@@ -129,7 +129,7 @@ class MokuroImporter(
 
         val pages = rawSidecar["pages"]?.jsonArray
             ?: throw MokuroImportException("The .mokuro file has no \"pages\" — it may be corrupt.")
-        require(pages.isNotEmpty()) { "The .mokuro file contains no pages." }
+        if (pages.isEmpty()) throw MokuroImportException("The .mokuro file contains no pages.")
 
         val title = rawSidecar.stringOrNull("volume")
             ?: rawSidecar.stringOrNull("title")

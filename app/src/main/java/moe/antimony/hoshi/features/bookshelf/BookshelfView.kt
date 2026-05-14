@@ -116,6 +116,8 @@ import moe.antimony.hoshi.epub.BookEntry
 import moe.antimony.hoshi.epub.BookRepository
 import moe.antimony.hoshi.epub.BookShelf
 import moe.antimony.hoshi.epub.BookSortOption
+import moe.antimony.hoshi.epub.ContentType
+import moe.antimony.hoshi.epub.bookContentType
 import moe.antimony.hoshi.features.reader.ReaderSettings
 import moe.antimony.hoshi.features.sync.SyncDirection
 import moe.antimony.hoshi.features.sync.SyncMode
@@ -1212,6 +1214,10 @@ private fun BookContextMenu(
 ) {
     var moveMenuExpanded by remember { mutableStateOf(false) }
     var syncMenuExpanded by remember { mutableStateOf(false) }
+    // Manga books reuse Bookmark/BookInfo with page-index semantics and have no EPUB spine,
+    // so ッツ sync would push/pull garbage progress and "Match Sasayaki" would run the EPUB
+    // parser on a non-EPUB directory — hide both for mokuro books.
+    val isManga = remember(entry.root) { bookContentType(entry.root) == ContentType.Mokuro }
     LaunchedEffect(expanded, hideMove) {
         if (!expanded || hideMove) {
             moveMenuExpanded = false
@@ -1224,7 +1230,7 @@ private fun BookContextMenu(
         expanded = expanded && !moveMenuExpanded && !syncMenuExpanded,
         onDismissRequest = onDismiss,
     ) {
-        if (syncSettings.enabled) {
+        if (syncSettings.enabled && !isManga) {
             if (syncSettings.mode == SyncMode.Manual) {
                 DropdownMenuItem(
                     text = { Text("Sync") },
@@ -1260,7 +1266,7 @@ private fun BookContextMenu(
             )
             HorizontalDivider()
         }
-        if (sasayakiEnabled) {
+        if (sasayakiEnabled && !isManga) {
             DropdownMenuItem(
                 text = { Text("Match Sasayaki") },
                 onClick = {

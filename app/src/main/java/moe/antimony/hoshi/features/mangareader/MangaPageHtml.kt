@@ -69,7 +69,7 @@ internal object MangaPageHtml {
             <body>
             <div class="page">
               <div class="frame">
-                <img class="page-image" src="${escapeAttribute(page.imagePath)}" alt="">
+                <img class="page-image" src="${escapeAttribute(encodeImagePath(page.imagePath))}" alt="">
                 <div class="ocr-layer">
             $boxes
                 </div>
@@ -251,4 +251,34 @@ internal object MangaPageHtml {
             .replace("\"", "&quot;")
             .replace("<", "&lt;")
             .replace(">", "&gt;")
+
+    /**
+     * Percent-encodes a book-root-relative image path (per `/`-separated segment) so it
+     * survives URL resolution against [BASE_URL]: a `#`, `?`, `%` or space in an image
+     * filename would otherwise be parsed as URL syntax and the image would fail to load.
+     * [MangaWebResourceBridge] resolves the request back through `URI.path`, which
+     * percent-decodes, so the encoded form round-trips to the original on-disk path.
+     */
+    private fun encodeImagePath(path: String): String =
+        path.split('/').joinToString("/") { segment ->
+            buildString {
+                for (byte in segment.toByteArray(Charsets.UTF_8)) {
+                    val code = byte.toInt() and 0xFF
+                    val ch = code.toChar()
+                    if (ch in PATH_SEGMENT_SAFE) {
+                        append(ch)
+                    } else {
+                        append('%')
+                        append(HEX_DIGITS[code shr 4])
+                        append(HEX_DIGITS[code and 0x0F])
+                    }
+                }
+            }
+        }
+
+    private const val HEX_DIGITS = "0123456789ABCDEF"
+
+    /** RFC 3986 unreserved characters — safe to leave un-encoded in a URL path segment. */
+    private val PATH_SEGMENT_SAFE: Set<Char> =
+        (('A'..'Z') + ('a'..'z') + ('0'..'9') + listOf('-', '_', '.', '~')).toSet()
 }

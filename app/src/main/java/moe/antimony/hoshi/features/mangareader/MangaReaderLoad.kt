@@ -31,7 +31,7 @@ internal class MangaReaderLoader(
                 bookRoot = entry.root,
                 book = book,
                 initialPageIndex = (bookmark?.chapterIndex ?: 0)
-                    .coerceIn(0, book.pages.lastIndex),
+                    .coerceIn(0, book.pages.lastIndex.coerceAtLeast(0)),
             )
         }.getOrElse { error ->
             MangaReaderLoadState.Error(error.localizedMessage ?: "Failed to open manga.")
@@ -55,13 +55,18 @@ internal sealed interface MangaReaderLoadState {
 
 /**
  * Builds the page-index [Bookmark] for a manga book. Manga reuses the EPUB [Bookmark]
- * schema unchanged (no iOS-incompatible fields): `chapterIndex` and `characterCount` both
- * carry the 0-based page index, `progress` is always 0.0.
+ * schema unchanged (no iOS-incompatible fields):
+ *  - `chapterIndex` carries the 0-based page index — the reader's resume position.
+ *  - `characterCount` carries the 1-based "pages read" count (`pageIndex + 1`), so the
+ *    bookshelf's `loadReadingProgress` (`characterCount / bookInfo.characterCount`, where
+ *    `bookInfo.characterCount` is the page count) reaches 100% on the last page. This also
+ *    matches what "Mark Read" writes (`characterCount = totalPages`).
+ *  - `progress` is always 0.0 (the EPUB per-chapter fraction is meaningless for manga).
  */
 internal fun mangaBookmark(pageIndex: Int, lastModifiedSeconds: Double): Bookmark =
     Bookmark(
         chapterIndex = pageIndex,
         progress = 0.0,
-        characterCount = pageIndex,
+        characterCount = pageIndex + 1,
         lastModified = lastModifiedSeconds,
     )

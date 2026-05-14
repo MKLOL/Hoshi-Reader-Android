@@ -5,11 +5,13 @@ import org.junit.Test
 
 class MangaBookmarkTest {
     @Test
-    fun pageIndexIsStoredInBothChapterIndexAndCharacterCount() {
+    fun chapterIndexIsThePageIndexAndCharacterCountIsOneBasedPagesRead() {
         val bookmark = mangaBookmark(pageIndex = 7, lastModifiedSeconds = 123.0)
 
+        // chapterIndex = 0-based resume position; characterCount = 1-based pages-read count
+        // so bookshelf progress (characterCount / pageCount) reaches 100% on the last page.
         assertEquals(7, bookmark.chapterIndex)
-        assertEquals(7, bookmark.characterCount)
+        assertEquals(8, bookmark.characterCount)
     }
 
     @Test

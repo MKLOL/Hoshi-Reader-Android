@@ -345,14 +345,23 @@ class BookImportDataSource(
     ).bookRoot
 
     /**
-     * Creates a fresh, empty book directory for a mokuro volume. Unlike the EPUB path, a
-     * re-import overwrites: stale page images from a previous import must not linger.
+     * Creates a fresh, empty book directory for a mokuro volume.
+     *
+     * The directory name is uniquified (`title`, `title-1`, `title-2`, …) rather than reused:
+     * two different volumes can share a `volume` / `title` string — or a generic
+     * `volume.mokuro` filename — and reusing-then-clearing the directory would destroy the
+     * other book's images, bookmark and statistics. Re-importing the same volume therefore
+     * adds a second copy rather than overwriting, which is acceptable; silently wiping an
+     * unrelated book is not.
      */
     private suspend fun createMokuroBookDirectory(title: String): File {
-        val root = fileDataSource.createBookDirectoryForImportedTitle(title)
-        root.deleteRecursively()
-        root.mkdirs()
-        return root
+        val safeTitle = title.sanitizeImportedBookTitle().ifBlank { "Manga" }
+        var folder = safeTitle
+        var suffix = 1
+        while (File(fileDataSource.booksDirectory, folder).exists()) {
+            folder = "$safeTitle-${suffix++}"
+        }
+        return fileDataSource.createBookDirectory(folder)
     }
 
     private suspend fun importEpub(contentResolver: ContentResolver, uri: Uri): File {

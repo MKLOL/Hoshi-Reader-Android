@@ -51,11 +51,11 @@ internal class MangaWebResourceBridge(
 
     fun resourceForUrl(url: String): WebResourceResponse? {
         val file = resolveImageFile(url) ?: return null
-        return WebResourceResponse(
-            file.imageMediaType(),
-            null,
-            file.inputStream(),
-        )
+        // The file existed when resolveImageFile() checked it, but opening it can still
+        // fail (TOCTOU, a permission change); never let that escape onto the WebView's
+        // resource thread — fall back to letting the request 404.
+        val stream = runCatching { file.inputStream() }.getOrNull() ?: return null
+        return WebResourceResponse(file.imageMediaType(), null, stream)
     }
 
     private fun File.isWithin(root: File): Boolean {

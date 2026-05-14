@@ -102,13 +102,17 @@ internal fun MangaReaderWebView(
                 onWebViewReady(this)
             }
         },
+        onRelease = { webView ->
+            // Tear the WebView down when the reader leaves composition: it holds a
+            // JavaScript interface and, via the Activity context, can otherwise leak
+            // until GC. destroy() also stops any in-flight load.
+            webView.destroy()
+        },
         update = { webView ->
-            // Re-attach in case the bridge instance changed (book / root recomposition).
-            if (webView.webViewClient !is MangaWebViewClient) {
-                webView.webViewClient = MangaWebViewClient(resourceBridge)
-            }
-            webView.attachMangaTouchListener(currentOnNavigate, currentOnSelectionCleared)
-            val loadKey = "${page.index}#${html.hashCode()}"
+            // The WebViewClient and touch listener are attached once in factory(); both
+            // read rememberUpdatedState values, so they stay current without being
+            // re-allocated on every recomposition. update() only swaps the page content.
+            val loadKey = "${page.index}#${html.length}#${html.hashCode()}"
             if (webView.tag != loadKey) {
                 webView.tag = loadKey
                 webView.loadDataWithBaseURL(

@@ -39,6 +39,7 @@ import androidx.compose.ui.zIndex
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import moe.antimony.hoshi.LocalHoshiAppContainer
 import moe.antimony.hoshi.epub.BookRepository
 import moe.antimony.hoshi.features.dictionary.DictionarySettings
 import moe.antimony.hoshi.features.dictionary.LookupPopupItem
@@ -83,16 +84,22 @@ internal fun MangaReaderScreen(
     val pageCount = book.pages.size
 
     var pageIndex by remember(book) {
-        mutableIntStateOf(initialPageIndex.coerceIn(0, book.pages.lastIndex))
+        mutableIntStateOf(initialPageIndex.coerceIn(0, book.pages.lastIndex.coerceAtLeast(0)))
     }
     var webView by remember { mutableStateOf<WebView?>(null) }
     var lookupPopups by remember(book) { mutableStateOf<List<LookupPopupItem>>(emptyList()) }
 
     val scope = rememberCoroutineScope()
+    // A scope that outlives the reader route, used only to flush a pending bookmark save on
+    // exit — rememberCoroutineScope is cancelled on dispose, which would drop the save.
+    val persistenceScope = LocalHoshiAppContainer.current.appScope
     var bookmarkSaveJob by remember(book) { mutableStateOf<Job?>(null) }
+    // The page index awaiting the debounced bookmark write, or null when nothing is pending.
+    val pendingBookmarkPage = remember(book) { mutableStateOf<Int?>(null) }
     val currentOnBookmarkSaved = rememberUpdatedState(onBookmarkSaved)
 
     fun scheduleBookmarkSave(index: Int) {
+        pendingBookmarkPage.value = index
         bookmarkSaveJob?.cancel()
         bookmarkSaveJob = scope.launch {
             delay(BOOKMARK_SAVE_DEBOUNCE_MS)
@@ -100,6 +107,7 @@ internal fun MangaReaderScreen(
                 bookRoot,
                 mangaBookmark(index, repository.currentAppleReferenceDateSeconds()),
             )
+            pendingBookmarkPage.value = null
             currentOnBookmarkSaved.value()
         }
     }
@@ -110,7 +118,7 @@ internal fun MangaReaderScreen(
     }
 
     fun goToPage(index: Int) {
-        val clamped = index.coerceIn(0, book.pages.lastIndex)
+        val clamped = index.coerceIn(0, book.pages.lastIndex.coerceAtLeast(0))
         if (clamped == pageIndex) return
         clearSelectionAndPopups()
         pageIndex = clamped
@@ -129,6 +137,7 @@ internal fun MangaReaderScreen(
         height = readerSettings.popupHeight,
         dictionarySettings = dictionarySettings,
         darkMode = readerSettings.usesDarkInterface(systemDark),
+        eInkMode = readerSettings.eInkMode,
         documentTitle = book.title,
     )
 
@@ -168,20 +177,29 @@ internal fun MangaReaderScreen(
         onDispose { onReaderKeyEventHandlerChange(null) }
     }
 
-    // Persist the resume position when the reader is left, in case the debounce is pending.
+    // Flush a still-pending debounced bookmark save when the reader is left, so closing it
+    // within the debounce window doesn't lose the last page turn. rememberCoroutineScope is
+    // cancelled on dispose, so the flush runs on the app-lifetime persistence scope.
     DisposableEffect(book, bookRoot) {
         onDispose {
             bookmarkSaveJob?.cancel()
+            val unsaved = pendingBookmarkPage.value
+            if (unsaved != null) {
+                pendingBookmarkPage.value = null
+                persistenceScope.launch {
+                    repository.saveBookmark(
+                        bookRoot,
+                        mangaBookmark(unsaved, repository.currentAppleReferenceDateSeconds()),
+                    )
+                }
+            }
         }
     }
-    LaunchedEffect(book, bookRoot, initialPageIndex) {
+    LaunchedEffect(book, bookRoot) {
         // Record the opened page so "recent" ordering reflects the visit even if the reader
-        // is closed before turning a page.
-        repository.saveBookmark(
-            bookRoot,
-            mangaBookmark(pageIndex, repository.currentAppleReferenceDateSeconds()),
-        )
-        currentOnBookmarkSaved.value()
+        // is closed before turning a page. Routed through the same debounced + flush-on-exit
+        // path as page turns, so the open save and a quick page turn never race to disk.
+        scheduleBookmarkSave(pageIndex)
     }
 
     BackHandler {
@@ -222,6 +240,7 @@ internal fun MangaReaderScreen(
         MangaReaderChrome(
             title = book.title,
             darkInterface = readerSettings.usesDarkInterface(systemDark),
+            eInkMode = readerSettings.eInkMode,
             onClose = onClose,
             modifier = Modifier
                 .align(Alignment.TopCenter)
@@ -233,6 +252,7 @@ internal fun MangaReaderScreen(
             pageIndex = pageIndex,
             pageCount = pageCount,
             darkInterface = readerSettings.usesDarkInterface(systemDark),
+            eInkMode = readerSettings.eInkMode,
             onForward = { navigate(ReaderNavigationDirection.Forward) },
             onBackward = { navigate(ReaderNavigationDirection.Backward) },
             modifier = Modifier
@@ -248,15 +268,12 @@ internal fun MangaReaderScreen(
 private fun MangaReaderChrome(
     title: String,
     darkInterface: Boolean,
+    eInkMode: Boolean,
     onClose: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val contentColor = if (darkInterface) Color.White else Color.Black
-    val scrim = if (darkInterface) {
-        Color.Black.copy(alpha = 0.45f)
-    } else {
-        Color.White.copy(alpha = 0.55f)
-    }
+    val scrim = mangaChromeScrim(darkInterface, eInkMode)
     Surface(
         modifier = modifier,
         color = scrim,
@@ -303,16 +320,13 @@ private fun MangaReaderBottomBar(
     pageIndex: Int,
     pageCount: Int,
     darkInterface: Boolean,
+    eInkMode: Boolean,
     onForward: () -> Unit,
     onBackward: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val contentColor = if (darkInterface) Color.White else Color.Black
-    val scrim = if (darkInterface) {
-        Color.Black.copy(alpha = 0.45f)
-    } else {
-        Color.White.copy(alpha = 0.55f)
-    }
+    val scrim = mangaChromeScrim(darkInterface, eInkMode)
     val canGoForward = pageIndex < pageCount - 1
     val canGoBackward = pageIndex > 0
     fun tint(enabled: Boolean) = contentColor.copy(alpha = if (enabled) 1f else 0.38f)
@@ -359,6 +373,17 @@ private fun MangaReaderBottomBar(
             }
         }
     }
+}
+
+/**
+ * Background for the reader chrome bars. On e-ink the bar is solid black/white — a
+ * translucent scrim dithers to a muddy grey over the artwork — while a colour display keeps
+ * the translucent scrim so the page edge still shows through.
+ */
+private fun mangaChromeScrim(darkInterface: Boolean, eInkMode: Boolean): Color = when {
+    eInkMode -> if (darkInterface) Color.Black else Color.White
+    darkInterface -> Color.Black.copy(alpha = 0.45f)
+    else -> Color.White.copy(alpha = 0.55f)
 }
 
 private fun Color.toCssHex(): String {
