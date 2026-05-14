@@ -16,15 +16,9 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
-import kotlinx.coroutines.launch
-import moe.antimony.hoshi.LocalHoshiAppContainer
 import moe.antimony.hoshi.features.settings.SettingsDetailScaffold
-import moe.antimony.hoshi.features.settings.collectAsLoadedSettings
-import moe.antimony.hoshi.features.update.UpdateScheduler
 
 @Composable
 fun ReaderBehaviorScreen(
@@ -33,10 +27,8 @@ fun ReaderBehaviorScreen(
     onClose: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val context = LocalContext.current
-    val appContainer = LocalHoshiAppContainer.current
-    val updateSettings = appContainer.updateSettingsRepository.settings.collectAsLoadedSettings()
-    val scope = rememberCoroutineScope()
+    // The "Automatically Download Updates" row was removed alongside the rest of the
+    // upstream-release update mechanism — this fork does not track upstream releases.
     SettingsDetailScaffold(
         title = "Behavior",
         onClose = onClose,
@@ -49,7 +41,6 @@ fun ReaderBehaviorScreen(
             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 16.dp),
         ) {
             item {
-                val loadedUpdateSettings = updateSettings ?: return@item
                 BehaviorSettingsCard {
                     BehaviorSwitchRow(
                         label = "Volume Keys Turn Pages",
@@ -74,24 +65,6 @@ fun ReaderBehaviorScreen(
                         checked = settings.reverseVolumeKeyDirection,
                         onCheckedChange = {
                             onSettingsChange(settings.copy(reverseVolumeKeyDirection = it))
-                        },
-                    )
-                    BehaviorDivider()
-                    BehaviorSwitchRow(
-                        label = "Automatically Download Updates",
-                        checked = loadedUpdateSettings.autoDownloadUpdates,
-                        onCheckedChange = { enabled ->
-                            scope.launch {
-                                appContainer.updateSettingsRepository.update {
-                                    it.copy(autoDownloadUpdates = enabled)
-                                }
-                                if (enabled) {
-                                    UpdateScheduler.schedule(context)
-                                    UpdateScheduler.scheduleImmediateCheck(context)
-                                } else {
-                                    UpdateScheduler.cancel(context)
-                                }
-                            }
                         },
                     )
                 }

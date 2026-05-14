@@ -18,9 +18,10 @@ class UpdateSettingsRepositoryTest {
     val tempFolder = TemporaryFolder()
 
     @Test
-    fun emitsAutoDownloadEnabledByDefault() = runBlocking {
+    fun emitsAutoDownloadDisabledByDefault() = runBlocking {
+        // This fork does not track upstream releases, so auto-download defaults to off.
         repository().use { repository ->
-            assertTrue(repository.settings.first().autoDownloadUpdates)
+            assertFalse(repository.settings.first().autoDownloadUpdates)
         }
     }
 

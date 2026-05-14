@@ -20,7 +20,6 @@ import androidx.compose.runtime.setValue
 import kotlinx.coroutines.launch
 import moe.antimony.hoshi.features.reader.ReaderSettings
 import moe.antimony.hoshi.features.reader.usesDarkInterface
-import moe.antimony.hoshi.features.update.DownloadedUpdatePrompt
 import moe.antimony.hoshi.navigation.AppShell
 import moe.antimony.hoshi.ui.theme.HoshiReaderTheme
 
@@ -67,7 +66,8 @@ class MainActivity : ComponentActivity() {
                             readerKeyEventHandler = handler
                         }
                     )
-                    DownloadedUpdatePrompt()
+                    // The "Update Downloaded — install now?" prompt is intentionally not
+                    // shown: this fork does not track upstream releases.
                 }
             }
         }
