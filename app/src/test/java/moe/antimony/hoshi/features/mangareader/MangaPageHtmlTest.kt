@@ -20,11 +20,12 @@ class MangaPageHtmlTest {
         textBoxes = textBoxes,
     )
 
-    private fun build(page: MokuroPage) = MangaPageHtml.build(
+    private fun build(page: MokuroPage, eInkMode: Boolean = false) = MangaPageHtml.build(
         page = page,
         backgroundCssColor = "#ffffff",
         selectionScript = "/* selection script */",
         scanNonJapaneseText = true,
+        eInkMode = eInkMode,
     )
 
     @Test
@@ -132,9 +133,22 @@ class MangaPageHtmlTest {
             backgroundCssColor = "#101010",
             selectionScript = "",
             scanNonJapaneseText = false,
+            eInkMode = false,
         )
         assertTrue(html.contains("background: #101010"))
         assertTrue(html.contains("window.scanNonJapaneseText = false"))
+    }
+
+    @Test
+    fun eInkModeUsesAHighContrastMatchedWordHighlight() {
+        val colour = build(page(emptyList()), eInkMode = false)
+        val eInk = build(page(emptyList()), eInkMode = true)
+
+        // Colour displays get the amber highlight; e-ink gets an inverted black-on-white one
+        // since a colour highlight is nearly invisible on greyscale.
+        assertTrue(colour.contains("::highlight(hoshi-selection) { background: #ffd400"))
+        assertTrue(eInk.contains("::highlight(hoshi-selection) { background: #000; color: #fff;"))
+        assertFalse(eInk.contains("#ffd400"))
     }
 
     @Test

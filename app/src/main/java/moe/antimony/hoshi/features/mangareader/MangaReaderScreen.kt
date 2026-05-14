@@ -5,12 +5,17 @@ import android.webkit.WebView
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.rounded.KeyboardArrowLeft
+import androidx.compose.material.icons.rounded.KeyboardArrowRight
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Surface
@@ -28,6 +33,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import kotlinx.coroutines.Job
@@ -197,6 +203,7 @@ internal fun MangaReaderScreen(
             pageIndex = pageIndex,
             backgroundCssColor = backgroundCssColor,
             scanNonJapaneseText = dictionarySettings.scanNonJapaneseText,
+            eInkMode = readerSettings.eInkMode,
             onNavigate = { direction -> navigate(direction) },
             onTextSelected = handleTextSelected,
             onSelectionCleared = { lookupPopups = emptyList() },
@@ -214,23 +221,32 @@ internal fun MangaReaderScreen(
 
         MangaReaderChrome(
             title = book.title,
-            pageIndex = pageIndex,
-            pageCount = pageCount,
             darkInterface = readerSettings.usesDarkInterface(systemDark),
             onClose = onClose,
             modifier = Modifier
+                .align(Alignment.TopCenter)
+                .fillMaxWidth()
+                .zIndex(1f),
+        )
+
+        MangaReaderBottomBar(
+            pageIndex = pageIndex,
+            pageCount = pageCount,
+            darkInterface = readerSettings.usesDarkInterface(systemDark),
+            onForward = { navigate(ReaderNavigationDirection.Forward) },
+            onBackward = { navigate(ReaderNavigationDirection.Backward) },
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
                 .fillMaxWidth()
                 .zIndex(1f),
         )
     }
 }
 
-/** Minimal reader chrome for v1: a close affordance, the book title and a page indicator. */
+/** Top reader chrome: a close affordance and the book title. */
 @Composable
 private fun MangaReaderChrome(
     title: String,
-    pageIndex: Int,
-    pageCount: Int,
     darkInterface: Boolean,
     onClose: () -> Unit,
     modifier: Modifier = Modifier,
@@ -270,13 +286,77 @@ private fun MangaReaderChrome(
                     .padding(horizontal = 56.dp),
                 maxLines = 1,
             )
+        }
+    }
+}
+
+/**
+ * Bottom reader chrome: explicit previous / next page buttons plus the page indicator.
+ *
+ * Page turning lives on dedicated buttons (not taps on the page) so tapping a word for
+ * dictionary lookup can never move the page. Manga reads right-to-left, so the left-hand
+ * button advances to the next page and the right-hand button goes back, matching the swipe
+ * direction. Buttons disable at the first / last page.
+ */
+@Composable
+private fun MangaReaderBottomBar(
+    pageIndex: Int,
+    pageCount: Int,
+    darkInterface: Boolean,
+    onForward: () -> Unit,
+    onBackward: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val contentColor = if (darkInterface) Color.White else Color.Black
+    val scrim = if (darkInterface) {
+        Color.Black.copy(alpha = 0.45f)
+    } else {
+        Color.White.copy(alpha = 0.55f)
+    }
+    val canGoForward = pageIndex < pageCount - 1
+    val canGoBackward = pageIndex > 0
+    fun tint(enabled: Boolean) = contentColor.copy(alpha = if (enabled) 1f else 0.38f)
+    Surface(
+        modifier = modifier,
+        color = scrim,
+        contentColor = contentColor,
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .navigationBarsPadding()
+                .padding(horizontal = 8.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            IconButton(
+                onClick = onForward,
+                enabled = canGoForward,
+                modifier = Modifier.size(56.dp),
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.KeyboardArrowLeft,
+                    contentDescription = "Next page",
+                    tint = tint(canGoForward),
+                )
+            }
             Text(
                 text = "${(pageIndex + 1).coerceAtMost(pageCount)} / $pageCount",
                 color = contentColor,
-                modifier = Modifier
-                    .align(Alignment.CenterEnd)
-                    .padding(end = 12.dp),
+                textAlign = TextAlign.Center,
+                maxLines = 1,
+                modifier = Modifier.weight(1f),
             )
+            IconButton(
+                onClick = onBackward,
+                enabled = canGoBackward,
+                modifier = Modifier.size(56.dp),
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.KeyboardArrowRight,
+                    contentDescription = "Previous page",
+                    tint = tint(canGoBackward),
+                )
+            }
         }
     }
 }

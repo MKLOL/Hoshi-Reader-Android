@@ -40,8 +40,10 @@ private const val MANGA_MAX_SELECTION_LENGTH = 16
  * `HoshiTextSelection` JavaScript interface. A tap selects the word under the finger and
  * the caller turns that [ReaderSelectionData] into a lookup popup.
  *
- * Right-to-left navigation: a left swipe / left-edge tap moves *forward* in reading order,
- * a right swipe / right-edge tap moves *backward* — see [MangaPageNavigation].
+ * Right-to-left navigation: a left swipe moves *forward* in reading order and a right swipe
+ * moves *backward* — see [MangaPageNavigation]. A tap never turns the page; it is reserved
+ * for selecting a word, so page turning is driven by swipes, the chrome buttons, and the
+ * hardware page/volume keys.
  */
 @Composable
 internal fun MangaReaderWebView(
@@ -50,6 +52,7 @@ internal fun MangaReaderWebView(
     pageIndex: Int,
     backgroundCssColor: String,
     scanNonJapaneseText: Boolean,
+    eInkMode: Boolean,
     onNavigate: (ReaderNavigationDirection) -> Unit,
     onTextSelected: (ReaderSelectionData) -> Int?,
     onSelectionCleared: () -> Unit,
@@ -63,12 +66,13 @@ internal fun MangaReaderWebView(
     val resourceBridge = remember(book, bookRoot) { MangaWebResourceBridge(bookRoot, book) }
 
     val page = book.pages[pageIndex.coerceIn(0, book.pages.lastIndex)]
-    val html = remember(page, backgroundCssColor, scanNonJapaneseText) {
+    val html = remember(page, backgroundCssColor, scanNonJapaneseText, eInkMode) {
         MangaPageHtml.build(
             page = page,
             backgroundCssColor = backgroundCssColor,
             selectionScript = ReaderSelectionScripts.source(),
             scanNonJapaneseText = scanNonJapaneseText,
+            eInkMode = eInkMode,
         )
     }
 
@@ -128,18 +132,10 @@ private fun WebView.attachMangaTouchListener(
     setOnTouchListener(
         object : SwipePageTouchListener() {
             override fun onTap(x: Float, y: Float) {
-                // OCR text boxes can sit anywhere on the page, including the edge zones, so
-                // always try to select the word under the tap first. Only a tap that hits no
-                // OCR text falls through to edge-zone page turning (or clearing the popup).
-                val viewWidth = webView.width.toFloat().coerceAtLeast(1f)
-                webView.selectAt(x, y) {
-                    val tapDirection = MangaPageNavigation.directionForTap(x / viewWidth)
-                    if (tapDirection != null) {
-                        onNavigate.value(tapDirection)
-                    } else {
-                        onSelectionCleared.value()
-                    }
-                }
+                // A tap only ever selects the word under the finger for dictionary lookup —
+                // it never turns the page. Page turning is the chrome buttons, swipes and
+                // the hardware page/volume keys, so tapping a word can't move the page.
+                webView.selectAt(x, y) { onSelectionCleared.value() }
             }
 
             override fun onLeftSwipe() {

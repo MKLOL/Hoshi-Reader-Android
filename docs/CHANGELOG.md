@@ -7,7 +7,7 @@ The format follows a Keep a Changelog style, and release sections use Semantic V
 
 ### Added
 
-- Read mokuro manga alongside EPUBs: import a mokuro `.zip`/`.cbz` bundle or a mokuro output folder from the bookshelf, then read it with the page artwork plus selectable OCR text wired to dictionary lookup, right-to-left page turning, tap-to-turn and swipe navigation, volume-key page turns, and per-page resume.
+- Read mokuro manga alongside EPUBs: import a mokuro `.zip`/`.cbz` bundle or a mokuro output folder from the bookshelf, then read it with the page artwork plus selectable OCR text wired to dictionary lookup. Turn pages with on-screen previous/next buttons, swipes, or the volume / hardware page keys (taps are reserved for word lookup so they never move the page); right-to-left reading order, per-page resume, and an e-ink-friendly high-contrast lookup highlight.
 
 ## [v0.6.1] - 2026-05-14
 

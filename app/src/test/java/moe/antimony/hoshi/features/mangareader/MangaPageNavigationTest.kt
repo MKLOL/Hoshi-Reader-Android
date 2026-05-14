@@ -78,37 +78,4 @@ class MangaPageNavigationTest {
             MangaPageNavigation.directionForSwipe(MangaSwipeDirection.Right),
         )
     }
-
-    @Test
-    fun tapOnLeftEdgeZoneMovesForward() {
-        assertEquals(
-            ReaderNavigationDirection.Forward,
-            MangaPageNavigation.directionForTap(xFraction = 0.05f, edgeZoneFraction = 0.2f),
-        )
-    }
-
-    @Test
-    fun tapOnRightEdgeZoneMovesBackward() {
-        assertEquals(
-            ReaderNavigationDirection.Backward,
-            MangaPageNavigation.directionForTap(xFraction = 0.95f, edgeZoneFraction = 0.2f),
-        )
-    }
-
-    @Test
-    fun tapInCentralZoneDoesNotNavigate() {
-        assertNull(MangaPageNavigation.directionForTap(xFraction = 0.5f, edgeZoneFraction = 0.2f))
-    }
-
-    @Test
-    fun tapZoneBoundariesAreInclusiveOnTheEdges() {
-        assertEquals(
-            ReaderNavigationDirection.Forward,
-            MangaPageNavigation.directionForTap(xFraction = 0.2f, edgeZoneFraction = 0.2f),
-        )
-        assertEquals(
-            ReaderNavigationDirection.Backward,
-            MangaPageNavigation.directionForTap(xFraction = 0.8f, edgeZoneFraction = 0.2f),
-        )
-    }
 }

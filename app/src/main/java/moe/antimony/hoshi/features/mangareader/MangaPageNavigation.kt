@@ -6,9 +6,13 @@ import moe.antimony.hoshi.features.reader.ReaderNavigationDirection
  * Page-index math for the mokuro manga reader.
  *
  * Manga reads **right-to-left**: "forward" (advance in reading order) means moving to the
- * next page, which sits on the *left*. So a swipe/tap on the left edge advances the story,
- * a swipe/tap on the right edge goes back. This object keeps that mapping in one pure,
- * unit-testable place; the WebView/gesture code only deals in [ReaderNavigationDirection].
+ * next page, which sits on the *left*. So a swipe to the left (or the left-hand chrome
+ * button) advances the story and a swipe to the right goes back. This object keeps that
+ * mapping in one pure, unit-testable place; the WebView/gesture code only deals in
+ * [ReaderNavigationDirection].
+ *
+ * Page turning is intentionally **not** bound to taps on the page: a tap is reserved for
+ * selecting a word for dictionary lookup, so taps never move the page.
  */
 internal object MangaPageNavigation {
     /** The page index reached by moving [direction] from [currentIndex], or `null` at a limit. */
@@ -34,22 +38,6 @@ internal object MangaPageNavigation {
             MangaSwipeDirection.Left -> ReaderNavigationDirection.Forward
             MangaSwipeDirection.Right -> ReaderNavigationDirection.Backward
         }
-
-    /**
-     * Maps a tap at horizontal fraction [xFraction] (0 = left edge, 1 = right edge) of the
-     * page to a navigation direction, or `null` for the central "no navigation" zone.
-     * [edgeZoneFraction] is the width of each tap-to-turn edge zone.
-     */
-    fun directionForTap(
-        xFraction: Float,
-        edgeZoneFraction: Float = DEFAULT_TAP_EDGE_ZONE_FRACTION,
-    ): ReaderNavigationDirection? = when {
-        xFraction <= edgeZoneFraction -> ReaderNavigationDirection.Forward
-        xFraction >= 1f - edgeZoneFraction -> ReaderNavigationDirection.Backward
-        else -> null
-    }
-
-    const val DEFAULT_TAP_EDGE_ZONE_FRACTION = 0.2f
 }
 
 internal enum class MangaSwipeDirection {

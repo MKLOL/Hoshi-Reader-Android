@@ -41,12 +41,15 @@ internal object MangaPageHtml {
      *   inside a `<script>` tag so the page's `HoshiTextSelection` interface works on tap.
      * @param scanNonJapaneseText forwarded to `window.scanNonJapaneseText`, mirroring the
      *   EPUB reader so the selection scanner respects the dictionary setting.
+     * @param eInkMode picks a high-contrast matched-word highlight (black-on-white) instead
+     *   of the colour highlight, which is indistinct on a greyscale e-ink display.
      */
     fun build(
         page: MokuroPage,
         backgroundCssColor: String,
         selectionScript: String,
         scanNonJapaneseText: Boolean,
+        eInkMode: Boolean,
     ): String {
         val imageWidth = page.imageWidth.coerceAtLeast(1)
         val imageHeight = page.imageHeight.coerceAtLeast(1)
@@ -60,7 +63,7 @@ internal object MangaPageHtml {
             <meta charset="utf-8">
             <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=5, user-scalable=yes">
             <style>
-            ${pageCss(backgroundCssColor)}
+            ${pageCss(backgroundCssColor, eInkMode)}
             </style>
             </head>
             <body>
@@ -127,7 +130,16 @@ internal object MangaPageHtml {
         """.trimIndent()
     }
 
-    private fun pageCss(backgroundCssColor: String): String = """
+    private fun pageCss(backgroundCssColor: String, eInkMode: Boolean): String {
+        // On a greyscale e-ink display a colour highlight is nearly indistinguishable from
+        // the OCR plate, so the matched word is shown inverted (black plate, white text) for
+        // maximum contrast; on a colour display it gets the usual amber highlight.
+        val matchedWordHighlight = if (eInkMode) {
+            "::highlight(hoshi-selection) { background: #000; color: #fff; }"
+        } else {
+            "::highlight(hoshi-selection) { background: #ffd400; color: #000; }"
+        }
+        return """
         * { margin: 0; padding: 0; box-sizing: border-box; }
         html, body {
           width: 100%;
@@ -191,8 +203,9 @@ internal object MangaPageHtml {
            (the shared selection script does CSS.highlights.set('hoshi-selection', ...)).
            Without this rule the highlight paints nothing, so a tap gives no feedback about
            which word it landed on — this makes the matched word visibly light up. */
-        ::highlight(hoshi-selection) { background: #ffd400; color: #000; }
+        $matchedWordHighlight
     """.trimIndent()
+    }
 
     private fun textBoxHtml(
         box: MokuroTextBox,
