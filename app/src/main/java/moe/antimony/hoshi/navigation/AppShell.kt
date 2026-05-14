@@ -27,6 +27,8 @@ import androidx.navigation3.runtime.rememberSaveableStateHolderNavEntryDecorator
 import androidx.navigation3.scene.Scene
 import androidx.navigation3.ui.NavDisplay
 import moe.antimony.hoshi.LocalHoshiAppContainer
+import moe.antimony.hoshi.epub.ContentType
+import moe.antimony.hoshi.epub.bookContentType
 import moe.antimony.hoshi.features.audio.AdvancedSettingsView
 import moe.antimony.hoshi.features.anki.AnkiView
 import moe.antimony.hoshi.features.bookshelf.BookshelfView
@@ -131,7 +133,14 @@ fun AppShell(
     }
 
     fun openReader(bookId: String) {
-        backStack.openReaderRoute(bookId)
+        scope.launch {
+            val entry = bookRepository.loadBookEntry(bookId)
+            if (entry != null && bookContentType(entry.root) == ContentType.Mokuro) {
+                backStack.openMangaReaderRoute(bookId)
+            } else {
+                backStack.openReaderRoute(bookId)
+            }
+        }
     }
 
     fun openSasayakiMatch(request: SasayakiMatchRequest) {
@@ -218,6 +227,17 @@ fun AppShell(
                         ReaderRouteDestination(
                             bookId = route.bookId,
                             stateHolder = readerRouteStateHolder,
+                            readerSettings = currentReaderSettings,
+                            onReaderSettingsChange = currentOnReaderSettingsChange,
+                            onReaderKeyEventHandlerChange = currentOnReaderKeyEventHandlerChange,
+                            onBookmarkSaved = readerBookmarkRefreshState::markDirty,
+                            onClose = ::closeReaderRoute,
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                    }
+                    is AppRoute.MangaReaderRoute -> {
+                        MangaReaderRouteDestination(
+                            bookId = route.bookId,
                             readerSettings = currentReaderSettings,
                             onReaderSettingsChange = currentOnReaderSettingsChange,
                             onReaderKeyEventHandlerChange = currentOnReaderKeyEventHandlerChange,

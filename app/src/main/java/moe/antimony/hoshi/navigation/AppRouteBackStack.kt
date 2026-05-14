@@ -21,6 +21,11 @@ internal fun MutableList<NavKey>.openReaderRoute(bookId: String) {
     add(AppRoute.ReaderRoute(bookId))
 }
 
+internal fun MutableList<NavKey>.openMangaReaderRoute(bookId: String) {
+    selectTopLevelRoute(AppRoute.BooksRoute)
+    add(AppRoute.MangaReaderRoute(bookId))
+}
+
 internal fun MutableList<NavKey>.openSasayakiMatchRoute(bookId: String) {
     selectTopLevelRoute(AppRoute.BooksRoute)
     add(AppRoute.SasayakiMatchRoute(bookId))

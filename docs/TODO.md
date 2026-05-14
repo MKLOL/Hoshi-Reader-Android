@@ -66,6 +66,21 @@ This file is the short operational handoff for future agents.
 
 - Before F-Droid distribution, split update behavior by distribution channel so F-Droid builds do not bypass F-Droid update checks.
 
+## Mokuro Manga Support (Android-only, in progress)
+
+Branch `codex/mokuro-manga-support`. Adds a parallel content path for mokuro manga
+(JSON + page images) that reuses the bookshelf, dictionary lookup, and Anki mining.
+
+- Done: `ContentType` + disk-based `bookContentType()`; `MokuroBook` model + pure-Kotlin
+  `MokuroBookParser`; `AppRoute.MangaReaderRoute` + `AppShell` content-type dispatch;
+  `MangaReaderRouteDestination` stub.
+- Next: importer (SAF folder picker + `.zip`/`.cbz`) landing `mokuro.json` + page images;
+  manga reader WebView with selectable OCR text boxes wired to the shared lookup bridge,
+  right-to-left page navigation, page-index bookmarks.
+- Content type is derived from disk (`mokuro.json` sidecar), never stored in the
+  iOS-shared `metadata.json`. `Bookmark.chapterIndex` is reused as the manga page index;
+  no sidecar schema change.
+
 ## Required Validation
 
 Before claiming implementation complete, run:
