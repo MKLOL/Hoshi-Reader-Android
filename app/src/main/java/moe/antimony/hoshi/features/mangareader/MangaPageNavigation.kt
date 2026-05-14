@@ -6,9 +6,11 @@ import moe.antimony.hoshi.features.reader.ReaderNavigationDirection
  * Page-index math for the mokuro manga reader.
  *
  * Manga reads **right-to-left**: "forward" (advance in reading order) means moving to the
- * next page, which sits on the *left*. So a swipe to the left (or the left-hand chrome
- * button) advances the story and a swipe to the right goes back. This object keeps that
- * mapping in one pure, unit-testable place; the WebView/gesture code only deals in
+ * next page, which sits on the *left*. The chrome's left-hand button advances the story,
+ * but a *swipe* follows the page like a filmstrip (page 1 at the right): dragging to the
+ * right slides the current page off and pulls the next page in from the left, so a right
+ * swipe moves forward and a left swipe goes back. This object keeps that mapping in one
+ * pure, unit-testable place; the WebView/gesture code only deals in
  * [ReaderNavigationDirection].
  *
  * Page turning is intentionally **not** bound to taps on the page: a tap is reserved for
@@ -30,13 +32,14 @@ internal object MangaPageNavigation {
     }
 
     /**
-     * Maps a horizontal swipe to a reading-direction navigation. In a right-to-left manga a
-     * swipe to the *left* drags the next (left-hand) page into view, i.e. moves forward.
+     * Maps a horizontal swipe to a reading-direction navigation. The swipe drags the page
+     * like a filmstrip: a swipe to the *right* slides the current page off to the right and
+     * pulls the next (left-hand) page in, i.e. moves forward; a left swipe goes back.
      */
     fun directionForSwipe(swipe: MangaSwipeDirection): ReaderNavigationDirection =
         when (swipe) {
-            MangaSwipeDirection.Left -> ReaderNavigationDirection.Forward
-            MangaSwipeDirection.Right -> ReaderNavigationDirection.Backward
+            MangaSwipeDirection.Left -> ReaderNavigationDirection.Backward
+            MangaSwipeDirection.Right -> ReaderNavigationDirection.Forward
         }
 }
 

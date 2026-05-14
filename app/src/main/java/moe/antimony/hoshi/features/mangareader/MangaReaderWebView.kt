@@ -38,12 +38,12 @@ private const val MANGA_MAX_SELECTION_LENGTH = 16
  * Text selection -> dictionary lookup reuses the shared EPUB mechanism: the injected
  * [ReaderSelectionScripts] source plus a [ReaderSelectionBridge] bound to the
  * `HoshiTextSelection` JavaScript interface. OCR text is invisible until tapped — a tap
- * goes through `window.hoshiManga.handleTap` ([MangaPageHtml]), which reveals the tapped
- * bubble and looks the word up, copies a bubble via the `HoshiMangaClipboard` interface
- * ([MangaClipboardBridge]) when its copy button is hit, or hides every revealed bubble when
- * the tap lands on empty artwork.
+ * goes through `window.hoshiManga.handleTap` ([MangaPageHtml]): the first tap on a bubble
+ * just reveals it, a second tap on that revealed bubble looks the tapped word up, a tap on
+ * the copy button copies the bubble via the `HoshiMangaClipboard` interface
+ * ([MangaClipboardBridge]), and a tap on empty artwork hides every revealed bubble.
  *
- * Right-to-left navigation: a left swipe moves *forward* in reading order and a right swipe
+ * Right-to-left navigation: a right swipe moves *forward* in reading order and a left swipe
  * moves *backward* — see [MangaPageNavigation]. A tap never turns the page; it is reserved
  * for the OCR interactions above, so page turning is driven by swipes, the chrome buttons,
  * and the hardware page/volume keys.
@@ -182,13 +182,14 @@ private fun WebView.attachMangaTouchListener(
 
 /**
  * Routes a tap at ([x], [y]) (Android pixels) through the in-page manga tap handler
- * (`window.hoshiManga.handleTap`): it reveals the tapped bubble and looks the word up,
- * copies a bubble when its copy button is hit, or hides every revealed bubble when the tap
- * lands on empty artwork.
+ * (`window.hoshiManga.handleTap`): the first tap on a bubble reveals it, a second tap on a
+ * revealed bubble looks the word up, a copy-button tap copies the bubble, and a tap on empty
+ * artwork hides every revealed bubble.
  *
- * [onSelectedNothing] runs when the tap selects no word — empty artwork, or a bubble with no
- * character under the finger — so the caller can clear the lookup popup. A copy-button hit
- * reports neither a selection nor "nothing", so it leaves any open popup untouched.
+ * [onSelectedNothing] runs when the tap selects no word — empty artwork, or a revealed bubble
+ * with no character under the finger — so the caller can clear the lookup popup. A first-tap
+ * reveal and a copy/ChatGPT-button hit report neither a selection nor "nothing", so they
+ * leave any open popup untouched.
  */
 private fun WebView.selectAt(x: Float, y: Float, onSelectedNothing: () -> Unit) {
     val density = resources.displayMetrics.density

@@ -64,18 +64,19 @@ class MangaPageNavigationTest {
     }
 
     @Test
-    fun leftSwipeMovesForwardInRightToLeftManga() {
+    fun rightSwipeMovesForwardInRightToLeftManga() {
+        // The next page sits on the left; a right swipe drags it into view like a filmstrip.
         assertEquals(
             ReaderNavigationDirection.Forward,
-            MangaPageNavigation.directionForSwipe(MangaSwipeDirection.Left),
+            MangaPageNavigation.directionForSwipe(MangaSwipeDirection.Right),
         )
     }
 
     @Test
-    fun rightSwipeMovesBackwardInRightToLeftManga() {
+    fun leftSwipeMovesBackwardInRightToLeftManga() {
         assertEquals(
             ReaderNavigationDirection.Backward,
-            MangaPageNavigation.directionForSwipe(MangaSwipeDirection.Right),
+            MangaPageNavigation.directionForSwipe(MangaSwipeDirection.Left),
         )
     }
 }

@@ -362,13 +362,14 @@ internal fun MangaReaderScreen(
     ) {
         val activeTransition = pageTransition
         val containerWidthPx = constraints.maxWidth
-        // Slide direction for a right-to-left manga: the page being *left* slides off the way
-        // it was swiped — a backward turn (right swipe) sends it right, a forward turn sends
-        // it left — and the incoming page slides in from the opposite edge, so the two stay
-        // edge to edge with no gap. `transitionProgress` is read inside the offset lambdas so
-        // each animation frame only re-lays-out, never recomposes.
+        // Slide direction for a right-to-left manga, modelled as a filmstrip with page 1 at
+        // the right: a forward turn slides the outgoing page off to the *right* and pulls the
+        // incoming page in from the left; a backward turn does the reverse. The incoming page
+        // slides in from the opposite edge, so the two stay edge to edge with no gap.
+        // `transitionProgress` is read inside the offset lambdas so each animation frame only
+        // re-lays-out, never recomposes.
         val leavingSign =
-            if (activeTransition?.direction == ReaderNavigationDirection.Backward) 1 else -1
+            if (activeTransition?.direction == ReaderNavigationDirection.Backward) -1 else 1
 
         MangaReaderWebView(
             book = book,
@@ -641,8 +642,8 @@ private fun Color.toCssHex(): String {
     return "#%02x%02x%02x".format(r, g, b)
 }
 
-/** Duration of the manga page-turn slide. Short enough to stay snappy when flicking pages. */
-private const val MANGA_PAGE_TURN_DURATION_MS = 280
+/** Duration of the manga page-turn slide. Long enough to read as a page turn, not a jump. */
+private const val MANGA_PAGE_TURN_DURATION_MS = 800
 
 /**
  * A manga page turn in flight: [snapshot] is the page being left — drawn on top of the

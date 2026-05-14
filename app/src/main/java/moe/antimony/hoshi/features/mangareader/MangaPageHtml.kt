@@ -19,12 +19,13 @@ import moe.antimony.hoshi.mokuro.MokuroTextBox
  *
  * The OCR text is real, selectable DOM text (`<p>` per box). Every box is invisible by
  * default — the reader sees only the artwork — but it stays present and hit-testable.
- * Tapping a box adds `.revealed`, which paints its text on a translucent plate and runs the
- * shared selection bridge to look the tapped word up; tapping empty artwork hides every
- * revealed box again. A revealed box also shows small action buttons — ask ChatGPT about the
- * bubble, and copy the whole bubble's OCR text. All four outcomes are routed through
- * `window.hoshiManga.handleTap` (see the page script) so a single tap path decides between
- * them. `<p>` is used because
+ * Tapping a hidden box adds `.revealed`, which paints its text on a translucent plate; a
+ * *second* tap on that revealed box runs the shared selection bridge to look the tapped word
+ * up. The lookup is held back to the second tap so the dictionary popup can't open on top of
+ * the box's action buttons. Tapping empty artwork hides every revealed box again. A revealed
+ * box also shows small action buttons — ask ChatGPT about the bubble, and copy the whole
+ * bubble's OCR text. All of these outcomes are routed through `window.hoshiManga.handleTap`
+ * (see the page script) so a single tap path decides between them. `<p>` is used because
  * the shared selection script ([moe.antimony.hoshi.features.reader.ReaderSelectionScripts])
  * scopes its sentence scan to the nearest `p`, which conveniently bounds a scan to one box.
  *
@@ -317,8 +318,12 @@ internal object MangaPageHtml {
      *    `'__ai__'` so the caller leaves the lookup popup untouched;
      *  - copy button -> copy the whole bubble's OCR text via `HoshiMangaClipboard`, and
      *    return `'__copied__'` so the caller leaves the lookup popup untouched;
-     *  - text box -> add `.revealed` to paint that bubble's text, then run the shared
-     *    `selectText` so the tapped word is looked up (its return value flows back out);
+     *  - a not-yet-revealed text box -> add `.revealed` to paint that bubble's text and show
+     *    its action buttons, returning `'__revealed__'` so the caller leaves the popup
+     *    untouched; the word lookup is deferred to the next tap, so the dictionary popup can
+     *    never open on top of (and cover) the ChatGPT / copy buttons;
+     *  - an already-revealed text box -> run the shared `selectText` so the tapped word is
+     *    looked up (its return value flows back out);
      *  - empty artwork -> strip `.revealed` from every box and clear the active selection,
      *    returning `null` so the caller dismisses the lookup popup.
      */
@@ -347,7 +352,14 @@ internal object MangaPageHtml {
               }
               var box = el && el.closest && el.closest('.ocr-box');
               if (box) {
-                box.classList.add('revealed');
+                if (!box.classList.contains('revealed')) {
+                  // First tap: just reveal this bubble's text and action buttons. The word
+                  // lookup waits for a second tap so the dictionary popup can't cover the
+                  // ChatGPT / copy buttons.
+                  box.classList.add('revealed');
+                  return '__revealed__';
+                }
+                // Second tap on an already-revealed bubble: look the tapped word up.
                 return window.hoshiSelection.selectText(x, y, maxLength);
               }
               var revealed = document.querySelectorAll('.ocr-box.revealed');
