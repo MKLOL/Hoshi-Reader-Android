@@ -28,6 +28,18 @@ data class ImportFileType(
             mimeTypes = arrayOf("application/epub+zip", "application/octet-stream"),
         )
 
+        val Mokuro = ImportFileType(
+            description = "mokuro manga",
+            extensions = listOf("zip", "cbz"),
+            mimeTypes = arrayOf(
+                "application/zip",
+                "application/x-zip-compressed",
+                "application/x-cbz",
+                "application/vnd.comicbook+zip",
+                "application/octet-stream",
+            ),
+        )
+
         val SasayakiSubtitle = ImportFileType(
             description = "subtitle",
             extensions = listOf("srt"),

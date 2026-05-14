@@ -6,6 +6,7 @@ import android.graphics.BitmapFactory
 import android.net.Uri
 import android.util.LruCache
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
@@ -158,7 +159,7 @@ fun BookshelfView(
                 @Suppress("UNCHECKED_CAST")
                 override fun <T : ViewModel> create(modelClass: Class<T>): T =
                     BookshelfViewModel(
-                        appContainer.bookshelfRepository(context.contentResolver),
+                        appContainer.bookshelfRepository(context),
                     ) as T
             }
         },
@@ -188,8 +189,27 @@ fun BookshelfView(
         booksViewModel.importBooks(imports)
     }
 
+    val mangaFolderImporter = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocumentTree(),
+    ) { treeUri: Uri? ->
+        if (treeUri == null) return@rememberLauncherForActivityResult
+        runCatching {
+            context.contentResolver.takePersistableUriPermission(
+                treeUri,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION,
+            )
+        }
+        booksViewModel.importMokuroFolder(treeUri)
+    }
+
     fun launchBookImporter() {
-        importer.launch(ImportFileType.Epub.mimeTypes)
+        // Both EPUBs and mokuro manga bundles (.zip/.cbz) are picked here; the importer
+        // dispatches on the picked file's name.
+        importer.launch(ImportFileType.Epub.mimeTypes + ImportFileType.Mokuro.mimeTypes)
+    }
+
+    fun launchMangaFolderImporter() {
+        mangaFolderImporter.launch(null)
     }
 
     LaunchedEffect(refreshKey) {
@@ -245,6 +265,7 @@ fun BookshelfView(
         onDeleteSelectedBooks = { showBulkDeleteConfirmation = true },
         onManageShelves = { showShelfManagement = true },
         onImport = ::launchBookImporter,
+        onImportMangaFolder = ::launchMangaFolderImporter,
         onOpenBook = booksViewModel::openBook,
         contextMenuTarget = contextMenuTarget,
         onContextMenuTargetChange = { contextMenuTarget = it },
@@ -558,6 +579,7 @@ private fun BooksTab(
     onDeleteSelectedBooks: () -> Unit,
     onManageShelves: () -> Unit,
     onImport: () -> Unit,
+    onImportMangaFolder: () -> Unit,
     onOpenBook: (BookEntry) -> Unit,
     contextMenuTarget: BookContextMenuTarget?,
     onContextMenuTargetChange: (BookContextMenuTarget?) -> Unit,
@@ -593,6 +615,7 @@ private fun BooksTab(
                 onDeleteSelectedBooks = onDeleteSelectedBooks,
                 onManageShelves = onManageShelves,
                 onImport = onImport,
+                onImportMangaFolder = onImportMangaFolder,
             )
         },
     ) { innerPadding ->
@@ -620,6 +643,7 @@ private fun BooksTab(
                 hasLoadedBooks && bookEntries.isEmpty() -> EmptyBooksView(
                     enabled = !fileTaskBlocked,
                     onImport = onImport,
+                    onImportMangaFolder = onImportMangaFolder,
                     modifier = Modifier
                         .align(Alignment.Center)
                         .widthIn(max = layoutSpec.contentMaxWidthDp.dp)
@@ -761,8 +785,10 @@ private fun BooksTopAppBar(
     onDeleteSelectedBooks: () -> Unit,
     onManageShelves: () -> Unit,
     onImport: () -> Unit,
+    onImportMangaFolder: () -> Unit,
 ) {
     var moveMenuExpanded by remember { mutableStateOf(false) }
+    var importMenuExpanded by remember { mutableStateOf(false) }
     CenterAlignedTopAppBar(
         title = {
             Text(
@@ -865,11 +891,34 @@ private fun BooksTopAppBar(
                         contentDescription = "Manage Shelves",
                     )
                 }
-                IconButton(onClick = onImport, enabled = enabled) {
-                    Icon(
-                        imageVector = Icons.Rounded.Add,
-                        contentDescription = "Import EPUB",
-                    )
+                Box {
+                    IconButton(onClick = { importMenuExpanded = true }, enabled = enabled) {
+                        Icon(
+                            imageVector = Icons.Rounded.Add,
+                            contentDescription = "Import book",
+                        )
+                    }
+                    DropdownMenu(
+                        expanded = importMenuExpanded,
+                        onDismissRequest = { importMenuExpanded = false },
+                    ) {
+                        SortMenuHeader(text = "Import")
+                        HorizontalDivider()
+                        DropdownMenuItem(
+                            text = { Text("EPUB or manga file") },
+                            onClick = {
+                                importMenuExpanded = false
+                                onImport()
+                            },
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Manga folder") },
+                            onClick = {
+                                importMenuExpanded = false
+                                onImportMangaFolder()
+                            },
+                        )
+                    }
                 }
             }
         },
@@ -1535,6 +1584,7 @@ private fun SettingsRow(row: SettingsRowModel, onClick: () -> Unit) {
 @Composable
 private fun EmptyBooksView(
     onImport: () -> Unit,
+    onImportMangaFolder: () -> Unit,
     enabled: Boolean = true,
     modifier: Modifier = Modifier,
 ) {
@@ -1549,14 +1599,20 @@ private fun EmptyBooksView(
         )
         Spacer(Modifier.height(10.dp))
         Text(
-            text = "Import an EPUB using the + button to start reading.",
+            text = "Import an EPUB or mokuro manga using the + button to start reading.",
             style = MaterialTheme.typography.bodyLarge,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Spacer(Modifier.height(24.dp))
-        Row(Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
             Button(onClick = onImport, enabled = enabled) {
-                Text("Import EPUB")
+                Text("Import file")
+            }
+            Button(onClick = onImportMangaFolder, enabled = enabled) {
+                Text("Import manga folder")
             }
         }
     }
