@@ -143,11 +143,8 @@ class MokuroImporter(
             val page = pageElement.jsonObject
             val imgPath = page.stringOrNull("img_path")
                 ?: throw MokuroImportException("A page in the .mokuro file is missing its \"img_path\".")
-            val sourceImage = sourceRoot.resolveWithin(imgPath)
-                ?: throw MokuroImportException("Page image escapes the source folder: $imgPath")
-            if (!sourceImage.isFile) {
-                throw MokuroImportException("Page image referenced by the .mokuro file is missing: $imgPath")
-            }
+            val sourceImage = locatePageImage(staging, sourceRoot, imgPath)
+                ?: throw MokuroImportException("Page image referenced by the .mokuro file is missing: $imgPath")
             val basename = uniqueBasename(sourceImage.name, plannedImages)
             plannedImages[basename] = sourceImage
             val rewritten = "$MOKURO_IMAGES_DIR/$basename"
@@ -260,6 +257,32 @@ internal fun File.findMokuroFile(): File? =
         .filter { it.isFile && it.extension.equals(MOKURO_FILE_EXTENSION, ignoreCase = true) }
         .sortedWith(compareBy({ it.relativeTo(this).path.count { c -> c == File.separatorChar } }, { it.name }))
         .firstOrNull()
+
+/**
+ * Locates the page image referenced by a mokuro `img_path`.
+ *
+ * Mokuro's standard output keeps the `.mokuro` file as a *sibling* of the image folder, so
+ * `img_path` is relative to that folder rather than to the `.mokuro` file's own directory.
+ * Resolution therefore falls back from the strict interpretation to matching the `img_path`
+ * tail, then a unique basename, anywhere under the extracted [staging] tree. Every candidate
+ * comes from `walkTopDown()` over [staging], so results are always inside it (no traversal).
+ */
+private fun locatePageImage(staging: File, sourceRoot: File, imgPath: String): File? {
+    // 1. Strict: img_path relative to the .mokuro file's own directory.
+    sourceRoot.resolveWithin(imgPath)?.takeIf { it.isFile }?.let { return it }
+    val normalized = imgPath.replace('\\', '/').trim().trimStart('/')
+    if (normalized.isEmpty()) return null
+    // 2. Common mokuro layout: images in a sibling folder — match the img_path tail.
+    staging.walkTopDown()
+        .firstOrNull { it.isFile && it.invariantSeparatorsPath.endsWith("/$normalized") }
+        ?.let { return it }
+    // 3. Last resort: a single unambiguous basename match anywhere in the tree.
+    val basename = normalized.substringAfterLast('/')
+    return staging.walkTopDown()
+        .filter { it.isFile && it.name == basename }
+        .toList()
+        .singleOrNull()
+}
 
 /**
  * Resolves [relativePath] against this directory, returning null if it escapes the

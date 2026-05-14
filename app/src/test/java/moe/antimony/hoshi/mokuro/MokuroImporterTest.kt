@@ -96,6 +96,26 @@ class MokuroImporterTest {
     }
 
     @Test
+    fun resolvesImagesFromSiblingFolderWhenImgPathIsBareFilename() = runBlocking {
+        // Standard mokuro output: the .mokuro file sits next to a folder of page images and
+        // img_path is a bare filename relative to that folder, not to the .mokuro file itself.
+        val filesDir = newDir("hoshi-mokuro-sibling-files")
+        val staging = newDir("hoshi-mokuro-sibling-staging")
+        staging.resolve("Yotsubato.mokuro").writeText(mokuroJson("page_000.jpg", "page_001.jpg"))
+        val imageFolder = staging.resolve("Yotsubato").apply { mkdirs() }
+        imageFolder.resolve("page_000.jpg").writeBytes(byteArrayOf(1, 2))
+        imageFolder.resolve("page_001.jpg").writeBytes(byteArrayOf(3, 4))
+
+        val target = filesDir.resolve("Books/sibling").apply { mkdirs() }
+        val result = importer(filesDir).assembleMokuroBook(staging) { target }
+
+        assertEquals(2, result.pageCount)
+        assertTrue(target.resolve("images/page_000.jpg").isFile)
+        assertTrue(target.resolve("images/page_001.jpg").isFile)
+        assertArrayEquals(byteArrayOf(1, 2), target.resolve("images/page_000.jpg").readBytes())
+    }
+
+    @Test
     fun flattensCollidingBasenamesFromDifferentSubfolders() = runBlocking {
         val filesDir = newDir("hoshi-mokuro-collide-files")
         val staging = newDir("hoshi-mokuro-collide-staging")
