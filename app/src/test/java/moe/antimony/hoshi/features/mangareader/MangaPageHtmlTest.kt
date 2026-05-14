@@ -114,6 +114,18 @@ class MangaPageHtmlTest {
     }
 
     @Test
+    fun matchedWordHighlightAndOcrBoxPopupRectAreWiredIntoThePage() {
+        val html = build(page(emptyList()))
+
+        // The dictionary-matched word gets a visible highlight (CSS Custom Highlight API).
+        assertTrue(html.contains("::highlight(hoshi-selection)"))
+        // HoshiTextSelection is wrapped so the lookup popup is positioned off the OCR box
+        // rather than over the tapped character.
+        assertTrue(html.contains("window.HoshiTextSelection ="))
+        assertTrue(html.contains("closest('.ocr-box')"))
+    }
+
+    @Test
     fun backgroundColourIsAppliedToThePageLetterbox() {
         val html = MangaPageHtml.build(
             page = page(emptyList()),

@@ -92,6 +92,34 @@ internal object MangaPageHtml {
               window.addEventListener('orientationchange', sizeFrame);
             })();
             window.scanNonJapaneseText = $scanNonJapaneseText;
+            (function() {
+              // Place the dictionary popup clear of the whole OCR text box (the sentence
+              // being read), not just the tapped character. The shared selection script
+              // reports the tapped character's tiny rect; here HoshiTextSelection.postMessage
+              // is wrapped so the containing .ocr-box's rect is substituted before the
+              // payload reaches the bridge, and LookupPopupLayout then positions the popup
+              // above or below the entire bubble.
+              var native = window.HoshiTextSelection;
+              if (native) {
+                window.HoshiTextSelection = {
+                  postMessage: function(json) {
+                    try {
+                      var sel = window.hoshiSelection && window.hoshiSelection.selection;
+                      var node = sel && sel.startNode;
+                      var el = node && (node.nodeType === 1 ? node : node.parentElement);
+                      var box = el && el.closest && el.closest('.ocr-box');
+                      if (box) {
+                        var r = box.getBoundingClientRect();
+                        var data = JSON.parse(json);
+                        data.rect = { x: r.x, y: r.y, width: r.width, height: r.height };
+                        json = JSON.stringify(data);
+                      }
+                    } catch (e) {}
+                    native.postMessage(json);
+                  }
+                };
+              }
+            })();
             $selectionScript
             </script>
             </body>
@@ -159,6 +187,11 @@ internal object MangaPageHtml {
           margin: 0;
         }
         ::selection { background: rgba(70, 130, 220, 0.45); }
+        /* The dictionary-matched word is highlighted through the CSS Custom Highlight API
+           (the shared selection script does CSS.highlights.set('hoshi-selection', ...)).
+           Without this rule the highlight paints nothing, so a tap gives no feedback about
+           which word it landed on — this makes the matched word visibly light up. */
+        ::highlight(hoshi-selection) { background: #ffd400; color: #000; }
     """.trimIndent()
 
     private fun textBoxHtml(
