@@ -191,20 +191,29 @@ internal object MangaPageHtml {
           white-space: pre;
           /* Invisible by default: the OCR text stays in the DOM (so a tap can hit-test a
              word and the box itself is hit-testable) but transparent, so the reader sees
-             only the artwork. A tap adds `.revealed`, which paints the text on a
-             translucent plate. Selectable so a tap looks the word up in the dictionary. */
+             only the artwork. A tap adds `.revealed`, which paints the text on a solid
+             white plate. Selectable so a tap looks the word up in the dictionary.
+
+             The mokuro width/height are applied as *minimums* (see textBoxHtml) rather than
+             fixed sizes, and a little padding is added: the WebView routinely renders the
+             OCR text larger than mokuro's box, and a fixed box left that overflow spilling
+             past the plate — invisible black-on-black over dark artwork. As min sizes, the
+             box (and therefore the revealed plate) instead grows to fully contain the text. */
           color: transparent;
           background: transparent;
           border-radius: 3px;
+          padding: 0.08em;
           -webkit-user-select: text;
           user-select: text;
         }
         .ocr-box.revealed {
-          /* A near-opaque white plate behind the black OCR text so a revealed bubble stays
-             legible over *any* artwork — including solid-black panels, where the previous
-             more-translucent plate left the text barely visible. */
+          /* A solid white plate behind the black OCR text, plus a white halo on the glyphs
+             as a safety net for anything that still pokes past the plate. */
           color: #000;
-          background: rgba(255, 255, 255, 0.95);
+          background: #fff;
+          text-shadow:
+            1px 1px 1px #fff, -1px 1px 1px #fff, 1px -1px 1px #fff, -1px -1px 1px #fff,
+            2px 0 2px #fff, -2px 0 2px #fff, 0 2px 2px #fff, 0 -2px 2px #fff;
         }
         .ocr-box.vertical {
           writing-mode: vertical-rl;
@@ -281,8 +290,11 @@ internal object MangaPageHtml {
         val fontCqw = percent(box.fontSize, imageWidth)
         val verticalClass = if (box.vertical) " vertical" else ""
         val text = box.lines.joinToString("\n").let(::escapeHtmlText)
+        // width/height go in as *minimums*: the box grows past them when the WebView
+        // renders the OCR text larger than mokuro's box, so the revealed plate always
+        // fully covers the text (see the .ocr-box comment).
         return """    <div class="ocr-box$verticalClass" style="left: $leftPct%; top: $topPct%; """ +
-            """width: $widthPct%; height: $heightPct%; font-size: ${fontCqw}cqw;">""" +
+            """min-width: $widthPct%; min-height: $heightPct%; font-size: ${fontCqw}cqw;">""" +
             """<p>$text</p>$ACTION_BUTTONS_HTML</div>"""
     }
 

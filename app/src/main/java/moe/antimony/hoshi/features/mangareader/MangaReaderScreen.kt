@@ -119,8 +119,13 @@ internal fun MangaReaderScreen(
     // A page turn in flight: the snapshot of the page being left, which slides off while the
     // WebView (already reloading to the new page) slides in. Null except during the slide.
     var pageTransition by remember(book) { mutableStateOf<MangaPageTransition?>(null) }
+    // The transition the slide is actually driving. It trails `pageTransition` by the one
+    // frame in which the LaunchedEffect below snaps the slide back to its start: until they
+    // match, the offset modifiers force progress to 0 so the snapshot covers the reloading
+    // WebView from the very first frame, instead of briefly flashing it at full size.
+    var animatingTransition by remember(book) { mutableStateOf<MangaPageTransition?>(null) }
     // Drives the slide 0f (just started) -> 1f (settled); read in the offset modifiers below.
-    val transitionProgress = remember { Animatable(1f) }
+    val transitionProgress = remember { Animatable(0f) }
 
     // ChatGPT speech-bubble feature. Deliberately self-contained — its own settings repo and
     // per-manga history store (see features/ai) — so it never touches shared/upstream files.
@@ -336,13 +341,16 @@ internal fun MangaReaderScreen(
         // Load this manga's ChatGPT history so the ⋯ menu can show it.
         aiHistory = aiHistoryStore.load(bookRoot).entries
     }
-    // Drive the page-turn slide: snap to the start, animate to settled, then drop the
+    // Drive the page-turn slide: snap to the start, adopt the transition (which lets the
+    // offset modifiers start reading the live progress), animate to settled, then drop the
     // snapshot. Re-keys on `pageTransition`, so a fast second turn restarts the slide cleanly.
     LaunchedEffect(pageTransition) {
-        if (pageTransition == null) return@LaunchedEffect
+        val transition = pageTransition ?: return@LaunchedEffect
         transitionProgress.snapTo(0f)
+        animatingTransition = transition
         transitionProgress.animateTo(1f, tween(durationMillis = MANGA_PAGE_TURN_DURATION_MS))
         pageTransition = null
+        animatingTransition = null
     }
 
     BackHandler {
@@ -361,6 +369,7 @@ internal fun MangaReaderScreen(
             .background(backgroundColor),
     ) {
         val activeTransition = pageTransition
+        val animating = animatingTransition
         val containerWidthPx = constraints.maxWidth
         // Slide direction for a right-to-left manga, modelled as a filmstrip with page 1 at
         // the right: a forward turn slides the outgoing page off to the *right* and pulls the
@@ -386,8 +395,12 @@ internal fun MangaReaderScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .offset {
-                    if (activeTransition == null) return@offset IntOffset.Zero
-                    val entering = -leavingSign * containerWidthPx * (1f - transitionProgress.value)
+                    val transition = activeTransition ?: return@offset IntOffset.Zero
+                    // Hold progress at 0 until the LaunchedEffect has adopted this transition,
+                    // so the snapshot below covers the reloading WebView from the first frame.
+                    val progress =
+                        if (transition === animating) transitionProgress.value else 0f
+                    val entering = -leavingSign * containerWidthPx * (1f - progress)
                     IntOffset(entering.roundToInt(), 0)
                 },
         )
@@ -401,7 +414,12 @@ internal fun MangaReaderScreen(
                 modifier = Modifier
                     .fillMaxSize()
                     .offset {
-                        val leaving = leavingSign * containerWidthPx * transitionProgress.value
+                        val progress = if (activeTransition === animating) {
+                            transitionProgress.value
+                        } else {
+                            0f
+                        }
+                        val leaving = leavingSign * containerWidthPx * progress
                         IntOffset(leaving.roundToInt(), 0)
                     },
             )
@@ -648,7 +666,7 @@ private const val MANGA_PAGE_TURN_DURATION_MS = 800
 /**
  * A manga page turn in flight: [snapshot] is the page being left — drawn on top of the
  * WebView (which is already reloading to the new page) and slid off-screen — and [direction]
- * is which way it goes. A backward turn slides it right, a forward turn slides it left.
+ * is which way it goes. A forward turn slides it right, a backward turn slides it left.
  */
 private data class MangaPageTransition(
     val snapshot: ImageBitmap,
