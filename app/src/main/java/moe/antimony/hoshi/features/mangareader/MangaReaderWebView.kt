@@ -35,15 +35,18 @@ private const val MANGA_MAX_SELECTION_LENGTH = 16
  * [MangaWebResourceBridge]. Navigating pages just reloads the WebView with the next page's
  * HTML.
  *
- * Text selection -> dictionary lookup reuses the shared EPUB mechanism verbatim: the
- * injected [ReaderSelectionScripts] source plus a [ReaderSelectionBridge] bound to the
- * `HoshiTextSelection` JavaScript interface. A tap selects the word under the finger and
- * the caller turns that [ReaderSelectionData] into a lookup popup.
+ * Text selection -> dictionary lookup reuses the shared EPUB mechanism: the injected
+ * [ReaderSelectionScripts] source plus a [ReaderSelectionBridge] bound to the
+ * `HoshiTextSelection` JavaScript interface. OCR text is invisible until tapped — a tap
+ * goes through `window.hoshiManga.handleTap` ([MangaPageHtml]), which reveals the tapped
+ * bubble and looks the word up, copies a bubble via the `HoshiMangaClipboard` interface
+ * ([MangaClipboardBridge]) when its copy button is hit, or hides every revealed bubble when
+ * the tap lands on empty artwork.
  *
  * Right-to-left navigation: a left swipe moves *forward* in reading order and a right swipe
  * moves *backward* — see [MangaPageNavigation]. A tap never turns the page; it is reserved
- * for selecting a word, so page turning is driven by swipes, the chrome buttons, and the
- * hardware page/volume keys.
+ * for the OCR interactions above, so page turning is driven by swipes, the chrome buttons,
+ * and the hardware page/volume keys.
  */
 @Composable
 internal fun MangaReaderWebView(
@@ -56,12 +59,14 @@ internal fun MangaReaderWebView(
     onNavigate: (ReaderNavigationDirection) -> Unit,
     onTextSelected: (ReaderSelectionData) -> Int?,
     onSelectionCleared: () -> Unit,
+    onAskAi: (String) -> Unit,
     onWebViewReady: (WebView) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val currentOnNavigate = rememberUpdatedState(onNavigate)
     val currentOnTextSelected = rememberUpdatedState(onTextSelected)
     val currentOnSelectionCleared = rememberUpdatedState(onSelectionCleared)
+    val currentOnAskAi = rememberUpdatedState(onAskAi)
 
     val resourceBridge = remember(book, bookRoot) { MangaWebResourceBridge(bookRoot, book) }
 
@@ -92,10 +97,32 @@ internal fun MangaReaderWebView(
                 // own generated document. Left at defaults, the layout viewport is the
                 // WebView's own size, so 100vh / height:100% work.
                 addJavascriptInterface(
-                    ReaderSelectionBridge(this) { selection ->
-                        currentOnTextSelected.value(selection)
+                    // The shared selection bridge now hands back a `selectionRects` callback
+                    // for the EPUB reader's Compose highlight overlay; the manga reader does
+                    // not use that — it highlights the matched word with the in-page CSS
+                    // Custom Highlight (see MangaPageHtml's `::highlight(hoshi-selection)`),
+                    // so it ignores `selectionRects` and applies the highlight here.
+                    ReaderSelectionBridge(this) { selection, _ ->
+                        val highlightCount = currentOnTextSelected.value(selection)
+                        if (highlightCount != null) {
+                            evaluateJavascript(
+                                ReaderSelectionCommand.HighlightSelection(highlightCount).source,
+                                null,
+                            )
+                        }
                     },
                     "HoshiTextSelection",
+                )
+                addJavascriptInterface(
+                    // Lets a revealed bubble's copy button copy the whole bubble's OCR text.
+                    MangaClipboardBridge(context),
+                    "HoshiMangaClipboard",
+                )
+                addJavascriptInterface(
+                    // Lets a revealed bubble's ChatGPT button send the bubble text for a
+                    // lookup; MangaReaderScreen turns it into the ChatGPT popup.
+                    MangaAiBridge { bubbleText -> currentOnAskAi.value(bubbleText) },
+                    "HoshiMangaAi",
                 )
                 webViewClient = MangaWebViewClient(resourceBridge)
                 attachMangaTouchListener(currentOnNavigate, currentOnSelectionCleared)
@@ -136,9 +163,9 @@ private fun WebView.attachMangaTouchListener(
     setOnTouchListener(
         object : SwipePageTouchListener() {
             override fun onTap(x: Float, y: Float) {
-                // A tap only ever selects the word under the finger for dictionary lookup —
-                // it never turns the page. Page turning is the chrome buttons, swipes and
-                // the hardware page/volume keys, so tapping a word can't move the page.
+                // A tap never turns the page — it reveals/looks up/copies OCR text, or hides
+                // revealed bubbles (see selectAt). Page turning is the chrome buttons,
+                // swipes and the hardware page/volume keys, so a tap can't move the page.
                 webView.selectAt(x, y) { onSelectionCleared.value() }
             }
 
@@ -154,18 +181,21 @@ private fun WebView.attachMangaTouchListener(
 }
 
 /**
- * Asks the in-page selection script to select the word at ([x], [y]) (Android pixels). When
- * a word is selected the shared selection bridge delivers it for dictionary lookup; when the
- * tap hits no OCR text, [onSelectedNothing] runs so the caller can fall back to navigation.
+ * Routes a tap at ([x], [y]) (Android pixels) through the in-page manga tap handler
+ * (`window.hoshiManga.handleTap`): it reveals the tapped bubble and looks the word up,
+ * copies a bubble when its copy button is hit, or hides every revealed bubble when the tap
+ * lands on empty artwork.
+ *
+ * [onSelectedNothing] runs when the tap selects no word — empty artwork, or a bubble with no
+ * character under the finger — so the caller can clear the lookup popup. A copy-button hit
+ * reports neither a selection nor "nothing", so it leaves any open popup untouched.
  */
 private fun WebView.selectAt(x: Float, y: Float, onSelectedNothing: () -> Unit) {
     val density = resources.displayMetrics.density
+    val cssX = androidPixelsToCssPixels(x, density)
+    val cssY = androidPixelsToCssPixels(y, density)
     evaluateJavascript(
-        ReaderSelectionCommand.SelectText(
-            x = androidPixelsToCssPixels(x, density),
-            y = androidPixelsToCssPixels(y, density),
-            maxLength = MANGA_MAX_SELECTION_LENGTH,
-        ).source,
+        "window.hoshiManga && window.hoshiManga.handleTap($cssX, $cssY, $MANGA_MAX_SELECTION_LENGTH)",
     ) { result ->
         if (ReaderSelectionResult.fromWebViewResult(result).selectedNothing) {
             onSelectedNothing()

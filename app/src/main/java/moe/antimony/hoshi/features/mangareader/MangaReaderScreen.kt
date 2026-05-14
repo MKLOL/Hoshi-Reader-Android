@@ -1,14 +1,21 @@
 package moe.antimony.hoshi.features.mangareader
 
+import android.graphics.Bitmap
+import android.graphics.Canvas
 import android.view.KeyEvent
 import android.webkit.WebView
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -16,6 +23,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.KeyboardArrowLeft
 import androidx.compose.material.icons.rounded.KeyboardArrowRight
+import androidx.compose.material.icons.rounded.MoreVert
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Surface
@@ -23,6 +33,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -33,14 +44,30 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
+import androidx.core.graphics.createBitmap
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import moe.antimony.hoshi.LocalHoshiAppContainer
 import moe.antimony.hoshi.epub.BookRepository
+import moe.antimony.hoshi.features.ai.AiChatEntry
+import moe.antimony.hoshi.features.ai.AiChatHistoryStore
+import moe.antimony.hoshi.features.ai.AiChatHistoryView
+import moe.antimony.hoshi.features.ai.AiChatPopupView
+import moe.antimony.hoshi.features.ai.AiChatSettingsScreen
+import moe.antimony.hoshi.features.ai.AiChatUiState
+import moe.antimony.hoshi.features.ai.OpenAiChatClient
+import moe.antimony.hoshi.features.ai.aiChatSettingsRepository
 import moe.antimony.hoshi.features.dictionary.DictionarySettings
 import moe.antimony.hoshi.features.dictionary.LookupPopupItem
 import moe.antimony.hoshi.features.dictionary.LookupPopupOptions
@@ -54,6 +81,7 @@ import moe.antimony.hoshi.features.reader.ReaderHardwareKeyAction
 import moe.antimony.hoshi.features.reader.usesDarkInterface
 import moe.antimony.hoshi.mokuro.MokuroBook
 import java.io.File
+import kotlin.math.roundToInt
 
 private const val BOOKMARK_SAVE_DEBOUNCE_MS = 400L
 
@@ -88,6 +116,25 @@ internal fun MangaReaderScreen(
     }
     var webView by remember { mutableStateOf<WebView?>(null) }
     var lookupPopups by remember(book) { mutableStateOf<List<LookupPopupItem>>(emptyList()) }
+    // A page turn in flight: the snapshot of the page being left, which slides off while the
+    // WebView (already reloading to the new page) slides in. Null except during the slide.
+    var pageTransition by remember(book) { mutableStateOf<MangaPageTransition?>(null) }
+    // Drives the slide 0f (just started) -> 1f (settled); read in the offset modifiers below.
+    val transitionProgress = remember { Animatable(1f) }
+
+    // ChatGPT speech-bubble feature. Deliberately self-contained — its own settings repo and
+    // per-manga history store (see features/ai) — so it never touches shared/upstream files.
+    val context = LocalContext.current
+    val aiSettingsRepository = remember { context.applicationContext.aiChatSettingsRepository() }
+    val aiSettings by aiSettingsRepository.settings.collectAsState(initial = null)
+    val aiHistoryStore = remember { AiChatHistoryStore() }
+    // The ChatGPT popup state (null = no popup), the in-flight request, this manga's chat
+    // history, and whether the history / settings overlays are open.
+    var aiChatState by remember(book) { mutableStateOf<AiChatUiState?>(null) }
+    var aiRequestJob by remember(book) { mutableStateOf<Job?>(null) }
+    var aiHistory by remember(book) { mutableStateOf<List<AiChatEntry>>(emptyList()) }
+    var showAiHistory by remember(book) { mutableStateOf(false) }
+    var showAiSettings by remember(book) { mutableStateOf(false) }
 
     val scope = rememberCoroutineScope()
     // A scope that outlives the reader route, used only to flush a pending bookmark save on
@@ -120,7 +167,21 @@ internal fun MangaReaderScreen(
     fun goToPage(index: Int) {
         val clamped = index.coerceIn(0, book.pages.lastIndex.coerceAtLeast(0))
         if (clamped == pageIndex) return
+        val direction = if (clamped > pageIndex) {
+            ReaderNavigationDirection.Forward
+        } else {
+            ReaderNavigationDirection.Backward
+        }
         clearSelectionAndPopups()
+        // Snapshot the outgoing page so it can slide off over the incoming page. Skipped on
+        // e-ink (a slide just ghosts on a slow panel) and when the WebView is not laid out
+        // yet — either way `pageTransition` stays null and the page simply swaps.
+        val snapshot = if (readerSettings.eInkMode) {
+            null
+        } else {
+            webView?.let(::captureWebViewBitmap)
+        }
+        pageTransition = snapshot?.let { MangaPageTransition(it.asImageBitmap(), direction) }
         pageIndex = clamped
         scheduleBookmarkSave(clamped)
     }
@@ -129,6 +190,76 @@ internal fun MangaReaderScreen(
         val target = MangaPageNavigation.targetIndex(pageIndex, pageCount, direction) ?: return false
         goToPage(target)
         return true
+    }
+
+    fun dismissAiChat() {
+        aiRequestJob?.cancel()
+        aiChatState = null
+    }
+
+    /**
+     * Sends a tapped speech bubble to ChatGPT, shows the popup, and on success appends the
+     * exchange to this manga's history. Dismissing the popup cancels an in-flight request,
+     * and the coroutine bails without touching state once cancelled.
+     */
+    fun askAi(bubbleText: String) {
+        val settings = aiSettings
+        if (settings == null) {
+            // DataStore's first emission is async; a tap in that brief window would otherwise
+            // do nothing at all. Tell the user to retry instead of leaving a dead button.
+            aiChatState = AiChatUiState.Failed(
+                bubbleText,
+                "ChatGPT is still loading — tap again in a moment.",
+            )
+            return
+        }
+        if (!settings.isConfigured) {
+            aiChatState = AiChatUiState.Failed(
+                bubbleText,
+                "Set your OpenAI API key first: open the ⋯ menu → ChatGPT settings.",
+            )
+            return
+        }
+        aiRequestJob?.cancel()
+        aiChatState = AiChatUiState.Loading(bubbleText)
+        aiRequestJob = scope.launch {
+            val result = runCatching {
+                OpenAiChatClient.complete(
+                    apiKey = settings.apiKey,
+                    model = settings.model,
+                    prompt = settings.promptText,
+                    bubbleText = bubbleText,
+                )
+            }
+            // Bail without touching state if the popup was dismissed mid-request.
+            if (!isActive) return@launch
+            result.fold(
+                onSuccess = { response ->
+                    val entry = AiChatEntry(
+                        bubbleText = bubbleText,
+                        prompt = settings.promptText,
+                        model = settings.model,
+                        response = response,
+                        timestampSeconds = repository.currentAppleReferenceDateSeconds(),
+                    )
+                    aiChatState = AiChatUiState.Loaded(entry)
+                    // Persist into this manga's history. A disk failure here must not crash
+                    // the reader — the reply is already shown — so keep the existing history
+                    // on failure, while still letting cancellation propagate normally.
+                    aiHistory = runCatching { aiHistoryStore.append(bookRoot, entry).entries }
+                        .getOrElse { error ->
+                            if (error is CancellationException) throw error
+                            aiHistory
+                        }
+                },
+                onFailure = { error ->
+                    aiChatState = AiChatUiState.Failed(
+                        bubbleText,
+                        error.message ?: "ChatGPT request failed.",
+                    )
+                },
+            )
+        }
     }
 
     val lookupOptions = LookupPopupOptions(
@@ -201,20 +332,44 @@ internal fun MangaReaderScreen(
         // path as page turns, so the open save and a quick page turn never race to disk.
         scheduleBookmarkSave(pageIndex)
     }
+    LaunchedEffect(book, bookRoot) {
+        // Load this manga's ChatGPT history so the ⋯ menu can show it.
+        aiHistory = aiHistoryStore.load(bookRoot).entries
+    }
+    // Drive the page-turn slide: snap to the start, animate to settled, then drop the
+    // snapshot. Re-keys on `pageTransition`, so a fast second turn restarts the slide cleanly.
+    LaunchedEffect(pageTransition) {
+        if (pageTransition == null) return@LaunchedEffect
+        transitionProgress.snapTo(0f)
+        transitionProgress.animateTo(1f, tween(durationMillis = MANGA_PAGE_TURN_DURATION_MS))
+        pageTransition = null
+    }
 
     BackHandler {
-        if (lookupPopups.isNotEmpty()) {
-            clearSelectionAndPopups()
-        } else {
-            onClose()
+        // The ChatGPT history / settings overlays own their own back handling (via
+        // SettingsDetailScaffold); this handles the ChatGPT popup and lookup popups.
+        when {
+            aiChatState != null -> dismissAiChat()
+            lookupPopups.isNotEmpty() -> clearSelectionAndPopups()
+            else -> onClose()
         }
     }
 
-    Box(
+    BoxWithConstraints(
         modifier = modifier
             .fillMaxSize()
             .background(backgroundColor),
     ) {
+        val activeTransition = pageTransition
+        val containerWidthPx = constraints.maxWidth
+        // Slide direction for a right-to-left manga: the page being *left* slides off the way
+        // it was swiped — a backward turn (right swipe) sends it right, a forward turn sends
+        // it left — and the incoming page slides in from the opposite edge, so the two stay
+        // edge to edge with no gap. `transitionProgress` is read inside the offset lambdas so
+        // each animation frame only re-lays-out, never recomposes.
+        val leavingSign =
+            if (activeTransition?.direction == ReaderNavigationDirection.Backward) 1 else -1
+
         MangaReaderWebView(
             book = book,
             bookRoot = bookRoot,
@@ -225,15 +380,43 @@ internal fun MangaReaderScreen(
             onNavigate = { direction -> navigate(direction) },
             onTextSelected = handleTextSelected,
             onSelectionCleared = { lookupPopups = emptyList() },
+            onAskAi = { bubbleText -> askAi(bubbleText) },
             onWebViewReady = { webView = it },
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier
+                .fillMaxSize()
+                .offset {
+                    if (activeTransition == null) return@offset IntOffset.Zero
+                    val entering = -leavingSign * containerWidthPx * (1f - transitionProgress.value)
+                    IntOffset(entering.roundToInt(), 0)
+                },
         )
+
+        if (activeTransition != null) {
+            // The outgoing page, drawn on top of the (incoming) WebView and slid off-screen.
+            Image(
+                bitmap = activeTransition.snapshot,
+                contentDescription = null,
+                contentScale = ContentScale.FillBounds,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .offset {
+                        val leaving = leavingSign * containerWidthPx * transitionProgress.value
+                        IntOffset(leaving.roundToInt(), 0)
+                    },
+            )
+        }
 
         LookupPopupStackView(
             popups = lookupPopups,
             onPopupsChange = { lookupPopups = it },
             lookupChildPopup = ::lookupPopupFor,
-            onRootPopupDismissed = { webView?.clearMangaSelection() },
+            onRootPopupDismissed = {
+                // Clear the in-page selection highlight, then return false so the stack view
+                // still removes the dismissed popup from the list (the manga reader has no
+                // separate root-popup teardown to own the dismissal).
+                webView?.clearMangaSelection()
+                false
+            },
             modifier = Modifier.fillMaxSize(),
         )
 
@@ -242,6 +425,8 @@ internal fun MangaReaderScreen(
             darkInterface = readerSettings.usesDarkInterface(systemDark),
             eInkMode = readerSettings.eInkMode,
             onClose = onClose,
+            onShowAiHistory = { showAiHistory = true },
+            onShowAiSettings = { showAiSettings = true },
             modifier = Modifier
                 .align(Alignment.TopCenter)
                 .fillMaxWidth()
@@ -260,16 +445,50 @@ internal fun MangaReaderScreen(
                 .fillMaxWidth()
                 .zIndex(1f),
         )
+
+        // ChatGPT overlays. The response popup sits above the page and the lookup popups;
+        // the history / settings screens are full-screen and sit above everything.
+        val activeAiChat = aiChatState
+        if (activeAiChat != null) {
+            AiChatPopupView(
+                state = activeAiChat,
+                onDismiss = { dismissAiChat() },
+                onRetry = { askAi(activeAiChat.bubbleText) },
+                modifier = Modifier.zIndex(3f),
+            )
+        }
+        if (showAiHistory) {
+            AiChatHistoryView(
+                entries = aiHistory,
+                onClose = { showAiHistory = false },
+                modifier = Modifier
+                    .fillMaxSize()
+                    .zIndex(4f),
+            )
+        }
+        if (showAiSettings) {
+            AiChatSettingsScreen(
+                onClose = { showAiSettings = false },
+                modifier = Modifier
+                    .fillMaxSize()
+                    .zIndex(4f),
+            )
+        }
     }
 }
 
-/** Top reader chrome: a close affordance and the book title. */
+/**
+ * Top reader chrome: a close affordance, the book title, and a ⋯ overflow menu for the
+ * ChatGPT history / settings (a fork addition, kept off the shared Settings navigation).
+ */
 @Composable
 private fun MangaReaderChrome(
     title: String,
     darkInterface: Boolean,
     eInkMode: Boolean,
     onClose: () -> Unit,
+    onShowAiHistory: () -> Unit,
+    onShowAiSettings: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val contentColor = if (darkInterface) Color.White else Color.Black
@@ -303,6 +522,35 @@ private fun MangaReaderChrome(
                     .padding(horizontal = 56.dp),
                 maxLines = 1,
             )
+            Box(modifier = Modifier.align(Alignment.CenterEnd)) {
+                var menuExpanded by remember { mutableStateOf(false) }
+                IconButton(onClick = { menuExpanded = true }) {
+                    Icon(
+                        imageVector = Icons.Rounded.MoreVert,
+                        contentDescription = "More options",
+                        tint = contentColor,
+                    )
+                }
+                DropdownMenu(
+                    expanded = menuExpanded,
+                    onDismissRequest = { menuExpanded = false },
+                ) {
+                    DropdownMenuItem(
+                        text = { Text("ChatGPT history") },
+                        onClick = {
+                            menuExpanded = false
+                            onShowAiHistory()
+                        },
+                    )
+                    DropdownMenuItem(
+                        text = { Text("ChatGPT settings") },
+                        onClick = {
+                            menuExpanded = false
+                            onShowAiSettings()
+                        },
+                    )
+                }
+            }
         }
     }
 }
@@ -391,4 +639,33 @@ private fun Color.toCssHex(): String {
     val g = (green * 255f).toInt().coerceIn(0, 255)
     val b = (blue * 255f).toInt().coerceIn(0, 255)
     return "#%02x%02x%02x".format(r, g, b)
+}
+
+/** Duration of the manga page-turn slide. Short enough to stay snappy when flicking pages. */
+private const val MANGA_PAGE_TURN_DURATION_MS = 280
+
+/**
+ * A manga page turn in flight: [snapshot] is the page being left — drawn on top of the
+ * WebView (which is already reloading to the new page) and slid off-screen — and [direction]
+ * is which way it goes. A backward turn slides it right, a forward turn slides it left.
+ */
+private data class MangaPageTransition(
+    val snapshot: ImageBitmap,
+    val direction: ReaderNavigationDirection,
+)
+
+/**
+ * Snapshots [view]'s current pixels into a bitmap so the page it shows can keep being drawn
+ * while the WebView reloads to the next page underneath the slide. Returns null when the
+ * WebView is not laid out yet (nothing to capture) or the draw fails.
+ */
+private fun captureWebViewBitmap(view: WebView): Bitmap? {
+    val width = view.width
+    val height = view.height
+    if (width <= 0 || height <= 0) return null
+    return runCatching {
+        val bitmap = createBitmap(width, height)
+        view.draw(Canvas(bitmap))
+        bitmap
+    }.getOrNull()
 }

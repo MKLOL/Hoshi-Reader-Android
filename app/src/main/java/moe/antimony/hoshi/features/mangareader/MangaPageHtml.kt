@@ -17,10 +17,15 @@ import moe.antimony.hoshi.mokuro.MokuroTextBox
  *    intrinsic pixel size. Percent positioning tracks `.frame`'s real rendered size, and
  *    the script re-runs on resize so rotation keeps the text aligned.
  *
- * The OCR text is real, selectable DOM text (`<p>` per box). It is rendered transparent so
- * the artwork shows through, but it is present and hit-testable — tapping a word triggers
- * the shared selection bridge exactly like the EPUB reader. `<p>` is used because the
- * shared selection script ([moe.antimony.hoshi.features.reader.ReaderSelectionScripts])
+ * The OCR text is real, selectable DOM text (`<p>` per box). Every box is invisible by
+ * default — the reader sees only the artwork — but it stays present and hit-testable.
+ * Tapping a box adds `.revealed`, which paints its text on a translucent plate and runs the
+ * shared selection bridge to look the tapped word up; tapping empty artwork hides every
+ * revealed box again. A revealed box also shows small action buttons — ask ChatGPT about the
+ * bubble, and copy the whole bubble's OCR text. All four outcomes are routed through
+ * `window.hoshiManga.handleTap` (see the page script) so a single tap path decides between
+ * them. `<p>` is used because
+ * the shared selection script ([moe.antimony.hoshi.features.reader.ReaderSelectionScripts])
  * scopes its sentence scan to the nearest `p`, which conveniently bounds a scan to one box.
  *
  * This deliberately does **not** reuse `ReaderContentStyles` / the EPUB pagination JS:
@@ -124,6 +129,7 @@ internal object MangaPageHtml {
               }
             })();
             $selectionScript
+            $MANGA_TAP_HANDLER_SCRIPT
             </script>
             </body>
             </html>
@@ -182,14 +188,22 @@ internal object MangaPageHtml {
           position: absolute;
           line-height: 1.1;
           white-space: pre;
-          /* The OCR text is shown over the artwork: visible so the reader can see what is
-             tappable, on a translucent light plate so it stays legible without fully
-             hiding the art, and selectable so a tap looks the word up in the dictionary. */
-          color: #000;
-          background: rgba(255, 255, 255, 0.82);
+          /* Invisible by default: the OCR text stays in the DOM (so a tap can hit-test a
+             word and the box itself is hit-testable) but transparent, so the reader sees
+             only the artwork. A tap adds `.revealed`, which paints the text on a
+             translucent plate. Selectable so a tap looks the word up in the dictionary. */
+          color: transparent;
+          background: transparent;
           border-radius: 3px;
           -webkit-user-select: text;
           user-select: text;
+        }
+        .ocr-box.revealed {
+          /* A near-opaque white plate behind the black OCR text so a revealed bubble stays
+             legible over *any* artwork — including solid-black panels, where the previous
+             more-translucent plate left the text barely visible. */
+          color: #000;
+          background: rgba(255, 255, 255, 0.95);
         }
         .ocr-box.vertical {
           writing-mode: vertical-rl;
@@ -197,6 +211,51 @@ internal object MangaPageHtml {
         }
         .ocr-box p {
           margin: 0;
+        }
+        /* Action buttons (ChatGPT, copy): shown only on a revealed box, in a row floated
+           just *above* the box's top-right corner — never over the text. (A box tightly
+           bounds its OCR text, and a vertical-rl bubble even starts in the top-right
+           corner, so any in-box placement covers characters.) The manga tap handler routes
+           a hit on one of these to its native bridge instead of a word lookup. Buttons are
+           sized in `em` so they track the box's text, with a px floor so they stay usable
+           tap targets on small bubbles. */
+        .ocr-actions {
+          display: none;
+          position: absolute;
+          bottom: 100%;
+          right: 0;
+          margin-bottom: 3px;
+          flex-direction: row;
+          gap: 3px;
+          z-index: 2;
+        }
+        .ocr-box.revealed .ocr-actions {
+          display: flex;
+        }
+        .ocr-action-btn {
+          box-sizing: border-box;
+          width: 1.7em;
+          height: 1.7em;
+          min-width: 20px;
+          min-height: 20px;
+          padding: 0.3em;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          border: none;
+          border-radius: 5px;
+          background: #1b1b1b;
+          color: #fff;
+          cursor: pointer;
+          -webkit-user-select: none;
+          user-select: none;
+        }
+        .ocr-action-btn svg {
+          width: 100%;
+          height: 100%;
+          display: block;
+          /* Let elementFromPoint resolve to the button itself, not the inner SVG. */
+          pointer-events: none;
         }
         ::selection { background: rgba(70, 130, 220, 0.45); }
         /* The dictionary-matched word is highlighted through the CSS Custom Highlight API
@@ -223,8 +282,84 @@ internal object MangaPageHtml {
         val text = box.lines.joinToString("\n").let(::escapeHtmlText)
         return """    <div class="ocr-box$verticalClass" style="left: $leftPct%; top: $topPct%; """ +
             """width: $widthPct%; height: $heightPct%; font-size: ${fontCqw}cqw;">""" +
-            """<p>$text</p></div>"""
+            """<p>$text</p>$ACTION_BUTTONS_HTML</div>"""
     }
+
+    /**
+     * The action buttons baked into every box; CSS keeps them hidden until the box is
+     * `.revealed`. A tap on one is recognised by [MANGA_TAP_HANDLER_SCRIPT], which routes it
+     * to a native bridge instead of starting a word lookup:
+     *
+     *  - the ChatGPT button (a sparkles glyph) -> `HoshiMangaAi`;
+     *  - the copy button (the standard two-rectangle glyph) -> `HoshiMangaClipboard`.
+     */
+    private const val ACTION_BUTTONS_HTML: String =
+        """<div class="ocr-actions">""" +
+            """<button class="ocr-action-btn ocr-ai-btn" type="button" """ +
+            """aria-label="Ask ChatGPT about this bubble">""" +
+            """<svg viewBox="0 0 24 24" fill="currentColor">""" +
+            """<path d="M11 2.5l1.8 4.7L17.5 9l-4.7 1.8L11 15.5l-1.8-4.7L4.5 9l4.7-1.8L11 2.5z"></path>""" +
+            """<path d="M18 13l.95 2.05L21 16l-2.05.95L18 19l-.95-2.05L15 16l2.05-.95L18 13z"></path>""" +
+            """</svg></button>""" +
+            """<button class="ocr-action-btn ocr-copy-btn" type="button" """ +
+            """aria-label="Copy bubble text">""" +
+            """<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" """ +
+            """stroke-linecap="round" stroke-linejoin="round">""" +
+            """<rect x="9" y="9" width="11" height="11" rx="2"></rect>""" +
+            """<path d="M5 15V5a2 2 0 0 1 2-2h10"></path></svg></button>""" +
+            """</div>"""
+
+    /**
+     * The single tap entry point for the manga page, called by [MangaReaderWebView.selectAt].
+     * It inspects the element under the tap and picks one of four outcomes:
+     *
+     *  - ChatGPT button -> hand the whole bubble's OCR text to `HoshiMangaAi`, returning
+     *    `'__ai__'` so the caller leaves the lookup popup untouched;
+     *  - copy button -> copy the whole bubble's OCR text via `HoshiMangaClipboard`, and
+     *    return `'__copied__'` so the caller leaves the lookup popup untouched;
+     *  - text box -> add `.revealed` to paint that bubble's text, then run the shared
+     *    `selectText` so the tapped word is looked up (its return value flows back out);
+     *  - empty artwork -> strip `.revealed` from every box and clear the active selection,
+     *    returning `null` so the caller dismisses the lookup popup.
+     */
+    private val MANGA_TAP_HANDLER_SCRIPT: String = """
+        (function() {
+          window.hoshiManga = {
+            handleTap: function(x, y, maxLength) {
+              var el = document.elementFromPoint(x, y);
+              var aiBtn = el && el.closest && el.closest('.ocr-ai-btn');
+              if (aiBtn) {
+                var aiBox = aiBtn.closest('.ocr-box');
+                var aiText = aiBox && aiBox.querySelector('p');
+                if (aiText && window.HoshiMangaAi) {
+                  window.HoshiMangaAi.askAboutBubble(aiText.textContent || '');
+                }
+                return '__ai__';
+              }
+              var copyBtn = el && el.closest && el.closest('.ocr-copy-btn');
+              if (copyBtn) {
+                var copyBox = copyBtn.closest('.ocr-box');
+                var copyText = copyBox && copyBox.querySelector('p');
+                if (copyText && window.HoshiMangaClipboard) {
+                  window.HoshiMangaClipboard.copyBubbleText(copyText.textContent || '');
+                }
+                return '__copied__';
+              }
+              var box = el && el.closest && el.closest('.ocr-box');
+              if (box) {
+                box.classList.add('revealed');
+                return window.hoshiSelection.selectText(x, y, maxLength);
+              }
+              var revealed = document.querySelectorAll('.ocr-box.revealed');
+              for (var i = 0; i < revealed.length; i++) {
+                revealed[i].classList.remove('revealed');
+              }
+              window.hoshiSelection.clearSelection();
+              return null;
+            }
+          };
+        })();
+    """.trimIndent()
 
     private fun percent(value: Int, total: Int): String =
         formatNumber(percentValue(value, total))

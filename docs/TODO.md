@@ -87,10 +87,19 @@ page images) that reuses the bookshelf, dictionary lookup, and Anki mining.
   / `ReaderSelectionBridge` / `LookupPopupStackView` for lookup; the manga page WebView is
   sized from `window.innerWidth/innerHeight` (CSS `vw`/`vh` resolve to 0 in this WebView
   config) — do not reintroduce `useWideViewPort`/`loadWithOverviewMode` or `vh`-based sizing.
-- Not yet done: reader appearance/settings sheet for manga, two-page spreads, OCR text
-  show-on-tap vs always-on toggle, manga reading statistics. Manual validation should
-  cover import of both source layouts, RTL paging boundaries, and tap-to-lookup landing
-  on the tapped word.
+- Emulator-verified: OCR text is hidden until a bubble is tapped (a tap reveals that
+  bubble on a near-opaque plate and looks the tapped word up; tapping empty artwork hides
+  revealed bubbles again), a revealed bubble shows a copy button that copies its whole
+  text, and page turns play a right-to-left slide animation (skipped on e-ink).
+- ChatGPT bubble lookup, emulator-verified end to end: a revealed bubble shows a ChatGPT
+  button that sends a configurable prompt + the bubble's OCR text to OpenAI and shows the
+  Markdown-rendered reply in a closable popup; API key / model / prompt and a per-manga
+  chat history are reached from the manga reader's overflow (⋯) menu. Kept deliberately
+  self-contained in `features/ai/` (own settings store, own `ai_chat_log.json` per book,
+  no shared-file edits) so it stays easy to merge alongside upstream.
+- Not yet done: reader appearance/settings sheet for manga, two-page spreads, manga
+  reading statistics. Manual validation should cover import of both source layouts and RTL
+  paging boundaries.
 
 ## Required Validation
 

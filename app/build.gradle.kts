@@ -93,6 +93,16 @@ android {
             }
             if (isReleaseSigningConfigured) {
                 signingConfig = signingConfigs.getByName("release")
+            } else {
+                // No official release keystore was provided. Rather than emit an
+                // uninstallable unsigned APK, produce an installable *fork* build: carry
+                // the `.debug` applicationId suffix and sign with the universal Android
+                // debug keystore. It is still a real release build (minified, resource-
+                // shrunk, not debuggable), but shares the package name and signing key of
+                // a debug build of this fork, so it installs as an in-place update over
+                // one — keeping the user's library, reading progress and dictionaries.
+                applicationIdSuffix = ".debug"
+                signingConfig = signingConfigs.getByName("debug")
             }
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
