@@ -87,6 +87,10 @@ page images) that reuses the bookshelf, dictionary lookup, and Anki mining.
 
 ## Required Validation
 
+On a fresh machine, run `./bootstrap.sh` (macOS/Homebrew) to install the JDK 21, Android
+SDK 36 + NDK + CMake, and Rust + cargo-ndk toolchain, then `source ./.bootstrap-env` before
+any Gradle command (it exports `ANDROID_NDK_HOME`, which the Rust/UniFFI build needs).
+
 Before claiming implementation complete, run:
 
 ```bash

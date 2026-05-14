@@ -10,3 +10,6 @@
 local.properties
 /testdata
 .codex/
+.codex-*
+.bootstrap-env
+.claude/
