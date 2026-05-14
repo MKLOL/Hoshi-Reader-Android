@@ -44,6 +44,16 @@ class ImportFileTypeTest {
     }
 
     @Test
+    fun mokuroAcceptsZipAndCbzBundlesButNotEpubs() {
+        assertEquals(listOf("zip", "cbz"), ImportFileType.Mokuro.extensions)
+        assertTrue(ImportFileType.Mokuro.matchesDisplayName("Yotsubato v01.zip"))
+        assertTrue(ImportFileType.Mokuro.matchesDisplayName("Yotsubato v01.CBZ"))
+        assertFalse(ImportFileType.Mokuro.matchesDisplayName("Yotsubato v01.epub"))
+        assertFalse(ImportFileType.Mokuro.matchesDisplayName("Yotsubato v01.mokuro"))
+        assertFalse(ImportFileType.Mokuro.mimeTypes.contains("*/*"))
+    }
+
+    @Test
     fun rejectsWrongExtensionsBeforeOpeningTheFile() {
         assertFalse(ImportFileType.SasayakiSubtitle.matchesDisplayName("audiobook.m4b"))
         assertFalse(ImportFileType.SasayakiAudiobook.matchesDisplayName("subtitle.srt"))

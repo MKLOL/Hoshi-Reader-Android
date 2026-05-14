@@ -1,25 +1,32 @@
 package moe.antimony.hoshi.features.bookshelf
 
-import android.content.ContentResolver
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import androidx.documentfile.provider.DocumentFile
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import moe.antimony.hoshi.dictionary.DictionaryRepository
 import moe.antimony.hoshi.epub.BookEntry
+import moe.antimony.hoshi.epub.BookInfo
 import moe.antimony.hoshi.epub.BookMetadata
 import moe.antimony.hoshi.epub.BookRepository
 import moe.antimony.hoshi.epub.BookShelf
 import moe.antimony.hoshi.epub.BookSortOption
 import moe.antimony.hoshi.epub.Bookmark
+import moe.antimony.hoshi.epub.ContentType
 import moe.antimony.hoshi.epub.EpubBook
 import moe.antimony.hoshi.epub.EpubBookParser
+import moe.antimony.hoshi.epub.bookContentType
 import moe.antimony.hoshi.epub.isUuidString
 import moe.antimony.hoshi.features.sync.StatisticsSyncMode
 import moe.antimony.hoshi.features.sync.SyncDirection
 import moe.antimony.hoshi.features.sync.SyncManager
 import moe.antimony.hoshi.features.sync.SyncResult
+import moe.antimony.hoshi.mokuro.MokuroBook
+import moe.antimony.hoshi.mokuro.MokuroBookParser
+import moe.antimony.hoshi.mokuro.MokuroImportException
 import java.io.File
 import java.util.UUID
 import kotlinx.coroutines.flow.first
@@ -28,6 +35,7 @@ internal interface BookshelfRepository {
     suspend fun loadBooks(sortOption: BookSortOption): BookshelfLoadResult
     suspend fun openBook(entry: BookEntry): String
     suspend fun importBook(uri: Uri): String
+    suspend fun importMokuroFolder(treeUri: Uri): String
     suspend fun deleteBook(entry: BookEntry)
     suspend fun deleteBooks(entries: Collection<BookEntry>)
     suspend fun moveBooks(bookIds: Set<String>, shelfName: String?)
@@ -48,14 +56,16 @@ internal interface BookshelfRepository {
 }
 
 internal class AndroidBookshelfRepository(
-    private val contentResolver: ContentResolver,
+    private val context: Context,
     private val bookRepository: BookRepository,
     private val dictionaryRepository: DictionaryRepository,
     private val settingsRepository: BookshelfSettingsRepository,
     private val syncManager: SyncManager,
     private val bookParser: EpubBookParser = EpubBookParser(),
+    private val mokuroParser: MokuroBookParser = MokuroBookParser(),
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
 ) : BookshelfRepository {
+    private val contentResolver = context.contentResolver
     override suspend fun loadBooks(sortOption: BookSortOption): BookshelfLoadResult = withContext(ioDispatcher) {
         val entries = bookRepository.loadBookEntries(sortOption)
         val shelves = bookRepository.loadShelves()
@@ -68,17 +78,37 @@ internal class AndroidBookshelfRepository(
     }
 
     override suspend fun openBook(entry: BookEntry): String = withContext(ioDispatcher) {
-        val parsedBook = bookParser.parse(entry.root)
-        saveMetadata(entry.root, parsedBook, bookRepository.loadMetadata(entry.root))
-        saveBookInfo(entry.root, parsedBook)
+        // Manga book directories have no EpubBookParser-readable content; dispatch on the
+        // content type derived from disk structure so the EPUB parser is never handed one.
+        when (bookContentType(entry.root)) {
+            ContentType.Epub -> {
+                val parsedBook = bookParser.parse(entry.root)
+                saveMetadata(entry.root, parsedBook, bookRepository.loadMetadata(entry.root))
+                saveBookInfo(entry.root, parsedBook)
+            }
+            ContentType.Mokuro -> writeMokuroSidecars(entry.root)
+        }
         readerBookId(entry.root)
     }
 
     override suspend fun importBook(uri: Uri): String = withContext(ioDispatcher) {
         val root = bookRepository.importBook(contentResolver, uri)
-        val parsedBook = bookParser.parse(root)
-        saveMetadata(root, parsedBook, bookRepository.loadMetadata(root))
-        saveBookInfo(root, parsedBook)
+        when (bookContentType(root)) {
+            ContentType.Epub -> {
+                val parsedBook = bookParser.parse(root)
+                saveMetadata(root, parsedBook, bookRepository.loadMetadata(root))
+                saveBookInfo(root, parsedBook)
+            }
+            ContentType.Mokuro -> writeMokuroSidecars(root)
+        }
+        readerBookId(root)
+    }
+
+    override suspend fun importMokuroFolder(treeUri: Uri): String = withContext(ioDispatcher) {
+        val tree = DocumentFile.fromTreeUri(context, treeUri)
+            ?: throw MokuroImportException("Unable to open the selected folder.")
+        val root = bookRepository.importMokuroFolder(tree, contentResolver::openInputStream)
+        writeMokuroSidecars(root)
         readerBookId(root)
     }
 
@@ -128,19 +158,38 @@ internal class AndroidBookshelfRepository(
 
     override suspend fun markRead(entry: BookEntry) = withContext(ioDispatcher) {
         val bookInfo = bookRepository.loadBookInfo(entry.root) ?: return@withContext
-        val lastChapter = bookInfo.chapterInfo.values
-            .mapNotNull { it.spineIndex }
-            .maxOrNull()
-            ?: 0
-        bookRepository.saveBookmark(
-            entry.root,
-            Bookmark(
-                chapterIndex = lastChapter,
-                progress = 1.0,
-                characterCount = bookInfo.characterCount,
-                lastModified = bookRepository.currentAppleReferenceDateSeconds(),
-            ),
-        )
+        when (bookContentType(entry.root)) {
+            ContentType.Epub -> {
+                val lastChapter = bookInfo.chapterInfo.values
+                    .mapNotNull { it.spineIndex }
+                    .maxOrNull()
+                    ?: 0
+                bookRepository.saveBookmark(
+                    entry.root,
+                    Bookmark(
+                        chapterIndex = lastChapter,
+                        progress = 1.0,
+                        characterCount = bookInfo.characterCount,
+                        lastModified = bookRepository.currentAppleReferenceDateSeconds(),
+                    ),
+                )
+            }
+            ContentType.Mokuro -> {
+                // For manga, bookinfo.characterCount is the page count: the last page index
+                // is one below it, and that index doubles as the bookmark position.
+                val totalPages = bookInfo.characterCount
+                val lastPageIndex = (totalPages - 1).coerceAtLeast(0)
+                bookRepository.saveBookmark(
+                    entry.root,
+                    Bookmark(
+                        chapterIndex = lastPageIndex,
+                        progress = 1.0,
+                        characterCount = totalPages,
+                        lastModified = bookRepository.currentAppleReferenceDateSeconds(),
+                    ),
+                )
+            }
+        }
     }
 
     override suspend fun changeSort(sortOption: BookSortOption) {
@@ -184,6 +233,33 @@ internal class AndroidBookshelfRepository(
 
     private suspend fun saveBookInfo(root: File, parsedBook: EpubBook) {
         bookRepository.saveBookInfo(root, parsedBook.bookInfo)
+    }
+
+    /**
+     * Writes the shared `metadata.json` / `bookinfo.json` sidecars for a mokuro book
+     * directory, parsing the on-disk `mokuro.json`. The content type itself is never
+     * persisted — it stays derivable from disk structure.
+     */
+    private suspend fun writeMokuroSidecars(root: File) {
+        val book = mokuroParser.parse(root)
+        saveMokuroMetadata(root, book, bookRepository.loadMetadata(root))
+        // For manga there are no chapters; characterCount carries the total page count so
+        // the bookshelf's progress fraction (bookmark.characterCount / total) still works.
+        bookRepository.saveBookInfo(
+            root,
+            BookInfo(characterCount = book.pages.size, chapterInfo = emptyMap()),
+        )
+    }
+
+    private suspend fun saveMokuroMetadata(root: File, book: MokuroBook, previous: BookMetadata?) {
+        val metadata = BookMetadata(
+            id = previous?.id?.takeIf { it.isUuidString() } ?: UUID.randomUUID().toString(),
+            title = book.title,
+            cover = bookRepository.metadataCoverPath(root, book.coverImagePath),
+            folder = root.name,
+            lastAccess = bookRepository.currentAppleReferenceDateSeconds(),
+        )
+        bookRepository.saveMetadata(root, metadata)
     }
 
     private suspend fun readerBookId(root: File): String =

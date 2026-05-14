@@ -82,6 +82,21 @@ internal class BookshelfViewModel(
         }
     }
 
+    fun importMokuroFolder(treeUri: Uri) {
+        if (!importGate.tryStart(treeUri.toString())) {
+            return
+        }
+        runLoading(
+            errorPrefix = "Failed to import manga.",
+            onComplete = { importGate.finish(treeUri.toString()) },
+            blockingProgressMessage = "Importing manga...",
+            block = {
+                repository.importMokuroFolder(treeUri)
+                reloadBookEntriesSync()
+            },
+        )
+    }
+
     fun importBooks(imports: List<BookImportItem>) {
         val pendingImports = imports.map { import ->
             PendingBookImport(

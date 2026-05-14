@@ -92,9 +92,9 @@ internal class HoshiAppContainer(context: Context) {
     fun readerRouteStateHolder(): ReaderRouteStateHolder =
         ReaderRouteStateHolder(bookRepository)
 
-    fun bookshelfRepository(contentResolver: ContentResolver): BookshelfRepository =
+    fun bookshelfRepository(context: Context): BookshelfRepository =
         AndroidBookshelfRepository(
-            contentResolver = contentResolver,
+            context = context,
             bookRepository = bookRepository,
             dictionaryRepository = dictionaryRepository,
             settingsRepository = bookshelfSettingsRepository,

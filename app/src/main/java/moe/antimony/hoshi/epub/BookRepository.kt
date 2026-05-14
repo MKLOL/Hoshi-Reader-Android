@@ -3,6 +3,7 @@ package moe.antimony.hoshi.epub
 
 import android.content.ContentResolver
 import android.net.Uri
+import androidx.documentfile.provider.DocumentFile
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -11,7 +12,9 @@ import kotlinx.serialization.KSerializer
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
 import moe.antimony.hoshi.importing.ImportFileType
+import moe.antimony.hoshi.importing.importDisplayName
 import moe.antimony.hoshi.importing.validateImportFile
+import moe.antimony.hoshi.mokuro.MokuroImporter
 import java.io.File
 import java.time.Instant
 import java.util.UUID
@@ -157,6 +160,11 @@ class BookRepository(
     suspend fun importBook(contentResolver: ContentResolver, uri: Uri): File =
         importDataSource.importBook(contentResolver, uri)
 
+    suspend fun importMokuroFolder(
+        tree: DocumentFile,
+        openInputStream: (Uri) -> java.io.InputStream?,
+    ): File = importDataSource.importMokuroFolder(tree, openInputStream)
+
     private suspend fun File.fallbackMetadata(): BookMetadata = withContext(ioDispatcher) {
         BookMetadata(
             id = name,
@@ -298,8 +306,56 @@ class BookImportDataSource(
     private val fileDataSource: BookFileDataSource,
     private val parser: EpubBookParser = EpubBookParser(),
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
+    private val mokuroImporter: MokuroImporter = MokuroImporter(filesDir, ioDispatcher),
 ) {
+    /**
+     * Imports the picked file into a book directory and returns its root. The picked file's
+     * display name selects the content path: `.epub` is extracted and parsed as before,
+     * `.zip`/`.cbz` is treated as a mokuro manga bundle. Either way the returned directory
+     * is a complete book directory; its [moe.antimony.hoshi.epub.ContentType] is derived
+     * from disk structure by the caller.
+     */
     suspend fun importBook(contentResolver: ContentResolver, uri: Uri): File = withContext(ioDispatcher) {
+        val displayName = contentResolver.importDisplayName(uri)
+        if (ImportFileType.Mokuro.matchesDisplayName(displayName)) {
+            return@withContext importMokuroBundle(contentResolver, uri)
+        }
+        importEpub(contentResolver, uri)
+    }
+
+    private suspend fun importMokuroBundle(contentResolver: ContentResolver, uri: Uri): File =
+        mokuroImporter.importFromBundle(
+            contentResolver = contentResolver,
+            uri = uri,
+            targetRootFactory = ::createMokuroBookDirectory,
+        ).bookRoot
+
+    /**
+     * Imports a mokuro output folder picked via `ACTION_OPEN_DOCUMENT_TREE` and returns the
+     * book directory root. [tree] is the picked document tree; [openInputStream] reads a
+     * SAF document's bytes.
+     */
+    suspend fun importMokuroFolder(
+        tree: DocumentFile,
+        openInputStream: (Uri) -> java.io.InputStream?,
+    ): File = mokuroImporter.importFromTree(
+        tree = tree,
+        openInputStream = openInputStream,
+        targetRootFactory = ::createMokuroBookDirectory,
+    ).bookRoot
+
+    /**
+     * Creates a fresh, empty book directory for a mokuro volume. Unlike the EPUB path, a
+     * re-import overwrites: stale page images from a previous import must not linger.
+     */
+    private suspend fun createMokuroBookDirectory(title: String): File {
+        val root = fileDataSource.createBookDirectoryForImportedTitle(title)
+        root.deleteRecursively()
+        root.mkdirs()
+        return root
+    }
+
+    private suspend fun importEpub(contentResolver: ContentResolver, uri: Uri): File {
         contentResolver.validateImportFile(uri, ImportFileType.Epub)
         val tempRoot = File(filesDir, "ImportTemp/${UUID.randomUUID()}").canonicalFile
         contentResolver.openInputStream(uri).use { input ->
@@ -333,7 +389,7 @@ class BookImportDataSource(
             .onFailure { tempRoot.deleteRecursively() }
             .getOrThrow()
         val targetRoot = fileDataSource.createBookDirectoryForImportedTitle(parsedBook.title)
-        if (targetRoot.listFiles()?.isNotEmpty() == true) {
+        return if (targetRoot.listFiles()?.isNotEmpty() == true) {
             tempRoot.deleteRecursively()
             targetRoot
         } else {

@@ -440,6 +440,8 @@ class BookshelfViewModelTest {
 
         override suspend fun importBook(uri: android.net.Uri): String = importBookId
 
+        override suspend fun importMokuroFolder(treeUri: android.net.Uri): String = importBookId
+
         override suspend fun deleteBook(entry: BookEntry) {
             deletedEntries += entry
         }
