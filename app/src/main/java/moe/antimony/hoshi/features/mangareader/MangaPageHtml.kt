@@ -9,13 +9,13 @@ import moe.antimony.hoshi.mokuro.MokuroTextBox
  * Layout strategy — chosen so the absolutely-positioned OCR boxes line up with the image
  * at *any* rendered size, including the letterboxing from `object-fit: contain`:
  *
- *  - A `.page` flexbox centres a `.frame` element in the viewport.
- *  - `.frame` is sized with `aspect-ratio` matching the source image and grows to the
- *    largest size that fits the viewport (`max-width/height: 100%`, `width/height: auto`
- *    via the aspect-ratio + `object-fit`). The background `<img>` fills `.frame` exactly.
+ *  - A `.page` flexbox, pinned to the viewport with `position: fixed`, centres a `.frame`.
+ *  - `.frame`'s pixel size is set by the page script to the largest box with the image's
+ *    aspect ratio that fits the viewport, computed from `window.innerWidth/innerHeight`.
+ *    The background `<img>` fills `.frame` exactly (`object-fit: contain`).
  *  - Every OCR box is a child of `.frame` positioned with **percentages** of the image's
- *    intrinsic pixel size. Percent positioning tracks `.frame`'s real rendered size, so no
- *    JS measuring / rescaling is needed and pinch-zoom keeps the text aligned.
+ *    intrinsic pixel size. Percent positioning tracks `.frame`'s real rendered size, and
+ *    the script re-runs on resize so rotation keeps the text aligned.
  *
  * The OCR text is real, selectable DOM text (`<p>` per box). It is rendered transparent so
  * the artwork shows through, but it is present and hit-testable — tapping a word triggers
@@ -53,11 +53,6 @@ internal object MangaPageHtml {
         val boxes = page.textBoxes.joinToString("\n") { box ->
             textBoxHtml(box, imageWidth, imageHeight)
         }
-        // `.frame` is given a *definite* size: the largest box with the image's aspect ratio
-        // that fits the viewport. A definite size is what lets the OCR boxes position by
-        // percentage and lets `cqw` font units resolve.
-        val frameStyle = "width: min(100vw, calc(100vh * $imageWidth / $imageHeight)); " +
-            "height: min(100vh, calc(100vw * $imageHeight / $imageWidth));"
         return """
             <!DOCTYPE html>
             <html>
@@ -70,7 +65,7 @@ internal object MangaPageHtml {
             </head>
             <body>
             <div class="page">
-              <div class="frame" style="$frameStyle">
+              <div class="frame">
                 <img class="page-image" src="${escapeAttribute(page.imagePath)}" alt="">
                 <div class="ocr-layer">
             $boxes
@@ -78,6 +73,24 @@ internal object MangaPageHtml {
               </div>
             </div>
             <script>
+            (function() {
+              // .frame is sized in pixels from window.innerWidth/innerHeight rather than CSS
+              // vw/vh units. A host WebView can report a 0-height CSS layout viewport while
+              // the JS viewport size is still correct, which collapses vw/vh- and
+              // percentage-based heights; pixel sizing from JS is the reliable path.
+              var IMG_W = $imageWidth, IMG_H = $imageHeight;
+              var frame = document.querySelector('.frame');
+              function sizeFrame() {
+                var vw = window.innerWidth, vh = window.innerHeight;
+                if (!vw || !vh) return;
+                var scale = Math.min(vw / IMG_W, vh / IMG_H);
+                frame.style.width = (IMG_W * scale) + 'px';
+                frame.style.height = (IMG_H * scale) + 'px';
+              }
+              sizeFrame();
+              window.addEventListener('resize', sizeFrame);
+              window.addEventListener('orientationchange', sizeFrame);
+            })();
             window.scanNonJapaneseText = $scanNonJapaneseText;
             $selectionScript
             </script>
@@ -96,17 +109,20 @@ internal object MangaPageHtml {
           -webkit-text-size-adjust: 100%;
         }
         .page {
-          width: 100%;
-          height: 100%;
+          /* Pinned to the viewport rather than chained off html/body height, so the page
+             can never collapse if a host WebView reports an odd document height. */
+          position: fixed;
+          inset: 0;
           display: flex;
           align-items: center;
           justify-content: center;
         }
         .frame {
           position: relative;
-          /* Concrete width/height (largest aspect-correct box fitting the viewport) are
-             set inline per page. A definite size makes percentage-positioned OCR boxes and
-             cqw font units resolve. inline-size containment is used so cqw = 1% of width. */
+          /* Width/height are set in pixels by the page script (see build()): the largest
+             aspect-correct box that fits the viewport. A definite pixel size is what makes
+             the percentage-positioned OCR boxes and the cqw font units resolve;
+             inline-size containment makes cqw = 1% of .frame's width. */
           container-type: inline-size;
         }
         .page-image {
@@ -126,8 +142,12 @@ internal object MangaPageHtml {
           position: absolute;
           line-height: 1.1;
           white-space: pre;
-          /* Transparent but present: artwork shows through, text stays selectable on tap. */
-          color: transparent;
+          /* The OCR text is shown over the artwork: visible so the reader can see what is
+             tappable, on a translucent light plate so it stays legible without fully
+             hiding the art, and selectable so a tap looks the word up in the dictionary. */
+          color: #000;
+          background: rgba(255, 255, 255, 0.82);
+          border-radius: 3px;
           -webkit-user-select: text;
           user-select: text;
         }

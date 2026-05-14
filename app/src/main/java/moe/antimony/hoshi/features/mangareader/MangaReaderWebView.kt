@@ -82,8 +82,11 @@ internal fun MangaReaderWebView(
                 setBackgroundColor(AndroidColor.TRANSPARENT)
                 settings.builtInZoomControls = true
                 settings.displayZoomControls = false
-                settings.useWideViewPort = true
-                settings.loadWithOverviewMode = true
+                // Deliberately NOT setting useWideViewPort / loadWithOverviewMode: those make
+                // the WebView size its layout viewport from a <meta viewport> tag (for zooming
+                // desktop pages to fit) and leave CSS vh / % heights resolving to 0 for our
+                // own generated document. Left at defaults, the layout viewport is the
+                // WebView's own size, so 100vh / height:100% work.
                 addJavascriptInterface(
                     ReaderSelectionBridge(this) { selection ->
                         currentOnTextSelected.value(selection)
@@ -125,13 +128,18 @@ private fun WebView.attachMangaTouchListener(
     setOnTouchListener(
         object : SwipePageTouchListener() {
             override fun onTap(x: Float, y: Float) {
+                // OCR text boxes can sit anywhere on the page, including the edge zones, so
+                // always try to select the word under the tap first. Only a tap that hits no
+                // OCR text falls through to edge-zone page turning (or clearing the popup).
                 val viewWidth = webView.width.toFloat().coerceAtLeast(1f)
-                val tapDirection = MangaPageNavigation.directionForTap(x / viewWidth)
-                if (tapDirection != null) {
-                    onNavigate.value(tapDirection)
-                    return
+                webView.selectAt(x, y) {
+                    val tapDirection = MangaPageNavigation.directionForTap(x / viewWidth)
+                    if (tapDirection != null) {
+                        onNavigate.value(tapDirection)
+                    } else {
+                        onSelectionCleared.value()
+                    }
                 }
-                webView.selectAt(x, y, onSelectionCleared.value)
             }
 
             override fun onLeftSwipe() {
@@ -145,7 +153,12 @@ private fun WebView.attachMangaTouchListener(
     )
 }
 
-private fun WebView.selectAt(x: Float, y: Float, onSelectionCleared: () -> Unit) {
+/**
+ * Asks the in-page selection script to select the word at ([x], [y]) (Android pixels). When
+ * a word is selected the shared selection bridge delivers it for dictionary lookup; when the
+ * tap hits no OCR text, [onSelectedNothing] runs so the caller can fall back to navigation.
+ */
+private fun WebView.selectAt(x: Float, y: Float, onSelectedNothing: () -> Unit) {
     val density = resources.displayMetrics.density
     evaluateJavascript(
         ReaderSelectionCommand.SelectText(
@@ -155,7 +168,7 @@ private fun WebView.selectAt(x: Float, y: Float, onSelectionCleared: () -> Unit)
         ).source,
     ) { result ->
         if (ReaderSelectionResult.fromWebViewResult(result).selectedNothing) {
-            onSelectionCleared()
+            onSelectedNothing()
         }
     }
 }
@@ -177,8 +190,10 @@ private class MangaWebViewClient(
     }
 
     override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
-        // The manga page never links out; block any navigation away from the page document.
-        return true
+        // Never override the page's own document load: loadDataWithBaseURL uses the
+        // hoshi.local base URL, and returning true for that load cancels it and blanks the
+        // WebView. Only a genuine outbound navigation (a different host) is blocked.
+        return request.url?.host != MangaWebResourceBridge.HOST
     }
 
     override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {

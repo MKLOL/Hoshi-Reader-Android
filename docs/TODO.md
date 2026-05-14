@@ -66,20 +66,24 @@ This file is the short operational handoff for future agents.
 
 - Before F-Droid distribution, split update behavior by distribution channel so F-Droid builds do not bypass F-Droid update checks.
 
-## Mokuro Manga Support (Android-only, in progress)
+## Mokuro Manga Support (Android-only)
 
-Branch `codex/mokuro-manga-support`. Adds a parallel content path for mokuro manga
-(JSON + page images) that reuses the bookshelf, dictionary lookup, and Anki mining.
+Branch `codex/mokuro-manga-support`. A parallel content path for mokuro manga (JSON +
+page images) that reuses the bookshelf, dictionary lookup, and Anki mining.
 
-- Done: `ContentType` + disk-based `bookContentType()`; `MokuroBook` model + pure-Kotlin
-  `MokuroBookParser`; `AppRoute.MangaReaderRoute` + `AppShell` content-type dispatch;
-  `MangaReaderRouteDestination` stub.
-- Next: importer (SAF folder picker + `.zip`/`.cbz`) landing `mokuro.json` + page images;
-  manga reader WebView with selectable OCR text boxes wired to the shared lookup bridge,
-  right-to-left page navigation, page-index bookmarks.
-- Content type is derived from disk (`mokuro.json` sidecar), never stored in the
-  iOS-shared `metadata.json`. `Bookmark.chapterIndex` is reused as the manga page index;
-  no sidecar schema change.
+- Working end to end, emulator-verified: import (`.zip`/`.cbz` bundle or SAF folder),
+  bookshelf entry + cover, page WebView rendering, visible+selectable OCR text wired to
+  the shared dictionary lookup, right-to-left navigation, volume-key paging, per-page
+  resume. Content type is derived from disk (`mokuro.json` sidecar), never stored in the
+  iOS-shared `metadata.json`; `Bookmark.chapterIndex` carries the page index.
+- Architecture invariants for future work: keep using the shared `ReaderSelectionScripts`
+  / `ReaderSelectionBridge` / `LookupPopupStackView` for lookup; the manga page WebView is
+  sized from `window.innerWidth/innerHeight` (CSS `vw`/`vh` resolve to 0 in this WebView
+  config) — do not reintroduce `useWideViewPort`/`loadWithOverviewMode` or `vh`-based sizing.
+- Not yet done: reader appearance/settings sheet for manga, two-page spreads, OCR text
+  show-on-tap vs always-on toggle, manga reading statistics. Manual validation should
+  cover import of both source layouts, RTL paging boundaries, and tap-to-lookup landing
+  on the tapped word.
 
 ## Required Validation
 

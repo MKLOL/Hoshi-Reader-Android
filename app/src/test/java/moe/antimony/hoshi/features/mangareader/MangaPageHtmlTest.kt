@@ -99,10 +99,10 @@ class MangaPageHtmlTest {
         val html = build(page(emptyList(), imagePath = "images/page_007.jpg"))
 
         assertTrue(html.contains("src=\"images/page_007.jpg\""))
-        // The frame is sized to the largest box with the image's aspect ratio that fits
-        // the viewport, so the OCR overlay tracks the rendered image exactly.
-        assertTrue(html.contains("calc(100vh * 1000 / 1500)"))
-        assertTrue(html.contains("calc(100vw * 1500 / 1000)"))
+        // .frame is sized in pixels by the page script from the image's intrinsic size and
+        // the JS viewport, so the OCR overlay tracks the rendered image exactly.
+        assertTrue(html.contains("IMG_W = 1000, IMG_H = 1500"))
+        assertTrue(html.contains("Math.min(vw / IMG_W, vh / IMG_H)"))
     }
 
     @Test
