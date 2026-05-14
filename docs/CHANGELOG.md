@@ -8,6 +8,20 @@ The format follows a Keep a Changelog style, and release sections use Semantic V
 ### Added
 
 - Read mokuro manga alongside EPUBs: import a mokuro `.zip`/`.cbz` bundle or a mokuro output folder from the bookshelf, then read it with the page artwork plus selectable OCR text wired to dictionary lookup. Turn pages with on-screen previous/next buttons, swipes, or the volume / hardware page keys (taps are reserved for word lookup so they never move the page); right-to-left reading order, per-page resume, and an e-ink-friendly high-contrast lookup highlight.
+- Add a reader popup Reduced Motion Scrolling option that scrolls lookup popups by a configurable percentage of the current popup height.
+
+### Changed
+
+- Draw reader lookup selection marks as close underlines in E-ink mode instead of filled highlights.
+
+### Fixed
+
+- Reuse a warm reader root lookup popup shell so repeated reader lookups avoid rebuilding the popup WebView.
+- Keep reader popup internal dictionary redirects from rendering stale entries from the previous popup result.
+- Synchronize popup-to-popup selection marks with child popup display and draw E-ink popup selections as underlines.
+- Keep vertical lookup selection marks and popup placement aligned to one ruby-aware selection area so furigana is not covered.
+- Keep reader progress counters from refreshing ahead of paginated page turns on slow E-ink screens by waiting for the WebView page state to be ready to draw.
+- Synchronize reader lookup popup visibility with the selected-word highlight on slow E-ink screens, while keeping highlighted text readable.
 
 ## [v0.6.1] - 2026-05-14
 
