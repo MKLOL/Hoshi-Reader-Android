@@ -23,7 +23,7 @@ The format follows a Keep a Changelog style, and release sections use Semantic V
 
 ### Fixed
 
-- Keep animated mokuro page turns from exposing a resizing incoming page while the WebView settles the new artwork.
+- Fix animated mokuro page turns shrinking the outgoing page mid-slide: the page now sizes its layout boxes from the host-provided viewport in definite pixels, instead of viewport-edge insets / JS that resolve against the WebView's layout viewport — which `WebView.draw()` was snapshotting at the wrong size and centring.
 - Reuse a warm reader root lookup popup shell so repeated reader lookups avoid rebuilding the popup WebView.
 - Keep reader popup internal dictionary redirects from rendering stale entries from the previous popup result.
 - Synchronize popup-to-popup selection marks with child popup display and draw E-ink popup selections as underlines.

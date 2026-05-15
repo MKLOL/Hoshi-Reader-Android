@@ -378,6 +378,12 @@ internal fun MangaReaderScreen(
         val activeTransition = pageTransition
         val animating = animatingTransition
         val containerWidthPx = constraints.maxWidth
+        // The WebView's viewport size in CSS pixels — Dp values are 1:1 with CSS px for a
+        // WebView at default scale. Passed into the page so `.frame` is sized from a
+        // known-good size instead of a possibly-stale `window.innerWidth` during a
+        // page-turn reload, which would otherwise resize the incoming artwork mid-slide.
+        val viewportCssWidth = maxWidth.value.roundToInt()
+        val viewportCssHeight = maxHeight.value.roundToInt()
         // Slide direction for a right-to-left manga, modelled as a filmstrip with page 1 at
         // the right: a forward turn slides the outgoing page off to the *right* and pulls the
         // incoming page in from the left; a backward turn does the reverse. The incoming page
@@ -394,6 +400,8 @@ internal fun MangaReaderScreen(
             backgroundCssColor = backgroundCssColor,
             scanNonJapaneseText = dictionarySettings.scanNonJapaneseText,
             eInkMode = readerSettings.eInkMode,
+            viewportCssWidth = viewportCssWidth,
+            viewportCssHeight = viewportCssHeight,
             onNavigate = { direction -> navigate(direction) },
             onTextSelected = handleTextSelected,
             onSelectionCleared = { lookupPopups = emptyList() },

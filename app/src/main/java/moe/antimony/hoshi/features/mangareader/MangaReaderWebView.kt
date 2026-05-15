@@ -56,6 +56,8 @@ internal fun MangaReaderWebView(
     backgroundCssColor: String,
     scanNonJapaneseText: Boolean,
     eInkMode: Boolean,
+    viewportCssWidth: Int,
+    viewportCssHeight: Int,
     onNavigate: (ReaderNavigationDirection) -> Unit,
     onTextSelected: (ReaderSelectionData) -> Int?,
     onSelectionCleared: () -> Unit,
@@ -73,13 +75,24 @@ internal fun MangaReaderWebView(
     val resourceBridge = remember(book, bookRoot) { MangaWebResourceBridge(bookRoot, book) }
 
     val page = book.pages[pageIndex.coerceIn(0, book.pages.lastIndex)]
-    val html = remember(page, backgroundCssColor, scanNonJapaneseText, eInkMode) {
+    // Re-keyed on the viewport size so a real viewport change (rotation) reloads the page
+    // with fresh dimensions baked in — see MangaPageHtml's frame-sizing script.
+    val html = remember(
+        page,
+        backgroundCssColor,
+        scanNonJapaneseText,
+        eInkMode,
+        viewportCssWidth,
+        viewportCssHeight,
+    ) {
         MangaPageHtml.build(
             page = page,
             backgroundCssColor = backgroundCssColor,
             selectionScript = ReaderSelectionScripts.source(),
             scanNonJapaneseText = scanNonJapaneseText,
             eInkMode = eInkMode,
+            viewportCssWidth = viewportCssWidth,
+            viewportCssHeight = viewportCssHeight,
         )
     }
 

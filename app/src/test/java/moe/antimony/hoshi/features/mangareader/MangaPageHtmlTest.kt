@@ -20,12 +20,19 @@ class MangaPageHtmlTest {
         textBoxes = textBoxes,
     )
 
-    private fun build(page: MokuroPage, eInkMode: Boolean = false) = MangaPageHtml.build(
+    private fun build(
+        page: MokuroPage,
+        eInkMode: Boolean = false,
+        viewportCssWidth: Int = 400,
+        viewportCssHeight: Int = 800,
+    ) = MangaPageHtml.build(
         page = page,
         backgroundCssColor = "#ffffff",
         selectionScript = "/* selection script */",
         scanNonJapaneseText = true,
         eInkMode = eInkMode,
+        viewportCssWidth = viewportCssWidth,
+        viewportCssHeight = viewportCssHeight,
     )
 
     @Test
@@ -101,10 +108,43 @@ class MangaPageHtmlTest {
 
         // A plain ASCII path is left as-is (it is already URL-safe).
         assertTrue(html.contains("src=\"images/page_007.jpg\""))
-        // .frame is sized in pixels by the page script from the image's intrinsic size and
-        // the JS viewport, so the OCR overlay tracks the rendered image exactly.
-        assertTrue(html.contains("IMG_W = 1000, IMG_H = 1500"))
-        assertTrue(html.contains("Math.min(vw / IMG_W, vh / IMG_H)"))
+    }
+
+    @Test
+    fun frameAndPageAreSizedInPixelsFromTheHostViewportNotTheLayoutViewport() {
+        // 1000x1500 image, 412x915 host viewport -> contain fit scale = 412/1000 = 0.412,
+        // so .frame is 412 x 618 and .page covers the exact host viewport.
+        val html = build(
+            page(emptyList()),
+            viewportCssWidth = 412,
+            viewportCssHeight = 915,
+        )
+
+        // .page is an explicit pixel box, not a viewport-edge-pinned one: edge insets
+        // resolve against the WebView's layout viewport, which it can report wrong and then
+        // snapshot at that wrong size during an animated page turn.
+        assertTrue(html.contains("width: 412px;") && html.contains("height: 915px;"))
+        assertFalse("page must not depend on the layout viewport", html.contains("position: fixed;"))
+        // .frame is the baked-in contain-fit box; no JS sizing, no vw/vh, no resize listener.
+        assertTrue(html.contains("width: 412px;") && html.contains("height: 618px;"))
+        assertFalse(html.contains("window.innerWidth"))
+        assertFalse(html.contains("Math.min"))
+        assertFalse(html.contains("addEventListener('resize'"))
+        assertFalse(html.contains("addEventListener('orientationchange'"))
+    }
+
+    @Test
+    fun frameContainFitClampsToWhicheverViewportAxisIsTighter() {
+        // 1000x1500 image, 800x400 host viewport -> the height axis is tighter:
+        // scale = 400/1500 = 0.2667, so .frame is 266.667 x 400, letterboxed left/right.
+        val html = build(
+            page(emptyList()),
+            viewportCssWidth = 800,
+            viewportCssHeight = 400,
+        )
+
+        assertTrue(html.contains("width: 266.667px;"))
+        assertTrue(html.contains("height: 400px;"))
     }
 
     @Test
@@ -144,6 +184,8 @@ class MangaPageHtmlTest {
             selectionScript = "",
             scanNonJapaneseText = false,
             eInkMode = false,
+            viewportCssWidth = 400,
+            viewportCssHeight = 800,
         )
         assertTrue(html.contains("background: #101010"))
         assertTrue(html.contains("window.scanNonJapaneseText = false"))
