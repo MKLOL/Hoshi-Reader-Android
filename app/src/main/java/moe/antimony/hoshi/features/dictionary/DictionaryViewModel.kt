@@ -16,22 +16,37 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import moe.antimony.hoshi.dictionary.DictionaryInfo
+import moe.antimony.hoshi.dictionary.DictionaryRename
 import moe.antimony.hoshi.dictionary.DictionaryRepository
 import moe.antimony.hoshi.dictionary.DictionaryType
+import moe.antimony.hoshi.dictionary.DictionaryUpdateCandidate
+import moe.antimony.hoshi.dictionary.DictionaryUpdateProgress
+import moe.antimony.hoshi.dictionary.DictionaryUpdateStage
+import moe.antimony.hoshi.dictionary.DictionaryUpdateSummary
+import moe.antimony.hoshi.dictionary.RecommendedDictionary
+import moe.antimony.hoshi.features.anki.AnkiSettings
+import moe.antimony.hoshi.features.anki.AnkiSettingsRepository
 
 internal interface DictionaryViewModelRepository {
     suspend fun loadDictionaries(): Map<DictionaryType, List<DictionaryInfo>>
+    suspend fun updatableDictionaries(): List<DictionaryUpdateCandidate>
     suspend fun importDictionaries(
         items: List<DictionaryImportItem>,
         type: DictionaryType,
         onProgress: (DictionaryImportItem) -> Unit,
     )
+    suspend fun importRecommendedDictionaries(
+        dictionaries: List<RecommendedDictionary>,
+        onProgress: (DictionaryUpdateProgress) -> Unit,
+    )
+    suspend fun updateDictionaries(onProgress: (DictionaryUpdateProgress) -> Unit): DictionaryUpdateSummary
     suspend fun setDictionaryEnabled(type: DictionaryType, fileName: String, enabled: Boolean)
     suspend fun deleteDictionary(type: DictionaryType, fileName: String)
     suspend fun moveDictionary(type: DictionaryType, fromIndex: Int, toIndex: Int)
     suspend fun rebuildLookupQuery()
     val settings: Flow<DictionarySettings>
     suspend fun updateSettings(transform: (DictionarySettings) -> DictionarySettings)
+    suspend fun updateAnkiSettings(transform: (AnkiSettings) -> AnkiSettings)
 }
 
 internal data class DictionaryImportItem(
@@ -43,6 +58,7 @@ internal class AndroidDictionaryViewModelRepository(
     private val contentResolver: ContentResolver,
     private val dictionaryRepository: DictionaryRepository,
     private val settingsRepository: DictionarySettingsRepository,
+    private val ankiSettingsRepository: AnkiSettingsRepository,
 ) : DictionaryViewModelRepository {
     override val settings: Flow<DictionarySettings> = settingsRepository.settings
 
@@ -62,6 +78,21 @@ internal class AndroidDictionaryViewModelRepository(
         }
     }
 
+    override suspend fun updatableDictionaries(): List<DictionaryUpdateCandidate> =
+        dictionaryRepository.updatableDictionaries()
+
+    override suspend fun importRecommendedDictionaries(
+        dictionaries: List<RecommendedDictionary>,
+        onProgress: (DictionaryUpdateProgress) -> Unit,
+    ) {
+        dictionaryRepository.importRecommendedDictionaries(dictionaries, onProgress)
+    }
+
+    override suspend fun updateDictionaries(
+        onProgress: (DictionaryUpdateProgress) -> Unit,
+    ): DictionaryUpdateSummary =
+        dictionaryRepository.updateDictionaries(onProgress)
+
     override suspend fun setDictionaryEnabled(type: DictionaryType, fileName: String, enabled: Boolean) {
         dictionaryRepository.setDictionaryEnabled(type, fileName, enabled)
     }
@@ -80,6 +111,10 @@ internal class AndroidDictionaryViewModelRepository(
 
     override suspend fun updateSettings(transform: (DictionarySettings) -> DictionarySettings) {
         settingsRepository.update(transform)
+    }
+
+    override suspend fun updateAnkiSettings(transform: (AnkiSettings) -> AnkiSettings) {
+        ankiSettingsRepository.update(transform)
     }
 }
 
@@ -124,6 +159,71 @@ internal class DictionaryViewModel(
                 repository.importDictionaries(items, type, onProgress)
             },
         )
+    }
+
+    fun updateDictionaries() {
+        updateDictionaries { onProgress ->
+            repository.updateDictionaries(onProgress)
+        }
+    }
+
+    fun importRecommendedDictionaries(dictionaries: List<RecommendedDictionary>) {
+        importRecommendedDictionaries { onProgress ->
+            repository.importRecommendedDictionaries(dictionaries, onProgress)
+        }
+    }
+
+    internal fun importRecommendedDictionaries(
+        importOperation: suspend ((DictionaryUpdateProgress) -> Unit) -> Unit,
+    ) {
+        scope.launch {
+            _uiState.update { it.copy(isImporting = true, currentImportMessage = null, errorMessage = null) }
+            runCatching {
+                withContext(ioDispatcher) {
+                    importOperation { progress ->
+                        _uiState.update { state ->
+                            state.copy(currentImportMessage = progress.message())
+                        }
+                    }
+                }
+            }.onSuccess {
+                reloadDictionaries(clearError = true)
+            }.onFailure { error ->
+                _uiState.update {
+                    it.copy(
+                        errorMessage = error.localizedMessage ?: "Failed to download dictionaries.",
+                    )
+                }
+            }
+            _uiState.update { it.copy(isImporting = false, currentImportMessage = null) }
+        }
+    }
+
+    internal fun updateDictionaries(
+        updateOperation: suspend ((DictionaryUpdateProgress) -> Unit) -> DictionaryUpdateSummary,
+    ) {
+        scope.launch {
+            _uiState.update { it.copy(isUpdating = true, currentImportMessage = null, errorMessage = null) }
+            runCatching {
+                withContext(ioDispatcher) {
+                    updateOperation { progress ->
+                        _uiState.update { state ->
+                            state.copy(currentImportMessage = progress.message())
+                        }
+                    }
+                }
+            }.onSuccess { summary ->
+                migrateDictionaryTitles(summary.renamedDictionaries)
+                reloadDictionaries(clearError = true)
+            }.onFailure { error ->
+                _uiState.update {
+                    it.copy(
+                        errorMessage = error.localizedMessage ?: "Failed to update dictionaries.",
+                    )
+                }
+            }
+            _uiState.update { it.copy(isUpdating = false, currentImportMessage = null) }
+        }
     }
 
     internal fun importDictionaries(
@@ -207,15 +307,41 @@ internal class DictionaryViewModel(
     }
 
     private suspend fun reloadDictionaries(clearError: Boolean) {
-        val dictionaries = withContext(ioDispatcher) {
-            repository.loadDictionaries().also {
+        val (dictionaries, updatableDictionaries) = withContext(ioDispatcher) {
+            val dictionaries = repository.loadDictionaries().also {
                 repository.rebuildLookupQuery()
             }
+            dictionaries to repository.updatableDictionaries()
         }
         _uiState.update { state ->
             state.copy(
                 dictionaries = dictionaries,
+                updatableDictionaries = updatableDictionaries,
                 errorMessage = if (clearError) null else state.errorMessage,
+            )
+        }
+    }
+
+    private suspend fun migrateDictionaryTitles(renames: List<DictionaryRename>) {
+        if (renames.isEmpty()) return
+        val renameMap = renames.associate { it.oldTitle to it.newTitle }
+        repository.updateSettings { current ->
+            current.copy(
+                collapsedDictionaries = current.collapsedDictionaries.mapTo(mutableSetOf()) { title ->
+                    renameMap[title] ?: title
+                },
+            )
+        }
+        repository.updateAnkiSettings { current ->
+            current.copy(
+                fieldMappings = current.fieldMappings.mapValues { (_, template) ->
+                    renameMap.entries.fold(template) { value, (oldTitle, newTitle) ->
+                        value.replace(
+                            oldValue = "{single-glossary-$oldTitle}",
+                            newValue = "{single-glossary-$newTitle}",
+                        )
+                    }
+                },
             )
         }
     }
@@ -225,3 +351,11 @@ internal class DictionaryViewModel(
         super.onCleared()
     }
 }
+
+private fun DictionaryUpdateProgress.message(): String =
+    when (stage) {
+        DictionaryUpdateStage.Fetching -> "Fetching $title"
+        DictionaryUpdateStage.Checking -> "Checking $title"
+        DictionaryUpdateStage.Downloading -> "Downloading $title"
+        DictionaryUpdateStage.Importing -> "Importing $title"
+    }

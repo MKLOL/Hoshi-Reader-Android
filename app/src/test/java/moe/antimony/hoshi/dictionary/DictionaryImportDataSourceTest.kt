@@ -61,7 +61,10 @@ class DictionaryImportDataSourceTest {
 
         dataSource.importDictionary(ByteArrayInputStream(dictionaryArchive("Existing")), typeDirectory)
 
-        assertEquals("""{"title":"Existing"}""", typeDirectory.resolve("Existing/index.json").readText())
+        assertEquals(
+            """{"title":"Existing","format":3,"revision":"rev"}""",
+            typeDirectory.resolve("Existing/index.json").readText(),
+        )
         assertFalse(typeDirectory.listFiles().orEmpty().any { it.name.contains("-replace-") })
         assertFalse(typeDirectory.listFiles().orEmpty().any { it.name.startsWith(".dictionary-import-") })
     }
@@ -185,7 +188,7 @@ class DictionaryImportDataSourceTest {
             outputDirs += outputDir
             File(outputDir, "$dictionaryName/index.json").also { file ->
                 file.parentFile!!.mkdirs()
-                file.writeText("""{"title":"$dictionaryName"}""")
+                file.writeText("""{"title":"$dictionaryName","format":3,"revision":"rev"}""")
             }
             return true
         }

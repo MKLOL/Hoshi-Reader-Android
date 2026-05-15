@@ -1,6 +1,6 @@
 # Hoshi Android Agent TODO
 
-Last updated: 2026-05-14
+Last updated: 2026-05-15
 
 This file is the short operational handoff for future agents.
 
@@ -32,12 +32,13 @@ This file is the short operational handoff for future agents.
 ### Reader And Lookup
 
 - Device-validate vertical lookup selection on ruby text, confirming E-ink underlines, regular highlights, and popup placement share one furigana-aware selection area.
+- Device-validate continuous-mode lookup popup placement with nonzero reader padding in both vertical and horizontal writing.
 - Device-validate paginated page turns with top and bottom progress counters enabled on E-ink, confirming the counter no longer refreshes before the page flip.
 - Device-validate E-ink reader lookup underlines in horizontal and vertical text, confirming the line sits close to selected text without obscuring glyphs.
 - Device-validate reader popup Reduced Motion Scrolling on an E-ink target, including vertical swipe threshold, 40%-100% scroll amount, mouse wheel/page-wheel input, and coexistence with horizontal swipe-to-dismiss.
 - Device-validate the warm reader root lookup popup shell, confirming repeated root lookups reuse the popup without breaking child popups, redirects, action-bar history, or popup dismiss behavior.
 - Device-validate popup-to-popup lookup selections, confirming child popup display syncs with Compose-drawn parent selection marks, E-ink mode uses underlines, and scrolling a parent popup dismisses child popups.
-- Device-validate reader lookup popup open and dismiss on a slow E-ink target, confirming the Compose-drawn selected-word highlight appears and disappears with the popup and does not gray out text.
+- Device-validate reader lookup popup open and dismiss on a slow E-ink target, confirming popup content does not flash a blank white shell, the Compose-drawn selected-word highlight appears and disappears with the popup, and highlighted text stays readable.
 - Blocked pending device validation: mokuro page turns should keep the current artwork size stable during animated swipes, and Behavior -> Disable Page-Turn Animation should still swap instantly without forcing E-ink black-and-white mode.
 - Finish remaining iOS `PopupWebView` Anki mining behavior beyond selected popup text export.
 - Validate paginated and continuous reader modes together for cover image pages, multi-image illustration pages, long text paging, forward/backward progress monotonicity, per-page progress updates and restore landing inside large text nodes, forward and backward chapter boundaries, reverse cross-chapter landing, lookup popup open, and bookmark restore.
@@ -48,7 +49,7 @@ This file is the short operational handoff for future agents.
 
 ### Dictionary
 
-- Align recommended dictionary download/update behavior with iOS `DictionaryView`, including recommended downloads, update availability, and revision-based update flow.
+- Device-validate recommended dictionary downloads from the Dictionaries screen, covering JMdict, Jiten, and Jitendex individual downloads and confirming each imported dictionary remains updatable.
 - Keep frequency and pitch dictionaries type-specific; do not treat metadata dictionaries as term fallback dictionaries.
 - Do not reimplement Yomitan import, lookup, media, or style extraction outside `third_party/hoshidicts-kotlin-bridge` unless the bridge gap is documented first.
 
@@ -73,6 +74,7 @@ This file is the short operational handoff for future agents.
 ### Release Distribution
 
 - Before F-Droid distribution, split update behavior by distribution channel so F-Droid builds do not bypass F-Droid update checks.
+- Device-validate GitHub update prompts after the check/download split, covering skip-version, manual checks, completed-download prompts, user-triggered install, and same-version APK cleanup.
 
 ## Mokuro Manga Support (Android-only)
 
@@ -140,9 +142,13 @@ For reader statistics regressions, verify Advanced -> Statistics defaults off, e
 
 For Sasayaki settings regressions, verify fresh installs default Sasayaki, Show Sasayaki Toggle, Auto-Scroll, and Auto-Pause on Lookup on, and that Appearance can toggle the reader Sasayaki button.
 
+For Sasayaki matching regressions, verify short low-confidence `＊` subtitle cues are skipped while longer `＊` cues still match and advance playback alignment.
+
 For Sasayaki skip-control regressions, verify the reader bottom skip buttons flank the existing Back/Menu buttons, and the same cue/5s/10s/15s/30s action applies from reader chrome, Sasayaki sheet controls, and Android system media controls.
 
 For Sasayaki volume-key regressions, verify volume-key seek with loaded audiobook audio, fallback without loaded audio, priority over Volume Keys Turn Pages, and Reverse Volume Key Direction affecting both seek and page-turn controls.
+
+For reader keep-screen-on regressions, verify Behavior -> Keep Screen On defaults off, persists after leaving settings, keeps the display awake while the reader is foregrounded when enabled, clears after closing the reader when disabled, and still keeps Sasayaki playback awake only while playback and Auto-Scroll are active.
 
 For reader text layout regressions, verify Appearance -> Layout changes such as Vertical Padding reload the current chapter at the displayed position and visibly affect text spacing.
 

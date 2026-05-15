@@ -53,6 +53,10 @@ object SasayakiMatcher {
                 continue
             }
             val chars = text.codePointsList()
+            if (cue.text.startsWith("＊") && chars.size < 5) {
+                unmatched += 1
+                continue
+            }
             val index = findText(source, chars, start = cursor, end = minOf(source.size, cursor + chars.size + searchWindow))
             if (index == null) {
                 unmatched += 1

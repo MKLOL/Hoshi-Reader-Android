@@ -34,7 +34,13 @@ internal class DictionaryImportDataSource(
         input: InputStream,
         typeDirectory: File,
         shouldSkip: (DictionaryIndex) -> Boolean = { false },
-    ): Boolean {
+    ): Boolean = importDictionaryWithResult(input, typeDirectory, shouldSkip).isNotEmpty()
+
+    fun importDictionaryWithResult(
+        input: InputStream,
+        typeDirectory: File,
+        shouldSkip: (DictionaryIndex) -> Boolean = { false },
+    ): List<ImportedDictionary> {
         typeDirectory.mkdirs()
         val importId = UUID.randomUUID()
         val tempZip = typeDirectory.resolve(".dictionary-import-$importId.zip")
@@ -43,20 +49,19 @@ internal class DictionaryImportDataSource(
             input.use { source ->
                 tempZip.outputStream().use { output -> source.copyTo(output) }
             }
-            val index = readDictionaryIndex(tempZip)
-            if (shouldSkip(index)) return false
+            val index = readDictionaryIndexFromZip(tempZip)
+            if (shouldSkip(index)) return emptyList()
             stagingRoot.mkdirs()
             val imported = nativeBridge.importDictionary(tempZip.absolutePath, stagingRoot.absolutePath)
             require(imported) { "Failed to import dictionary." }
-            commitStagedDictionaries(stagingRoot, typeDirectory)
-            return true
+            return commitStagedDictionaries(stagingRoot, typeDirectory)
         } finally {
             tempZip.delete()
             stagingRoot.deleteRecursively()
         }
     }
 
-    private fun readDictionaryIndex(zipFile: File): DictionaryIndex {
+    private fun readDictionaryIndexFromZip(zipFile: File): DictionaryIndex {
         ZipFile(zipFile).use { zip ->
             val entry = zip.getEntry("index.json")
                 ?: error("Unable to read dictionary index.")
@@ -66,13 +71,21 @@ internal class DictionaryImportDataSource(
         }
     }
 
-    private fun commitStagedDictionaries(stagingRoot: File, typeDirectory: File) {
+    private fun commitStagedDictionaries(stagingRoot: File, typeDirectory: File): List<ImportedDictionary> {
         val importedDictionaries = stagingRoot.listFiles()?.filter(File::isDirectory).orEmpty()
         require(importedDictionaries.isNotEmpty()) { "Failed to import dictionary." }
-        importedDictionaries.forEach { stagedDictionary ->
+        return importedDictionaries.map { stagedDictionary ->
+            val imported = ImportedDictionary(
+                fileName = stagedDictionary.name,
+                index = readDictionaryIndexFile(stagedDictionary.resolve("index.json")),
+            )
             commitStagedDictionary(stagedDictionary, typeDirectory.resolve(stagedDictionary.name))
+            imported
         }
     }
+
+    private fun readDictionaryIndexFile(indexFile: File): DictionaryIndex =
+        json.decodeFromString<DictionaryIndex>(indexFile.readText())
 
     private fun commitStagedDictionary(stagedDictionary: File, target: File) {
         val replacementBackup = target.takeIf(File::exists)?.let { existing ->

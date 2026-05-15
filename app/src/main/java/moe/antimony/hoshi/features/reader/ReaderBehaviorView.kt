@@ -18,14 +18,12 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 import moe.antimony.hoshi.LocalHoshiAppContainer
 import moe.antimony.hoshi.features.settings.SettingsDetailScaffold
 import moe.antimony.hoshi.features.settings.collectAsLoadedSettings
 import moe.antimony.hoshi.features.update.UpdateConfig
-import moe.antimony.hoshi.features.update.UpdateScheduler
 
 @Composable
 fun ReaderBehaviorScreen(
@@ -34,10 +32,9 @@ fun ReaderBehaviorScreen(
     onClose: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    // The "Automatically Download Updates" row is only mounted when UpdateConfig.AUTO_UPDATE_ENABLED
-    // is on, so the rest of the screen stays settings-free of network-update concerns when the
+    // The "Automatically Check for Updates" row is only mounted when UpdateConfig.AUTO_UPDATE_ENABLED
+    // is on, so the rest of the screen stays free of network-update concerns when the
     // updater is dormant.
-    val context = LocalContext.current
     val appContainer = LocalHoshiAppContainer.current
     val updateSettings = if (UpdateConfig.AUTO_UPDATE_ENABLED) {
         appContainer.updateSettingsRepository.settings.collectAsLoadedSettings()
@@ -59,7 +56,7 @@ fun ReaderBehaviorScreen(
             item {
                 BehaviorSettingsCard {
                     BehaviorSwitchRow(
-                        label = "Disable Page-Turn Animation",
+                        label = ReaderBehaviorRow.DisablePageTurnAnimation.label,
                         checked = settings.disablePageTurnAnimation,
                         onCheckedChange = {
                             onSettingsChange(settings.copy(disablePageTurnAnimation = it))
@@ -68,7 +65,7 @@ fun ReaderBehaviorScreen(
                     )
                     BehaviorDivider()
                     BehaviorSwitchRow(
-                        label = "Volume Keys Turn Pages",
+                        label = ReaderBehaviorRow.VolumeKeysTurnPages.label,
                         checked = settings.volumeKeysTurnPages,
                         onCheckedChange = {
                             onSettingsChange(settings.copy(volumeKeysTurnPages = it))
@@ -86,10 +83,18 @@ fun ReaderBehaviorScreen(
                     }
                     BehaviorDivider()
                     BehaviorSwitchRow(
-                        label = "Reverse Volume Key Direction",
+                        label = ReaderBehaviorRow.ReverseVolumeKeyDirection.label,
                         checked = settings.reverseVolumeKeyDirection,
                         onCheckedChange = {
                             onSettingsChange(settings.copy(reverseVolumeKeyDirection = it))
+                        },
+                    )
+                    BehaviorDivider()
+                    BehaviorSwitchRow(
+                        label = ReaderBehaviorRow.KeepScreenOn.label,
+                        checked = settings.keepScreenOnWhileReading,
+                        onCheckedChange = {
+                            onSettingsChange(settings.copy(keepScreenOnWhileReading = it))
                         },
                     )
                     // The auto-updater is opt-in at compile time (see UpdateConfig); when
@@ -99,18 +104,12 @@ fun ReaderBehaviorScreen(
                     if (UpdateConfig.AUTO_UPDATE_ENABLED && loadedUpdateSettings != null) {
                         BehaviorDivider()
                         BehaviorSwitchRow(
-                            label = "Automatically Download Updates",
-                            checked = loadedUpdateSettings.autoDownloadUpdates,
+                            label = ReaderBehaviorRow.AutomaticallyCheckForUpdates.label,
+                            checked = loadedUpdateSettings.autoCheckUpdates,
                             onCheckedChange = { enabled ->
                                 scope.launch {
                                     appContainer.updateSettingsRepository.update {
-                                        it.copy(autoDownloadUpdates = enabled)
-                                    }
-                                    if (enabled) {
-                                        UpdateScheduler.schedule(context)
-                                        UpdateScheduler.scheduleImmediateCheck(context)
-                                    } else {
-                                        UpdateScheduler.cancel(context)
+                                        it.copy(autoCheckUpdates = enabled)
                                     }
                                 }
                             },
@@ -123,7 +122,18 @@ fun ReaderBehaviorScreen(
 }
 
 internal fun readerBehaviorSasayakiRows(): List<String> =
-    listOf("Volume Keys Seek Sasayaki")
+    listOf(ReaderBehaviorRow.VolumeKeysSeekSasayaki.label)
+
+internal fun readerBehaviorRows(): List<String> = ReaderBehaviorRow.entries.map { it.label }
+
+private enum class ReaderBehaviorRow(val label: String) {
+    DisablePageTurnAnimation("Disable Page-Turn Animation"),
+    VolumeKeysTurnPages("Volume Keys Turn Pages"),
+    VolumeKeysSeekSasayaki("Volume Keys Seek Sasayaki"),
+    ReverseVolumeKeyDirection("Reverse Volume Key Direction"),
+    KeepScreenOn("Keep Screen On"),
+    AutomaticallyCheckForUpdates("Automatically Check for Updates"),
+}
 
 @Composable
 private fun BehaviorSettingsCard(content: @Composable () -> Unit) {

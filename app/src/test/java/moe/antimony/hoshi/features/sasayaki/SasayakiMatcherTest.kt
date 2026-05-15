@@ -102,7 +102,7 @@ class SasayakiMatcherTest {
     }
 
     @Test
-    fun starPrefixedCuesStillAdvanceCursorLikeIos() {
+    fun longStarPrefixedCuesStillAdvanceCursorLikeIos() {
         val book = EpubBook(
             title = "Book",
             chapters = listOf(
@@ -110,15 +110,15 @@ class SasayakiMatcherTest {
                     id = "chapter",
                     href = "chapter.xhtml",
                     mediaType = "application/xhtml+xml",
-                    html = "<html><body>最初の文章です星一番星二番星三番東条さんの言葉だった</body></html>",
+                    html = "<html><body>最初の文章です星一番です星二番です星三番です東条さんの言葉だった</body></html>",
                 ),
             ),
         )
         val cues = listOf(
             SasayakiCue("0", 0.0, 1.0, "最初の文章です"),
-            SasayakiCue("1", 1.0, 2.0, "＊星一番"),
-            SasayakiCue("2", 2.0, 3.0, "＊星二番"),
-            SasayakiCue("3", 3.0, 4.0, "＊星三番"),
+            SasayakiCue("1", 1.0, 2.0, "＊星一番です"),
+            SasayakiCue("2", 2.0, 3.0, "＊星二番です"),
+            SasayakiCue("3", 3.0, 4.0, "＊星三番です"),
             SasayakiCue("4", 4.0, 5.0, "東条さんの言葉だった"),
         )
 
@@ -126,6 +126,31 @@ class SasayakiMatcherTest {
 
         assertEquals(listOf("0", "1", "2", "3", "4"), match.matches.map { it.id })
         assertEquals(0, match.unmatched)
+    }
+
+    @Test
+    fun skipsShortStarPrefixedCuesLikeIos() {
+        val book = EpubBook(
+            title = "Book",
+            chapters = listOf(
+                EpubChapter(
+                    id = "chapter",
+                    href = "chapter.xhtml",
+                    mediaType = "application/xhtml+xml",
+                    html = "<html><body>最初の文章です星次の本文です</body></html>",
+                ),
+            ),
+        )
+        val cues = listOf(
+            SasayakiCue("0", 0.0, 1.0, "最初の文章です"),
+            SasayakiCue("1", 1.0, 2.0, "＊星"),
+            SasayakiCue("2", 2.0, 3.0, "次の本文です"),
+        )
+
+        val match = SasayakiMatcher.match(book = book, cues = cues, searchWindow = 1)
+
+        assertEquals(listOf("0", "2"), match.matches.map { it.id })
+        assertEquals(1, match.unmatched)
     }
 
     @Test

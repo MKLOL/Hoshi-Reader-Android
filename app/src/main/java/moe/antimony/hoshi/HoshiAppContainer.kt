@@ -92,6 +92,7 @@ internal class HoshiAppContainer(context: Context) {
         currentVersionName = BuildConfig.VERSION_NAME,
         releaseRepository = GitHubReleaseUpdateRepository(),
         downloadController = updateDownloadManager,
+        updateStore = updateDownloadStore,
     )
 
     fun readerRouteStateHolder(): ReaderRouteStateHolder =
@@ -111,6 +112,7 @@ internal class HoshiAppContainer(context: Context) {
             contentResolver = contentResolver,
             dictionaryRepository = dictionaryRepository,
             settingsRepository = dictionarySettingsRepository,
+            ankiSettingsRepository = ankiSettingsRepository,
         )
 
     fun dictionarySearchRepository(): DictionarySearchRepository =

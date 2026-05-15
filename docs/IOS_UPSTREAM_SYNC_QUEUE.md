@@ -2,7 +2,7 @@
 
 Temporary working document for syncing user-visible iOS upstream changes into Android without mixing the queue into `docs/TODO.md`.
 
-Source range: `reference/Hoshi-Reader-iOS` commits `07b5c09` through `839d486`.
+Source range: `reference/Hoshi-Reader-iOS` commits `07b5c09` through `d1f8409`.
 
 ## Implementation Order
 
@@ -15,6 +15,7 @@ Source range: `reference/Hoshi-Reader-iOS` commits `07b5c09` through `839d486`.
 2. Sasayaki matching - implemented
    - `839d486`: include cue text length in matcher search range.
    - `839d486`: widen match UI search window from `50..350` to `50..1000`.
+   - `d1f8409`: skip short low-confidence `＊` cues during matching.
 
 3. Lookup scanning setting - implemented
    - `07b5c09`: add `scanNonJapaneseText` setting, default `true`.

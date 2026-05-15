@@ -5,6 +5,21 @@ The format follows a Keep a Changelog style, and release sections use Semantic V
 
 ## [Unreleased]
 
+## [v0.6.3] - 2026-05-15
+
+### Added
+
+- Add a Behavior setting to keep the screen awake while reading books without Sasayaki audio.
+- Add iOS-style dictionary update checks for installed updatable dictionaries, including revision comparison, download/install progress, preservation of dictionary order and enabled state, and Anki single-glossary field migration when a dictionary title changes.
+- Add recommended dictionary downloads for JMdict, Jiten, and Jitendex, with each dictionary downloaded individually.
+
+### Fixed
+
+- Keep continuous-mode reader lookup popups aligned with selected text when reader padding is applied.
+- Skip low-confidence short Sasayaki subtitle cues during matching, matching iOS behavior and avoiding poor read-along alignments.
+
+## [v0.6.2] - 2026-05-14
+
 ### Added
 
 - Read mokuro manga alongside EPUBs: import a mokuro `.zip`/`.cbz` bundle or a mokuro output folder from the bookshelf, then read it with the page artwork plus selectable OCR text wired to dictionary lookup. Turn pages with on-screen previous/next buttons, swipes, or the volume / hardware page keys (taps are reserved for word lookup so they never move the page); right-to-left reading order, per-page resume, and an e-ink-friendly high-contrast lookup highlight.
@@ -14,19 +29,22 @@ The format follows a Keep a Changelog style, and release sections use Semantic V
 
 ### Changed
 
+- Change GitHub release updates to automatically check only, prompt before downloading, support skipping a version, and clean up installed-version APKs.
 - Draw reader lookup selection marks as close underlines in E-ink mode instead of filled highlights.
 - Split manga page-turn animation from E-ink Mode: Behavior now has a Disable Page-Turn Animation toggle for instant page swaps without forcing black-and-white rendering.
-- Gate the GitHub-release auto-updater behind a compile-time flag (`UpdateConfig.AUTO_UPDATE_ENABLED`, off by default) and route the GitHub owner/repo through the same config. While the flag is off the periodic update check, "Update Downloaded" install prompt, and "Automatically Download Updates" toggle are all dormant; flipping the flag (and pointing the owner/repo at your fork) brings the original updater back online.
+- Gate the GitHub-release auto-updater behind a compile-time flag (`UpdateConfig.AUTO_UPDATE_ENABLED`, off by default) and route the GitHub owner/repo through the same config. While the flag is off the periodic update check, the "Update Downloaded" install prompt, and the "Automatically Check for Updates" toggle are all dormant; flipping the flag (and pointing the owner/repo at your fork) brings the original updater back online.
 
 ### Fixed
 
 - Fix animated mokuro page turns shrinking the outgoing page mid-slide: the page now sizes its layout boxes from the host-provided viewport in definite pixels, instead of viewport-edge insets / JS that resolve against the WebView's layout viewport — which `WebView.draw()` was snapshotting at the wrong size and centring.
+- Prevent the About update section from flashing stale default status while loading saved update state, and keep update prompt actions aligned on one row.
 - Reuse a warm reader root lookup popup shell so repeated reader lookups avoid rebuilding the popup WebView.
 - Keep reader popup internal dictionary redirects from rendering stale entries from the previous popup result.
 - Synchronize popup-to-popup selection marks with child popup display and draw E-ink popup selections as underlines.
 - Keep vertical lookup selection marks and popup placement aligned to one ruby-aware selection area so furigana is not covered.
 - Keep reader progress counters from refreshing ahead of paginated page turns on slow E-ink screens by waiting for the WebView page state to be ready to draw.
 - Synchronize reader lookup popup visibility with the selected-word highlight on slow E-ink screens, while keeping highlighted text readable.
+- Prevent reader lookup popups from briefly showing a blank white shell while opening or dismissing on slow E-ink screens.
 
 ## [v0.6.1] - 2026-05-14
 

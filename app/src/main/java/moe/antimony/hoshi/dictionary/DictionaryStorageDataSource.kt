@@ -25,6 +25,17 @@ internal class DictionaryStorageDataSource(
         pitchDictionaries = configEntries(DictionaryType.Pitch),
     )
 
+    fun updatableDictionaries(): List<DictionaryUpdateCandidate> =
+        DictionaryType.entries.flatMap { type ->
+            loadDictionaries(type)
+                .filter { dictionary ->
+                    dictionary.index.isUpdatable &&
+                        dictionary.index.indexUrl.isNotBlank() &&
+                        dictionary.index.downloadUrl.isNotBlank()
+                }
+                .map { dictionary -> DictionaryUpdateCandidate(dictionary, type) }
+        }
+
     fun configWithDictionaryEnabled(
         type: DictionaryType,
         fileName: String,
@@ -47,6 +58,30 @@ internal class DictionaryStorageDataSource(
     ): DictionaryConfig =
         currentConfig().copyForType(type) {
             DictionaryManager.moveDictionaries(loadDictionaries(type), fromIndex, toIndex)
+        }
+
+    fun configWithImportedDictionaryReplacing(
+        type: DictionaryType,
+        replacementFileName: String,
+        enabled: Boolean,
+        order: Int,
+    ): DictionaryConfig =
+        currentConfig().copyForType(type) {
+            val dictionaries = loadDictionaries(type)
+            val replacement = dictionaries.firstOrNull { dictionary ->
+                dictionary.path.name == replacementFileName
+            } ?: return@copyForType it
+            val ordered = dictionaries
+                .filterNot { dictionary -> dictionary.path.name == replacementFileName }
+                .toMutableList()
+            ordered.add(order.coerceIn(0, ordered.size), replacement.copy(isEnabled = enabled))
+            ordered.mapIndexed { index, dictionary ->
+                DictionaryConfig.DictionaryEntry(
+                    fileName = dictionary.path.name,
+                    isEnabled = if (dictionary.path.name == replacementFileName) enabled else dictionary.isEnabled,
+                    order = index,
+                )
+            }
         }
 
     fun saveConfigFromStorage() {

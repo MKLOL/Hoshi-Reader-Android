@@ -58,6 +58,7 @@ data class ReaderSettings(
     val volumeKeysTurnPages: Boolean = false,
     val volumeKeysSeekSasayaki: Boolean = false,
     val reverseVolumeKeyDirection: Boolean = false,
+    val keepScreenOnWhileReading: Boolean = false,
 ) {
     val bottomOverlapPx: Int
         get() = if (verticalWriting) fontSize else 0
@@ -235,6 +236,7 @@ class ReaderSettingsStore(context: Context) : ReaderSettingsLegacySource {
         volumeKeysTurnPages = preferences.getBoolean("volumeKeysTurnPages", false),
         volumeKeysSeekSasayaki = preferences.getBoolean("volumeKeysSeekSasayaki", false),
         reverseVolumeKeyDirection = preferences.getBoolean("reverseVolumeKeyDirection", false),
+        keepScreenOnWhileReading = preferences.getBoolean("keepScreenOnWhileReading", false),
     )
 
     fun save(settings: ReaderSettings) {
@@ -280,6 +282,7 @@ class ReaderSettingsStore(context: Context) : ReaderSettingsLegacySource {
             .putBoolean("volumeKeysTurnPages", settings.volumeKeysTurnPages)
             .putBoolean("volumeKeysSeekSasayaki", settings.volumeKeysSeekSasayaki)
             .putBoolean("reverseVolumeKeyDirection", settings.reverseVolumeKeyDirection)
+            .putBoolean("keepScreenOnWhileReading", settings.keepScreenOnWhileReading)
             .apply()
     }
 }
@@ -364,6 +367,7 @@ class ReaderSettingsRepository(
             volumeKeysTurnPages = this[KEY_VOLUME_KEYS_TURN_PAGES] ?: false,
             volumeKeysSeekSasayaki = this[KEY_VOLUME_KEYS_SEEK_SASAYAKI] ?: false,
             reverseVolumeKeyDirection = this[KEY_REVERSE_VOLUME_KEY_DIRECTION] ?: false,
+            keepScreenOnWhileReading = this[KEY_KEEP_SCREEN_ON_WHILE_READING] ?: false,
         )
 
     private fun MutablePreferences.writeReaderSettings(settings: ReaderSettings) {
@@ -408,6 +412,7 @@ class ReaderSettingsRepository(
         this[KEY_VOLUME_KEYS_TURN_PAGES] = settings.volumeKeysTurnPages
         this[KEY_VOLUME_KEYS_SEEK_SASAYAKI] = settings.volumeKeysSeekSasayaki
         this[KEY_REVERSE_VOLUME_KEY_DIRECTION] = settings.reverseVolumeKeyDirection
+        this[KEY_KEEP_SCREEN_ON_WHILE_READING] = settings.keepScreenOnWhileReading
     }
 
     companion object {
@@ -457,6 +462,7 @@ class ReaderSettingsRepository(
         private val KEY_VOLUME_KEYS_TURN_PAGES = booleanPreferencesKey("volumeKeysTurnPages")
         private val KEY_VOLUME_KEYS_SEEK_SASAYAKI = booleanPreferencesKey("volumeKeysSeekSasayaki")
         private val KEY_REVERSE_VOLUME_KEY_DIRECTION = booleanPreferencesKey("reverseVolumeKeyDirection")
+        private val KEY_KEEP_SCREEN_ON_WHILE_READING = booleanPreferencesKey("keepScreenOnWhileReading")
     }
 }
 

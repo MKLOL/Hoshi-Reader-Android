@@ -14,7 +14,7 @@ data class UpdateSettings(
     // when [UpdateConfig.AUTO_UPDATE_ENABLED] is `true`; when the compile-time flag is
     // `false` the scheduler is never started and the toggle is hidden, so this value is
     // simply unused.
-    val autoDownloadUpdates: Boolean = true,
+    val autoCheckUpdates: Boolean = true,
 )
 
 private val Context.updateSettingsDataStore by preferencesDataStore(name = "update-settings")
@@ -27,21 +27,26 @@ class UpdateSettingsRepository(
 ) {
     val settings: Flow<UpdateSettings> = dataStore.data.map { preferences ->
         UpdateSettings(
-            autoDownloadUpdates = preferences[KEY_AUTO_DOWNLOAD_UPDATES] ?: true,
+            autoCheckUpdates = preferences[KEY_AUTO_CHECK_UPDATES]
+                ?: preferences[KEY_AUTO_DOWNLOAD_UPDATES]
+                ?: true,
         )
     }
 
     suspend fun update(transform: (UpdateSettings) -> UpdateSettings) {
         dataStore.edit { preferences ->
             val current = UpdateSettings(
-                autoDownloadUpdates = preferences[KEY_AUTO_DOWNLOAD_UPDATES] ?: true,
+                autoCheckUpdates = preferences[KEY_AUTO_CHECK_UPDATES]
+                    ?: preferences[KEY_AUTO_DOWNLOAD_UPDATES]
+                    ?: true,
             )
             val next = transform(current)
-            preferences[KEY_AUTO_DOWNLOAD_UPDATES] = next.autoDownloadUpdates
+            preferences[KEY_AUTO_CHECK_UPDATES] = next.autoCheckUpdates
         }
     }
 
     companion object {
+        private val KEY_AUTO_CHECK_UPDATES = booleanPreferencesKey("autoCheckUpdates")
         private val KEY_AUTO_DOWNLOAD_UPDATES = booleanPreferencesKey("autoDownloadUpdates")
     }
 }
