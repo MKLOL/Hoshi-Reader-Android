@@ -13,7 +13,7 @@ class AdvancedSettingsRowsTest {
         assertEquals(
             listOf(
                 listOf("Audio", "Statistics", "Sasayaki (Audiobooks)"),
-                listOf("ッツ Sync"),
+                listOf("ッツ Sync", "HTTP Sync"),
                 listOf("Backup"),
             ),
             sections.map { section -> section.rows.map { it.title } },

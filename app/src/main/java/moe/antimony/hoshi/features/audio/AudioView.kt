@@ -123,6 +123,13 @@ fun AdvancedSettingsView(
         )
         return
     }
+    if (destination == AdvancedDestination.HttpSync) {
+        moe.antimony.hoshi.features.sync.http.HttpSyncSettingsView(
+            onClose = { destination = null },
+            modifier = modifier,
+        )
+        return
+    }
 
     val colorScheme = MaterialTheme.colorScheme
     SettingsDetailScaffold(
@@ -561,6 +568,7 @@ internal enum class AdvancedDestination {
     Sasayaki,
     Backup,
     Syncing,
+    HttpSync,
 }
 
 internal enum class AdvancedSettingsIcon {
@@ -611,6 +619,12 @@ internal fun advancedSettingsSections(): List<AdvancedSettingsSection> =
                     title = "ッツ Sync",
                     destination = AdvancedDestination.Syncing,
                     icon = AdvancedSettingsIcon.Cloud,
+                ),
+                AdvancedSettingsRow(
+                    title = "HTTP Sync",
+                    destination = AdvancedDestination.HttpSync,
+                    icon = AdvancedSettingsIcon.Cloud,
+                    subtitle = "Sync bookmarks and ChatGPT history to your own server (manga + EPUB)",
                 ),
             ),
         ),

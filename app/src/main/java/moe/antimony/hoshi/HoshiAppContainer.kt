@@ -39,6 +39,9 @@ import moe.antimony.hoshi.features.sync.GoogleDriveClient
 import moe.antimony.hoshi.features.sync.SyncManager
 import moe.antimony.hoshi.features.sync.SyncSettingsRepository
 import moe.antimony.hoshi.features.sync.syncSettingsRepository
+import moe.antimony.hoshi.features.sync.http.HttpSyncManager
+import moe.antimony.hoshi.features.sync.http.HttpSyncSettingsRepository
+import moe.antimony.hoshi.features.sync.http.httpSyncSettingsRepository
 import moe.antimony.hoshi.features.update.AndroidUpdateDownloadManager
 import moe.antimony.hoshi.features.update.GitHubReleaseUpdateRepository
 import moe.antimony.hoshi.features.update.UpdateCheckService
@@ -74,6 +77,8 @@ internal class HoshiAppContainer(context: Context) {
         bookRepository = bookRepository,
         drive = googleDriveClient,
     )
+    val httpSyncSettingsRepository: HttpSyncSettingsRepository = appContext.httpSyncSettingsRepository()
+    val httpSyncManager: HttpSyncManager = HttpSyncManager(bookRepository = bookRepository)
     val ankiRepository: AnkiRepository = AnkiRepository(
         context = appContext,
         backend = AnkiDroidBackendAdapter(AndroidAnkiContentApi(appContext)),
