@@ -179,9 +179,9 @@ internal fun MangaReaderScreen(
         }
         clearSelectionAndPopups()
         // Snapshot the outgoing page so it can slide off over the incoming page. Skipped on
-        // e-ink (a slide just ghosts on a slow panel) and when the WebView is not laid out
-        // yet — either way `pageTransition` stays null and the page simply swaps.
-        val snapshot = if (readerSettings.eInkMode) {
+        // e-ink or when the user has disabled page-turn animation, and when the WebView is
+        // not laid out yet — either way `pageTransition` stays null and the page simply swaps.
+        val snapshot = if (!shouldAnimateMangaPageTurns(readerSettings)) {
             null
         } else {
             webView?.let(::captureWebViewBitmap)
@@ -652,6 +652,9 @@ private fun mangaChromeScrim(darkInterface: Boolean, eInkMode: Boolean): Color =
     darkInterface -> Color.Black.copy(alpha = 0.45f)
     else -> Color.White.copy(alpha = 0.55f)
 }
+
+internal fun shouldAnimateMangaPageTurns(settings: ReaderSettings): Boolean =
+    !settings.eInkMode && !settings.disablePageTurnAnimation
 
 private fun Color.toCssHex(): String {
     val r = (red * 255f).toInt().coerceIn(0, 255)

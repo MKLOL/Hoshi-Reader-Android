@@ -38,6 +38,7 @@ This file is the short operational handoff for future agents.
 - Device-validate the warm reader root lookup popup shell, confirming repeated root lookups reuse the popup without breaking child popups, redirects, action-bar history, or popup dismiss behavior.
 - Device-validate popup-to-popup lookup selections, confirming child popup display syncs with Compose-drawn parent selection marks, E-ink mode uses underlines, and scrolling a parent popup dismisses child popups.
 - Device-validate reader lookup popup open and dismiss on a slow E-ink target, confirming the Compose-drawn selected-word highlight appears and disappears with the popup and does not gray out text.
+- Blocked pending device validation: Behavior -> Disable Page-Turn Animation should make mokuro page swaps instant without forcing E-ink black-and-white mode.
 - Finish remaining iOS `PopupWebView` Anki mining behavior beyond selected popup text export.
 - Validate paginated and continuous reader modes together for cover image pages, multi-image illustration pages, long text paging, forward/backward progress monotonicity, per-page progress updates and restore landing inside large text nodes, forward and backward chapter boundaries, reverse cross-chapter landing, lookup popup open, and bookmark restore.
 - Re-check forward chapter-boundary landings at chapter start, visual-state-gated chapter jumps, and stable progress counters during rapid boundary flips after reader pagination changes.
@@ -90,7 +91,8 @@ page images) that reuses the bookshelf, dictionary lookup, and Anki mining.
 - Emulator-verified: OCR text is hidden until a bubble is tapped (a tap reveals that
   bubble on a near-opaque plate and looks the tapped word up; tapping empty artwork hides
   revealed bubbles again), a revealed bubble shows a copy button that copies its whole
-  text, and page turns play a right-to-left slide animation (skipped on e-ink).
+  text, and page turns play a right-to-left slide animation by default while Behavior can
+  disable that animation for instant swaps without forcing E-ink black-and-white mode.
 - ChatGPT bubble lookup, emulator-verified end to end: a revealed bubble shows a ChatGPT
   button that sends a configurable prompt + the bubble's OCR text to OpenAI and shows the
   Markdown-rendered reply in a closable popup; API key / model / prompt and a per-manga

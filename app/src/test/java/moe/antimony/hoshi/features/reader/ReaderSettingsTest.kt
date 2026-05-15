@@ -13,6 +13,7 @@ class ReaderSettingsTest {
         val settings = ReaderSettings()
 
         assertFalse(settings.eInkMode)
+        assertFalse(settings.disablePageTurnAnimation)
         assertEquals(true, settings.verticalWriting)
         assertEquals(22, settings.fontSize)
         assertEquals(5, settings.horizontalPadding)

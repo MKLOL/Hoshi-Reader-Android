@@ -1,8 +1,11 @@
 package moe.antimony.hoshi.features.mangareader
 
 import moe.antimony.hoshi.features.reader.ReaderNavigationDirection
+import moe.antimony.hoshi.features.reader.ReaderSettings
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class MangaPageNavigationTest {
@@ -77,6 +80,42 @@ class MangaPageNavigationTest {
         assertEquals(
             ReaderNavigationDirection.Backward,
             MangaPageNavigation.directionForSwipe(MangaSwipeDirection.Left),
+        )
+    }
+
+    @Test
+    fun eInkModeDisablesMangaPageTurnAnimation() {
+        assertFalse(
+            shouldAnimateMangaPageTurns(
+                ReaderSettings(
+                    eInkMode = true,
+                    disablePageTurnAnimation = false,
+                ),
+            ),
+        )
+    }
+
+    @Test
+    fun behaviorSettingDisablesMangaPageTurnAnimationWithoutEInkMode() {
+        assertFalse(
+            shouldAnimateMangaPageTurns(
+                ReaderSettings(
+                    eInkMode = false,
+                    disablePageTurnAnimation = true,
+                ),
+            ),
+        )
+    }
+
+    @Test
+    fun colorScreensKeepAnimationWhenNeitherSwitchIsEnabled() {
+        assertTrue(
+            shouldAnimateMangaPageTurns(
+                ReaderSettings(
+                    eInkMode = false,
+                    disablePageTurnAnimation = false,
+                ),
+            ),
         )
     }
 }

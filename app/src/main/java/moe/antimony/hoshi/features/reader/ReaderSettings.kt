@@ -19,6 +19,7 @@ import java.util.Locale
 data class ReaderSettings(
     val theme: ReaderTheme = ReaderTheme.System,
     val eInkMode: Boolean = false,
+    val disablePageTurnAnimation: Boolean = false,
     val systemLightSepia: Boolean = false,
     val sepiaInvertInDark: Boolean = false,
     val verticalWriting: Boolean = true,
@@ -191,6 +192,7 @@ class ReaderSettingsStore(context: Context) : ReaderSettingsLegacySource {
             ?.let { saved -> ReaderTheme.entries.firstOrNull { it.label == saved } }
             ?: ReaderTheme.System,
         eInkMode = preferences.getBoolean("eInkMode", false),
+        disablePageTurnAnimation = preferences.getBoolean("disablePageTurnAnimation", false),
         systemLightSepia = preferences.getBoolean("systemLightSepia", false),
         sepiaInvertInDark = preferences.getBoolean("sepiaInvertInDark", false),
         verticalWriting = preferences.getBoolean("verticalWriting", true),
@@ -239,6 +241,7 @@ class ReaderSettingsStore(context: Context) : ReaderSettingsLegacySource {
         preferences.edit()
             .putString("theme", settings.theme.label)
             .putBoolean("eInkMode", settings.eInkMode)
+            .putBoolean("disablePageTurnAnimation", settings.disablePageTurnAnimation)
             .putBoolean("systemLightSepia", settings.systemLightSepia)
             .putBoolean("sepiaInvertInDark", settings.sepiaInvertInDark)
             .putBoolean("verticalWriting", settings.verticalWriting)
@@ -320,6 +323,7 @@ class ReaderSettingsRepository(
                 ?.let { saved -> ReaderTheme.entries.firstOrNull { it.label == saved } }
                 ?: ReaderTheme.System,
             eInkMode = this[KEY_E_INK_MODE] ?: false,
+            disablePageTurnAnimation = this[KEY_DISABLE_PAGE_TURN_ANIMATION] ?: false,
             systemLightSepia = this[KEY_SYSTEM_LIGHT_SEPIA] ?: false,
             sepiaInvertInDark = this[KEY_SEPIA_INVERT_IN_DARK] ?: false,
             verticalWriting = this[KEY_VERTICAL_WRITING] ?: true,
@@ -365,6 +369,7 @@ class ReaderSettingsRepository(
     private fun MutablePreferences.writeReaderSettings(settings: ReaderSettings) {
         this[KEY_THEME] = settings.theme.label
         this[KEY_E_INK_MODE] = settings.eInkMode
+        this[KEY_DISABLE_PAGE_TURN_ANIMATION] = settings.disablePageTurnAnimation
         this[KEY_SYSTEM_LIGHT_SEPIA] = settings.systemLightSepia
         this[KEY_SEPIA_INVERT_IN_DARK] = settings.sepiaInvertInDark
         this[KEY_VERTICAL_WRITING] = settings.verticalWriting
@@ -412,6 +417,8 @@ class ReaderSettingsRepository(
             booleanPreferencesKey("readerSettingsMigratedFromSharedPreferences")
         private val KEY_THEME = stringPreferencesKey("theme")
         private val KEY_E_INK_MODE = booleanPreferencesKey("eInkMode")
+        private val KEY_DISABLE_PAGE_TURN_ANIMATION =
+            booleanPreferencesKey("disablePageTurnAnimation")
         private val KEY_SYSTEM_LIGHT_SEPIA = booleanPreferencesKey("systemLightSepia")
         private val KEY_SEPIA_INVERT_IN_DARK = booleanPreferencesKey("sepiaInvertInDark")
         private val KEY_VERTICAL_WRITING = booleanPreferencesKey("verticalWriting")

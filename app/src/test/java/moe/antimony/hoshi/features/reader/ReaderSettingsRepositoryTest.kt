@@ -26,6 +26,7 @@ class ReaderSettingsRepositoryTest {
 
             assertEquals(ReaderTheme.System, settings.theme)
             assertFalse(settings.eInkMode)
+            assertFalse(settings.disablePageTurnAnimation)
             assertFalse(settings.systemLightSepia)
             assertFalse(settings.sepiaInvertInDark)
             assertTrue(settings.verticalWriting)
@@ -68,6 +69,7 @@ class ReaderSettingsRepositoryTest {
             ReaderSettings(
                 theme = ReaderTheme.Dark,
                 eInkMode = true,
+                disablePageTurnAnimation = true,
                 selectedFont = "Hiragino Mincho ProN",
                 fontSize = 29,
                 continuousMode = true,
@@ -84,6 +86,7 @@ class ReaderSettingsRepositoryTest {
 
             assertEquals(ReaderTheme.Dark, migrated.theme)
             assertTrue(migrated.eInkMode)
+            assertTrue(migrated.disablePageTurnAnimation)
             assertEquals(ReaderFontManager.defaultMinchoFont, migrated.selectedFont)
             assertEquals(29, migrated.fontSize)
             assertTrue(migrated.continuousMode)
@@ -107,6 +110,7 @@ class ReaderSettingsRepositoryTest {
                     theme = ReaderTheme.Sepia,
                     systemLightSepia = true,
                     sepiaInvertInDark = true,
+                    disablePageTurnAnimation = true,
                     verticalWriting = false,
                     selectedFont = ReaderFontManager.defaultGothicFont,
                     fontSize = 24,
@@ -146,6 +150,7 @@ class ReaderSettingsRepositoryTest {
             assertEquals(ReaderTheme.Sepia, saved.theme)
             assertTrue(saved.systemLightSepia)
             assertTrue(saved.sepiaInvertInDark)
+            assertTrue(saved.disablePageTurnAnimation)
             assertFalse(saved.verticalWriting)
             assertEquals(ReaderFontManager.defaultGothicFont, saved.selectedFont)
             assertEquals(24, saved.fontSize)

@@ -43,6 +43,15 @@ fun ReaderBehaviorScreen(
             item {
                 BehaviorSettingsCard {
                     BehaviorSwitchRow(
+                        label = "Disable Page-Turn Animation",
+                        checked = settings.disablePageTurnAnimation,
+                        onCheckedChange = {
+                            onSettingsChange(settings.copy(disablePageTurnAnimation = it))
+                        },
+                        description = "Skips the manga page-turn slide and swaps pages instantly.",
+                    )
+                    BehaviorDivider()
+                    BehaviorSwitchRow(
                         label = "Volume Keys Turn Pages",
                         checked = settings.volumeKeysTurnPages,
                         onCheckedChange = {
@@ -94,6 +103,7 @@ private fun BehaviorSwitchRow(
     label: String,
     checked: Boolean,
     onCheckedChange: (Boolean) -> Unit,
+    description: String? = null,
 ) {
     ListItem(
         colors = ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.surface),
@@ -102,6 +112,14 @@ private fun BehaviorSwitchRow(
                 text = label,
                 style = MaterialTheme.typography.bodyLarge,
             )
+        },
+        supportingContent = description?.let {
+            {
+                Text(
+                    text = it,
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            }
         },
         trailingContent = {
             Switch(checked = checked, onCheckedChange = onCheckedChange)
