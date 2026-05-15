@@ -22,8 +22,8 @@ import java.util.UUID
 /**
  * End-to-end tests for the v2 KV HTTP sync. Covers:
  *
- *  - [HttpSyncManager.syncOnce] inbound, outbound, cursor advancement, error collection.
- *  - [HttpSyncManager.pushBookmark] / [pushChatEntry] single-shot hooks.
+ *  - [HttpSyncReconciler.syncOnce] inbound, outbound, cursor advancement, error collection.
+ *  - [HttpSyncPusher.pushBookmark] / [pushChatEntry] single-shot hooks.
  *  - The blob schema helpers from [HttpSyncBlobs] — `deriveSyncId`, `chatEntryKeySuffix`,
  *    timestamp conversions, key builders.
  *
@@ -449,23 +449,226 @@ class HttpSyncTest {
     }
 
     @Test
+    fun isConfiguredRequiresBothUrlAndToken() {
+        assertFalse(HttpSyncSettings(baseUrl = "", bearerToken = "t").isConfigured)
+        assertFalse(HttpSyncSettings(baseUrl = "https://x", bearerToken = "").isConfigured)
+        assertFalse(HttpSyncSettings(baseUrl = "", bearerToken = "").isConfigured)
+        // `isNotBlank()` catches whitespace-only — repository trims on write anyway, but the
+        // data class itself is defensive.
+        assertFalse(HttpSyncSettings(baseUrl = "https://x", bearerToken = " ").isConfigured)
+        assertFalse(HttpSyncSettings(baseUrl = "   ", bearerToken = "t").isConfigured)
+        assertTrue(HttpSyncSettings(baseUrl = "https://x", bearerToken = "t").isConfigured)
+    }
+
+    @Test
+    fun syncOnceDoesNotAdvanceCursorWhenNothingChanges() = runBlocking {
+        // Empty local + empty server → no inbound, no outbound, cursor stays put.
+        val repo = newBookRepository()
+        val transport = FakeKvTransport()
+        val manager = managerFor(repo, transport)
+        val result = manager.syncOnce(configured.copy(lastSyncedAt = "2020-01-01T00:00:00Z"))
+        assertEquals(0, result.uploadedBookmarks)
+        assertEquals(0, result.downloadedBookmarks)
+        assertNull("cursor must not advance when there is nothing to do", result.newLastSyncedAt)
+    }
+
+    @Test
+    fun syncOncePaginatesAcrossTruncatedListResponses() = runBlocking {
+        val repo = newBookRepository()
+        val (root, _) = importMokuroBook(repo, "Paginated Book")
+        repo.saveBookmark(root, Bookmark(1, 0.0, 1, 800_000_000.0))
+
+        // Server has a bookmark + 3 chat entries split across 2 pages of 2 each.
+        val transport = object : HttpSyncKvTransport {
+            val data: MutableMap<String, FakeKvTransport.Stored> = linkedMapOf()
+            override suspend fun put(key: String, contentType: String, body: ByteArray) = error("unused")
+            override suspend fun get(key: String): HttpSyncKvFetched? {
+                val s = data[key] ?: return null
+                return HttpSyncKvFetched(s.body, s.contentType, s.lastModified, "etag")
+            }
+            override suspend fun list(prefix: String?, since: String?, cursor: String?, limit: Int?): HttpSyncKvList {
+                val all = data.entries
+                    .filter { prefix == null || it.key.startsWith(prefix) }
+                    .sortedBy { it.key }
+                val pageSize = 2
+                val start = cursor?.let { c -> all.indexOfFirst { it.key > c }.coerceAtLeast(0) } ?: 0
+                val end = (start + pageSize).coerceAtMost(all.size)
+                val slice = all.subList(start, end)
+                val truncated = end < all.size
+                val nextCursor = if (truncated) slice.last().key else null
+                val keys = slice.map { (k, s) -> HttpSyncKvKeyMeta(k, s.lastModified, "etag", s.body.size, s.contentType) }
+                return HttpSyncKvList(keys = keys, truncated = truncated, nextCursor = nextCursor)
+            }
+            override suspend fun delete(key: String) { data.remove(key) }
+        }
+        // Seed the pages with a bookmark + chat entries.
+        listOf(
+            chatKey("paginated_book", "2030-01-01T00:00:00.000Z-aaaa") to
+                HttpSyncChatEntryBlob("a", "p", "m", "r", 1.0),
+            chatKey("paginated_book", "2030-01-01T00:00:01.000Z-bbbb") to
+                HttpSyncChatEntryBlob("b", "p", "m", "r", 2.0),
+            chatKey("paginated_book", "2030-01-01T00:00:02.000Z-cccc") to
+                HttpSyncChatEntryBlob("c", "p", "m", "r", 3.0),
+        ).forEach { (k, blob) ->
+            transport.data[k] = FakeKvTransport.Stored(
+                body = json.encodeToString(HttpSyncChatEntryBlob.serializer(), blob).toByteArray(),
+                contentType = "application/json; charset=utf-8",
+                lastModified = "2030-01-01T00:00:00Z",
+            )
+        }
+        // Reconciler talks list/get only — push side is bypassed via FakeKvTransport.put = error.
+        // We test inbound pagination by giving an empty local chat log; all 3 chat entries
+        // should make it across despite the 2-per-page split.
+        val historyStore = AiChatHistoryStore()
+        val readOnly = HttpSyncReconciler(
+            bookRepository = repo,
+            aiHistoryStore = historyStore,
+            transportFactory = {
+                // Wrap to make PUTs no-op so the outbound push doesn't fail the test.
+                object : HttpSyncKvTransport by transport {
+                    override suspend fun put(key: String, contentType: String, body: ByteArray) =
+                        HttpSyncKvWriteResponse(key, "2030-01-01T00:00:00Z", "etag", body.size, contentType)
+                }
+            },
+            ioDispatcher = kotlinx.coroutines.Dispatchers.Unconfined,
+        )
+        val result = readOnly.syncOnce(configured)
+        assertEquals(3, result.downloadedChatEntries)
+        assertEquals(3, historyStore.load(root).entries.size)
+    }
+
+    @Test
+    fun pushBookmarkExceptionPropagatesToCaller() = runBlocking {
+        val repo = newBookRepository()
+        val (root, _) = importMokuroBook(repo, "Failing")
+        repo.saveBookmark(root, Bookmark(1, 0.0, 1, 800_000_000.0))
+        val explodingTransport = object : HttpSyncKvTransport by FakeKvTransport() {
+            override suspend fun put(key: String, contentType: String, body: ByteArray): HttpSyncKvWriteResponse =
+                throw HttpSyncException("simulated 5xx")
+        }
+        val manager = managerFor(repo, explodingTransport)
+        val ex = assertThrows(HttpSyncException::class.java) {
+            runBlocking { manager.pushBookmark(root, "Failing", configured) }
+        }
+        assertTrue("expected simulated message, got '${ex.message}'", "simulated" in ex.message!!)
+    }
+
+    @Test
+    fun pushChatEntryExceptionPropagatesToCaller() = runBlocking {
+        val repo = newBookRepository()
+        val explodingTransport = object : HttpSyncKvTransport by FakeKvTransport() {
+            override suspend fun put(key: String, contentType: String, body: ByteArray): HttpSyncKvWriteResponse =
+                throw HttpSyncException("server burning")
+        }
+        val manager = managerFor(repo, explodingTransport)
+        val ex = assertThrows(HttpSyncException::class.java) {
+            runBlocking {
+                manager.pushChatEntry("Title", AiChatEntry("x", "p", "m", "r", 0.0), configured)
+            }
+        }
+        assertTrue("server burning" in ex.message!!)
+    }
+
+    @Test
+    fun applyBookmarkSurvivesKeyGoingAwayBeforeFetch() = runBlocking {
+        val repo = newBookRepository()
+        val (root, _) = importMokuroBook(repo, "Vanishing")
+        repo.saveBookmark(root, Bookmark(1, 0.0, 1, 800_000_000.0))
+        val transport = object : HttpSyncKvTransport by FakeKvTransport() {
+            override suspend fun list(prefix: String?, since: String?, cursor: String?, limit: Int?): HttpSyncKvList =
+                HttpSyncKvList(
+                    keys = listOf(
+                        HttpSyncKvKeyMeta(
+                            key = bookmarkKey("vanishing"),
+                            lastModified = "2030-01-01T00:00:00Z",
+                            etag = "etag",
+                            size = 100,
+                            contentType = "application/json; charset=utf-8",
+                        ),
+                    ),
+                    truncated = false,
+                    nextCursor = null,
+                )
+            override suspend fun get(key: String): HttpSyncKvFetched? = null // 404 — disappeared between list and get
+            override suspend fun put(key: String, contentType: String, body: ByteArray) =
+                HttpSyncKvWriteResponse(key, "2030-01-01T00:00:00Z", "etag", body.size, contentType)
+        }
+        val manager = managerFor(repo, transport)
+        val result = manager.syncOnce(configured)
+        assertEquals(0, result.downloadedBookmarks)
+        // Outbound still ran — the absent key didn't poison the whole sync.
+        assertTrue(result.errors.isEmpty())
+    }
+
+    @Test
+    fun malformedBookmarkBlobIsReportedAsPerBookError() = runBlocking {
+        val repo = newBookRepository()
+        val (root, _) = importMokuroBook(repo, "Bad JSON")
+        repo.saveBookmark(root, Bookmark(1, 0.0, 1, 800_000_000.0))
+        val transport = FakeKvTransport()
+        transport.kv[bookmarkKey("bad_json")] = FakeKvTransport.Stored(
+            body = "this is not json {".toByteArray(),
+            contentType = "application/json; charset=utf-8",
+            lastModified = "2030-01-01T00:00:00Z",
+        )
+        val manager = managerFor(repo, transport)
+        val result = manager.syncOnce(configured)
+        assertEquals("malformed JSON should not crash; reported as error", 0, result.downloadedBookmarks)
+        assertTrue(
+            "expected the per-key error, got ${result.errors}",
+            result.errors.any { "bad_json" in it && "malformed" in it.lowercase() },
+        )
+    }
+
+    @Test
+    fun encodeKeyHandlesTimestampWithColons() {
+        // Reconstruct what HttpSyncKvClient.encodeKey does — colons must survive
+        // (or be encoded consistently). The real chat key has the form
+        // books/{syncId}/chat/2026-05-15T12:34:56.789Z-abcd.
+        val client = HttpSyncKvClient(baseUrl = "https://x", bearerToken = "t")
+        val encode = HttpSyncKvClient::class.java.getDeclaredMethod("encodeKey", String::class.java)
+        encode.isAccessible = true
+        val key = "books/yotsubato_01/chat/2026-05-15T12:34:56.789Z-abcdef"
+        val encoded = encode.invoke(client, key) as String
+        // Slashes preserved, segments percent-encoded only where needed.
+        assertTrue("encoded path keeps slashes: $encoded", encoded.startsWith("books/"))
+        assertEquals("dots and dashes don't get encoded", -1, encoded.indexOf("%2D"))
+        assertEquals("dots don't get encoded", -1, encoded.indexOf("%2E"))
+        // Colon is encoded by URLEncoder as %3A — that's fine, the server's path decoder
+        // restores it. The key thing is no `+` slipped in (since URLEncoder maps spaces to +).
+        assertEquals("no '+' in output (we mapped them to %20)", -1, encoded.indexOf('+'))
+    }
+
+    @Test
     fun summaryRendersHumanReadableCountsOrNothingToSync() {
-        val empty = HttpSyncResult(0, 0, 0, 0, 0, 0, emptyList())
+        val empty = HttpSyncResult(
+            uploadedBookmarks = 0,
+            uploadedChatEntries = 0,
+            uploadedMetadata = 0,
+            downloadedBookmarks = 0,
+            downloadedChatEntries = 0,
+            remoteOnlyBooks = 0,
+            errors = emptyList(),
+        )
         assertEquals("nothing to sync", empty.summary())
 
         val mixed = HttpSyncResult(
             uploadedBookmarks = 3,
             uploadedChatEntries = 1,
             uploadedMetadata = 3,
+            uploadedPayloads = 2,
             downloadedBookmarks = 0,
             downloadedChatEntries = 2,
+            downloadedPayloads = 1,
             remoteOnlyBooks = 1,
             errors = emptyList(),
         )
         val summary = mixed.summary()
         assertTrue(summary.contains("3 bookmarks up"))
         assertTrue(summary.contains("1 chat up"))
+        assertTrue(summary.contains("2 book payloads up"))
         assertTrue(summary.contains("2 chats down"))
+        assertTrue(summary.contains("1 book payload down"))
         assertTrue(summary.contains("1 remote-only book"))
     }
 
@@ -506,15 +709,35 @@ class HttpSyncTest {
         return root to title
     }
 
+    /** Holder for the two halves of the sync code so tests can pick whichever they need. */
+    private class SyncFixture(
+        val pusher: HttpSyncPusher,
+        val reconciler: HttpSyncReconciler,
+    ) {
+        suspend fun pushBookmark(bookRoot: File, title: String, settings: HttpSyncSettings) =
+            pusher.pushBookmark(bookRoot, title, settings)
+        suspend fun pushChatEntry(title: String, entry: AiChatEntry, settings: HttpSyncSettings) =
+            pusher.pushChatEntry(title, entry, settings)
+        suspend fun syncOnce(settings: HttpSyncSettings): HttpSyncResult =
+            reconciler.syncOnce(settings)
+    }
+
     private fun managerFor(
         repo: BookRepository,
         transport: HttpSyncKvTransport,
         historyStore: AiChatHistoryStore = AiChatHistoryStore(),
-    ): HttpSyncManager = HttpSyncManager(
-        bookRepository = repo,
-        aiHistoryStore = historyStore,
-        transportFactory = { transport },
-        ioDispatcher = kotlinx.coroutines.Dispatchers.Unconfined,
+    ): SyncFixture = SyncFixture(
+        pusher = HttpSyncPusher(
+            bookRepository = repo,
+            transportFactory = { transport },
+            ioDispatcher = kotlinx.coroutines.Dispatchers.Unconfined,
+        ),
+        reconciler = HttpSyncReconciler(
+            bookRepository = repo,
+            aiHistoryStore = historyStore,
+            transportFactory = { transport },
+            ioDispatcher = kotlinx.coroutines.Dispatchers.Unconfined,
+        ),
     )
 }
 

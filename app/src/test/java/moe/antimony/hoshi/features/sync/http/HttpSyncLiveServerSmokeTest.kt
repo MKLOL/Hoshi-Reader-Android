@@ -2,11 +2,14 @@ package moe.antimony.hoshi.features.sync.http
 
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
+import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.TemporaryFolder
 import java.util.UUID
 
 /**
@@ -28,6 +31,8 @@ import java.util.UUID
  * so it doesn't pollute the live namespace.
  */
 class HttpSyncLiveServerSmokeTest {
+
+    @get:Rule val tempFolder = TemporaryFolder()
 
     private val baseUrl: String? = System.getenv("HOSHI_KV_BASE_URL")
     private val token: String? = System.getenv("HOSHI_KV_TOKEN")
@@ -81,6 +86,57 @@ class HttpSyncLiveServerSmokeTest {
         assumeTrue("HOSHI_KV_TOKEN not set — skipping live-server test", token != null)
         val client = HttpSyncKvClient(baseUrl!!, token!!)
         assertNull(client.get("__smoke/${UUID.randomUUID()}/never-existed"))
+    }
+
+    @Test
+    fun payloadCodecRoundTripsAgainstLiveServer() = runBlocking {
+        assumeTrue("HOSHI_KV_BASE_URL not set — skipping live-server test", baseUrl != null)
+        assumeTrue("HOSHI_KV_TOKEN not set — skipping live-server test", token != null)
+
+        val client = HttpSyncKvClient(baseUrl!!, token!!)
+        val codec = HttpSyncPayloadCodec()
+        val syncId = "__smoke_payload_${UUID.randomUUID().toString().substring(0, 8)}"
+
+        // Build a small fake book directory.
+        val src = tempFolder.newFolder("upload-side").apply {
+            resolve("mokuro.json").writeText("""{"smoke":"test"}""")
+            resolve("pages").mkdirs()
+            resolve("pages/page1.png").writeBytes(byteArrayOf(0x89.toByte(), 0x50, 0x4E, 0x47))
+        }
+
+        try {
+            // First upload should write zip + manifest.
+            val firstUpload = codec.uploadIfChanged(
+                transport = client,
+                syncId = syncId,
+                bookRoot = src,
+                originalName = "Smoke Test Volume",
+                format = HttpSyncContentType.Mokuro,
+            )
+            assertTrue("first call should upload", firstUpload)
+
+            // Second call (same contents) must not re-upload.
+            val secondUpload = codec.uploadIfChanged(
+                transport = client,
+                syncId = syncId,
+                bookRoot = src,
+                originalName = "Smoke Test Volume",
+                format = HttpSyncContentType.Mokuro,
+            )
+            assertFalse("identical contents should not re-upload", secondUpload)
+
+            // Download to a fresh dir and verify contents match.
+            val downloadTarget = tempFolder.newFolder("download-side")
+            val manifest = codec.downloadAndUnpack(client, syncId, downloadTarget)
+            assertEquals("Smoke Test Volume", manifest.originalName)
+            assertEquals(HttpSyncContentType.Mokuro, manifest.format)
+            assertEquals("""{"smoke":"test"}""", downloadTarget.resolve("mokuro.json").readText())
+            assertEquals(4, downloadTarget.resolve("pages/page1.png").readBytes().size)
+        } finally {
+            // Clean up server-side keys regardless of test outcome.
+            runCatching { client.delete(payloadZipKey(syncId)) }
+            runCatching { client.delete(payloadManifestKey(syncId)) }
+        }
     }
 
     @Test

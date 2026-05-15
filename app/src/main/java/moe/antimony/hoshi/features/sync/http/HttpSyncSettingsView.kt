@@ -50,7 +50,7 @@ fun HttpSyncSettingsView(
 ) {
     val appContainer = LocalHoshiAppContainer.current
     val repository = appContainer.httpSyncSettingsRepository
-    val syncManager = appContainer.httpSyncManager
+    val reconciler = appContainer.httpSyncReconciler
     val scope = rememberCoroutineScope()
     val settings by repository.settings.collectAsState(initial = null)
 
@@ -135,7 +135,7 @@ fun HttpSyncSettingsView(
                 onClick = {
                     status = SyncStatus.Running
                     scope.launch {
-                        status = runCatching { syncManager.syncOnce(loaded) }
+                        status = runCatching { reconciler.syncOnce(loaded) }
                             .fold(
                                 onSuccess = { result ->
                                     // Persist the inbound cursor so the next sync can use
@@ -172,9 +172,9 @@ private fun EnabledRow(
                 Text("Enabled", style = MaterialTheme.typography.bodyLarge)
                 Text(
                     text = if (isConfigured) {
-                        "Page-turn and chat-entry auto-push run whenever this is configured, " +
-                            "independent of this toggle. The toggle is reserved for a future " +
-                            "explicit kill-switch; the Sync now button below always works."
+                        "On: page-turn and chat-entry auto-push run silently in the background. " +
+                            "Off: only the Sync now button below pushes anything. Useful on " +
+                            "cellular data or when you don't want the chatter."
                     } else {
                         "Fill in the base URL and bearer token first."
                     },

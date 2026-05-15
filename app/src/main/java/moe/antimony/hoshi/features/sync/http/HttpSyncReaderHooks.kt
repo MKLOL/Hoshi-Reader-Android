@@ -1,5 +1,6 @@
 package moe.antimony.hoshi.features.sync.http
 
+import android.util.Log
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -10,6 +11,8 @@ import kotlinx.coroutines.launch
 import moe.antimony.hoshi.LocalHoshiAppContainer
 import moe.antimony.hoshi.features.ai.AiChatEntry
 import java.io.File
+
+private const val TAG = "HttpSync"
 
 /**
  * Reader-side auto-push hooks for the v2 KV sync, packaged so the call site in the manga
@@ -24,8 +27,13 @@ import java.io.File
  *  - On every new ChatGPT response that gets persisted: PUT that one chat entry at its
  *    content-addressable key (write-once on the server; safe to retry).
  *
- * Skipped when [HttpSyncSettings.isConfigured] is false (no base URL / no token).
- * Network errors are swallowed — the next manual "Sync now" tap will reconcile.
+ * Gated by both [HttpSyncSettings.isConfigured] and [HttpSyncSettings.enabled]. Network
+ * errors are swallowed — the next manual "Sync now" tap will reconcile.
+ *
+ * **Offline circuit breaker:** after [CONSECUTIVE_FAILURE_THRESHOLD] consecutive failed
+ * pushes we suppress new pushes for [BACKOFF_MS] milliseconds. This keeps the IO thread
+ * pool clean on airplane mode / captive portal / dead server and reduces logcat noise.
+ * The next successful push (or a manual Sync now) resets the breaker.
  */
 class HttpSyncReaderHooks internal constructor(
     private val bookRoot: File,
@@ -34,8 +42,11 @@ class HttpSyncReaderHooks internal constructor(
     private val pushChatEntry: suspend (String, AiChatEntry, HttpSyncSettings) -> Unit,
     private val currentSettings: () -> HttpSyncSettings?,
     private val persistenceScope: CoroutineScope,
+    private val clock: () -> Long = System::currentTimeMillis,
 ) {
     private var unpushedPageTurns: Int = 0
+    private var consecutiveFailures: Int = 0
+    private var suppressUntilMs: Long = 0L
 
     /** Call this from your existing post-save callback (after the local-bookmark file write). */
     fun onPageTurnPersisted() {
@@ -52,25 +63,64 @@ class HttpSyncReaderHooks internal constructor(
 
     /** Call this once for every chat entry that gets appended to the local log. */
     fun onChatEntryPersisted(entry: AiChatEntry) {
-        val settings = currentSettings() ?: return
-        if (!settings.isConfigured) return
+        val settings = activeSettings() ?: return
+        if (breakerOpen()) return
         persistenceScope.launch {
             runCatching { pushChatEntry(title, entry, settings) }
+                .onSuccess { onPushSuccess() }
+                .onFailure { onPushFailure("chat", it) }
         }
     }
 
     private fun flushBookmarkIfActivity() {
         if (unpushedPageTurns <= 0) return
-        val settings = currentSettings() ?: return
-        if (!settings.isConfigured) return
+        val settings = activeSettings() ?: return
+        if (breakerOpen()) {
+            // We're suppressed; keep the unpushed counter so a later success can pick up
+            // the work. Reset it here would silently drop progress.
+            return
+        }
         unpushedPageTurns = 0
         persistenceScope.launch {
             runCatching { pushBookmark(bookRoot, title, settings) }
+                .onSuccess { onPushSuccess() }
+                .onFailure { onPushFailure("bookmark", it) }
+        }
+    }
+
+    /** Returns the current settings iff sync is configured AND the user hasn't disabled auto-push. */
+    private fun activeSettings(): HttpSyncSettings? {
+        val s = currentSettings() ?: return null
+        if (!s.isConfigured) return null
+        if (!s.enabled) return null
+        return s
+    }
+
+    private fun breakerOpen(): Boolean = clock() < suppressUntilMs
+
+    private fun onPushSuccess() {
+        consecutiveFailures = 0
+        suppressUntilMs = 0L
+    }
+
+    private fun onPushFailure(kind: String, error: Throwable) {
+        consecutiveFailures += 1
+        // Log only on the failure that tripped the breaker; further failures within the
+        // backoff window are dropped silently (which is the whole point of the breaker).
+        if (consecutiveFailures == CONSECUTIVE_FAILURE_THRESHOLD) {
+            suppressUntilMs = clock() + BACKOFF_MS
+            Log.w(
+                TAG,
+                "Auto-push of $kind for '$title' failed ${consecutiveFailures}x; suppressing for ${BACKOFF_MS / 1000}s: ${error.message}",
+            )
         }
     }
 
     /** Test-only accessor; never read in production. */
     internal val pendingTurns: Int get() = unpushedPageTurns
+
+    /** Test-only accessor for circuit-breaker state. */
+    internal val isSuppressed: Boolean get() = breakerOpen()
 
     companion object {
         /**
@@ -80,6 +130,16 @@ class HttpSyncReaderHooks internal constructor(
          * force-push on leave so the bookmark is never more than 4 turns out of date.
          */
         const val PAGE_TURN_PUSH_THRESHOLD: Int = 5
+
+        /**
+         * Number of consecutive failed pushes before the breaker trips. The first
+         * [CONSECUTIVE_FAILURE_THRESHOLD] failures are silent (each push gets its own
+         * shot); the Nth logs once and starts suppression.
+         */
+        const val CONSECUTIVE_FAILURE_THRESHOLD: Int = 3
+
+        /** How long the breaker stays open after tripping. 5 min = airplane-mode-friendly. */
+        const val BACKOFF_MS: Long = 5 * 60 * 1000L
     }
 }
 
@@ -96,15 +156,15 @@ fun rememberHttpSyncReaderHooks(
     persistenceScope: CoroutineScope,
 ): HttpSyncReaderHooks {
     val appContainer = LocalHoshiAppContainer.current
-    val manager = appContainer.httpSyncManager
+    val pusher = appContainer.httpSyncPusher
     val settings by appContainer.httpSyncSettingsRepository.settings.collectAsState(initial = null)
     val settingsRef = rememberUpdatedState(settings)
     return remember(bookRoot, title, persistenceScope) {
         HttpSyncReaderHooks(
             bookRoot = bookRoot,
             title = title,
-            pushBookmark = manager::pushBookmark,
-            pushChatEntry = manager::pushChatEntry,
+            pushBookmark = pusher::pushBookmark,
+            pushChatEntry = pusher::pushChatEntry,
             currentSettings = { settingsRef.value },
             persistenceScope = persistenceScope,
         )

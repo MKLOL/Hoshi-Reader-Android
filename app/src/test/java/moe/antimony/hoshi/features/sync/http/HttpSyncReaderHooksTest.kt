@@ -7,6 +7,7 @@ import kotlinx.coroutines.runBlocking
 import moe.antimony.hoshi.features.ai.AiChatEntry
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -15,7 +16,7 @@ import java.io.File
 /**
  * Unit tests for the every-5/on-leave/on-chat counter logic in [HttpSyncReaderHooks].
  *
- * No real network, no real `HttpSyncManager` — the hooks class takes `pushBookmark` and
+ * No real network, no real `HttpSyncPusher` — the hooks class takes `pushBookmark` and
  * `pushChatEntry` as function references so we can drop in a recording spy. The
  * persistence scope runs on `Dispatchers.Unconfined` so async pushes resolve immediately
  * and assertions can inspect the spy without sleeping.
@@ -26,6 +27,8 @@ class HttpSyncReaderHooksTest {
     private lateinit var scope: CoroutineScope
     private val configured = HttpSyncSettings(baseUrl = "https://x", bearerToken = "t", enabled = true)
     private val unconfigured = HttpSyncSettings(baseUrl = "", bearerToken = "")
+    private val disabled = HttpSyncSettings(baseUrl = "https://x", bearerToken = "t", enabled = false)
+    private var fakeNowMs: Long = 1_700_000_000_000L
 
     @Before fun setUp() {
         spy = RecordingPusher()
@@ -130,19 +133,104 @@ class HttpSyncReaderHooksTest {
         assertEquals(entry, gotEntry)
     }
 
+    @Test
+    fun hooksNoOpWhenEnabledFalse() = runBlocking {
+        val hooks = newHooks(settings = disabled)
+        repeat(HttpSyncReaderHooks.PAGE_TURN_PUSH_THRESHOLD) { hooks.onPageTurnPersisted() }
+        hooks.onLeave()
+        hooks.onChatEntryPersisted(AiChatEntry("x", "p", "m", "r", 0.0))
+        assertEquals("disabled = no pushes, even if URL+token configured", 0, spy.bookmarkCount)
+        assertEquals(0, spy.chatCount)
+    }
+
+    @Test
+    fun circuitBreakerTripsAfterConsecutiveFailures() = runBlocking {
+        val failing: suspend (File, String, HttpSyncSettings) -> Unit = { _, _, _ ->
+            throw HttpSyncException("network down")
+        }
+        val hooks = newHooks(settings = configured, pushBookmark = failing)
+        // Each batch of THRESHOLD turns triggers one push attempt.
+        repeat(HttpSyncReaderHooks.CONSECUTIVE_FAILURE_THRESHOLD) {
+            repeat(HttpSyncReaderHooks.PAGE_TURN_PUSH_THRESHOLD) { hooks.onPageTurnPersisted() }
+        }
+        assertTrue("after N consecutive failures the breaker is open", hooks.isSuppressed)
+    }
+
+    @Test
+    fun openBreakerSuppressesFurtherPushAttempts() = runBlocking {
+        var attemptCount = 0
+        val failing: suspend (File, String, HttpSyncSettings) -> Unit = { _, _, _ ->
+            attemptCount += 1
+            throw HttpSyncException("server is down")
+        }
+        val hooks = newHooks(settings = configured, pushBookmark = failing)
+        // Trip the breaker.
+        repeat(HttpSyncReaderHooks.CONSECUTIVE_FAILURE_THRESHOLD) {
+            repeat(HttpSyncReaderHooks.PAGE_TURN_PUSH_THRESHOLD) { hooks.onPageTurnPersisted() }
+        }
+        val attemptsAtTrip = attemptCount
+        // Many more page turns while the breaker is open should NOT trigger more PUTs.
+        repeat(HttpSyncReaderHooks.PAGE_TURN_PUSH_THRESHOLD * 5) { hooks.onPageTurnPersisted() }
+        hooks.onLeave()
+        assertEquals(
+            "no extra push attempts while breaker is open",
+            attemptsAtTrip,
+            attemptCount,
+        )
+    }
+
+    @Test
+    fun breakerResetsAfterBackoffWindow() = runBlocking {
+        var failNext = true
+        val maybeFailing: suspend (File, String, HttpSyncSettings) -> Unit = { _, _, _ ->
+            if (failNext) throw HttpSyncException("transient")
+        }
+        val hooks = newHooks(settings = configured, pushBookmark = maybeFailing)
+        // Trip the breaker.
+        repeat(HttpSyncReaderHooks.CONSECUTIVE_FAILURE_THRESHOLD) {
+            repeat(HttpSyncReaderHooks.PAGE_TURN_PUSH_THRESHOLD) { hooks.onPageTurnPersisted() }
+        }
+        assertTrue(hooks.isSuppressed)
+        // Advance fake clock past the backoff.
+        fakeNowMs += HttpSyncReaderHooks.BACKOFF_MS + 1
+        assertFalse("breaker closes once backoff elapses", hooks.isSuppressed)
+        // A successful push after backoff should reset the failure counter.
+        failNext = false
+        repeat(HttpSyncReaderHooks.PAGE_TURN_PUSH_THRESHOLD) { hooks.onPageTurnPersisted() }
+        // Trip would now take another N failures, so a single failure shouldn't suppress.
+        failNext = true
+        repeat(HttpSyncReaderHooks.PAGE_TURN_PUSH_THRESHOLD) { hooks.onPageTurnPersisted() }
+        assertFalse("one failure post-recovery does not re-trip the breaker", hooks.isSuppressed)
+    }
+
+    @Test
+    fun chatEntryFailureDoesNotPropagate() = runBlocking {
+        val failing: suspend (String, AiChatEntry, HttpSyncSettings) -> Unit = { _, _, _ ->
+            throw HttpSyncException("boom")
+        }
+        val hooks = newHooks(settings = configured, pushChatEntry = failing)
+        // Must not throw.
+        hooks.onChatEntryPersisted(AiChatEntry("x", "p", "m", "r", 0.0))
+        // Survives — subsequent calls keep working.
+        hooks.onChatEntryPersisted(AiChatEntry("y", "p", "m", "r", 1.0))
+    }
+
     // --- helpers --------------------------------------------------------------------------
 
     private fun newHooks(
         settings: HttpSyncSettings?,
         bookRoot: File = File("/tmp/test-book"),
         title: String = "Some Title",
+        pushBookmark: suspend (File, String, HttpSyncSettings) -> Unit = { root, t, s -> spy.recordBookmark(root, t, s) },
+        pushChatEntry: suspend (String, AiChatEntry, HttpSyncSettings) -> Unit = { t, e, s -> spy.recordChat(t, e, s) },
     ): HttpSyncReaderHooks = HttpSyncReaderHooks(
         bookRoot = bookRoot,
         title = title,
-        pushBookmark = { root, t, s -> spy.recordBookmark(root, t, s) },
-        pushChatEntry = { t, e, s -> spy.recordChat(t, e, s) },
+        pushBookmark = pushBookmark,
+        pushChatEntry = pushChatEntry,
         currentSettings = { settings },
         persistenceScope = scope,
+        clock = { fakeNowMs },
     )
 
     private class RecordingPusher {

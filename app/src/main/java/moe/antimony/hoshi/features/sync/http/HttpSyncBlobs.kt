@@ -2,7 +2,9 @@ package moe.antimony.hoshi.features.sync.http
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import moe.antimony.hoshi.epub.Bookmark
 import moe.antimony.hoshi.epub.ContentType
+import moe.antimony.hoshi.features.ai.AiChatEntry
 import java.security.MessageDigest
 import java.time.Instant
 
@@ -142,3 +144,36 @@ internal fun rfc3339ToAppleSeconds(rfc3339: String): Double {
 /** Lexicographic comparison is chronological for `Z`-suffixed UTC RFC 3339. */
 internal fun compareRfc3339(a: String?, b: String?): Int =
     (a ?: "").compareTo(b ?: "")
+
+/** Returns whichever of two RFC 3339 timestamps is later, or `null` if both are null. */
+internal fun maxRfc(left: String?, right: String?): String? = when {
+    left == null -> right
+    right == null -> left
+    compareRfc3339(left, right) >= 0 -> left
+    else -> right
+}
+
+// ----- Local ⇄ wire conversions ----------------------------------------------------------
+// Lives here (next to the wire schemas) rather than in HttpSyncManager so the manager
+// doesn't have to know about the Bookmark / AiChatEntry shapes beyond what these helpers
+// hide. The `internal` visibility keeps these out of public API.
+
+internal fun Bookmark.toBlob(): HttpSyncBookmarkBlob = HttpSyncBookmarkBlob(
+    chapterIndex = chapterIndex,
+    progress = progress,
+    characterCount = characterCount,
+    lastModified = lastModified?.let(::appleSecondsToRfc3339)
+        ?: appleSecondsToRfc3339(0.0),
+)
+
+internal fun AiChatEntry.toBlob(): HttpSyncChatEntryBlob = HttpSyncChatEntryBlob(
+    bubbleText = bubbleText,
+    prompt = prompt,
+    model = model,
+    response = response,
+    timestampSeconds = timestampSeconds,
+)
+
+/** Same-entry detection for inbound dedup: bubble + timestamp uniquely identifies a chat. */
+internal fun AiChatEntry.matchesEntry(other: AiChatEntry): Boolean =
+    bubbleText == other.bubbleText && timestampSeconds == other.timestampSeconds

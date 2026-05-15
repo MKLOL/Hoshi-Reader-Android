@@ -11,14 +11,16 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 
 /**
- * Settings + runtime cursor for the v2 KV HTTP sync (see [HttpSyncManager] and
+ * Settings + runtime cursor for the v2 KV HTTP sync (see [HttpSyncReconciler] and
  * `docs/HTTP_SYNC_KV.md`):
  *
  *  - [baseUrl] and [bearerToken] — what the user pastes once.
- *  - [enabled] — gates future auto-sync hooks. The manual Sync now button always works.
+ *  - [enabled] — gates the reader-side auto-push hooks ([HttpSyncReaderHooks]). When
+ *    off, page turns and chat entries still save locally and the manual "Sync now"
+ *    button still works; only the silent fire-and-forget pushes are suppressed.
  *  - [lastSyncedAt] — RFC 3339 cursor for the inbound `list?since=` filter. Managed by
- *    [HttpSyncManager], not the UI; lives in the same DataStore so it survives uninstalls
- *    / clears the way the rest of the settings do.
+ *    [HttpSyncReconciler], not the UI; lives in the same DataStore so it survives
+ *    uninstalls / clears the way the rest of the settings do.
  */
 data class HttpSyncSettings(
     /** Base URL of the sync server, e.g. `https://dragos.games/api/book_sync`. No trailing slash. */
@@ -30,7 +32,7 @@ data class HttpSyncSettings(
     /**
      * Highest `lastModified` (RFC 3339 UTC) the client has observed from the server. The
      * inbound `GET /v1/kv?since=...` filter uses this so we never re-fetch unchanged keys.
-     * `null` until the first successful [HttpSyncManager.syncOnce].
+     * `null` until the first successful [HttpSyncReconciler.syncOnce].
      */
     val lastSyncedAt: String? = null,
 ) {

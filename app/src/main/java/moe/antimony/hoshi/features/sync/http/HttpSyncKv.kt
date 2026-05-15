@@ -14,7 +14,8 @@ import java.net.URLEncoder
  *
  * This file is intentionally **schema-free** — it knows about keys, bytes, content-types,
  * timestamps and etags, but not about bookmarks, chat entries, manga or EPUB. Hoshi-specific
- * blob shapes live in [HttpSyncBlobs]; the reconciliation logic lives in [HttpSyncManager].
+ * blob shapes live in [HttpSyncBlobs]; the reconciliation logic lives in [HttpSyncReconciler]
+ * and the reader-hot fire-and-forget pushes in [HttpSyncPusher].
  * Splitting it this way keeps the network layer easy to fake in tests and isolates upstream
  * merges to a single fork-owned directory.
  */
@@ -70,7 +71,7 @@ class HttpSyncException(message: String) : Exception(message)
 // ----- Transport interface ---------------------------------------------------------------
 
 /**
- * The four blob-store operations [HttpSyncManager] needs. An interface so unit tests fake the
+ * The four blob-store operations the sync code needs. An interface so unit tests fake the
  * network with an in-memory map and never touch [HttpSyncKvClient].
  */
 interface HttpSyncKvTransport {
@@ -123,7 +124,7 @@ class HttpSyncKvClient(
         } catch (e: HttpSyncException) {
             throw e
         } catch (e: Exception) {
-            throw HttpSyncException(e.message ?: "HTTP sync request failed.")
+            throw HttpSyncException(friendlyMessage(e))
         } finally {
             connection.disconnect()
         }
@@ -140,7 +141,10 @@ class HttpSyncKvClient(
                     .orEmpty()
                 throw HttpSyncException(parseError(code, raw))
             }
-            val body = connection.inputStream.use { it.readBytes() }
+            // Defensive null check: per HTTP spec a 2xx with a body always has a non-null
+            // inputStream, but a misbehaving proxy / Cloudflare worker could return 200 with
+            // an empty payload, and dereferencing would NPE under that pathology.
+            val body = connection.inputStream?.use { it.readBytes() } ?: byteArrayOf()
             HttpSyncKvFetched(
                 body = body,
                 contentType = connection.getHeaderField("Content-Type")
@@ -151,7 +155,7 @@ class HttpSyncKvClient(
         } catch (e: HttpSyncException) {
             throw e
         } catch (e: Exception) {
-            throw HttpSyncException(e.message ?: "HTTP sync request failed.")
+            throw HttpSyncException(friendlyMessage(e))
         } finally {
             connection.disconnect()
         }
@@ -178,7 +182,7 @@ class HttpSyncKvClient(
         } catch (e: HttpSyncException) {
             throw e
         } catch (e: Exception) {
-            throw HttpSyncException(e.message ?: "HTTP sync request failed.")
+            throw HttpSyncException(friendlyMessage(e))
         } finally {
             connection.disconnect()
         }
@@ -231,8 +235,44 @@ class HttpSyncKvClient(
         }.getOrNull()?.takeIf { it.isNotBlank() }
         return when {
             code == 401 -> "Server rejected the bearer token (HTTP 401). Check the token in Settings → Advanced → HTTP Sync."
+            code == 403 -> "Server forbids this request (HTTP 403)."
+            code == 404 -> "Not found on server (HTTP 404)."
+            code in 500..599 -> "Server is having trouble (HTTP $code). Try again in a moment."
             message != null -> "HTTP $code: $message"
             else -> "HTTP sync request failed (HTTP $code)."
+        }
+    }
+
+    /**
+     * Turns raw JVM I/O exceptions into messages a user can act on. The transport sees
+     * these as `e.message` from `HttpURLConnection`, which is fine for Logcat but useless
+     * for an in-app error toast ("Failed to connect to ...example.com/...: connect failed:
+     * ENETUNREACH (Network is unreachable)" is not friendly).
+     */
+    private fun friendlyMessage(e: Throwable): String {
+        val raw = e.message.orEmpty()
+        return when (e) {
+            is java.net.UnknownHostException ->
+                "Can't reach the sync server — check your network or the base URL."
+            is java.net.ConnectException ->
+                "Sync server is not reachable (connection refused). Is it up?"
+            is java.net.SocketTimeoutException ->
+                "Sync request timed out. Network is too slow or the server is hung."
+            is javax.net.ssl.SSLException ->
+                "TLS handshake with the sync server failed (${raw.ifBlank { "unknown SSL error" }})."
+            is java.io.IOException -> {
+                val lower = raw.lowercase()
+                when {
+                    "network is unreachable" in lower || "enetunreach" in lower ->
+                        "No network — try again when you're back online."
+                    "permission denied" in lower ->
+                        "Network permission denied. Restart the app or check system settings."
+                    else -> "Network error: ${raw.ifBlank { e.javaClass.simpleName }}."
+                }
+            }
+            is kotlinx.serialization.SerializationException ->
+                "Sync server returned malformed JSON. Either the URL is wrong or the server crashed."
+            else -> raw.ifBlank { "HTTP sync request failed (${e.javaClass.simpleName})." }
         }
     }
 
