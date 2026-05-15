@@ -93,9 +93,12 @@ enum class HttpSyncContentType {
 
 /**
  * Computes a stable, server-safe sync id from a book's title. Lowercase, replace non-ASCII-
- * alphanumerics with `_`, collapse runs, trim — same rule as the legacy v1 protocol so any
- * book already synced under v1 lands on the same id under v2 (the keys differ; the syncId
- * doesn't).
+ * alphanumerics with `_`, collapse runs, trim — same rule as the legacy v1 protocol while
+ * the result fits the v2 server's 64-character key-segment limit.
+ *
+ * Titles that produce no ASCII slug (for example Japanese-only titles), or an overlong slug,
+ * get a deterministic short hash suffix. This keeps normal v1/v2 ASCII sync ids unchanged
+ * while avoiding `400 invalid key` responses from the v2 KV server.
  *
  * Returns `null` for a blank title; the manager skips books that can't compute a syncId.
  */
@@ -109,8 +112,23 @@ internal fun deriveSyncId(title: String?): String? {
     }
         .replace(Regex("_+"), "_")
         .trim('_')
-    return sanitized.ifEmpty { null }
+    if (sanitized.isEmpty()) return "book_${shortTitleHash(raw)}"
+    if (sanitized.length <= SYNC_ID_MAX_SEGMENT_LENGTH) return sanitized
+
+    val hash = shortTitleHash(raw)
+    val prefixLength = SYNC_ID_MAX_SEGMENT_LENGTH - hash.length - 1
+    val prefix = sanitized.take(prefixLength).trim('_').ifEmpty { "book" }
+    return "${prefix}_$hash"
 }
+
+private const val SYNC_ID_MAX_SEGMENT_LENGTH = 64
+private const val SYNC_ID_HASH_HEX_LENGTH = 16
+
+private fun shortTitleHash(title: String): String =
+    MessageDigest.getInstance("SHA-256")
+        .digest(title.toByteArray(Charsets.UTF_8))
+        .take(SYNC_ID_HASH_HEX_LENGTH / 2)
+        .joinToString("") { "%02x".format(it) }
 
 internal fun bookmarkKey(syncId: String): String = "books/$syncId/bookmark"
 internal fun metadataKey(syncId: String): String = "books/$syncId/metadata"
@@ -156,9 +174,15 @@ internal fun rfc3339ToAppleSeconds(rfc3339: String): Double {
     return unixMillis / 1000.0 - APPLE_REFERENCE_EPOCH
 }
 
-/** Lexicographic comparison is chronological for `Z`-suffixed UTC RFC 3339. */
-internal fun compareRfc3339(a: String?, b: String?): Int =
-    (a ?: "").compareTo(b ?: "")
+internal fun compareRfc3339(a: String?, b: String?): Int {
+    val leftInstant = a?.let { runCatching { Instant.parse(it) }.getOrNull() }
+    val rightInstant = b?.let { runCatching { Instant.parse(it) }.getOrNull() }
+    return if (leftInstant != null && rightInstant != null) {
+        leftInstant.compareTo(rightInstant)
+    } else {
+        (a ?: "").compareTo(b ?: "")
+    }
+}
 
 /** Returns whichever of two RFC 3339 timestamps is later, or `null` if both are null. */
 internal fun maxRfc(left: String?, right: String?): String? = when {
@@ -189,6 +213,8 @@ internal fun AiChatEntry.toBlob(): HttpSyncChatEntryBlob = HttpSyncChatEntryBlob
     timestampSeconds = timestampSeconds,
 )
 
-/** Same-entry detection for inbound dedup: bubble + timestamp uniquely identifies a chat. */
+/** Same-entry detection for inbound dedup: mirrors the content-addressed chat key shape. */
 internal fun AiChatEntry.matchesEntry(other: AiChatEntry): Boolean =
-    bubbleText == other.bubbleText && timestampSeconds == other.timestampSeconds
+    bubbleText == other.bubbleText &&
+        timestampSeconds == other.timestampSeconds &&
+        response == other.response

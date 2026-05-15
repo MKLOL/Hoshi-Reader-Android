@@ -177,6 +177,38 @@ class MangaPageHtmlTest {
     }
 
     @Test
+    fun tapHitTestingAndPopupRectUseVisualViewportScaleForWebViewZoom() {
+        val html = build(page(emptyList()))
+
+        // Native taps arrive in the host WebView's unzoomed CSS-pixel space. During pinch
+        // zoom the document hit-test point must be divided by the visual viewport scale,
+        // while the rect sent back to Compose must be multiplied back into host space.
+        assertTrue(html.contains("window.visualViewport"))
+        assertTrue(html.contains("pointFromHostViewport: function(x, y)"))
+        assertTrue(html.contains("document.elementFromPoint(point.x, point.y)"))
+        assertTrue(html.contains("window.hoshiSelection.selectText(point.x, point.y, maxLength)"))
+        assertTrue(html.contains("hostRectFromViewportRect"))
+        assertTrue(html.contains("x: rect.x * scale"))
+        assertTrue(html.contains("width: rect.width * scale"))
+    }
+
+    @Test
+    fun actionButtonsStayHorizontalWithChatGptToTheRightOfCopy() {
+        val box = MokuroTextBox(0, 0, 100, 100, 20, vertical = true, lines = listOf("縦"))
+        val html = build(page(listOf(box)))
+        val aiButtonIndex = html.indexOf("ocr-ai-btn")
+        val copyButtonIndex = html.indexOf("ocr-copy-btn")
+
+        // The action row lives inside vertical-rl OCR boxes, so it must reset writing mode
+        // before applying row-reverse: DOM order remains AI then copy, visual order is copy
+        // left and ChatGPT right.
+        assertTrue(html.contains("writing-mode: horizontal-tb;"))
+        assertTrue(html.contains("flex-direction: row-reverse;"))
+        assertTrue(aiButtonIndex >= 0)
+        assertTrue(copyButtonIndex > aiButtonIndex)
+    }
+
+    @Test
     fun backgroundColourIsAppliedToThePageLetterbox() {
         val html = MangaPageHtml.build(
             page = page(emptyList()),

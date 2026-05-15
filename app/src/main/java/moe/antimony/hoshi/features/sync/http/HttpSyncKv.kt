@@ -168,9 +168,9 @@ class HttpSyncKvClient(
         limit: Int?,
     ): HttpSyncKvList = withContext(ioDispatcher) {
         val params = buildList {
-            prefix?.let { add("prefix=" + URLEncoder.encode(it, Charsets.UTF_8)) }
-            since?.let { add("since=" + URLEncoder.encode(it, Charsets.UTF_8)) }
-            cursor?.let { add("cursor=" + URLEncoder.encode(it, Charsets.UTF_8)) }
+            prefix?.let { add("prefix=" + urlEncode(it)) }
+            since?.let { add("since=" + urlEncode(it)) }
+            cursor?.let { add("cursor=" + urlEncode(it)) }
             limit?.let { add("limit=$it") }
         }
         val query = if (params.isEmpty()) "" else "?" + params.joinToString("&")
@@ -284,6 +284,9 @@ class HttpSyncKvClient(
      */
     private fun encodeKey(key: String): String =
         key.split('/').joinToString("/") { segment ->
-            URLEncoder.encode(segment, Charsets.UTF_8).replace("+", "%20")
+            urlEncode(segment)
         }
+
+    private fun urlEncode(value: String): String =
+        URLEncoder.encode(value, Charsets.UTF_8.name()).replace("+", "%20")
 }

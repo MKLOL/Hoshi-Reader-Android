@@ -127,7 +127,10 @@ internal object MangaPageHtml {
                       if (box) {
                         var r = box.getBoundingClientRect();
                         var data = JSON.parse(json);
-                        data.rect = { x: r.x, y: r.y, width: r.width, height: r.height };
+                        var hostRect = window.hoshiManga && window.hoshiManga.hostRectFromViewportRect
+                          ? window.hoshiManga.hostRectFromViewportRect(r)
+                          : { x: r.x, y: r.y, width: r.width, height: r.height };
+                        data.rect = hostRect;
                         json = JSON.stringify(data);
                       }
                     } catch (e) {}
@@ -245,20 +248,24 @@ internal object MangaPageHtml {
         .ocr-box p {
           margin: 0;
         }
-        /* Action buttons (ChatGPT, copy): shown only on a revealed box, in a row floated
+        /* Action buttons (copy, ChatGPT): shown only on a revealed box, in a row floated
            just *above* the box's top-right corner — never over the text. (A box tightly
            bounds its OCR text, and a vertical-rl bubble even starts in the top-right
            corner, so any in-box placement covers characters.) The manga tap handler routes
            a hit on one of these to its native bridge instead of a word lookup. Buttons are
            sized in `em` so they track the box's text, with a px floor so they stay usable
-           tap targets on small bubbles. */
+           tap targets on small bubbles. The row resets vertical text-box writing mode so
+           the buttons stay side-by-side, then reverses visual order so ChatGPT sits to the
+           right of copy. */
         .ocr-actions {
           display: none;
           position: absolute;
           bottom: 100%;
           right: 0;
           margin-bottom: 3px;
-          flex-direction: row;
+          writing-mode: horizontal-tb;
+          text-orientation: mixed;
+          flex-direction: row-reverse;
           gap: 3px;
           z-index: 2;
         }
@@ -365,8 +372,27 @@ internal object MangaPageHtml {
     private val MANGA_TAP_HANDLER_SCRIPT: String = """
         (function() {
           window.hoshiManga = {
+            viewportScale: function() {
+              var viewport = window.visualViewport;
+              var scale = viewport && typeof viewport.scale === 'number' ? viewport.scale : 1;
+              return isFinite(scale) && scale > 0 ? scale : 1;
+            },
+            pointFromHostViewport: function(x, y) {
+              var scale = this.viewportScale();
+              return { x: x / scale, y: y / scale };
+            },
+            hostRectFromViewportRect: function(rect) {
+              var scale = this.viewportScale();
+              return {
+                x: rect.x * scale,
+                y: rect.y * scale,
+                width: rect.width * scale,
+                height: rect.height * scale
+              };
+            },
             handleTap: function(x, y, maxLength) {
-              var el = document.elementFromPoint(x, y);
+              var point = this.pointFromHostViewport(x, y);
+              var el = document.elementFromPoint(point.x, point.y);
               var aiBtn = el && el.closest && el.closest('.ocr-ai-btn');
               if (aiBtn) {
                 var aiBox = aiBtn.closest('.ocr-box');
@@ -395,7 +421,7 @@ internal object MangaPageHtml {
                   return '__revealed__';
                 }
                 // Second tap on an already-revealed bubble: look the tapped word up.
-                return window.hoshiSelection.selectText(x, y, maxLength);
+                return window.hoshiSelection.selectText(point.x, point.y, maxLength);
               }
               var revealed = document.querySelectorAll('.ocr-box.revealed');
               for (var i = 0; i < revealed.length; i++) {

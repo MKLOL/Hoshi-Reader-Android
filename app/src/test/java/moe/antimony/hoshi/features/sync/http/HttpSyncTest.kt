@@ -45,8 +45,8 @@ class HttpSyncTest {
         assertEquals("yotsubato_01", deriveSyncId("Yotsubato 01"))
         assertEquals("001_jp_yotsubato", deriveSyncId("001 [JP] Yotsubato"))
         assertEquals("kafka_on_the_shore", deriveSyncId("Kafka on the Shore"))
-        // Japanese alone → all non-alphanumerics → empty → null.
-        assertNull(deriveSyncId("よつばと"))
+        // Japanese alone falls back to a deterministic hashed id instead of being skipped.
+        assertTrue(deriveSyncId("よつばと")!!.matches(Regex("book_[0-9a-f]{16}")))
         // Mixed ASCII + Japanese keeps the ASCII parts; digits count as ASCII-alphanumeric.
         assertEquals("1_vol_1", deriveSyncId("第1巻 vol 1"))
         // Empty / whitespace / null all return null.
@@ -102,6 +102,8 @@ class HttpSyncTest {
         assertTrue(compareRfc3339("2026-05-15T00:00:00Z", "2026-05-14T00:00:00Z") > 0)
         assertTrue(compareRfc3339("2026-05-14T00:00:00Z", "2026-05-15T00:00:00Z") < 0)
         assertEquals(0, compareRfc3339("2026-05-15T00:00:00Z", "2026-05-15T00:00:00Z"))
+        assertTrue(compareRfc3339("2026-05-15T00:00:00.500Z", "2026-05-15T00:00:00Z") > 0)
+        assertTrue(compareRfc3339("2026-05-15T00:00:00Z", "2026-05-15T00:00:00.500Z") < 0)
         // Null treated as "older than anything" (empty string sorts first).
         assertTrue(compareRfc3339(null, "2026-05-15T00:00:00Z") < 0)
         assertTrue(compareRfc3339("2026-05-15T00:00:00Z", null) > 0)
@@ -127,6 +129,47 @@ class HttpSyncTest {
             "\"epub\"",
             json.encodeToString(HttpSyncContentType.serializer(), HttpSyncContentType.Epub),
         )
+    }
+
+    // ===== syncId key grammar regressions ====================================================
+
+    @Test
+    fun deriveSyncIdPreservesLegacyAsciiIdsThatFitServerSegment() {
+        assertEquals("yotsubato_01", deriveSyncId("Yotsubato 01"))
+        assertEquals("001_jp_yotsubato", deriveSyncId("001 [JP] Yotsubato"))
+        assertEquals("kafka_on_the_shore", deriveSyncId("Kafka on the Shore"))
+
+        val exactly64 = "A".repeat(64)
+        assertEquals("a".repeat(64), deriveSyncId(exactly64))
+    }
+
+    @Test
+    fun deriveSyncIdFallsBackForJapaneseOnlyTitle() {
+        val syncId = deriveSyncId("よつばと")!!
+
+        assertTrue("fallback id should be server-safe: $syncId", syncId.matches(Regex("[a-z0-9_]{1,64}")))
+        assertTrue("fallback id should be recognizable: $syncId", syncId.startsWith("book_"))
+        assertEquals("fallback id length", 21, syncId.length)
+        assertEquals("fallback must be stable", syncId, deriveSyncId("よつばと"))
+    }
+
+    @Test
+    fun deriveSyncIdKeepsEveryServerKeySegmentAtMost64Chars() {
+        val overlongTitle = "A".repeat(90)
+        val syncId = deriveSyncId(overlongTitle)!!
+        val keys = listOf(
+            bookmarkKey(syncId),
+            metadataKey(syncId),
+            chatPrefixForBook(syncId).trimEnd('/'),
+        )
+
+        assertTrue("syncId should fit one server segment: $syncId", syncId.length <= 64)
+        assertTrue("syncId should be server-safe: $syncId", syncId.matches(Regex("[a-z0-9_]{1,64}")))
+        assertTrue("long ascii prefix should remain recognizable: $syncId", syncId.startsWith("a".repeat(40)))
+        keys.flatMap { it.split('/') }.forEach { segment ->
+            assertTrue("segment '$segment' in $keys is too long", segment.length <= 64)
+            assertTrue("segment '$segment' in $keys is not server-safe", segment.matches(Regex("[A-Za-z0-9_.-]{1,64}")))
+        }
     }
 
     // ===== pushBookmark =======================================================================
@@ -265,18 +308,34 @@ class HttpSyncTest {
     }
 
     @Test
-    fun syncOnceSkipsBooksWithoutDerivableSyncId() = runBlocking {
+    fun syncOncePushesJapaneseOnlyTitleUsingFallbackSyncId() = runBlocking {
         val repo = newBookRepository()
-        // Title that's all non-ASCII-alphanumeric → null syncId.
-        val (root, _) = importEpubBook(repo, "よつばと")
+        val title = "よつばと"
+        val (root, _) = importEpubBook(repo, title)
         repo.saveBookmark(root, Bookmark(1, 0.0, 1, 800_000_000.0))
 
         val transport = FakeKvTransport()
         val manager = managerFor(repo, transport)
         val result = manager.syncOnce(configured)
 
-        assertEquals(0, result.uploadedBookmarks)
-        assertTrue("nothing should have been written", transport.kv.isEmpty())
+        val syncId = deriveSyncId(title)!!
+        assertEquals(1, result.uploadedBookmarks)
+        assertNotNull(transport.kv[bookmarkKey(syncId)])
+        assertNotNull(transport.kv[metadataKey(syncId)])
+    }
+
+    @Test
+    fun syncOnceDoesNotAdvanceCursorFromOutboundWrites() = runBlocking {
+        val repo = newBookRepository()
+        val (root, _) = importMokuroBook(repo, "Outbound Cursor")
+        repo.saveBookmark(root, Bookmark(1, 0.0, 1, 800_000_000.0))
+
+        val transport = FakeKvTransport()
+        val manager = managerFor(repo, transport)
+        val result = manager.syncOnce(configured.copy(lastSyncedAt = "2030-01-01T00:00:00Z"))
+
+        assertEquals(1, result.uploadedBookmarks)
+        assertNull("locally written keys must not advance the inbound cursor", result.newLastSyncedAt)
     }
 
     // ===== syncOnce — inbound =================================================================
@@ -365,6 +424,40 @@ class HttpSyncTest {
     }
 
     @Test
+    fun syncOnceInboundKeepsDistinctChatResponsesAtSameTimestamp() = runBlocking {
+        val repo = newBookRepository()
+        val (root, _) = importMokuroBook(repo, "Chat Fork")
+        repo.saveBookmark(root, Bookmark(1, 0.0, 1, 800_000_000.0))
+        val historyStore = AiChatHistoryStore()
+        val local = AiChatEntry("bubble", "p", "m", "first response", 900_000.0)
+        historyStore.append(root, local)
+
+        val transport = FakeKvTransport()
+        val incoming = AiChatEntry("bubble", "p", "m", "second response", 900_000.0)
+        val incomingSuffix = chatEntryKeySuffix(incoming.timestampSeconds, incoming.bubbleText, incoming.response)
+        transport.putJson(
+            chatKey("chat_fork", incomingSuffix),
+            HttpSyncChatEntryBlob.serializer(),
+            HttpSyncChatEntryBlob(
+                incoming.bubbleText,
+                incoming.prompt,
+                incoming.model,
+                incoming.response,
+                incoming.timestampSeconds,
+            ),
+            json,
+            lastModified = "2030-01-01T00:00:00Z",
+        )
+
+        val manager = managerFor(repo, transport, historyStore)
+        val result = manager.syncOnce(configured)
+
+        assertEquals(1, result.downloadedChatEntries)
+        val responses = historyStore.load(root).entries.map { it.response }.toSet()
+        assertEquals(setOf("first response", "second response"), responses)
+    }
+
+    @Test
     fun syncOnceInboundIgnoresChatEntriesForEpubBooks() = runBlocking {
         val repo = newBookRepository()
         val (root, _) = importEpubBook(repo, "Not Manga")
@@ -387,6 +480,36 @@ class HttpSyncTest {
 
         assertEquals(0, result.downloadedChatEntries)
         assertTrue("no chat log should exist for an EPUB book", historyStore.load(root).entries.isEmpty())
+    }
+
+    @Test
+    fun syncOnceBackfillsChatEntriesSkippedByAnOlderBadCursor() = runBlocking {
+        val repo = newBookRepository()
+        val (root, _) = importMokuroBook(repo, "Skipped Chat")
+        repo.saveBookmark(root, Bookmark(1, 0.0, 1, 800_000_000.0))
+
+        val transport = FakeKvTransport()
+        val skipped = AiChatEntry("missed bubble", "p", "m", "missed reply", 900_000.0)
+        transport.putJson(
+            chatKey("skipped_chat", chatEntryKeySuffix(skipped.timestampSeconds, skipped.bubbleText, skipped.response)),
+            HttpSyncChatEntryBlob.serializer(),
+            HttpSyncChatEntryBlob(
+                skipped.bubbleText,
+                skipped.prompt,
+                skipped.model,
+                skipped.response,
+                skipped.timestampSeconds,
+            ),
+            json,
+            lastModified = "2030-01-01T00:00:00Z",
+        )
+
+        val historyStore = AiChatHistoryStore()
+        val manager = managerFor(repo, transport, historyStore)
+        val result = manager.syncOnce(configured.copy(lastSyncedAt = "2040-01-01T00:00:00Z"))
+
+        assertEquals(1, result.downloadedChatEntries)
+        assertEquals("missed bubble", historyStore.load(root).entries.single().bubbleText)
     }
 
     @Test
@@ -702,6 +825,89 @@ class HttpSyncTest {
     }
 
     @Test
+    fun missingRemoteOnlyBookDoesNotAdvanceCursorUntilPayloadArrives() = runBlocking {
+        val repo = newBookRepository()
+        val transport = FakeKvTransport()
+        val historyStore = AiChatHistoryStore()
+        val manager = managerFor(repo, transport, historyStore)
+        val syncId = "late_payload_book"
+        val originalCursor = "2020-01-01T00:00:00Z"
+
+        transport.putJson(
+            key = bookmarkKey(syncId),
+            serializer = HttpSyncBookmarkBlob.serializer(),
+            value = HttpSyncBookmarkBlob(9, 0.0, 9, "2030-01-01T00:00:00Z"),
+            json = json,
+            lastModified = "2030-01-01T00:00:00Z",
+        )
+        val chatBlob = HttpSyncChatEntryBlob("late", "p", "m", "payload", 123.0)
+        transport.putJson(
+            key = chatKey(syncId, chatEntryKeySuffix(chatBlob.timestampSeconds, chatBlob.bubbleText, chatBlob.response)),
+            serializer = HttpSyncChatEntryBlob.serializer(),
+            value = chatBlob,
+            json = json,
+            lastModified = "2030-01-01T00:00:01Z",
+        )
+
+        val first = manager.syncOnce(configured.copy(lastSyncedAt = originalCursor))
+
+        assertEquals(0, first.downloadedBookmarks)
+        assertEquals(0, first.downloadedChatEntries)
+        assertEquals(1, first.remoteOnlyBooks)
+        assertNull("unapplied bookmark/chat keys must keep the persisted cursor unchanged", first.newLastSyncedAt)
+
+        uploadRemoteMokuroPayload(transport, syncId, "Late Payload Book", "late-payload-source")
+        val second = manager.syncOnce(configured.copy(lastSyncedAt = first.newLastSyncedAt ?: originalCursor))
+
+        assertEquals(1, second.downloadedPayloads)
+        assertEquals(1, second.downloadedBookmarks)
+        assertEquals(1, second.downloadedChatEntries)
+        val imported = repo.loadBookEntries().single { deriveSyncId(it.metadata.title) == syncId }
+        assertEquals(9, repo.loadBookmark(imported.root)!!.chapterIndex)
+        assertEquals("late", historyStore.load(imported.root).entries.single().bubbleText)
+    }
+
+    @Test
+    fun syncOnceAppliesNewerBookmarkDiscoveredDuringOutboundGuard() = runBlocking {
+        val repo = newBookRepository()
+        val (root, _) = importEpubBook(repo, "Concurrent Bookmark")
+        repo.saveBookmark(root, Bookmark(1, 0.0, 1, 800_000_000.0))
+
+        val base = FakeKvTransport()
+        base.putJson(
+            key = bookmarkKey("concurrent_bookmark"),
+            serializer = HttpSyncBookmarkBlob.serializer(),
+            value = HttpSyncBookmarkBlob(99, 0.0, 99, "2099-01-01T00:00:00Z"),
+            json = json,
+            lastModified = "2099-01-01T00:00:00Z",
+        )
+        val transport = object : HttpSyncKvTransport {
+            override suspend fun put(key: String, contentType: String, body: ByteArray): HttpSyncKvWriteResponse =
+                base.put(key, contentType, body)
+
+            override suspend fun get(key: String): HttpSyncKvFetched? =
+                base.get(key)
+
+            override suspend fun list(prefix: String?, since: String?, cursor: String?, limit: Int?): HttpSyncKvList =
+                if (prefix == ALL_BOOKS_PREFIX) {
+                    HttpSyncKvList()
+                } else {
+                    base.list(prefix, since, cursor, limit)
+                }
+
+            override suspend fun delete(key: String) {
+                base.delete(key)
+            }
+        }
+
+        val manager = managerFor(repo, transport)
+        val result = manager.syncOnce(configured)
+
+        assertEquals(0, result.uploadedBookmarks)
+        assertEquals(99, repo.loadBookmark(root)!!.chapterIndex)
+    }
+
+    @Test
     fun pushBookmarkDoesNotOverwriteNewerServerBookmark() = runBlocking {
         // Device A is stale on page 50 (T1); server has page 100 (T2 > T1) from device B.
         // The fix: pushBookmark must fetch + compare, refuse to clobber, pull instead.
@@ -859,6 +1065,57 @@ class HttpSyncTest {
     }
 
     @Test
+    fun failedPayloadImportDoesNotAdvanceCursorAndCanRetrySameInboundKeys() = runBlocking {
+        val repo = newBookRepository()
+        val transport = FakeKvTransport()
+        val syncId = "retry_book"
+        val originalCursor = "2020-01-01T00:00:00Z"
+
+        transport.kv[payloadZipKey(syncId)] = FakeKvTransport.Stored(
+            body = byteArrayOf(0x50, 0x4B, 0x05, 0x06).plus(ByteArray(20)),
+            contentType = "application/zip",
+            lastModified = "2030-01-01T00:00:00Z",
+        )
+        transport.putJson(
+            key = payloadManifestKey(syncId),
+            serializer = HttpSyncPayloadManifest.serializer(),
+            value = HttpSyncPayloadManifest(
+                sha256 = "sha256:" + "ff".repeat(32),
+                sizeBytes = 9_999_999L,
+                originalName = "Retry Book",
+                format = HttpSyncContentType.Mokuro,
+            ),
+            json = json,
+            lastModified = "2030-01-01T00:00:00Z",
+        )
+        transport.putJson(
+            key = bookmarkKey(syncId),
+            serializer = HttpSyncBookmarkBlob.serializer(),
+            value = HttpSyncBookmarkBlob(12, 0.0, 12, "2030-01-02T00:00:00Z"),
+            json = json,
+            lastModified = "2030-01-02T00:00:00Z",
+        )
+
+        val manager = managerFor(repo, transport)
+        val first = manager.syncOnce(configured.copy(lastSyncedAt = originalCursor))
+
+        assertEquals(0, first.downloadedPayloads)
+        assertEquals(0, first.downloadedBookmarks)
+        assertTrue("expected payload failure, got ${first.errors}", first.errors.any { "retry_book" in it })
+        assertNull("failed payload import must not move the cursor past retryable inbound keys", first.newLastSyncedAt)
+
+        transport.delete(payloadManifestKey(syncId))
+        transport.delete(payloadZipKey(syncId))
+        uploadRemoteMokuroPayload(transport, syncId, "Retry Book", "retry-source")
+        val second = manager.syncOnce(configured.copy(lastSyncedAt = first.newLastSyncedAt ?: originalCursor))
+
+        assertEquals(1, second.downloadedPayloads)
+        assertEquals(1, second.downloadedBookmarks)
+        val imported = repo.loadBookEntries().single { deriveSyncId(it.metadata.title) == syncId }
+        assertEquals(12, repo.loadBookmark(imported.root)!!.chapterIndex)
+    }
+
+    @Test
     fun chatDedupListPaginatesAcrossTruncatedPages() = runBlocking {
         // Regression: `pushAllLocal` used to call list() once for chat-dedup, ignoring
         // `truncated`. On a chat-heavy book that means the second page of remote chat keys
@@ -996,6 +1253,18 @@ class HttpSyncTest {
             ),
         )
         return root to title
+    }
+
+    private suspend fun uploadRemoteMokuroPayload(
+        transport: FakeKvTransport,
+        syncId: String,
+        title: String,
+        sourceFolder: String,
+    ) {
+        val srcRoot = tempFolder.newFolder(sourceFolder)
+        srcRoot.resolve("mokuro.json").writeText("""{"v":1}""")
+        HttpSyncPayloadCodec(kotlinx.coroutines.Dispatchers.Unconfined)
+            .uploadIfChanged(transport, syncId, srcRoot, title, HttpSyncContentType.Mokuro)
     }
 
     /** Holder for the two halves of the sync code so tests can pick whichever they need. */

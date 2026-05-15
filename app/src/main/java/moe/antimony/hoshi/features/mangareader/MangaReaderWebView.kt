@@ -2,6 +2,8 @@ package moe.antimony.hoshi.features.mangareader
 
 import android.annotation.SuppressLint
 import android.graphics.Color as AndroidColor
+import android.view.MotionEvent
+import android.view.View
 import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
@@ -18,13 +20,15 @@ import moe.antimony.hoshi.features.reader.ReaderSelectionCommand
 import moe.antimony.hoshi.features.reader.ReaderSelectionData
 import moe.antimony.hoshi.features.reader.ReaderSelectionResult
 import moe.antimony.hoshi.features.reader.ReaderSelectionScripts
-import moe.antimony.hoshi.features.reader.SwipePageTouchListener
+import moe.antimony.hoshi.features.reader.ReaderSwipeGestureTracker
 import moe.antimony.hoshi.features.reader.androidPixelsToCssPixels
 import moe.antimony.hoshi.mokuro.MokuroBook
 import moe.antimony.hoshi.webview.applyHoshiWebViewSecurityDefaults
 import java.io.File
 
 private const val MANGA_MAX_SELECTION_LENGTH = 16
+private const val MANGA_SWIPE_MIN_DISTANCE = 72f
+private const val MANGA_NAVIGATION_MAX_SCALE = 1.01f
 
 /**
  * The WebView that renders one mokuro manga page at a time.
@@ -106,6 +110,9 @@ internal fun MangaReaderWebView(
                 setBackgroundColor(AndroidColor.TRANSPARENT)
                 settings.builtInZoomControls = true
                 settings.displayZoomControls = false
+                // OCR font sizes are derived from mokuro's image coordinates; Android's
+                // text zoom would resize only the DOM text, not the artwork it must track.
+                settings.textZoom = 100
                 // Deliberately NOT setting useWideViewPort / loadWithOverviewMode: those make
                 // the WebView size its layout viewport from a <meta viewport> tag (for zooming
                 // desktop pages to fit) and leave CSS vh / % heights resolving to 0 for our
@@ -186,24 +193,74 @@ private fun WebView.attachMangaTouchListener(
 ) {
     val webView = this
     setOnTouchListener(
-        object : SwipePageTouchListener() {
-            override fun onTap(x: Float, y: Float) {
-                // A tap never turns the page — it reveals/looks up/copies OCR text, or hides
-                // revealed bubbles (see selectAt). Page turning is the chrome buttons,
-                // swipes and the hardware page/volume keys, so a tap can't move the page.
-                webView.selectAt(x, y) { onSelectionCleared.value() }
+        object : View.OnTouchListener {
+            private val tracker = ReaderSwipeGestureTracker(minDistance = MANGA_SWIPE_MIN_DISTANCE)
+            private val navigationGate = MangaTouchNavigationGate()
+
+            override fun onTouch(view: View, event: MotionEvent): Boolean {
+                val decision = navigationGate.onTouch(
+                    action = event.toMangaTouchAction(),
+                    pointerCount = event.pointerCount,
+                )
+                if (decision == MangaTouchNavigationDecision.CancelTracking) {
+                    tracker.onCancel()
+                    return false
+                }
+
+                when (event.actionMasked) {
+                    MotionEvent.ACTION_DOWN -> tracker.onDown(event.x, event.y, event.eventTime)
+                    MotionEvent.ACTION_MOVE -> dispatch(tracker.onMove(event.x, event.y, event.eventTime))
+                    MotionEvent.ACTION_UP -> dispatch(tracker.onUp(event.x, event.y))
+                    MotionEvent.ACTION_CANCEL -> tracker.onCancel()
+                }
+                return false
             }
 
-            override fun onLeftSwipe() {
-                onNavigate.value(MangaPageNavigation.directionForSwipe(MangaSwipeDirection.Left))
+            private fun dispatch(result: ReaderSwipeGestureTracker.Result) {
+                when (result) {
+                    ReaderSwipeGestureTracker.Result.LeftSwipe -> {
+                        dispatchSwipe(MangaSwipeDirection.Left)
+                    }
+                    ReaderSwipeGestureTracker.Result.RightSwipe -> {
+                        dispatchSwipe(MangaSwipeDirection.Right)
+                    }
+                    is ReaderSwipeGestureTracker.Result.Tap -> {
+                        // A tap never turns the page — it reveals/looks up/copies OCR text,
+                        // or hides revealed bubbles (see selectAt). Page turning is the
+                        // chrome buttons, swipes and hardware page/volume keys.
+                        webView.selectAt(result.x, result.y) { onSelectionCleared.value() }
+                    }
+                    ReaderSwipeGestureTracker.Result.None -> Unit
+                }
             }
 
-            override fun onRightSwipe() {
-                onNavigate.value(MangaPageNavigation.directionForSwipe(MangaSwipeDirection.Right))
+            private fun dispatchSwipe(direction: MangaSwipeDirection) {
+                if (!shouldDispatchMangaSwipeAtScale(webView.mangaPageScale())) {
+                    tracker.onCancel()
+                    return
+                }
+                onNavigate.value(MangaPageNavigation.directionForSwipe(direction))
             }
         },
     )
 }
+
+@Suppress("DEPRECATION")
+private fun WebView.mangaPageScale(): Float = scale
+
+internal fun shouldDispatchMangaSwipeAtScale(scale: Float): Boolean =
+    scale.isNaN() || scale <= MANGA_NAVIGATION_MAX_SCALE
+
+private fun MotionEvent.toMangaTouchAction(): MangaTouchAction =
+    when (actionMasked) {
+        MotionEvent.ACTION_DOWN -> MangaTouchAction.Down
+        MotionEvent.ACTION_MOVE -> MangaTouchAction.Move
+        MotionEvent.ACTION_UP -> MangaTouchAction.Up
+        MotionEvent.ACTION_POINTER_DOWN -> MangaTouchAction.PointerDown
+        MotionEvent.ACTION_POINTER_UP -> MangaTouchAction.PointerUp
+        MotionEvent.ACTION_CANCEL -> MangaTouchAction.Cancel
+        else -> MangaTouchAction.Other
+    }
 
 /**
  * Routes a tap at ([x], [y]) (Android pixels) through the in-page manga tap handler

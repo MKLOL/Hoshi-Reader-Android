@@ -15,6 +15,7 @@ import moe.antimony.hoshi.features.ai.AiChatSettingsRepository
 import moe.antimony.hoshi.epub.BookMetadata
 import kotlinx.coroutines.flow.first
 import java.io.File
+import java.time.Instant
 import java.util.UUID
 
 /**
@@ -74,10 +75,7 @@ class HttpSyncReconciler(
         val outbound = pushAllLocal(transport)
         val appSettings = syncAppSettings(transport)
 
-        val newCursor = maxRfc(
-            maxRfc(settings.lastSyncedAt, inbound.maxLastModified),
-            maxRfc(outbound.maxLastModified, appSettings.maxLastModified),
-        )
+        val newCursor = safeNewCursor(currentCursor = settings.lastSyncedAt, inbound = inbound)
         val cursorChanged = newCursor != null && newCursor != settings.lastSyncedAt
 
         HttpSyncResult(
@@ -214,9 +212,29 @@ class HttpSyncReconciler(
         val downloadedChatEntries: Int,
         val downloadedPayloads: Int,
         val remoteOnlyBooks: Int,
-        val maxLastModified: String?,
+        val maxHandledLastModified: String?,
+        val minUnhandledLastModified: String?,
         val errors: List<String>,
     )
+
+    private fun safeNewCursor(
+        currentCursor: String?,
+        inbound: InboundResult,
+    ): String? {
+        val candidates = listOfNotNull(
+            currentCursor,
+            inbound.maxHandledLastModified,
+        )
+        val firstUnhandled = inbound.minUnhandledLastModified
+        val safeCandidates = if (firstUnhandled == null) {
+            candidates
+        } else {
+            candidates.filter { compareRfc3339(it, firstUnhandled) < 0 }
+        }
+        return safeCandidates.fold<String, String?>(null) { acc, timestamp ->
+            maxRfc(acc, timestamp)
+        }
+    }
 
     private suspend fun pullChangedKeys(
         transport: HttpSyncKvTransport,
@@ -225,8 +243,22 @@ class HttpSyncReconciler(
         var downloadedBookmarks = 0
         var downloadedChatEntries = 0
         var downloadedPayloads = 0
-        var maxLastModified: String? = sinceCursor
+        var maxHandledLastModified: String? = null
+        var minUnhandledLastModified: String? = null
         val errors = mutableListOf<String>()
+
+        fun markHandled(meta: HttpSyncKvKeyMeta) {
+            maxHandledLastModified = maxRfc(maxHandledLastModified, meta.lastModified)
+        }
+
+        fun markUnhandled(meta: HttpSyncKvKeyMeta) {
+            if (compareRfc3339(meta.lastModified, sinceCursor) <= 0) return
+            minUnhandledLastModified = when {
+                minUnhandledLastModified == null -> meta.lastModified
+                compareRfc3339(meta.lastModified, minUnhandledLastModified) < 0 -> meta.lastModified
+                else -> minUnhandledLastModified
+            }
+        }
 
         val localBookEntries = bookRepository.loadBookEntries()
         val rootsBySyncId: MutableMap<String, File> = mutableMapOf<String, File>().apply {
@@ -243,24 +275,26 @@ class HttpSyncReconciler(
         //    `freshDeviceSyncDownloadsPayloadBookmarkAndChatInOnePass`).
         val payloadManifests = mutableListOf<HttpSyncKvKeyMeta>()
         val bookmarksAndChats = mutableListOf<Pair<ParsedBookKey, HttpSyncKvKeyMeta>>()
+        val listSinceCursor = inboundListSinceCursor(sinceCursor)
         var cursor: String? = null
         do {
             val page = transport.list(
                 prefix = ALL_BOOKS_PREFIX,
-                since = sinceCursor,
+                since = listSinceCursor,
                 cursor = cursor,
             )
             for (meta in page.keys) {
-                if (compareRfc3339(meta.lastModified, maxLastModified) > 0) {
-                    maxLastModified = meta.lastModified
+                val parsed = parseBookKey(meta.key)
+                if (parsed == null) {
+                    markHandled(meta)
+                    continue
                 }
-                val parsed = parseBookKey(meta.key) ?: continue
                 remoteSyncIds += parsed.syncId
                 when (parsed.kind) {
                     BookKeyKind.PayloadManifest -> payloadManifests += meta
                     BookKeyKind.Bookmark, BookKeyKind.Chat -> bookmarksAndChats += parsed to meta
-                    BookKeyKind.PayloadZip -> Unit // followed via the manifest
-                    BookKeyKind.Metadata -> Unit // v2 doesn't act on metadata yet — reserved for tombstones
+                    BookKeyKind.PayloadZip -> markHandled(meta) // followed via the manifest
+                    BookKeyKind.Metadata -> markHandled(meta) // v2 doesn't act on metadata yet — reserved for tombstones
                 }
             }
             cursor = page.nextCursor
@@ -271,21 +305,32 @@ class HttpSyncReconciler(
         //    every syncId on the server has a local root in `rootsBySyncId`.
         for (meta in payloadManifests) {
             val parsed = parseBookKey(meta.key) ?: continue
-            if (parsed.syncId in rootsBySyncId.keys) continue
+            if (parsed.syncId in rootsBySyncId.keys) {
+                markHandled(meta)
+                continue
+            }
             runCatching {
                 val imported = importRemoteOnlyBook(transport, parsed.syncId)
                 if (imported != null) {
                     rootsBySyncId[parsed.syncId] = imported
                     downloadedPayloads += 1
+                    markHandled(meta)
+                } else {
+                    markUnhandled(meta)
                 }
             }.onFailure { e ->
                 errors += "payload ${parsed.syncId}: ${e.message ?: e.javaClass.simpleName}"
+                markUnhandled(meta)
             }
         }
 
         // ── Pass 3: bookmarks and chats now find their local roots and get applied.
         for ((parsed, meta) in bookmarksAndChats) {
-            val root = rootsBySyncId[parsed.syncId] ?: continue
+            val root = rootsBySyncId[parsed.syncId]
+            if (root == null) {
+                markUnhandled(meta)
+                continue
+            }
             runCatching {
                 when (parsed.kind) {
                     BookKeyKind.Bookmark ->
@@ -294,8 +339,70 @@ class HttpSyncReconciler(
                         if (applyChatEntryFromRemote(transport, root, meta)) downloadedChatEntries += 1
                     else -> Unit
                 }
+                markHandled(meta)
             }.onFailure { e ->
                 errors += "${parsed.kind.name.lowercase()} ${parsed.syncId}: ${e.message ?: e.javaClass.simpleName}"
+                markUnhandled(meta)
+            }
+        }
+
+        // A previous Android build could advance lastSyncedAt past chat keys that were
+        // listed before their book payload/root was available. Once that happens, an
+        // incremental `since` list will never show those older chat keys again. Backfill
+        // chat prefixes for local mokuro books so manual Sync now can recover those skipped
+        // ChatGPT entries without forcing a full payload rescan.
+        if (sinceCursor != null) {
+            for ((syncId, root) in rootsBySyncId) {
+                if (bookContentType(root) != ContentType.Mokuro) continue
+                val knownChatKeys = runCatching {
+                    aiHistoryStore.load(root).entries
+                        .map { entry ->
+                            chatKey(
+                                syncId,
+                                chatEntryKeySuffix(
+                                    entry.timestampSeconds,
+                                    entry.bubbleText,
+                                    entry.response,
+                                ),
+                            )
+                        }
+                        .toMutableSet()
+                }.getOrElse { e ->
+                    errors += "chat backfill $syncId: ${e.message ?: e.javaClass.simpleName}"
+                    mutableSetOf()
+                }
+                var chatCursor: String? = null
+                do {
+                    val page = try {
+                        transport.list(
+                            prefix = chatPrefixForBook(syncId),
+                            cursor = chatCursor,
+                        )
+                    } catch (e: HttpSyncException) {
+                        errors += "chat backfill $syncId: ${e.message}"
+                        break
+                    } catch (e: Exception) {
+                        errors += "chat backfill $syncId: ${e.message ?: e.javaClass.simpleName}"
+                        break
+                    }
+                    for (meta in page.keys) {
+                        if (meta.key in knownChatKeys) {
+                            markHandled(meta)
+                            continue
+                        }
+                        runCatching {
+                            if (applyChatEntryFromRemote(transport, root, meta)) {
+                                downloadedChatEntries += 1
+                            }
+                            knownChatKeys += meta.key
+                            markHandled(meta)
+                        }.onFailure { e ->
+                            errors += "chat backfill $syncId: ${e.message ?: e.javaClass.simpleName}"
+                            markUnhandled(meta)
+                        }
+                    }
+                    chatCursor = page.nextCursor
+                } while (chatCursor != null && page.truncated)
             }
         }
 
@@ -305,7 +412,8 @@ class HttpSyncReconciler(
             downloadedChatEntries = downloadedChatEntries,
             downloadedPayloads = downloadedPayloads,
             remoteOnlyBooks = remoteOnly,
-            maxLastModified = maxLastModified,
+            maxHandledLastModified = maxHandledLastModified,
+            minUnhandledLastModified = minUnhandledLastModified,
             errors = errors,
         )
     }
@@ -522,9 +630,19 @@ class HttpSyncReconciler(
             if (remoteBlob != null) {
                 val localStamp = local.lastModified?.let(::appleSecondsToRfc3339)
                 if (compareRfc3339(remoteBlob.lastModified, localStamp) > 0) {
-                    // Remote is newer — applyBookmarkFromRemote already ran during the
-                    // inbound pass for this same key (or will on next sync if it slipped
-                    // in between). Either way: don't downgrade. Just don't push.
+                    // Remote is newer. Inbound normally already applied this exact key, but
+                    // a concurrent push from another device can appear between inbound and
+                    // outbound. Apply it here before refusing to upload, so this sync pass
+                    // converges locally instead of waiting for another manual sync.
+                    bookRepository.saveBookmark(
+                        bookRoot,
+                        Bookmark(
+                            chapterIndex = remoteBlob.chapterIndex,
+                            progress = remoteBlob.progress,
+                            characterCount = remoteBlob.characterCount,
+                            lastModified = rfc3339ToAppleSeconds(remoteBlob.lastModified),
+                        ),
+                    )
                     return@withBookLock null
                 }
             }
@@ -601,6 +719,14 @@ class HttpSyncReconciler(
         )
         return targetRoot
     }
+}
+
+private const val INBOUND_CURSOR_LOOKBACK_MILLIS: Long = 5 * 60 * 1000L
+
+private fun inboundListSinceCursor(cursor: String?): String? {
+    if (cursor == null) return null
+    val instant = runCatching { Instant.parse(cursor) }.getOrNull() ?: return cursor
+    return instant.minusMillis(INBOUND_CURSOR_LOOKBACK_MILLIS).toString()
 }
 
 /**

@@ -5,6 +5,13 @@ The format follows a Keep a Changelog style, and release sections use Semantic V
 
 ## [Unreleased]
 
+## [v0.7.12] - 2026-05-15
+
+### Fixed
+
+- Fix HTTP Sync so manual sync does not advance past retryable remote book, bookmark, or ChatGPT chat items; manga ChatGPT history skipped by an older bad cursor is backfilled, Japanese-only titles get stable sync IDs, newer remote bookmarks discovered during upload are applied locally, and sync URL encoding works on Android API 28+.
+- Fix mokuro manga reader gestures and chrome: two-finger pinch gestures no longer turn pages, OCR bubble hit-testing and lookup anchors stay aligned while zoomed, transparent top and bottom controls no longer create full-width input bars, and the ChatGPT bubble button sits to the right of copy.
+
 ## [v0.6.3] - 2026-05-15
 
 ### Added

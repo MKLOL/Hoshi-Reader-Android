@@ -11,9 +11,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
@@ -21,14 +19,13 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
-import androidx.compose.material.icons.rounded.KeyboardArrowLeft
-import androidx.compose.material.icons.rounded.KeyboardArrowRight
+import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowLeft
+import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -46,6 +43,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
@@ -477,29 +475,58 @@ internal fun MangaReaderScreen(
             modifier = Modifier.fillMaxSize(),
         )
 
-        MangaReaderChrome(
-            title = book.title,
+        MangaReaderCloseButton(
             darkInterface = readerSettings.usesDarkInterface(systemDark),
-            eInkMode = readerSettings.eInkMode,
             onClose = onClose,
+            modifier = Modifier
+                .align(Alignment.TopStart)
+                .statusBarsPadding()
+                .padding(start = 4.dp, top = 4.dp)
+                .zIndex(1f),
+        )
+        MangaReaderOverflowMenu(
+            darkInterface = readerSettings.usesDarkInterface(systemDark),
             onShowAiHistory = { showAiHistory = true },
             onShowAiSettings = { showAiSettings = true },
             modifier = Modifier
-                .align(Alignment.TopCenter)
-                .fillMaxWidth()
+                .align(Alignment.TopEnd)
+                .statusBarsPadding()
+                .padding(end = 4.dp, top = 4.dp)
                 .zIndex(1f),
         )
 
-        MangaReaderBottomBar(
+        MangaReaderPageTurnButton(
+            imageVector = Icons.AutoMirrored.Rounded.KeyboardArrowLeft,
+            contentDescription = "Next page",
+            darkInterface = readerSettings.usesDarkInterface(systemDark),
+            enabled = pageIndex < pageCount - 1,
+            onClick = { navigate(ReaderNavigationDirection.Forward) },
+            modifier = Modifier
+                .align(Alignment.BottomStart)
+                .navigationBarsPadding()
+                .padding(start = 8.dp, bottom = 4.dp)
+                .zIndex(1f),
+        )
+        MangaReaderPageIndicator(
             pageIndex = pageIndex,
             pageCount = pageCount,
             darkInterface = readerSettings.usesDarkInterface(systemDark),
-            eInkMode = readerSettings.eInkMode,
-            onForward = { navigate(ReaderNavigationDirection.Forward) },
-            onBackward = { navigate(ReaderNavigationDirection.Backward) },
             modifier = Modifier
                 .align(Alignment.BottomCenter)
-                .fillMaxWidth()
+                .navigationBarsPadding()
+                .padding(bottom = 22.dp)
+                .zIndex(1f),
+        )
+        MangaReaderPageTurnButton(
+            imageVector = Icons.AutoMirrored.Rounded.KeyboardArrowRight,
+            contentDescription = "Previous page",
+            darkInterface = readerSettings.usesDarkInterface(systemDark),
+            enabled = pageIndex > 0,
+            onClick = { navigate(ReaderNavigationDirection.Backward) },
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .navigationBarsPadding()
+                .padding(end = 8.dp, bottom = 4.dp)
                 .zIndex(1f),
         )
 
@@ -535,80 +562,74 @@ internal fun MangaReaderScreen(
 }
 
 /**
- * Top reader chrome: a close affordance, the book title, and a ⋯ overflow menu for the
- * ChatGPT history / settings (a fork addition, kept off the shared Settings navigation).
+ * Floating top-left close affordance. Kept as an independent node so the transparent top
+ * chrome does not create a full-width input layer over the manga page.
  */
 @Composable
-private fun MangaReaderChrome(
-    title: String,
+private fun MangaReaderCloseButton(
     darkInterface: Boolean,
-    eInkMode: Boolean,
     onClose: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val contentColor = if (darkInterface) Color.White else Color.Black
+    IconButton(
+        onClick = onClose,
+        modifier = modifier,
+    ) {
+        Icon(
+            imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
+            contentDescription = "Close manga reader",
+            tint = contentColor,
+        )
+    }
+}
+
+/**
+ * Floating top-right overflow menu for ChatGPT history / settings. Its layout bounds are
+ * just the menu anchor and popup, not a transparent full-width toolbar.
+ */
+@Composable
+private fun MangaReaderOverflowMenu(
+    darkInterface: Boolean,
     onShowAiHistory: () -> Unit,
     onShowAiSettings: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val contentColor = if (darkInterface) Color.White else Color.Black
-    val scrim = mangaChromeScrim(darkInterface, eInkMode)
-    Surface(
-        modifier = modifier,
-        color = scrim,
-        contentColor = contentColor,
-    ) {
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .statusBarsPadding()
-                .padding(horizontal = 4.dp, vertical = 4.dp),
+    Box(modifier = modifier) {
+        var menuExpanded by remember { mutableStateOf(false) }
+        IconButton(onClick = { menuExpanded = true }) {
+            Icon(
+                imageVector = Icons.Rounded.MoreVert,
+                contentDescription = "More options",
+                tint = contentColor,
+            )
+        }
+        DropdownMenu(
+            expanded = menuExpanded,
+            onDismissRequest = { menuExpanded = false },
         ) {
-            IconButton(
-                onClick = onClose,
-                modifier = Modifier.align(Alignment.CenterStart),
-            ) {
-                Icon(
-                    imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
-                    contentDescription = "Close manga reader",
-                    tint = contentColor,
-                )
-            }
-            // Title intentionally omitted — the chrome bars are transparent and the title
-            // strip was the most distracting block on top of the artwork. The back icon and
-            // ⋯ menu still anchor the corners.
-            Box(modifier = Modifier.align(Alignment.CenterEnd)) {
-                var menuExpanded by remember { mutableStateOf(false) }
-                IconButton(onClick = { menuExpanded = true }) {
-                    Icon(
-                        imageVector = Icons.Rounded.MoreVert,
-                        contentDescription = "More options",
-                        tint = contentColor,
-                    )
-                }
-                DropdownMenu(
-                    expanded = menuExpanded,
-                    onDismissRequest = { menuExpanded = false },
-                ) {
-                    DropdownMenuItem(
-                        text = { Text("ChatGPT history") },
-                        onClick = {
-                            menuExpanded = false
-                            onShowAiHistory()
-                        },
-                    )
-                    DropdownMenuItem(
-                        text = { Text("ChatGPT settings") },
-                        onClick = {
-                            menuExpanded = false
-                            onShowAiSettings()
-                        },
-                    )
-                }
-            }
+            DropdownMenuItem(
+                text = { Text("ChatGPT history") },
+                onClick = {
+                    menuExpanded = false
+                    onShowAiHistory()
+                },
+            )
+            DropdownMenuItem(
+                text = { Text("ChatGPT settings") },
+                onClick = {
+                    menuExpanded = false
+                    onShowAiSettings()
+                },
+            )
         }
     }
 }
 
 /**
- * Bottom reader chrome: explicit previous / next page buttons plus the page indicator.
+ * Floating bottom page-turn button. Kept as an independent node so the transparent bottom
+ * chrome does not create a full-width input layer over the manga page.
  *
  * Page turning lives on dedicated buttons (not taps on the page) so tapping a word for
  * dictionary lookup can never move the page. Manga reads right-to-left, so the left-hand
@@ -616,72 +637,44 @@ private fun MangaReaderChrome(
  * direction. Buttons disable at the first / last page.
  */
 @Composable
-private fun MangaReaderBottomBar(
-    pageIndex: Int,
-    pageCount: Int,
+private fun MangaReaderPageTurnButton(
+    imageVector: ImageVector,
+    contentDescription: String,
     darkInterface: Boolean,
-    eInkMode: Boolean,
-    onForward: () -> Unit,
-    onBackward: () -> Unit,
+    enabled: Boolean,
+    onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val contentColor = if (darkInterface) Color.White else Color.Black
-    val scrim = mangaChromeScrim(darkInterface, eInkMode)
-    val canGoForward = pageIndex < pageCount - 1
-    val canGoBackward = pageIndex > 0
-    fun tint(enabled: Boolean) = contentColor.copy(alpha = if (enabled) 1f else 0.38f)
-    Surface(
-        modifier = modifier,
-        color = scrim,
-        contentColor = contentColor,
+    IconButton(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = modifier.size(56.dp),
     ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .navigationBarsPadding()
-                .padding(horizontal = 8.dp, vertical = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            IconButton(
-                onClick = onForward,
-                enabled = canGoForward,
-                modifier = Modifier.size(56.dp),
-            ) {
-                Icon(
-                    imageVector = Icons.Rounded.KeyboardArrowLeft,
-                    contentDescription = "Next page",
-                    tint = tint(canGoForward),
-                )
-            }
-            Text(
-                text = "${(pageIndex + 1).coerceAtMost(pageCount)} / $pageCount",
-                color = contentColor,
-                textAlign = TextAlign.Center,
-                maxLines = 1,
-                modifier = Modifier.weight(1f),
-            )
-            IconButton(
-                onClick = onBackward,
-                enabled = canGoBackward,
-                modifier = Modifier.size(56.dp),
-            ) {
-                Icon(
-                    imageVector = Icons.Rounded.KeyboardArrowRight,
-                    contentDescription = "Previous page",
-                    tint = tint(canGoBackward),
-                )
-            }
-        }
+        Icon(
+            imageVector = imageVector,
+            contentDescription = contentDescription,
+            tint = contentColor.copy(alpha = if (enabled) 1f else 0.38f),
+        )
     }
 }
 
-/**
- * Background for the reader chrome bars. Fully transparent so the bars (back, ⋯, page-turn
- * arrows) sit directly over the artwork without a coloured strip blocking the top and
- * bottom of the page. The icons themselves are tinted via [Color.White] / [Color.Black]
- * based on dark mode so they stay legible against the manga underneath.
- */
-private fun mangaChromeScrim(darkInterface: Boolean, eInkMode: Boolean): Color = Color.Transparent
+@Composable
+private fun MangaReaderPageIndicator(
+    pageIndex: Int,
+    pageCount: Int,
+    darkInterface: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    val contentColor = if (darkInterface) Color.White else Color.Black
+    Text(
+        text = "${(pageIndex + 1).coerceAtMost(pageCount)} / $pageCount",
+        color = contentColor,
+        textAlign = TextAlign.Center,
+        maxLines = 1,
+        modifier = modifier,
+    )
+}
 
 internal fun shouldAnimateMangaPageTurns(settings: ReaderSettings): Boolean =
     !settings.eInkMode && !settings.disablePageTurnAnimation
