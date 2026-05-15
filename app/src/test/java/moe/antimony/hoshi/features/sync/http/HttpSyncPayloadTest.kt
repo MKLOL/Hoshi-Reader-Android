@@ -54,21 +54,185 @@ class HttpSyncPayloadTest {
     }
 
     @Test
-    fun zipExcludesBookmarkAndChatLogSidecars() = runBlocking {
+    fun zipExcludesPerDeviceSidecars() = runBlocking {
         val src = tempFolder.newFolder("book").apply {
             resolve("mokuro.json").writeText("{}")
             resolve("bookmark.json").writeText("""{"chapterIndex": 5}""")
             resolve("ai_chat_log.json").writeText("""{"entries":[]}""")
-            resolve("metadata.json").writeText("""{"title":"Hi"}""")
+            // metadata.json carries per-device fields (UUID id, lastAccess timestamp)
+            // that rewrite on every book-open. Including it in the zip would make every
+            // device's payload sha differ and re-upload forever — the regression the
+            // user reported as "scrolled a bit, pressed Sync, said book payload up."
+            resolve("metadata.json").writeText("""{"title":"Hi","id":"device-a-uuid","lastAccess":12345}""")
         }
         val (zipBytes, _) = codec.zipDirectory(src)
         val dest = tempFolder.newFolder("unpacked")
         codec.unzipInto(zipBytes, dest)
 
-        assertTrue(dest.resolve("mokuro.json").exists())
-        assertTrue(dest.resolve("metadata.json").exists())
+        assertTrue("content file (mokuro.json) round-trips", dest.resolve("mokuro.json").exists())
         assertFalse("bookmark.json must not round-trip via the payload", dest.resolve("bookmark.json").exists())
         assertFalse("ai_chat_log.json must not round-trip via the payload", dest.resolve("ai_chat_log.json").exists())
+        assertFalse("metadata.json must not round-trip — receiving device makes its own", dest.resolve("metadata.json").exists())
+    }
+
+    @Test
+    fun zipExcludesAllPerDeviceSidecarsAndSasayakiDir() = runBlocking {
+        // Comprehensive zip-exclusion check. Adding a new per-book sidecar to BookRepository
+        // without updating PAYLOAD_EXCLUDED_FILES has caused the same user-visible bug
+        // ("scrolled a bit, sync re-uploaded the whole book") three separate times. This
+        // test makes sure every currently-known sidecar is filtered.
+        val src = tempFolder.newFolder("all-sidecars-book").apply {
+            resolve("mokuro.json").writeText("""{"v":1}""")
+            resolve("bookmark.json").writeText("""{"chapterIndex":5}""")
+            resolve("ai_chat_log.json").writeText("""{"entries":[]}""")
+            resolve("metadata.json").writeText("""{"title":"T","id":"abc","lastAccess":12345}""")
+            resolve("statistics.json").writeText("""[{"chapterIndex":1,"timestampSeconds":1.0}]""")
+            resolve("sasayaki_match.json").writeText("""{"deviceId":"a"}""")
+            resolve("sasayaki_playback.json").writeText("""{"playheadPosition":10.0}""")
+            // Sasayaki audio file lives under its own subdirectory.
+            resolve("Sasayaki").mkdirs()
+            resolve("Sasayaki/audio.m4b").writeBytes(ByteArray(64) { it.toByte() })
+        }
+        val (zipBytes, _) = codec.zipDirectory(src)
+        val dest = tempFolder.newFolder("unpacked")
+        codec.unzipInto(zipBytes, dest)
+
+        assertTrue("content file (mokuro.json) round-trips", dest.resolve("mokuro.json").exists())
+        for (name in listOf(
+            "bookmark.json",
+            "ai_chat_log.json",
+            "metadata.json",
+            "statistics.json",
+            "sasayaki_match.json",
+            "sasayaki_playback.json",
+        )) {
+            assertFalse("$name must not round-trip — it's per-device", dest.resolve(name).exists())
+        }
+        assertFalse(
+            "Sasayaki/ subdirectory must not round-trip — per-device audio file",
+            dest.resolve("Sasayaki").exists() || dest.resolve("Sasayaki/audio.m4b").exists(),
+        )
+    }
+
+    @Test
+    fun shaCacheSurvivesEveryExcludedSidecarMtimeChange() = runBlocking {
+        // **The structural defense against future sidecar leaks.** Every name in
+        // PAYLOAD_EXCLUDED_FILES gets an mtime bump after the cache is written; the
+        // cache must remain fresh in every case. If a new sidecar gets added to the
+        // exclusion list without this test being updated, the test still passes (good
+        // — the new sidecar is correctly excluded). If a new sidecar gets added to
+        // BookRepository and a developer forgets the exclusion list AND this test,
+        // they hit the "scroll and resync" bug on first use — at which point the
+        // matching live-server cross-device test would catch it.
+        val src = tempFolder.newFolder("everything-thrashes-book").apply {
+            resolve("mokuro.json").writeText("""{"v":1}""")
+        }
+        val transport = FakeKvTransport()
+        codec.uploadIfChanged(transport, "everything_thrashes", src, "Everything Thrashes", HttpSyncContentType.Mokuro)
+        val cacheFile = src.resolve(PAYLOAD_SHA_CACHE_FILENAME)
+        val later = cacheFile.lastModified() + 5_000
+
+        for (sidecar in PAYLOAD_EXCLUDED_FILES - PAYLOAD_SHA_CACHE_FILENAME) {
+            src.resolve(sidecar).apply {
+                writeText("""{"sidecar":"$sidecar","mutated":true}""")
+                setLastModified(later)
+            }
+        }
+
+        val uploaded = codec.uploadIfChanged(transport, "everything_thrashes", src, "Everything Thrashes", HttpSyncContentType.Mokuro)
+        assertFalse(
+            "mutating EVERY excluded sidecar simultaneously must not trigger re-upload",
+            uploaded,
+        )
+    }
+
+    @Test
+    fun shaCacheSurvivesSasayakiAudioFileMtimeChange() = runBlocking {
+        // User re-links / re-imports a Sasayaki audiobook. The audio file's mtime changes.
+        // Cache must NOT invalidate because the Sasayaki/ directory is excluded as a whole.
+        val src = tempFolder.newFolder("audio-relink-book").apply {
+            resolve("mokuro.json").writeText("""{"v":1}""")
+            resolve("Sasayaki").mkdirs()
+            resolve("Sasayaki/audio.m4b").writeBytes(byteArrayOf(0x00, 0x01, 0x02))
+        }
+        val transport = FakeKvTransport()
+        codec.uploadIfChanged(transport, "audio_relink", src, "Audio Relink", HttpSyncContentType.Mokuro)
+
+        // Simulate re-linking the audio (new bytes, new mtime).
+        val cacheFile = src.resolve(PAYLOAD_SHA_CACHE_FILENAME)
+        val later = cacheFile.lastModified() + 5_000
+        src.resolve("Sasayaki/audio.m4b").apply {
+            writeBytes(byteArrayOf(0x42, 0x43, 0x44, 0x45))
+            setLastModified(later)
+        }
+
+        val uploaded = codec.uploadIfChanged(transport, "audio_relink", src, "Audio Relink", HttpSyncContentType.Mokuro)
+        assertFalse("audio file under Sasayaki/ must not invalidate the payload cache", uploaded)
+    }
+
+    @Test
+    fun extraCarefulGateBlocksUploadWhenOnlyExcludedFilesChanged() = runBlocking {
+        // The defensive gate added in [HttpSyncPayloadCodec.uploadIfChanged]: when the
+        // remote manifest already exists and no NON-excluded file is newer than the cache,
+        // refuse to re-upload even if our cache file got corrupted/deleted. This catches
+        // the entire class of "future patch forgot to extend PAYLOAD_EXCLUDED_FILES" bugs
+        // without needing the fix to be in PAYLOAD_EXCLUDED_FILES.
+        val src = tempFolder.newFolder("careful-gate-book").apply {
+            resolve("mokuro.json").writeText("""{"v":1}""")
+        }
+        val transport = FakeKvTransport()
+        // First upload establishes the remote manifest.
+        codec.uploadIfChanged(transport, "careful_gate", src, "Careful Gate", HttpSyncContentType.Mokuro)
+        val initialZipBody = transport.kv[payloadZipKey("careful_gate")]?.body
+        assertNotNull("first sync should have uploaded the zip", initialZipBody)
+
+        // Now mutate ONLY excluded sidecars (so the staleness check sees nothing real change).
+        val cacheFile = src.resolve(PAYLOAD_SHA_CACHE_FILENAME)
+        val later = cacheFile.lastModified() + 5_000
+        src.resolve("bookmark.json").apply {
+            writeText("""{"chapterIndex":99}""")
+            setLastModified(later)
+        }
+        src.resolve("statistics.json").apply {
+            writeText("""[{"chapterIndex":99,"timestampSeconds":99.0}]""")
+            setLastModified(later)
+        }
+
+        val uploaded = codec.uploadIfChanged(transport, "careful_gate", src, "Careful Gate", HttpSyncContentType.Mokuro)
+        assertFalse("excluded-only mutations must not trigger re-upload", uploaded)
+        assertTrue(
+            "server's zip bytes must be untouched",
+            initialZipBody!!.contentEquals(transport.kv[payloadZipKey("careful_gate")]!!.body),
+        )
+    }
+
+    @Test
+    fun shaCacheSurvivesMetadataJsonMtimeChange() = runBlocking {
+        // Companion to shaCacheSurvivesBookmarkAndChatLogMtimeChange — the user reported
+        // "scrolled a bit, pressed Sync, took a long time and said book payload up". Root
+        // cause was metadata.json being rewritten with a new lastAccess every book-open,
+        // bumping its mtime past the cache, invalidating cache, re-zipping, re-hashing,
+        // sha differs because metadata.json is per-device, re-upload. The fix excludes
+        // metadata.json from the zip AND from the staleness check. Verify the cache stays
+        // fresh after a metadata.json rewrite.
+        val src = tempFolder.newFolder("metadata-thrash-book").apply {
+            resolve("mokuro.json").writeText("""{"v":1}""")
+            resolve("metadata.json").writeText("""{"title":"T","id":"abc","lastAccess":0}""")
+        }
+        val transport = FakeKvTransport()
+        codec.uploadIfChanged(transport, "metadata_thrash", src, "Metadata Thrash", HttpSyncContentType.Mokuro)
+
+        // User opens the book; bookshelf rewrites metadata.json with a new lastAccess.
+        val cacheFile = src.resolve(PAYLOAD_SHA_CACHE_FILENAME)
+        val later = cacheFile.lastModified() + 5_000
+        src.resolve("metadata.json").apply {
+            writeText("""{"title":"T","id":"abc","lastAccess":99999}""")
+            setLastModified(later)
+        }
+
+        // Second sync must hit the fast path.
+        val uploaded = codec.uploadIfChanged(transport, "metadata_thrash", src, "Metadata Thrash", HttpSyncContentType.Mokuro)
+        assertFalse("metadata.json mtime/content change must NOT trigger a re-upload", uploaded)
     }
 
     @Test
@@ -193,28 +357,42 @@ class HttpSyncPayloadTest {
     }
 
     @Test
-    fun uploadIfChangedRewritesWhenContentsDiffer() = runBlocking {
+    fun uploadIfChangedSkipsEvenWhenContentsDifferOnceServerHasManifest() = runBlocking {
+        // Manifest-existence policy: once the server has a copy of the book, we don't
+        // re-upload from this device — even when local content has objectively changed.
+        // This is the user-requested aggressive guard against the entire class of "some
+        // sidecar I forgot to exclude triggered a re-upload" bugs. Escape hatch is
+        // server-side: delete the manifest via curl, run sync, the codec uploads again.
         val src = tempFolder.newFolder("growing-book").apply {
             resolve("mokuro.json").writeText("""{"pages":1}""")
         }
         val transport = FakeKvTransport()
         codec.uploadIfChanged(transport, "growing_book", src, "Growing Book", HttpSyncContentType.Mokuro)
-        // Mutate the source so the sha shifts. Bump mtimes past the cache file's mtime —
-        // `File.lastModified()` has 1-second resolution on some filesystems, and unit tests
-        // run faster than that. Production code doesn't see this because real edits are
-        // separated by seconds at minimum.
-        val cacheFile = src.resolve(PAYLOAD_SHA_CACHE_FILENAME)
-        val futureMtime = cacheFile.lastModified() + 2_000
-        src.resolve("mokuro.json").apply {
-            writeText("""{"pages":2}""")
-            setLastModified(futureMtime)
-        }
-        src.resolve("new-page.png").apply {
-            writeBytes(byteArrayOf(1, 2, 3))
-            setLastModified(futureMtime)
-        }
+        // Now genuinely change the content. The codec MUST still refuse to re-upload
+        // because the manifest already exists.
+        src.resolve("mokuro.json").writeText("""{"pages":2}""")
+        src.resolve("new-page.png").writeBytes(byteArrayOf(1, 2, 3))
         val uploaded = codec.uploadIfChanged(transport, "growing_book", src, "Growing Book", HttpSyncContentType.Mokuro)
-        assertTrue("content changed = re-upload", uploaded)
+        assertFalse("once the server has the manifest, no re-upload (even on real content change)", uploaded)
+    }
+
+    @Test
+    fun uploadIfChangedUploadsAgainAfterServerSideManifestDelete() = runBlocking {
+        // The escape hatch: when the user deletes the manifest server-side, the next
+        // local sync uploads fresh content. Verifies the policy isn't a permanent lock.
+        val src = tempFolder.newFolder("redo-book").apply {
+            resolve("mokuro.json").writeText("""{"v":1}""")
+        }
+        val transport = FakeKvTransport()
+        val firstUpload = codec.uploadIfChanged(transport, "redo_book", src, "Redo Book", HttpSyncContentType.Mokuro)
+        assertTrue(firstUpload)
+
+        // Server-side delete (simulated).
+        transport.kv.remove(payloadManifestKey("redo_book"))
+        transport.kv.remove(payloadZipKey("redo_book"))
+
+        val reupload = codec.uploadIfChanged(transport, "redo_book", src, "Redo Book", HttpSyncContentType.Mokuro)
+        assertTrue("manifest gone from server → re-upload works", reupload)
     }
 
     @Test

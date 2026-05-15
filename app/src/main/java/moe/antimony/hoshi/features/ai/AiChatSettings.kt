@@ -54,18 +54,42 @@ class AiChatSettingsRepository(
     val settings: Flow<AiChatSettings> = dataStore.data.map { it.toAiChatSettings() }
 
     /**
-     * User-driven update. Auto-stamps [AiChatSettings.lastEditedAt] to "now" iff the
-     * sync-relevant fields (`model` / `promptText`) actually changed. API-key-only edits
-     * don't bump the stamp because the API key doesn't sync.
+     * User-driven update. Auto-stamps [AiChatSettings.lastEditedAt] iff the sync-relevant
+     * fields (`model` / `promptText`) actually changed. API-key-only edits don't bump the
+     * stamp because the API key doesn't sync.
+     *
+     * **Lamport-monotonic stamping.** The new stamp is `max(now, currentStamp + 1ms)`.
+     * That guarantees every user-driven edit is strictly newer than any prior stamp the
+     * device has ever seen — including a stale or maliciously-future stamp pulled from
+     * the server. Without this, a single bad blob (e.g. a smoke test that uploaded a
+     * "2099-01-01" stamp) would wedge the user permanently: every real edit would lose
+     * the LWW compare against the future timestamp and get overwritten on the next pull.
+     * With this, the user's first edit after the bad blob lands at `2099-01-01T...001Z`,
+     * gets pushed, and from then on the user owns the settings again.
      */
     suspend fun update(transform: (AiChatSettings) -> AiChatSettings) {
         dataStore.edit { preferences ->
             val current = preferences.toAiChatSettings()
             val next = transform(current)
             val syncRelevantChanged = next.model != current.model || next.promptText != current.promptText
-            val stamped = if (syncRelevantChanged) next.copy(lastEditedAt = nowRfc3339()) else next
+            val stamped = if (syncRelevantChanged) {
+                next.copy(lastEditedAt = stampStrictlyNewerThan(current.lastEditedAt))
+            } else {
+                next
+            }
             writeAll(preferences, stamped)
         }
+    }
+
+    /** Returns an RFC 3339 stamp strictly later than [previous]. Defaults to "now". */
+    private fun stampStrictlyNewerThan(previous: String?): String {
+        val now = Instant.now()
+        val prev = previous?.let { runCatching { Instant.parse(it) }.getOrNull() }
+        // `max(now, prev + 1ms)` — picks `now` in the common case (clock advanced past the
+        // previous stamp normally), or `prev + 1ms` when something dragged the previous
+        // stamp into the future.
+        val next = if (prev != null && !prev.isBefore(now)) prev.plusMillis(1) else now
+        return next.toString()
     }
 
     /**

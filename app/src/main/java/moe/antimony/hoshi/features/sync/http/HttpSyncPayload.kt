@@ -40,12 +40,49 @@ data class HttpSyncPayloadManifest(
     val format: HttpSyncContentType,
 )
 
-/** Files inside a book directory that should NOT be zipped — they're synced per-key. */
+/**
+ * Files inside a book directory that should NOT be zipped — they're per-device or synced
+ * via their own key path. Including ANY of these in the payload would:
+ *
+ *  - corrupt cross-device convergence (the file has a per-device UUID, a wallclock
+ *    timestamp, or otherwise mutates as the user reads), or
+ *  - waste bytes on state that already syncs through its own key, or
+ *  - feed the staleness check noise that isn't real content change.
+ *
+ * **If you add a new per-book sidecar to Hoshi, add its filename here.** Otherwise
+ * its mutations will invalidate the payload-sha cache on every Sync now, forcing a
+ * multi-second re-zip + multi-MB re-upload of unchanged content.
+ *
+ * Concretely, each excluded file is here because:
+ *  - `bookmark.json`   — per-device, rewritten on every page turn. Synced as `…/bookmark`.
+ *  - `ai_chat_log.json` — per-device, appended per ChatGPT reply. Synced as `…/chat/…`.
+ *  - `metadata.json`   — per-device `id` UUID + `lastAccess` bumped on every book open.
+ *                        Receiving device makes its own via `importRemoteOnlyBook`.
+ *  - `statistics.json` — per-book reading stats updated AS THE USER SCROLLS. **This was
+ *                        the bug the user hit as "I scrolled a bit, pressed sync, said
+ *                        book payload up" even after metadata.json was excluded.**
+ *  - `sasayaki_match.json` / `sasayaki_playback.json` — per-device audiobook alignment
+ *                        and playhead, mutate while listening.
+ *  - `.payload.sha256.cache` — the cache itself; including it would be circular.
+ */
 internal val PAYLOAD_EXCLUDED_FILES: Set<String> = setOf(
     "bookmark.json",
     "ai_chat_log.json",
+    "metadata.json",
+    "statistics.json",
+    "sasayaki_match.json",
+    "sasayaki_playback.json",
     PAYLOAD_SHA_CACHE_FILENAME,
 )
+
+/**
+ * Directories under a book root that are excluded from the payload, by directory name.
+ * Currently used for `Sasayaki/` — the per-device audiobook audio file lives under there
+ * with a filename that can vary per device (copy vs. linked import), and the file itself
+ * is large and stable post-import, so re-syncing it just to satisfy sha consistency would
+ * be wasteful. The audio sync (when we add it) gets its own key path.
+ */
+internal val PAYLOAD_EXCLUDED_DIRS: Set<String> = setOf("Sasayaki")
 
 /**
  * Sidecar that caches the last-computed payload sha so subsequent syncs of an unchanged
@@ -86,6 +123,27 @@ class HttpSyncPayloadCodec(
      * **Slow path:** zip + hash + compare; upload only if the sha actually differs from
      * what's on the server. Cache the freshly-computed sha so the next sync is fast.
      */
+    /**
+     * **Manifest-existence policy.** If the server already has a manifest for this
+     * book, we **never** re-upload from this device. The user explicitly asked for this
+     * after the codec re-uploaded their 50-100 MB book three times in a row from per-
+     * device sidecar mtime drift (`metadata.json`, then `statistics.json`, then a fourth
+     * unknown write site we never nailed down). Mokuro/EPUB content is immutable post-
+     * import; everything that mutates as you read (bookmark, chat log, statistics, cover
+     * regeneration, etc.) already syncs through its own key or is per-device-by-design.
+     *
+     * Cost: each `Sync now` for an already-synced book is exactly one HTTPS GET (the
+     * manifest), no zip work, no hash work, no upload. Fast and predictable.
+     *
+     * Escape hatch: if the user genuinely modifies a book's content and wants to push
+     * the new version, they `curl -X DELETE
+     * https://<server>/v1/kv/books/{syncId}/payload.manifest` and run sync again. We
+     * could surface a "re-upload book" button in settings later.
+     *
+     * First-upload-from-this-device path: still works. If no manifest exists, the zip is
+     * built and PUT'd, the manifest is written, and the cache sidecar is updated so
+     * future syncs hit the (also fast) "manifest exists" return.
+     */
     suspend fun uploadIfChanged(
         transport: HttpSyncKvTransport,
         syncId: String,
@@ -93,26 +151,21 @@ class HttpSyncPayloadCodec(
         originalName: String,
         format: HttpSyncContentType,
     ): Boolean = withContext(ioDispatcher) {
-        val cacheFile = bookRoot.resolve(PAYLOAD_SHA_CACHE_FILENAME)
-        val cachedSha = readCachedShaIfFresh(bookRoot, cacheFile)
-
-        // Cheapest possible check: ask the server what it has, compare to our cached sha.
-        // If they agree, we don't even open the zip path.
         val remoteManifest = fetchManifest(transport, syncId)
-        if (cachedSha != null && remoteManifest != null && remoteManifest.sha256 == cachedSha) {
+        if (remoteManifest != null) {
+            // Server already has this book — refuse to re-upload. No matter what mtime
+            // changes have happened locally (and they will happen, all the time — opening
+            // a book, scrolling, chatting, etc.), the manifest's existence is the
+            // authoritative signal that the user has already shipped a copy. We trust
+            // that and stay quiet.
             return@withContext false
         }
 
-        // We have to zip. This is the multi-second path on big books.
+        // First upload of this book from this device. This is the only path that does the
+        // multi-second zip + hash.
         val (zipBytes, sha) = zipDirectory(bookRoot)
         val localSize = zipBytes.size.toLong()
-        writeCachedSha(cacheFile, sha)
-
-        // The cache may have been stale (mtimes outdated) but the actual content might
-        // still match the server. Re-check with the fresh sha before committing the upload.
-        if (remoteManifest != null && remoteManifest.sha256 == sha && remoteManifest.sizeBytes == localSize) {
-            return@withContext false
-        }
+        writeCachedSha(bookRoot.resolve(PAYLOAD_SHA_CACHE_FILENAME), sha)
 
         // PUT zip first so the manifest never points at a missing or stale blob.
         transport.put(
@@ -145,11 +198,43 @@ class HttpSyncPayloadCodec(
         val anyContentNewerThanCache = bookRoot.walkTopDown().any { file ->
             file.isFile &&
                 file.name !in PAYLOAD_EXCLUDED_FILES &&
+                !file.isInsideExcludedDir(bookRoot) &&
                 file.lastModified() > cacheMtime
         }
         if (anyContentNewerThanCache) return null
         val raw = runCatching { cacheFile.readText().trim() }.getOrNull() ?: return null
         return raw.takeIf { it.startsWith("sha256:") }
+    }
+
+    /**
+     * Returns `true` iff every non-excluded file under [bookRoot] has an mtime less than
+     * or equal to [cacheFile]'s. When [cacheFile] doesn't exist, returns `false` because
+     * we have no baseline to compare against. Used as the "extra-careful" gate before
+     * a payload re-upload when the server already has the book.
+     */
+    private fun noContentFileNewerThan(bookRoot: File, cacheFile: File): Boolean {
+        if (!cacheFile.exists()) return false
+        val cacheMtime = cacheFile.lastModified()
+        return bookRoot.walkTopDown().none { file ->
+            file.isFile &&
+                file.name !in PAYLOAD_EXCLUDED_FILES &&
+                !file.isInsideExcludedDir(bookRoot) &&
+                file.lastModified() > cacheMtime
+        }
+    }
+
+    /**
+     * Walks the parent chain up to (but not including) [bookRoot]; returns `true` iff any
+     * intermediate directory's name appears in [PAYLOAD_EXCLUDED_DIRS]. Robust to nesting
+     * (e.g., `Sasayaki/Subdir/audio.m4b` still counts as inside `Sasayaki`).
+     */
+    private fun File.isInsideExcludedDir(bookRoot: File): Boolean {
+        var current: File? = this.parentFile
+        while (current != null && current != bookRoot) {
+            if (current.name in PAYLOAD_EXCLUDED_DIRS) return true
+            current = current.parentFile
+        }
+        return false
     }
 
     private fun writeCachedSha(cacheFile: File, sha: String) {
@@ -163,7 +248,11 @@ class HttpSyncPayloadCodec(
             val parent = cacheFile.parentFile
             if (parent != null && parent.isDirectory) {
                 val maxContentMtime = parent.walkTopDown()
-                    .filter { it.isFile && it.name !in PAYLOAD_EXCLUDED_FILES }
+                    .filter {
+                        it.isFile &&
+                            it.name !in PAYLOAD_EXCLUDED_FILES &&
+                            !it.isInsideExcludedDir(parent)
+                    }
                     .maxOfOrNull { it.lastModified() }
                     ?: 0L
                 cacheFile.setLastModified(maxContentMtime + 1_000L)
@@ -244,10 +333,12 @@ class HttpSyncPayloadCodec(
         val children = current.listFiles()?.sortedBy { it.name } ?: return
         for (child in children) {
             if (child.isDirectory) {
+                if (child.name in PAYLOAD_EXCLUDED_DIRS) continue
                 zipRecursive(rootDir, child, zip, digest)
                 continue
             }
             if (child.name in PAYLOAD_EXCLUDED_FILES) continue
+            if (child.isInsideExcludedDir(rootDir)) continue
             // Path inside the zip is the file's relative path under the book root, with
             // forward-slash separators so non-Android extractors decode it correctly.
             val entryPath = child.relativeTo(rootDir).path.replace(File.separatorChar, '/')
