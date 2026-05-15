@@ -17,6 +17,8 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowLeft
@@ -574,7 +576,7 @@ private fun MangaReaderCloseButton(
     val contentColor = if (darkInterface) Color.White else Color.Black
     IconButton(
         onClick = onClose,
-        modifier = modifier,
+        modifier = modifier.background(mangaFloatingControlBackground(darkInterface), CircleShape),
     ) {
         Icon(
             imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
@@ -598,7 +600,10 @@ private fun MangaReaderOverflowMenu(
     val contentColor = if (darkInterface) Color.White else Color.Black
     Box(modifier = modifier) {
         var menuExpanded by remember { mutableStateOf(false) }
-        IconButton(onClick = { menuExpanded = true }) {
+        IconButton(
+            onClick = { menuExpanded = true },
+            modifier = Modifier.background(mangaFloatingControlBackground(darkInterface), CircleShape),
+        ) {
             Icon(
                 imageVector = Icons.Rounded.MoreVert,
                 contentDescription = "More options",
@@ -649,7 +654,9 @@ private fun MangaReaderPageTurnButton(
     IconButton(
         onClick = onClick,
         enabled = enabled,
-        modifier = modifier.size(56.dp),
+        modifier = modifier
+            .size(56.dp)
+            .background(mangaFloatingControlBackground(darkInterface), CircleShape),
     ) {
         Icon(
             imageVector = imageVector,
@@ -672,9 +679,18 @@ private fun MangaReaderPageIndicator(
         color = contentColor,
         textAlign = TextAlign.Center,
         maxLines = 1,
-        modifier = modifier,
+        modifier = modifier
+            .background(mangaFloatingControlBackground(darkInterface), RoundedCornerShape(999.dp))
+            .padding(horizontal = 10.dp, vertical = 4.dp),
     )
 }
+
+private fun mangaFloatingControlBackground(darkInterface: Boolean): Color =
+    if (darkInterface) {
+        Color.Black.copy(alpha = 0.48f)
+    } else {
+        Color(0xFFF1F3F4).copy(alpha = 0.92f)
+    }
 
 internal fun shouldAnimateMangaPageTurns(settings: ReaderSettings): Boolean =
     !settings.eInkMode && !settings.disablePageTurnAnimation

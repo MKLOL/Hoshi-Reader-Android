@@ -177,18 +177,31 @@ class MangaPageHtmlTest {
     }
 
     @Test
-    fun tapHitTestingAndPopupRectUseVisualViewportScaleForWebViewZoom() {
+    fun tapHitTestingUsesDomClickCoordinatesForWebViewZoomAndPan() {
         val html = build(page(emptyList()))
 
-        // Native taps arrive in the host WebView's unzoomed CSS-pixel space. During pinch
-        // zoom the document hit-test point must be divided by the visual viewport scale,
-        // while the rect sent back to Compose must be multiplied back into host space.
-        assertTrue(html.contains("window.visualViewport"))
-        assertTrue(html.contains("pointFromHostViewport: function(x, y)"))
-        assertTrue(html.contains("document.elementFromPoint(point.x, point.y)"))
-        assertTrue(html.contains("window.hoshiSelection.selectText(point.x, point.y, maxLength)"))
+        // WebView DOM click events already account for pinch zoom and panning. Native code
+        // should not re-map tap points; the in-page click listener uses event.clientX/Y.
+        assertTrue(html.contains("installTapListener(16)"))
+        assertTrue(html.contains("document.addEventListener('click'"))
+        assertTrue(html.contains("handleTap(event.clientX, event.clientY, maxLength)"))
+        assertTrue(html.contains("document.elementFromPoint(x, y)"))
+        assertTrue(html.contains("window.hoshiSelection.selectText(x, y, maxLength)"))
+        assertFalse(html.contains("pointFromHostViewport"))
+    }
+
+    @Test
+    fun popupRectUsesNativeHostScaleAndVisualViewportOffsetForWebViewZoomAndPan() {
+        val html = build(page(emptyList()))
+
+        // Android WebView may not report visualViewport.scale reliably, so native WebView
+        // scale is pushed into the page and rects subtract the visual viewport pan offset
+        // before converting back into host coordinates for Compose popup placement.
+        assertTrue(html.contains("setHostScale: function(scale)"))
         assertTrue(html.contains("hostRectFromViewportRect"))
-        assertTrue(html.contains("x: rect.x * scale"))
+        assertTrue(html.contains("offsetLeft"))
+        assertTrue(html.contains("offsetTop"))
+        assertTrue(html.contains("x: (rect.x - offsetLeft) * scale"))
         assertTrue(html.contains("width: rect.width * scale"))
     }
 

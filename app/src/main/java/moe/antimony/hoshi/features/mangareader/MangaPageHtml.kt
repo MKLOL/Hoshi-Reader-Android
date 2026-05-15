@@ -44,6 +44,7 @@ import moe.antimony.hoshi.mokuro.MokuroTextBox
  */
 internal object MangaPageHtml {
     const val BASE_URL: String = "https://hoshi.local/manga/"
+    private const val MANGA_MAX_SELECTION_LENGTH = 16
 
     /**
      * Builds the full HTML document for [page].
@@ -141,6 +142,7 @@ internal object MangaPageHtml {
             })();
             $selectionScript
             $MANGA_TAP_HANDLER_SCRIPT
+            window.hoshiManga && window.hoshiManga.installTapListener($MANGA_MAX_SELECTION_LENGTH);
             </script>
             </body>
             </html>
@@ -372,27 +374,46 @@ internal object MangaPageHtml {
     private val MANGA_TAP_HANDLER_SCRIPT: String = """
         (function() {
           window.hoshiManga = {
-            viewportScale: function() {
-              var viewport = window.visualViewport;
-              var scale = viewport && typeof viewport.scale === 'number' ? viewport.scale : 1;
+            hostScaleValue: 1,
+            setHostScale: function(scale) {
+              if (typeof scale === 'number' && isFinite(scale) && scale > 0) {
+                this.hostScaleValue = scale;
+              }
+            },
+            hostScale: function() {
+              var scale = this.hostScaleValue;
               return isFinite(scale) && scale > 0 ? scale : 1;
             },
-            pointFromHostViewport: function(x, y) {
-              var scale = this.viewportScale();
-              return { x: x / scale, y: y / scale };
-            },
             hostRectFromViewportRect: function(rect) {
-              var scale = this.viewportScale();
+              var scale = this.hostScale();
+              var viewport = window.visualViewport;
+              var offsetLeft = viewport && typeof viewport.offsetLeft === 'number'
+                ? viewport.offsetLeft
+                : 0;
+              var offsetTop = viewport && typeof viewport.offsetTop === 'number'
+                ? viewport.offsetTop
+                : 0;
               return {
-                x: rect.x * scale,
-                y: rect.y * scale,
+                x: (rect.x - offsetLeft) * scale,
+                y: (rect.y - offsetTop) * scale,
                 width: rect.width * scale,
                 height: rect.height * scale
               };
             },
+            installTapListener: function(maxLength) {
+              if (this.tapListenerInstalled) return;
+              this.tapListenerInstalled = true;
+              document.addEventListener('click', function(event) {
+                if (!window.hoshiManga) return;
+                event.preventDefault();
+                var result = window.hoshiManga.handleTap(event.clientX, event.clientY, maxLength);
+                if ((result === null || typeof result === 'undefined') && window.HoshiMangaTap) {
+                  window.HoshiMangaTap.selectedNothing();
+                }
+              }, true);
+            },
             handleTap: function(x, y, maxLength) {
-              var point = this.pointFromHostViewport(x, y);
-              var el = document.elementFromPoint(point.x, point.y);
+              var el = document.elementFromPoint(x, y);
               var aiBtn = el && el.closest && el.closest('.ocr-ai-btn');
               if (aiBtn) {
                 var aiBox = aiBtn.closest('.ocr-box');
@@ -421,7 +442,7 @@ internal object MangaPageHtml {
                   return '__revealed__';
                 }
                 // Second tap on an already-revealed bubble: look the tapped word up.
-                return window.hoshiSelection.selectText(point.x, point.y, maxLength);
+                return window.hoshiSelection.selectText(x, y, maxLength);
               }
               var revealed = document.querySelectorAll('.ocr-box.revealed');
               for (var i = 0; i < revealed.length; i++) {

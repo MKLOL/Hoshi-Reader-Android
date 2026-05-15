@@ -5,6 +5,10 @@ The format follows a Keep a Changelog style, and release sections use Semantic V
 
 ## [Unreleased]
 
+### Fixed
+
+- Fix mokuro manga zoom follow-up: zoomed pages pan without turning pages, OCR bubble taps follow the visible zoomed/panned position, and floating reader controls remain visible on white page artwork.
+
 ## [v0.7.12] - 2026-05-15
 
 ### Fixed

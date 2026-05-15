@@ -39,7 +39,6 @@ This file is the short operational handoff for future agents.
 - Device-validate the warm reader root lookup popup shell, confirming repeated root lookups reuse the popup without breaking child popups, redirects, action-bar history, or popup dismiss behavior.
 - Device-validate popup-to-popup lookup selections, confirming child popup display syncs with Compose-drawn parent selection marks, E-ink mode uses underlines, and scrolling a parent popup dismisses child popups.
 - Device-validate reader lookup popup open and dismiss on a slow E-ink target, confirming popup content does not flash a blank white shell, the Compose-drawn selected-word highlight appears and disappears with the popup, and highlighted text stays readable.
-- Device-validate mokuro page turns, pinch zoom, floating chrome controls, and bubble action buttons: two-finger gestures should not turn pages, OCR boxes should stay aligned while zoomed, the transparent chrome should not block page input outside its buttons, ChatGPT should sit to the right of copy, and Behavior -> Disable Page-Turn Animation should still swap instantly without forcing E-ink black-and-white mode.
 - Finish remaining iOS `PopupWebView` Anki mining behavior beyond selected popup text export.
 - Validate paginated and continuous reader modes together for cover image pages, multi-image illustration pages, long text paging, forward/backward progress monotonicity, per-page progress updates and restore landing inside large text nodes, forward and backward chapter boundaries, reverse cross-chapter landing, lookup popup open, and bookmark restore.
 - Re-check forward chapter-boundary landings at chapter start, visual-state-gated chapter jumps, and stable progress counters during rapid boundary flips after reader pagination changes.
@@ -102,6 +101,10 @@ page images) that reuses the bookshelf, dictionary lookup, and Anki mining.
   chat history are reached from the manga reader's overflow (⋯) menu. Kept deliberately
   self-contained in `features/ai/` (own settings store, own `ai_chat_log.json` per book,
   no shared-file edits) so it stays easy to merge alongside upstream.
+- Zoom/chrome interactions, emulator-verified: one-finger swipes turn pages only when the
+  page is not zoomed or pannable, two-finger pinch zooms and one-finger panning do not turn
+  pages, zoomed OCR bubble taps hit the visible bubble position, and the floating controls
+  / page chip have subtle independent backgrounds without full-width input bars.
 - Not yet done: reader appearance/settings sheet for manga, two-page spreads, manga
   reading statistics. Manual validation should cover import of both source layouts and RTL
   paging boundaries.

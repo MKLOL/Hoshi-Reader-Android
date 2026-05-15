@@ -1,6 +1,7 @@
 package moe.antimony.hoshi.features.mangareader
 
 import android.annotation.SuppressLint
+import android.content.Context
 import android.graphics.Color as AndroidColor
 import android.view.MotionEvent
 import android.view.View
@@ -18,17 +19,14 @@ import moe.antimony.hoshi.features.reader.ReaderNavigationDirection
 import moe.antimony.hoshi.features.reader.ReaderSelectionBridge
 import moe.antimony.hoshi.features.reader.ReaderSelectionCommand
 import moe.antimony.hoshi.features.reader.ReaderSelectionData
-import moe.antimony.hoshi.features.reader.ReaderSelectionResult
 import moe.antimony.hoshi.features.reader.ReaderSelectionScripts
 import moe.antimony.hoshi.features.reader.ReaderSwipeGestureTracker
-import moe.antimony.hoshi.features.reader.androidPixelsToCssPixels
 import moe.antimony.hoshi.mokuro.MokuroBook
 import moe.antimony.hoshi.webview.applyHoshiWebViewSecurityDefaults
 import java.io.File
 
-private const val MANGA_MAX_SELECTION_LENGTH = 16
 private const val MANGA_SWIPE_MIN_DISTANCE = 72f
-private const val MANGA_NAVIGATION_MAX_SCALE = 1.01f
+private const val MANGA_NAVIGATION_MAX_ZOOM = 1.01f
 
 /**
  * The WebView that renders one mokuro manga page at a time.
@@ -103,7 +101,7 @@ internal fun MangaReaderWebView(
     AndroidView(
         modifier = modifier,
         factory = { context ->
-            WebView(context).apply {
+            MangaWebView(context).apply {
                 applyHoshiWebViewSecurityDefaults()
                 isVerticalScrollBarEnabled = false
                 isHorizontalScrollBarEnabled = false
@@ -146,10 +144,14 @@ internal fun MangaReaderWebView(
                     MangaAiBridge { bubbleText -> currentOnAskAi.value(bubbleText) },
                     "HoshiMangaAi",
                 )
+                addJavascriptInterface(
+                    MangaTapBridge { currentOnSelectionCleared.value() },
+                    "HoshiMangaTap",
+                )
                 webViewClient = MangaWebViewClient(resourceBridge) { readyPageIndex ->
                     currentOnPageReady.value(readyPageIndex)
                 }
-                attachMangaTouchListener(currentOnNavigate, currentOnSelectionCleared)
+                attachMangaTouchListener(currentOnNavigate)
                 onWebViewReady(this)
             }
         },
@@ -176,9 +178,28 @@ internal fun MangaReaderWebView(
                     "utf-8",
                     null,
                 )
+                webView.post { webView.syncMangaHostScale() }
             }
         },
     )
+}
+
+private class MangaWebView(context: Context) : WebView(context) {
+    private var baselineScale: Float? = null
+
+    fun adoptMangaScaleBaseline(scale: Float) {
+        if (baselineScale == null && scale.isFinite() && scale > 0f) {
+            baselineScale = scale
+        }
+    }
+
+    fun mangaZoomScale(): Float {
+        val current = rawMangaScale()
+        val baseline = baselineScale?.takeIf { it.isFinite() && it > 0f }
+            ?: current.takeIf { it.isFinite() && it > 0f }?.also { baselineScale = it }
+            ?: 1f
+        return current / baseline
+    }
 }
 
 private data class MangaPageLoadToken(
@@ -189,7 +210,6 @@ private data class MangaPageLoadToken(
 @SuppressLint("ClickableViewAccessibility")
 private fun WebView.attachMangaTouchListener(
     onNavigate: androidx.compose.runtime.State<(ReaderNavigationDirection) -> Unit>,
-    onSelectionCleared: androidx.compose.runtime.State<() -> Unit>,
 ) {
     val webView = this
     setOnTouchListener(
@@ -224,18 +244,13 @@ private fun WebView.attachMangaTouchListener(
                     ReaderSwipeGestureTracker.Result.RightSwipe -> {
                         dispatchSwipe(MangaSwipeDirection.Right)
                     }
-                    is ReaderSwipeGestureTracker.Result.Tap -> {
-                        // A tap never turns the page — it reveals/looks up/copies OCR text,
-                        // or hides revealed bubbles (see selectAt). Page turning is the
-                        // chrome buttons, swipes and hardware page/volume keys.
-                        webView.selectAt(result.x, result.y) { onSelectionCleared.value() }
-                    }
+                    is ReaderSwipeGestureTracker.Result.Tap -> Unit
                     ReaderSwipeGestureTracker.Result.None -> Unit
                 }
             }
 
             private fun dispatchSwipe(direction: MangaSwipeDirection) {
-                if (!shouldDispatchMangaSwipeAtScale(webView.mangaPageScale())) {
+                if (!webView.shouldDispatchMangaSwipe()) {
                     tracker.onCancel()
                     return
                 }
@@ -246,10 +261,37 @@ private fun WebView.attachMangaTouchListener(
 }
 
 @Suppress("DEPRECATION")
-private fun WebView.mangaPageScale(): Float = scale
+private fun WebView.rawMangaScale(): Float = scale
 
-internal fun shouldDispatchMangaSwipeAtScale(scale: Float): Boolean =
-    scale.isNaN() || scale <= MANGA_NAVIGATION_MAX_SCALE
+private fun WebView.mangaZoomScale(): Float =
+    (this as? MangaWebView)?.mangaZoomScale()
+        ?: 1f
+
+private fun WebView.shouldDispatchMangaSwipe(): Boolean =
+    shouldDispatchMangaSwipe(
+        canScrollLeft = canScrollHorizontally(-1),
+        canScrollRight = canScrollHorizontally(1),
+        zoomScale = mangaZoomScale(),
+    )
+
+internal fun shouldDispatchMangaSwipe(
+    canScrollLeft: Boolean,
+    canScrollRight: Boolean,
+    zoomScale: Float,
+): Boolean =
+    !canScrollLeft &&
+        !canScrollRight &&
+        (zoomScale.isNaN() || zoomScale <= MANGA_NAVIGATION_MAX_ZOOM)
+
+private fun WebView.syncMangaHostScale() {
+    val scale = mangaZoomScale()
+        .takeIf { it.isFinite() && it > 0f }
+        ?: 1f
+    evaluateJavascript(
+        "window.hoshiManga && window.hoshiManga.setHostScale($scale)",
+        null,
+    )
+}
 
 private fun MotionEvent.toMangaTouchAction(): MangaTouchAction =
     when (actionMasked) {
@@ -261,30 +303,6 @@ private fun MotionEvent.toMangaTouchAction(): MangaTouchAction =
         MotionEvent.ACTION_CANCEL -> MangaTouchAction.Cancel
         else -> MangaTouchAction.Other
     }
-
-/**
- * Routes a tap at ([x], [y]) (Android pixels) through the in-page manga tap handler
- * (`window.hoshiManga.handleTap`): the first tap on a bubble reveals it, a second tap on a
- * revealed bubble looks the word up, a copy-button tap copies the bubble, and a tap on empty
- * artwork hides every revealed bubble.
- *
- * [onSelectedNothing] runs when the tap selects no word — empty artwork, or a revealed bubble
- * with no character under the finger — so the caller can clear the lookup popup. A first-tap
- * reveal and a copy/ChatGPT-button hit report neither a selection nor "nothing", so they
- * leave any open popup untouched.
- */
-private fun WebView.selectAt(x: Float, y: Float, onSelectedNothing: () -> Unit) {
-    val density = resources.displayMetrics.density
-    val cssX = androidPixelsToCssPixels(x, density)
-    val cssY = androidPixelsToCssPixels(y, density)
-    evaluateJavascript(
-        "window.hoshiManga && window.hoshiManga.handleTap($cssX, $cssY, $MANGA_MAX_SELECTION_LENGTH)",
-    ) { result ->
-        if (ReaderSelectionResult.fromWebViewResult(result).selectedNothing) {
-            onSelectedNothing()
-        }
-    }
-}
 
 /** Clears any active in-page text selection (mirrors the EPUB reader's clear command). */
 internal fun WebView.clearMangaSelection() {
@@ -313,6 +331,7 @@ private class MangaWebViewClient(
     override fun onPageFinished(view: WebView, url: String?) {
         super.onPageFinished(view, url)
         if (requestUrlHost(url) != MangaWebResourceBridge.HOST) return
+        view.syncMangaHostScale()
         val loadToken = view.tag as? MangaPageLoadToken ?: return
         val requestId = nextMangaPageReadyRequestId()
         view.postVisualStateCallback(
@@ -325,6 +344,12 @@ private class MangaWebViewClient(
                 }
             },
         )
+    }
+
+    override fun onScaleChanged(view: WebView, oldScale: Float, newScale: Float) {
+        super.onScaleChanged(view, oldScale, newScale)
+        (view as? MangaWebView)?.adoptMangaScaleBaseline(oldScale)
+        view.syncMangaHostScale()
     }
 
     override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {

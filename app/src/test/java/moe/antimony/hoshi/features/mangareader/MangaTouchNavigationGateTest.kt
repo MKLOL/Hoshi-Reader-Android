@@ -90,9 +90,41 @@ class MangaTouchNavigationGateTest {
     }
 
     @Test
-    fun zoomedPageSuppressesSwipeNavigation() {
-        assertTrue(shouldDispatchMangaSwipeAtScale(1f))
-        assertTrue(shouldDispatchMangaSwipeAtScale(1.01f))
-        assertFalse(shouldDispatchMangaSwipeAtScale(1.1f))
+    fun swipeNavigationOnlyDispatchesWhenPageIsNotZoomedOrPannable() {
+        assertTrue(
+            shouldDispatchMangaSwipe(
+                canScrollLeft = false,
+                canScrollRight = false,
+                zoomScale = 1f,
+            ),
+        )
+        assertTrue(
+            shouldDispatchMangaSwipe(
+                canScrollLeft = false,
+                canScrollRight = false,
+                zoomScale = 1.01f,
+            ),
+        )
+        assertFalse(
+            shouldDispatchMangaSwipe(
+                canScrollLeft = false,
+                canScrollRight = false,
+                zoomScale = 1.1f,
+            ),
+        )
+        assertFalse(
+            shouldDispatchMangaSwipe(
+                canScrollLeft = true,
+                canScrollRight = false,
+                zoomScale = 1f,
+            ),
+        )
+        assertFalse(
+            shouldDispatchMangaSwipe(
+                canScrollLeft = false,
+                canScrollRight = true,
+                zoomScale = 1f,
+            ),
+        )
     }
 }
