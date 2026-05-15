@@ -72,8 +72,10 @@ fun HttpSyncSettingsView(
         ) {
             Text(
                 text = "Sync your reading position and per-manga ChatGPT history to your own server " +
-                    "over HTTPS. Independent of the iOS-shared Google Drive sync; works for both " +
-                    "EPUB and mokuro manga. See docs/HTTP_SYNC.md for the protocol spec.",
+                    "over HTTPS, against a generic key/value blob API. Independent of the iOS-shared " +
+                    "Google Drive sync; works for both EPUB and mokuro manga. Page turns auto-push " +
+                    "every 5 turns and on leave; new ChatGPT replies push immediately. See " +
+                    "docs/HTTP_SYNC_KV.md for the protocol spec.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -135,7 +137,14 @@ fun HttpSyncSettingsView(
                     scope.launch {
                         status = runCatching { syncManager.syncOnce(loaded) }
                             .fold(
-                                onSuccess = { SyncStatus.Done(it) },
+                                onSuccess = { result ->
+                                    // Persist the inbound cursor so the next sync can use
+                                    // `?since=` to skip everything we've already seen.
+                                    result.newLastSyncedAt?.let { cursor ->
+                                        repository.update { it.copy(lastSyncedAt = cursor) }
+                                    }
+                                    SyncStatus.Done(result)
+                                },
                                 onFailure = {
                                     SyncStatus.Failed(it.message ?: "HTTP sync failed.")
                                 },
@@ -163,7 +172,9 @@ private fun EnabledRow(
                 Text("Enabled", style = MaterialTheme.typography.bodyLarge)
                 Text(
                     text = if (isConfigured) {
-                        "Reserved for future auto-sync hooks; the Sync now button below works regardless."
+                        "Page-turn and chat-entry auto-push run whenever this is configured, " +
+                            "independent of this toggle. The toggle is reserved for a future " +
+                            "explicit kill-switch; the Sync now button below always works."
                     } else {
                         "Fill in the base URL and bearer token first."
                     },

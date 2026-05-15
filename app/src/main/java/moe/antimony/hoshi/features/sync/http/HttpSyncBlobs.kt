@@ -1,0 +1,144 @@
+package moe.antimony.hoshi.features.sync.http
+
+import kotlinx.serialization.SerialName
+import kotlinx.serialization.Serializable
+import moe.antimony.hoshi.epub.ContentType
+import java.security.MessageDigest
+import java.time.Instant
+
+/**
+ * The Hoshi-specific JSON schemas that get serialized into the bytes we PUT to each KV key.
+ *
+ * The server is content-blind (see [HttpSyncKvTransport]); these shapes are an
+ * **Android-client-only** contract. If iOS ever adopts the same protocol, it has to agree
+ * with these field names; for now this is the source of truth.
+ *
+ * Key layout (also documented in `docs/HTTP_SYNC_KV.md`):
+ *
+ *   books/{syncId}/metadata          → [HttpSyncMetadataBlob]    JSON, overwrite
+ *   books/{syncId}/bookmark          → [HttpSyncBookmarkBlob]    JSON, overwrite per page-turn batch
+ *   books/{syncId}/chat/{ts}-{hash}  → [HttpSyncChatEntryBlob]   JSON, write-once
+ *   books/{syncId}/payload.zip       → bytes                    application/zip, follow-up scope
+ *   books/{syncId}/payload.manifest  → JSON                     follow-up scope
+ *
+ * The `{ts}-{hash}` suffix for chat keys is built by [chatEntryKeySuffix] — RFC 3339
+ * timestamp + a short content hash, so two devices that produced the same entry collide
+ * onto the same key (idempotent) and different entries never collide.
+ */
+
+// ----- Per-key wire shapes ---------------------------------------------------------------
+
+@Serializable
+data class HttpSyncMetadataBlob(
+    val title: String,
+    val contentType: HttpSyncContentType,
+    /** RFC 3339 UTC — when the book was first imported on this device. Optional. */
+    val importedAt: String? = null,
+    /** RFC 3339 UTC — set when the user deletes the book; other devices honour it. */
+    val deletedAt: String? = null,
+)
+
+@Serializable
+data class HttpSyncBookmarkBlob(
+    val chapterIndex: Int,
+    val progress: Double,
+    val characterCount: Int,
+    /** RFC 3339 UTC — used by the client to last-write-wins when pulling from the server. */
+    val lastModified: String,
+)
+
+@Serializable
+data class HttpSyncChatEntryBlob(
+    val bubbleText: String,
+    val prompt: String,
+    val model: String,
+    val response: String,
+    /** Apple-reference seconds, the same epoch used by the on-disk `ai_chat_log.json`. */
+    val timestampSeconds: Double,
+)
+
+@Serializable
+enum class HttpSyncContentType {
+    @SerialName("epub") Epub,
+    @SerialName("mokuro") Mokuro;
+
+    fun toLocal(): ContentType = when (this) {
+        Epub -> ContentType.Epub
+        Mokuro -> ContentType.Mokuro
+    }
+
+    companion object {
+        fun fromLocal(content: ContentType): HttpSyncContentType = when (content) {
+            ContentType.Epub -> Epub
+            ContentType.Mokuro -> Mokuro
+        }
+    }
+}
+
+// ----- Key builders ----------------------------------------------------------------------
+
+/**
+ * Computes a stable, server-safe sync id from a book's title. Lowercase, replace non-ASCII-
+ * alphanumerics with `_`, collapse runs, trim — same rule as the legacy v1 protocol so any
+ * book already synced under v1 lands on the same id under v2 (the keys differ; the syncId
+ * doesn't).
+ *
+ * Returns `null` for a blank title; the manager skips books that can't compute a syncId.
+ */
+internal fun deriveSyncId(title: String?): String? {
+    val raw = title?.trim().orEmpty()
+    if (raw.isEmpty()) return null
+    val sanitized = buildString {
+        for (ch in raw.lowercase()) {
+            if (ch in 'a'..'z' || ch in '0'..'9') append(ch) else append('_')
+        }
+    }
+        .replace(Regex("_+"), "_")
+        .trim('_')
+    return sanitized.ifEmpty { null }
+}
+
+internal fun bookmarkKey(syncId: String): String = "books/$syncId/bookmark"
+internal fun metadataKey(syncId: String): String = "books/$syncId/metadata"
+internal fun chatPrefixForBook(syncId: String): String = "books/$syncId/chat/"
+internal fun chatKey(syncId: String, suffix: String): String = "books/$syncId/chat/$suffix"
+internal const val ALL_BOOKS_PREFIX: String = "books/"
+
+/**
+ * Builds the suffix of a chat entry's KV key: `{rfc3339_utc}-{8-hex-content-hash}`.
+ *
+ * The content hash is the first 8 hex chars of sha256("bubbleText|response"). Two devices
+ * that produce the same entry (same bubble, same response, same wallclock second) generate
+ * the same suffix and converge on one server-side blob; truly different entries never
+ * collide. The timestamp prefix makes the lexicographic key order roughly chronological,
+ * which matters because the server-side `?since=` filter compares `lastModified` and the
+ * fallback list-paginate compares keys.
+ */
+internal fun chatEntryKeySuffix(timestampAppleSeconds: Double, bubbleText: String, response: String): String {
+    val rfc3339 = appleSecondsToRfc3339(timestampAppleSeconds).replace(':', '-')
+    val digest = MessageDigest.getInstance("SHA-256")
+        .digest("$bubbleText|$response".toByteArray(Charsets.UTF_8))
+    val short = digest.copyOfRange(0, 4).joinToString("") { "%02x".format(it) }
+    return "$rfc3339-$short"
+}
+
+// ----- Timestamp helpers (Apple-reference seconds ⇄ RFC 3339) -----------------------------
+
+/** Apple's reference date in Unix epoch seconds (2001-01-01T00:00:00Z). */
+private const val APPLE_REFERENCE_EPOCH: Long = 978_307_200L
+
+internal fun appleSecondsToRfc3339(appleSeconds: Double): String {
+    val unixSeconds = appleSeconds + APPLE_REFERENCE_EPOCH
+    val instant = Instant.ofEpochMilli((unixSeconds * 1000.0).toLong())
+    return instant.toString()
+}
+
+internal fun rfc3339ToAppleSeconds(rfc3339: String): Double {
+    val instant = runCatching { Instant.parse(rfc3339) }.getOrNull() ?: return 0.0
+    val unixMillis = instant.toEpochMilli()
+    return unixMillis / 1000.0 - APPLE_REFERENCE_EPOCH
+}
+
+/** Lexicographic comparison is chronological for `Z`-suffixed UTC RFC 3339. */
+internal fun compareRfc3339(a: String?, b: String?): Int =
+    (a ?: "").compareTo(b ?: "")

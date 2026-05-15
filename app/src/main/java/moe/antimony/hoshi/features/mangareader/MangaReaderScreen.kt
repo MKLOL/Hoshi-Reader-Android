@@ -79,6 +79,7 @@ import moe.antimony.hoshi.features.reader.ReaderSettings
 import moe.antimony.hoshi.features.reader.readerHardwareKeyActionForKeyEvent
 import moe.antimony.hoshi.features.reader.ReaderHardwareKeyAction
 import moe.antimony.hoshi.features.reader.usesDarkInterface
+import moe.antimony.hoshi.features.sync.http.rememberHttpSyncReaderHooks
 import moe.antimony.hoshi.mokuro.MokuroBook
 import java.io.File
 import kotlin.math.roundToInt
@@ -152,6 +153,10 @@ internal fun MangaReaderScreen(
     // The page index awaiting the debounced bookmark write, or null when nothing is pending.
     val pendingBookmarkPage = remember(book) { mutableStateOf<Int?>(null) }
     val currentOnBookmarkSaved = rememberUpdatedState(onBookmarkSaved)
+    // FORK ADDITION: v2 KV HTTP sync auto-push hooks. See features/sync/http/HttpSyncReaderHooks.kt
+    // for the every-5 / on-leave / on-chat counter logic — kept out of this file so upstream
+    // merges don't have to reason about it.
+    val httpSyncHooks = rememberHttpSyncReaderHooks(bookRoot, book.title, persistenceScope)
 
     fun scheduleBookmarkSave(index: Int) {
         pendingBookmarkPage.value = index
@@ -164,6 +169,7 @@ internal fun MangaReaderScreen(
             )
             pendingBookmarkPage.value = null
             currentOnBookmarkSaved.value()
+            httpSyncHooks.onPageTurnPersisted()
         }
     }
 
@@ -256,11 +262,16 @@ internal fun MangaReaderScreen(
                     // Persist into this manga's history. A disk failure here must not crash
                     // the reader — the reply is already shown — so keep the existing history
                     // on failure, while still letting cancellation propagate normally.
-                    aiHistory = runCatching { aiHistoryStore.append(bookRoot, entry).entries }
+                    val appended = runCatching { aiHistoryStore.append(bookRoot, entry).entries }
                         .getOrElse { error ->
                             if (error is CancellationException) throw error
-                            aiHistory
+                            null
                         }
+                    if (appended != null) {
+                        aiHistory = appended
+                        // FORK ADDITION: push this one chat entry to the v2 KV sync server.
+                        httpSyncHooks.onChatEntryPersisted(entry)
+                    }
                 },
                 onFailure = { error ->
                     aiChatState = AiChatUiState.Failed(
@@ -332,7 +343,14 @@ internal fun MangaReaderScreen(
                         bookRoot,
                         mangaBookmark(unsaved, repository.currentAppleReferenceDateSeconds()),
                     )
+                    // FORK ADDITION: force-push the bookmark to the v2 KV sync server after
+                    // the local save, so leaving the reader doesn't lose accumulated turns.
+                    httpSyncHooks.onLeave()
                 }
+            } else {
+                // No pending debounced save, but we may still have unpushed turns from
+                // earlier saves that fired before the threshold was reached.
+                httpSyncHooks.onLeave()
             }
         }
     }

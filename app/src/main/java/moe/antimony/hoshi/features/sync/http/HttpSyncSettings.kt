@@ -11,20 +11,28 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 
 /**
- * Settings for the Android-only HTTP sync (see [HttpSyncManager] and `docs/HTTP_SYNC.md`):
- * the server's base URL, the bearer token, and an enabled toggle.
+ * Settings + runtime cursor for the v2 KV HTTP sync (see [HttpSyncManager] and
+ * `docs/HTTP_SYNC_KV.md`):
  *
- * Lives alongside the existing iOS-shared Google Drive sync ([SyncSettingsRepository]).
- * The two backends are independent — having one enabled does not affect the other — and
- * neither is configured by default.
+ *  - [baseUrl] and [bearerToken] — what the user pastes once.
+ *  - [enabled] — gates future auto-sync hooks. The manual Sync now button always works.
+ *  - [lastSyncedAt] — RFC 3339 cursor for the inbound `list?since=` filter. Managed by
+ *    [HttpSyncManager], not the UI; lives in the same DataStore so it survives uninstalls
+ *    / clears the way the rest of the settings do.
  */
 data class HttpSyncSettings(
-    /** Base URL of the sync server, e.g. `https://sync.example.com/hoshi`. No trailing slash. */
+    /** Base URL of the sync server, e.g. `https://dragos.games/api/book_sync`. No trailing slash. */
     val baseUrl: String = DEFAULT_BASE_URL,
     /** Bearer token sent in the `Authorization` header on every request. */
     val bearerToken: String = "",
     /** Whether HTTP sync is wired up. The Sync Now button works regardless; this gates auto-sync hooks. */
     val enabled: Boolean = false,
+    /**
+     * Highest `lastModified` (RFC 3339 UTC) the client has observed from the server. The
+     * inbound `GET /v1/kv?since=...` filter uses this so we never re-fetch unchanged keys.
+     * `null` until the first successful [HttpSyncManager.syncOnce].
+     */
+    val lastSyncedAt: String? = null,
 ) {
     val isConfigured: Boolean
         get() = baseUrl.isNotBlank() && bearerToken.isNotBlank()
@@ -55,6 +63,12 @@ class HttpSyncSettingsRepository(
             preferences[KEY_BASE_URL] = next.baseUrl.trim().trimEnd('/')
             preferences[KEY_TOKEN] = next.bearerToken.trim()
             preferences[KEY_ENABLED] = next.enabled
+            val cursor = next.lastSyncedAt?.trim()
+            if (cursor.isNullOrEmpty()) {
+                preferences.remove(KEY_LAST_SYNCED_AT)
+            } else {
+                preferences[KEY_LAST_SYNCED_AT] = cursor
+            }
         }
     }
 
@@ -65,11 +79,13 @@ class HttpSyncSettingsRepository(
             baseUrl = this[KEY_BASE_URL] ?: HttpSyncSettings.DEFAULT_BASE_URL,
             bearerToken = this[KEY_TOKEN].orEmpty(),
             enabled = this[KEY_ENABLED] ?: false,
+            lastSyncedAt = this[KEY_LAST_SYNCED_AT],
         )
 
     private companion object {
         val KEY_BASE_URL = stringPreferencesKey("baseUrl")
         val KEY_TOKEN = stringPreferencesKey("bearerToken")
         val KEY_ENABLED = booleanPreferencesKey("enabled")
+        val KEY_LAST_SYNCED_AT = stringPreferencesKey("lastSyncedAt")
     }
 }

@@ -1,4 +1,15 @@
-# Hoshi HTTP Sync (Android-only)
+# Hoshi HTTP Sync v1 (Android-only) — **superseded**
+
+> ⚠️ **This v1 protocol is no longer used by the Android client** (as of v0.7.5).
+> The current protocol is the generic-KV design documented in
+> [`HTTP_SYNC_KV.md`](HTTP_SYNC_KV.md): one PUT per book bookmark instead of
+> per-book whole-record blobs, one write-once PUT per chat entry instead of
+> re-uploading the full chat log, and book payloads as `payload.zip`. The v1
+> server endpoints can stay up indefinitely as harmless dead routes; nothing
+> reads or writes them anymore.
+>
+> This doc is kept for historical reference. New work should track
+> `HTTP_SYNC_KV.md`.
 
 A small REST-over-HTTPS sync that lives alongside the existing Google Drive sync.
 Unlike Drive sync — which mirrors iOS's `progress_*.json` schema and excludes
