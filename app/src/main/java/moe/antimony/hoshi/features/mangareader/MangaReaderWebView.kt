@@ -60,6 +60,7 @@ internal fun MangaReaderWebView(
     onTextSelected: (ReaderSelectionData) -> Int?,
     onSelectionCleared: () -> Unit,
     onAskAi: (String) -> Unit,
+    onPageReady: (Int) -> Unit,
     onWebViewReady: (WebView) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -67,6 +68,7 @@ internal fun MangaReaderWebView(
     val currentOnTextSelected = rememberUpdatedState(onTextSelected)
     val currentOnSelectionCleared = rememberUpdatedState(onSelectionCleared)
     val currentOnAskAi = rememberUpdatedState(onAskAi)
+    val currentOnPageReady = rememberUpdatedState(onPageReady)
 
     val resourceBridge = remember(book, bookRoot) { MangaWebResourceBridge(bookRoot, book) }
 
@@ -124,7 +126,9 @@ internal fun MangaReaderWebView(
                     MangaAiBridge { bubbleText -> currentOnAskAi.value(bubbleText) },
                     "HoshiMangaAi",
                 )
-                webViewClient = MangaWebViewClient(resourceBridge)
+                webViewClient = MangaWebViewClient(resourceBridge) { readyPageIndex ->
+                    currentOnPageReady.value(readyPageIndex)
+                }
                 attachMangaTouchListener(currentOnNavigate, currentOnSelectionCleared)
                 onWebViewReady(this)
             }
@@ -139,9 +143,12 @@ internal fun MangaReaderWebView(
             // The WebViewClient and touch listener are attached once in factory(); both
             // read rememberUpdatedState values, so they stay current without being
             // re-allocated on every recomposition. update() only swaps the page content.
-            val loadKey = "${page.index}#${html.length}#${html.hashCode()}"
-            if (webView.tag != loadKey) {
-                webView.tag = loadKey
+            val loadToken = MangaPageLoadToken(
+                pageIndex = page.index,
+                htmlHash = html.hashCode(),
+            )
+            if (webView.tag != loadToken) {
+                webView.tag = loadToken
                 webView.loadDataWithBaseURL(
                     MangaPageHtml.BASE_URL,
                     html,
@@ -153,6 +160,11 @@ internal fun MangaReaderWebView(
         },
     )
 }
+
+private data class MangaPageLoadToken(
+    val pageIndex: Int,
+    val htmlHash: Int,
+)
 
 @SuppressLint("ClickableViewAccessibility")
 private fun WebView.attachMangaTouchListener(
@@ -211,6 +223,7 @@ internal fun WebView.clearMangaSelection() {
 
 private class MangaWebViewClient(
     private val resourceBridge: MangaWebResourceBridge,
+    private val onPageReady: (Int) -> Unit,
 ) : WebViewClient() {
     override fun shouldInterceptRequest(
         view: WebView,
@@ -227,8 +240,35 @@ private class MangaWebViewClient(
         return request.url?.host != MangaWebResourceBridge.HOST
     }
 
+    override fun onPageFinished(view: WebView, url: String?) {
+        super.onPageFinished(view, url)
+        if (requestUrlHost(url) != MangaWebResourceBridge.HOST) return
+        val loadToken = view.tag as? MangaPageLoadToken ?: return
+        val requestId = nextMangaPageReadyRequestId()
+        view.postVisualStateCallback(
+            requestId,
+            object : WebView.VisualStateCallback() {
+                override fun onComplete(requestId: Long) {
+                    if (view.tag == loadToken) {
+                        onPageReady(loadToken.pageIndex)
+                    }
+                }
+            },
+        )
+    }
+
     override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
         view.destroy()
         return true
     }
+
+    private fun requestUrlHost(url: String?): String? =
+        url?.let(android.net.Uri::parse)?.host
+}
+
+private var mangaPageReadyRequestId = 0L
+
+private fun nextMangaPageReadyRequestId(): Long {
+    mangaPageReadyRequestId += 1L
+    return mangaPageReadyRequestId
 }

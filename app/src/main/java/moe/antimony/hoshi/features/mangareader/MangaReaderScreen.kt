@@ -124,6 +124,9 @@ internal fun MangaReaderScreen(
     // match, the offset modifiers force progress to 0 so the snapshot covers the reloading
     // WebView from the very first frame, instead of briefly flashing it at full size.
     var animatingTransition by remember(book) { mutableStateOf<MangaPageTransition?>(null) }
+    // The incoming page must finish its first draw before the slide starts; otherwise the
+    // artwork can visibly resize while the page script settles its aspect-correct frame.
+    var readyTransition by remember(book) { mutableStateOf<MangaPageTransition?>(null) }
     // Drives the slide 0f (just started) -> 1f (settled); read in the offset modifiers below.
     val transitionProgress = remember { Animatable(0f) }
 
@@ -186,7 +189,9 @@ internal fun MangaReaderScreen(
         } else {
             webView?.let(::captureWebViewBitmap)
         }
-        pageTransition = snapshot?.let { MangaPageTransition(it.asImageBitmap(), direction) }
+        val transition = snapshot?.let { MangaPageTransition(it.asImageBitmap(), direction) }
+        pageTransition = transition
+        readyTransition = null
         pageIndex = clamped
         scheduleBookmarkSave(clamped)
     }
@@ -344,13 +349,15 @@ internal fun MangaReaderScreen(
     // Drive the page-turn slide: snap to the start, adopt the transition (which lets the
     // offset modifiers start reading the live progress), animate to settled, then drop the
     // snapshot. Re-keys on `pageTransition`, so a fast second turn restarts the slide cleanly.
-    LaunchedEffect(pageTransition) {
+    LaunchedEffect(pageTransition, readyTransition) {
         val transition = pageTransition ?: return@LaunchedEffect
+        if (transition !== readyTransition) return@LaunchedEffect
         transitionProgress.snapTo(0f)
         animatingTransition = transition
         transitionProgress.animateTo(1f, tween(durationMillis = MANGA_PAGE_TURN_DURATION_MS))
         pageTransition = null
         animatingTransition = null
+        readyTransition = null
     }
 
     BackHandler {
@@ -391,6 +398,11 @@ internal fun MangaReaderScreen(
             onTextSelected = handleTextSelected,
             onSelectionCleared = { lookupPopups = emptyList() },
             onAskAi = { bubbleText -> askAi(bubbleText) },
+            onPageReady = { readyPageIndex ->
+                if (pageTransition != null && readyPageIndex == pageIndex) {
+                    readyTransition = pageTransition
+                }
+            },
             onWebViewReady = { webView = it },
             modifier = Modifier
                 .fillMaxSize()
