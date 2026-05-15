@@ -20,7 +20,7 @@ import kotlinx.coroutines.flow.map
  */
 data class HttpSyncSettings(
     /** Base URL of the sync server, e.g. `https://sync.example.com/hoshi`. No trailing slash. */
-    val baseUrl: String = "",
+    val baseUrl: String = DEFAULT_BASE_URL,
     /** Bearer token sent in the `Authorization` header on every request. */
     val bearerToken: String = "",
     /** Whether HTTP sync is wired up. The Sync Now button works regardless; this gates auto-sync hooks. */
@@ -28,6 +28,15 @@ data class HttpSyncSettings(
 ) {
     val isConfigured: Boolean
         get() = baseUrl.isNotBlank() && bearerToken.isNotBlank()
+
+    companion object {
+        /**
+         * Default base URL the screen pre-fills with. Points at the fork owner's own server;
+         * users can still type anything else into the field and that value gets persisted to
+         * the DataStore.
+         */
+        const val DEFAULT_BASE_URL: String = "https://dragos.games/api/book_sync"
+    }
 }
 
 private val Context.httpSyncSettingsDataStore by preferencesDataStore(name = "http-sync-settings")
@@ -51,7 +60,9 @@ class HttpSyncSettingsRepository(
 
     private fun Preferences.toHttpSyncSettings(): HttpSyncSettings =
         HttpSyncSettings(
-            baseUrl = this[KEY_BASE_URL].orEmpty(),
+            // Fall back to the default URL only when nothing was ever written — once the
+            // user has typed (even cleared the field to ""), that explicit value wins.
+            baseUrl = this[KEY_BASE_URL] ?: HttpSyncSettings.DEFAULT_BASE_URL,
             bearerToken = this[KEY_TOKEN].orEmpty(),
             enabled = this[KEY_ENABLED] ?: false,
         )

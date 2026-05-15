@@ -80,9 +80,14 @@ fun HttpSyncSettingsView(
                     scope.launch { repository.update { it.copy(baseUrl = value) } }
                 },
                 label = { Text("Base URL") },
-                placeholder = { Text("https://sync.example.com/hoshi") },
+                placeholder = { Text(HttpSyncSettings.DEFAULT_BASE_URL) },
                 singleLine = true,
-                supportingText = { Text("No trailing slash. The sync paths /v1/books… are appended.") },
+                supportingText = {
+                    Text(
+                        "Defaults to ${HttpSyncSettings.DEFAULT_BASE_URL}. No trailing slash; " +
+                            "the sync paths /v1/books… are appended.",
+                    )
+                },
                 modifier = Modifier.fillMaxWidth(),
             )
             OutlinedTextField(

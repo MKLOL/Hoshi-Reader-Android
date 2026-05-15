@@ -13,11 +13,11 @@ a `payload-files` extension later without breaking v1 clients.
 
 Reader → ⚙ Settings → Advanced → **HTTP Sync**:
 
-| Field | Example |
+| Field | Default |
 |---|---|
-| Base URL | `https://sync.example.com/hoshi` |
-| Bearer token | `<long random string>` |
-| Enabled | toggle |
+| Base URL | `https://dragos.games/api/book_sync` (this fork's server; editable) |
+| Bearer token | _empty — paste your token_ |
+| Enabled | off |
 
 Plus a manual **Sync now** button. Auto-sync on bookmark save is planned for v2.
 
