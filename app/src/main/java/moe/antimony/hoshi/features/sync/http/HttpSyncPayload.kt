@@ -153,7 +153,22 @@ class HttpSyncPayloadCodec(
     }
 
     private fun writeCachedSha(cacheFile: File, sha: String) {
-        runCatching { cacheFile.writeText(sha) }
+        runCatching {
+            cacheFile.writeText(sha)
+            // Defend against filesystems with coarse mtime resolution (FAT32 / sdcard:
+            // 2-second granularity). If a content file's mtime ends up identical to
+            // the cache's, our strict `>` check would treat the cache as fresh forever.
+            // Bump the cache file's mtime to one second past the latest content file we
+            // care about so the next staleness check has a meaningful baseline.
+            val parent = cacheFile.parentFile
+            if (parent != null && parent.isDirectory) {
+                val maxContentMtime = parent.walkTopDown()
+                    .filter { it.isFile && it.name !in PAYLOAD_EXCLUDED_FILES }
+                    .maxOfOrNull { it.lastModified() }
+                    ?: 0L
+                cacheFile.setLastModified(maxContentMtime + 1_000L)
+            }
+        }
         // Failure here just means subsequent syncs will recompute. Not fatal.
     }
 

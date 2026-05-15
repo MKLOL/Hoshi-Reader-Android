@@ -71,14 +71,37 @@ class AiChatSettingsRepository(
     /**
      * Sync-side application of a remote value. Writes [model] / [promptText] / [lastEditedAt]
      * exactly as supplied; does NOT touch [AiChatSettings.apiKey], which stays per-device.
+     *
+     * **Returns** `true` if the write was performed, `false` if the local store already had
+     * a [lastEditedAt] strictly newer than [remoteLastEditedAt] at write time. This is the
+     * CAS that closes the race between a sync-side apply and a user-driven edit happening
+     * in the same window: the comparison and write happen atomically inside the DataStore
+     * transaction, so a concurrent `update { ... }` either lands before this read (and
+     * loses the LWW comparison) or after this write (and stamps a fresh `lastEditedAt`
+     * that the next sync will push back up).
      */
-    suspend fun applyFromSync(model: String, promptText: String, lastEditedAt: String) {
+    suspend fun applyFromSync(model: String, promptText: String, remoteLastEditedAt: String): Boolean {
+        var applied = false
         dataStore.edit { preferences ->
-            preferences[KEY_PROMPT] = promptText
-            preferences[KEY_MODEL] = model
-            preferences[KEY_LAST_EDITED_AT] = lastEditedAt
+            val currentStamp = preferences[KEY_LAST_EDITED_AT]
+            val remoteIsNewer = currentStamp == null ||
+                compareRfc3339String(remoteLastEditedAt, currentStamp) > 0
+            if (remoteIsNewer) {
+                preferences[KEY_PROMPT] = promptText
+                preferences[KEY_MODEL] = model
+                preferences[KEY_LAST_EDITED_AT] = remoteLastEditedAt
+                applied = true
+            }
         }
+        return applied
     }
+
+    /**
+     * Lexicographic comparison of RFC 3339 UTC strings — chronological order for Z-suffixed
+     * timestamps. Lives here (instead of in [moe.antimony.hoshi.features.sync.http]) so the
+     * settings module doesn't need a sync dependency for an atomic LWW decision.
+     */
+    private fun compareRfc3339String(a: String, b: String): Int = a.compareTo(b)
 
     private fun writeAll(preferences: androidx.datastore.preferences.core.MutablePreferences, settings: AiChatSettings) {
         preferences[KEY_API_KEY] = settings.apiKey

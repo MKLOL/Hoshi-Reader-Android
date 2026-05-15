@@ -154,10 +154,52 @@ class HttpSyncAppSettingsTest {
     fun applyFromSyncDoesNotBumpLastEditedAt() = runBlocking {
         // Direct test of the repository's split write paths.
         val repo = newAiSettingsRepo()
-        repo.applyFromSync(model = "from-sync", promptText = "sync prompt", lastEditedAt = "2030-01-01T00:00:00Z")
+        val applied = repo.applyFromSync(model = "from-sync", promptText = "sync prompt", remoteLastEditedAt = "2030-01-01T00:00:00Z")
+        assertTrue("fresh device should accept the remote write", applied)
         val settings = repo.settings.first()
         assertEquals("2030-01-01T00:00:00Z", settings.lastEditedAt)
         assertEquals("from-sync", settings.model)
+    }
+
+    @Test
+    fun applyFromSyncIsCompareAndSwap_RejectsStaleRemoteWrite() = runBlocking {
+        // The race we're guarding against: reconciler reads remote (older), user edits
+        // locally (newer), then reconciler's applyFromSync tries to clobber the fresh edit.
+        // CAS must reject the write.
+        val repo = newAiSettingsRepo()
+        // User edit lands first.
+        repo.update { it.copy(model = "user-fresh", promptText = "user prompt") }
+        val userStamp = repo.settings.first().lastEditedAt!!
+
+        // Reconciler tries to apply an older remote value.
+        val applied = repo.applyFromSync(
+            model = "remote-stale",
+            promptText = "remote prompt",
+            remoteLastEditedAt = "2000-01-01T00:00:00Z", // older than user's "now"
+        )
+        assertFalse("CAS must reject the stale write", applied)
+
+        // User's edit survived.
+        val final = repo.settings.first()
+        assertEquals("user-fresh", final.model)
+        assertEquals(userStamp, final.lastEditedAt)
+    }
+
+    @Test
+    fun applyFromSyncAppliesWhenRemoteIsStrictlyNewer() = runBlocking {
+        val repo = newAiSettingsRepo()
+        repo.update { it.copy(model = "old", promptText = "old prompt") }
+
+        // Remote is much newer.
+        val applied = repo.applyFromSync(
+            model = "new",
+            promptText = "new prompt",
+            remoteLastEditedAt = "2099-01-01T00:00:00Z",
+        )
+        assertTrue("newer remote should win the CAS", applied)
+        val final = repo.settings.first()
+        assertEquals("new", final.model)
+        assertEquals("2099-01-01T00:00:00Z", final.lastEditedAt)
     }
 
     @Test

@@ -82,10 +82,22 @@ internal class HoshiAppContainer(context: Context) {
     )
     val httpSyncSettingsRepository: HttpSyncSettingsRepository = appContext.httpSyncSettingsRepository()
     val aiChatSettingsRepository: AiChatSettingsRepository = appContext.aiChatSettingsRepository()
-    val httpSyncPusher: HttpSyncPusher = HttpSyncPusher(bookRepository = bookRepository)
+    // Shared between the reader's auto-push and the manual reconciler so concurrent
+    // bookmark writes never race on the same book. See HttpSyncBookLocks.
+    val httpSyncBookLocks: moe.antimony.hoshi.features.sync.http.HttpSyncBookLocks =
+        moe.antimony.hoshi.features.sync.http.HttpSyncBookLocks()
+    // Wallclock of the most recent successful manual Sync now. The reader hooks read it
+    // to clear their circuit breaker on the next page turn after a successful manual sync.
+    val httpSyncManualSyncSuccessAt: kotlinx.coroutines.flow.MutableStateFlow<Long> =
+        kotlinx.coroutines.flow.MutableStateFlow(0L)
+    val httpSyncPusher: HttpSyncPusher = HttpSyncPusher(
+        bookRepository = bookRepository,
+        bookLocks = httpSyncBookLocks,
+    )
     val httpSyncReconciler: HttpSyncReconciler = HttpSyncReconciler(
         bookRepository = bookRepository,
         aiSettingsRepository = aiChatSettingsRepository,
+        bookLocks = httpSyncBookLocks,
     )
     val ankiRepository: AnkiRepository = AnkiRepository(
         context = appContext,

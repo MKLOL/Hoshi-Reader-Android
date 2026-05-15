@@ -43,10 +43,19 @@ class HttpSyncReaderHooks internal constructor(
     private val currentSettings: () -> HttpSyncSettings?,
     private val persistenceScope: CoroutineScope,
     private val clock: () -> Long = System::currentTimeMillis,
+    /**
+     * Read each time we evaluate the circuit breaker. When the settings view fires a
+     * successful manual Sync now, it bumps this signal to the current wallclock; if the
+     * signal is at least as new as our [suppressUntilMs], the breaker resets — the
+     * server is clearly reachable now, no reason to keep silencing auto-pushes.
+     */
+    private val breakerResetSignal: () -> Long = { 0L },
 ) {
     private var unpushedPageTurns: Int = 0
     private var consecutiveFailures: Int = 0
     private var suppressUntilMs: Long = 0L
+    /** Wallclock at which the breaker tripped. Used by [breakerOpen] for the reset-signal compare. */
+    private var trippedAtMs: Long = 0L
 
     /** Call this from your existing post-save callback (after the local-bookmark file write). */
     fun onPageTurnPersisted() {
@@ -96,11 +105,23 @@ class HttpSyncReaderHooks internal constructor(
         return s
     }
 
-    private fun breakerOpen(): Boolean = clock() < suppressUntilMs
+    private fun breakerOpen(): Boolean {
+        // If a manual Sync now succeeded AFTER we tripped the breaker, clear it — the
+        // server is reachable now, no reason to keep suppressing the reader's auto-push.
+        val resetAt = breakerResetSignal()
+        if (suppressUntilMs > 0L && resetAt > trippedAtMs) {
+            consecutiveFailures = 0
+            suppressUntilMs = 0L
+            trippedAtMs = 0L
+            return false
+        }
+        return clock() < suppressUntilMs
+    }
 
     private fun onPushSuccess() {
         consecutiveFailures = 0
         suppressUntilMs = 0L
+        trippedAtMs = 0L
     }
 
     private fun onPushFailure(kind: String, error: Throwable) {
@@ -108,7 +129,9 @@ class HttpSyncReaderHooks internal constructor(
         // Log only on the failure that tripped the breaker; further failures within the
         // backoff window are dropped silently (which is the whole point of the breaker).
         if (consecutiveFailures == CONSECUTIVE_FAILURE_THRESHOLD) {
-            suppressUntilMs = clock() + BACKOFF_MS
+            val now = clock()
+            trippedAtMs = now
+            suppressUntilMs = now + BACKOFF_MS
             Log.w(
                 TAG,
                 "Auto-push of $kind for '$title' failed ${consecutiveFailures}x; suppressing for ${BACKOFF_MS / 1000}s: ${error.message}",
@@ -157,6 +180,7 @@ fun rememberHttpSyncReaderHooks(
 ): HttpSyncReaderHooks {
     val appContainer = LocalHoshiAppContainer.current
     val pusher = appContainer.httpSyncPusher
+    val manualSyncSuccessAt = appContainer.httpSyncManualSyncSuccessAt
     val settings by appContainer.httpSyncSettingsRepository.settings.collectAsState(initial = null)
     val settingsRef = rememberUpdatedState(settings)
     return remember(bookRoot, title, persistenceScope) {
@@ -167,6 +191,7 @@ fun rememberHttpSyncReaderHooks(
             pushChatEntry = pusher::pushChatEntry,
             currentSettings = { settingsRef.value },
             persistenceScope = persistenceScope,
+            breakerResetSignal = { manualSyncSuccessAt.value },
         )
     }
 }

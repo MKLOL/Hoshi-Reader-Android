@@ -859,6 +859,76 @@ class HttpSyncTest {
     }
 
     @Test
+    fun chatDedupListPaginatesAcrossTruncatedPages() = runBlocking {
+        // Regression: `pushAllLocal` used to call list() once for chat-dedup, ignoring
+        // `truncated`. On a chat-heavy book that means the second page of remote chat keys
+        // is invisible — we'd re-upload entries we already have, or worse, miss new entries
+        // because we thought they weren't there.
+        val repo = newBookRepository()
+        val (root, _) = importMokuroBook(repo, "Chat Heavy Book")
+        repo.saveBookmark(root, Bookmark(1, 0.0, 1, 800_000_000.0))
+        val historyStore = AiChatHistoryStore()
+        // Push 3 chat entries locally, two of which will be "on the server" across two pages.
+        val entries = listOf(
+            AiChatEntry("a", "p", "m", "r1", 1.0),
+            AiChatEntry("b", "p", "m", "r2", 2.0),
+            AiChatEntry("c", "p", "m", "r3", 3.0),
+        )
+        for (e in entries) historyStore.append(root, e)
+
+        // Server has entries a + b on different pages; c is missing.
+        val pagedTransport = object : HttpSyncKvTransport {
+            val seeded: MutableMap<String, FakeKvTransport.Stored> = mutableMapOf()
+            override suspend fun put(key: String, contentType: String, body: ByteArray): HttpSyncKvWriteResponse {
+                seeded[key] = FakeKvTransport.Stored(body, contentType, "2026-01-01T00:00:00Z")
+                return HttpSyncKvWriteResponse(key, "2026-01-01T00:00:00Z", "etag", body.size, contentType)
+            }
+            override suspend fun get(key: String): HttpSyncKvFetched? = null
+            override suspend fun list(prefix: String?, since: String?, cursor: String?, limit: Int?): HttpSyncKvList {
+                if (prefix?.startsWith("books/chat_heavy_book/chat/") == true) {
+                    return when (cursor) {
+                        null -> HttpSyncKvList(
+                            keys = listOf(
+                                HttpSyncKvKeyMeta(
+                                    key = chatKey("chat_heavy_book", chatEntryKeySuffix(entries[0].timestampSeconds, entries[0].bubbleText, entries[0].response)),
+                                    lastModified = "2026-01-01T00:00:00Z",
+                                    etag = "etag", size = 1, contentType = "application/json; charset=utf-8",
+                                ),
+                            ),
+                            truncated = true,
+                            nextCursor = "page2",
+                        )
+                        "page2" -> HttpSyncKvList(
+                            keys = listOf(
+                                HttpSyncKvKeyMeta(
+                                    key = chatKey("chat_heavy_book", chatEntryKeySuffix(entries[1].timestampSeconds, entries[1].bubbleText, entries[1].response)),
+                                    lastModified = "2026-01-01T00:00:00Z",
+                                    etag = "etag", size = 1, contentType = "application/json; charset=utf-8",
+                                ),
+                            ),
+                            truncated = false, nextCursor = null,
+                        )
+                        else -> HttpSyncKvList()
+                    }
+                }
+                return HttpSyncKvList()
+            }
+            override suspend fun delete(key: String) { seeded.remove(key) }
+        }
+        val manager = managerFor(repo, pagedTransport, historyStore)
+        val result = manager.syncOnce(configured)
+
+        // Only entry `c` should have been uploaded — `a` and `b` were on the server across
+        // two pages and dedup correctly identified both.
+        assertEquals(1, result.uploadedChatEntries)
+        val cSuffix = chatEntryKeySuffix(entries[2].timestampSeconds, entries[2].bubbleText, entries[2].response)
+        assertTrue(
+            "entry c should be the one that landed on the server",
+            pagedTransport.seeded.keys.any { it == chatKey("chat_heavy_book", cSuffix) },
+        )
+    }
+
+    @Test
     fun summaryRendersHumanReadableCountsOrNothingToSync() {
         val empty = HttpSyncResult(
             uploadedBookmarks = 0,

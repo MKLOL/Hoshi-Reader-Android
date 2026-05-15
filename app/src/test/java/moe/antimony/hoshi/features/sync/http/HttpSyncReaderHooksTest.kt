@@ -180,6 +180,35 @@ class HttpSyncReaderHooksTest {
     }
 
     @Test
+    fun breakerResetsImmediatelyWhenManualSyncSignalArrivesAfterTrip() = runBlocking {
+        var manualSyncStamp = 0L
+        val failing: suspend (File, String, HttpSyncSettings) -> Unit = { _, _, _ ->
+            throw HttpSyncException("offline")
+        }
+        val hooks = HttpSyncReaderHooks(
+            bookRoot = File("/tmp/test-book"),
+            title = "Some Title",
+            pushBookmark = failing,
+            pushChatEntry = { _, _, _ -> },
+            currentSettings = { configured },
+            persistenceScope = scope,
+            clock = { fakeNowMs },
+            breakerResetSignal = { manualSyncStamp },
+        )
+        // Trip the breaker.
+        repeat(HttpSyncReaderHooks.CONSECUTIVE_FAILURE_THRESHOLD) {
+            repeat(HttpSyncReaderHooks.PAGE_TURN_PUSH_THRESHOLD) { hooks.onPageTurnPersisted() }
+        }
+        assertTrue("breaker open after threshold failures", hooks.isSuppressed)
+
+        // Now the user taps Sync now and it succeeds — settings view bumps the signal.
+        manualSyncStamp = fakeNowMs + 1L
+        // The very next page turn batch should see a fresh signal, reset the breaker,
+        // and proceed.
+        assertFalse("manual-sync signal must clear the breaker immediately", hooks.isSuppressed)
+    }
+
+    @Test
     fun breakerResetsAfterBackoffWindow() = runBlocking {
         var failNext = true
         val maybeFailing: suspend (File, String, HttpSyncSettings) -> Unit = { _, _, _ ->

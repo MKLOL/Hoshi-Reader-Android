@@ -46,6 +46,11 @@ class HttpSyncReconciler(
      * in [moe.antimony.hoshi.HoshiAppContainer] always supplies a real repo.
      */
     private val aiSettingsRepository: AiChatSettingsRepository? = null,
+    /**
+     * Shared with the reader's [HttpSyncPusher] so a manual Sync now can't race the reader's
+     * per-page-turn push on the same bookmark file. Defaults to a fresh map in tests.
+     */
+    private val bookLocks: HttpSyncBookLocks = HttpSyncBookLocks(),
     private val payloadCodec: HttpSyncPayloadCodec = HttpSyncPayloadCodec(),
     private val transportFactory: (HttpSyncSettings) -> HttpSyncKvTransport = { settings ->
         HttpSyncKvClient(settings.baseUrl, settings.bearerToken)
@@ -165,6 +170,9 @@ class HttpSyncReconciler(
                     }
                     cmp < 0 -> {
                         // Remote newer → apply.
+                        // applyFromSync is CAS: if the user edited locally between our read
+                        // (line above) and this write, it returns false and we leave the
+                        // newer local state alone. The next sync will push it up.
                         runCatching { repo.applyFromSync(remoteBlob.model, remoteBlob.promptText, remoteBlob.lastModified) }
                             .onFailure { errors += "ai_chat_settings apply: ${it.message ?: it.javaClass.simpleName}" }
                         AppSettingsResult(false, true, remoteStamp, errors)
@@ -307,31 +315,35 @@ class HttpSyncReconciler(
         bookRoot: File,
         meta: HttpSyncKvKeyMeta,
     ): Boolean {
-        val fetched = transport.get(meta.key) ?: return false
-        val blob = runCatching {
-            json.decodeFromString(
-                HttpSyncBookmarkBlob.serializer(),
-                fetched.body.toString(Charsets.UTF_8),
+        // Hold the per-book lock for the read-compare-write so a concurrent reader-side
+        // push can't interleave with the apply.
+        return bookLocks.withBookLock(bookRoot) {
+            val fetched = transport.get(meta.key) ?: return@withBookLock false
+            val blob = runCatching {
+                json.decodeFromString(
+                    HttpSyncBookmarkBlob.serializer(),
+                    fetched.body.toString(Charsets.UTF_8),
+                )
+            }.getOrElse { error ->
+                throw HttpSyncException("Bookmark at ${meta.key}: malformed JSON (${error.message ?: error.javaClass.simpleName})")
+            }
+            val local = bookRepository.loadBookmark(bookRoot)
+            val localModified = local?.lastModified?.let(::appleSecondsToRfc3339)
+            if (compareRfc3339(blob.lastModified, localModified) <= 0) {
+                // Local is at least as fresh — don't downgrade.
+                return@withBookLock false
+            }
+            bookRepository.saveBookmark(
+                bookRoot,
+                Bookmark(
+                    chapterIndex = blob.chapterIndex,
+                    progress = blob.progress,
+                    characterCount = blob.characterCount,
+                    lastModified = rfc3339ToAppleSeconds(blob.lastModified),
+                ),
             )
-        }.getOrElse { error ->
-            throw HttpSyncException("Bookmark at ${meta.key}: malformed JSON (${error.message ?: error.javaClass.simpleName})")
+            true
         }
-        val local = bookRepository.loadBookmark(bookRoot)
-        val localModified = local?.lastModified?.let(::appleSecondsToRfc3339)
-        if (compareRfc3339(blob.lastModified, localModified) <= 0) {
-            // Local is at least as fresh — don't downgrade.
-            return false
-        }
-        bookRepository.saveBookmark(
-            bookRoot,
-            Bookmark(
-                chapterIndex = blob.chapterIndex,
-                progress = blob.progress,
-                characterCount = blob.characterCount,
-                lastModified = rfc3339ToAppleSeconds(blob.lastModified),
-            ),
-        )
-        return true
     }
 
     private suspend fun applyChatEntryFromRemote(
@@ -393,7 +405,7 @@ class HttpSyncReconciler(
                     // HttpSyncPusher.pushBookmark for the rationale. Inbound just ran (so in
                     // most cases local IS the freshest), but a concurrent push from another
                     // device between inbound and outbound is still possible.
-                    val pushed = pushBookmarkIfLocalNewer(transport, syncId, bookmark)
+                    val pushed = pushBookmarkIfLocalNewer(transport, syncId, bookmark, root)
                     if (pushed != null) {
                         uploadedBookmarks += 1
                         maxLastModified = maxRfc(maxLastModified, pushed.lastModified)
@@ -444,10 +456,21 @@ class HttpSyncReconciler(
                     val chatEntries = runCatching { aiHistoryStore.load(root).entries }
                         .getOrDefault(emptyList())
                     if (chatEntries.isNotEmpty()) {
-                        // Only push entries the server doesn't have. Listing once is cheaper
-                        // than a PUT per entry on a chat-heavy book.
-                        val existing = transport.list(prefix = chatPrefixForBook(syncId))
-                            .keys.map { it.key }.toSet()
+                        // Only push entries the server doesn't have. Walk every page of the
+                        // chat-entry listing — a chat-heavy book can exceed the server's
+                        // default page size (~500), and missing entries from page N would
+                        // either re-upload duplicates or, worse, leave new local entries
+                        // unpushed because we thought the server already had them.
+                        val existing = mutableSetOf<String>()
+                        var chatCursor: String? = null
+                        do {
+                            val page = transport.list(
+                                prefix = chatPrefixForBook(syncId),
+                                cursor = chatCursor,
+                            )
+                            for (meta in page.keys) existing += meta.key
+                            chatCursor = page.nextCursor
+                        } while (chatCursor != null && page.truncated)
                         for (chatEntry in chatEntries) {
                             val suffix = chatEntryKeySuffix(chatEntry.timestampSeconds, chatEntry.bubbleText, chatEntry.response)
                             val key = chatKey(syncId, suffix)
@@ -485,7 +508,8 @@ class HttpSyncReconciler(
         transport: HttpSyncKvTransport,
         syncId: String,
         local: moe.antimony.hoshi.epub.Bookmark,
-    ): HttpSyncKvWriteResponse? {
+        bookRoot: File,
+    ): HttpSyncKvWriteResponse? = bookLocks.withBookLock(bookRoot) {
         val key = bookmarkKey(syncId)
         val remote = transport.get(key)
         if (remote != null) {
@@ -501,11 +525,11 @@ class HttpSyncReconciler(
                     // Remote is newer — applyBookmarkFromRemote already ran during the
                     // inbound pass for this same key (or will on next sync if it slipped
                     // in between). Either way: don't downgrade. Just don't push.
-                    return null
+                    return@withBookLock null
                 }
             }
         }
-        return transport.put(
+        transport.put(
             key = key,
             contentType = HttpSyncPusher.JSON_CONTENT_TYPE,
             body = json.encodeToString(HttpSyncBookmarkBlob.serializer(), local.toBlob()).toByteArray(),

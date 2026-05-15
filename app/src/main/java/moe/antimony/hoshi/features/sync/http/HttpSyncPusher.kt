@@ -23,6 +23,7 @@ import java.io.File
  */
 class HttpSyncPusher(
     private val bookRepository: BookRepository,
+    private val bookLocks: HttpSyncBookLocks = HttpSyncBookLocks(),
     private val transportFactory: (HttpSyncSettings) -> HttpSyncKvTransport = { settings ->
         HttpSyncKvClient(settings.baseUrl, settings.bearerToken)
     },
@@ -46,14 +47,18 @@ class HttpSyncPusher(
         require(settings.isConfigured) { "HTTP sync is not configured." }
         val syncId = deriveSyncId(title)
             ?: throw HttpSyncException("Book '$title' has no title to derive a syncId from.")
-        val local = bookRepository.loadBookmark(bookRoot)
-            ?: throw HttpSyncException("No local bookmark to push for '$title'.")
         val transport = transportFactory(settings)
         val key = bookmarkKey(syncId)
-        withContext(ioDispatcher) {
-            // Fetch + compare. The extra GET adds ~50ms to a typical push, well worth it
-            // to never lose a reading position because of a stale push.
-            val remote = transport.get(key)
+        // Hold the per-book mutex for the entire fetch + compare + write/PUT cycle so the
+        // reconciler can't race us on this same key. Without it the second writer's stale
+        // local copy could clobber the first's freshly-pulled-or-pushed value.
+        bookLocks.withBookLock(bookRoot) {
+            val local = bookRepository.loadBookmark(bookRoot)
+                ?: throw HttpSyncException("No local bookmark to push for '$title'.")
+            withContext(ioDispatcher) {
+                // Fetch + compare. The extra GET adds ~50ms to a typical push, well worth
+                // it to never lose a reading position because of a stale push.
+                val remote = transport.get(key)
             if (remote != null) {
                 val remoteBlob = runCatching {
                     json.decodeFromString(
@@ -85,6 +90,7 @@ class HttpSyncPusher(
                 contentType = JSON_CONTENT_TYPE,
                 body = json.encodeToString(HttpSyncBookmarkBlob.serializer(), local.toBlob()).toByteArray(),
             )
+            }
         }
     }
 

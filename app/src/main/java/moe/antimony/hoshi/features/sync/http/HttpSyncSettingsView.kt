@@ -143,6 +143,11 @@ fun HttpSyncSettingsView(
                                     result.newLastSyncedAt?.let { cursor ->
                                         repository.update { it.copy(lastSyncedAt = cursor) }
                                     }
+                                    // Tell any active reader's circuit breaker that the
+                                    // server is reachable now, so the next page turn pushes
+                                    // even if the breaker was open from earlier failures.
+                                    appContainer.httpSyncManualSyncSuccessAt.value =
+                                        System.currentTimeMillis()
                                     SyncStatus.Done(result)
                                 },
                                 onFailure = {
