@@ -50,7 +50,9 @@ import moe.antimony.hoshi.features.storage.StorageCleanupReport
 import java.io.File
 import java.util.Locale
 
-private const val GitHubRepositoryUrl = "https://github.com/HuangAntimony/Hoshi-Reader-Android"
+// Repo URL is driven by [UpdateConfig] so a fork can repoint the About-screen link by
+// editing one constant.
+private const val GitHubRepositoryUrl = UpdateConfig.REPO_URL
 
 @Composable
 fun AboutScreen(

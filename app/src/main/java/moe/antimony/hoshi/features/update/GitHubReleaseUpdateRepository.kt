@@ -145,8 +145,9 @@ internal class GitHubReleaseUpdateRepository(
     )
 
     companion object {
-        const val LatestReleaseUrl =
-            "https://api.github.com/repos/HuangAntimony/Hoshi-Reader-Android/releases/latest"
+        // The releases endpoint is driven by [UpdateConfig] so a fork can repoint the
+        // updater at its own release feed by editing one constant.
+        const val LatestReleaseUrl = UpdateConfig.LATEST_RELEASE_API_URL
     }
 }
 

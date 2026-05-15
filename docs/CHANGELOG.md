@@ -16,10 +16,7 @@ The format follows a Keep a Changelog style, and release sections use Semantic V
 
 - Draw reader lookup selection marks as close underlines in E-ink mode instead of filled highlights.
 - Split manga page-turn animation from E-ink Mode: Behavior now has a Disable Page-Turn Animation toggle for instant page swaps without forcing black-and-white rendering.
-
-### Removed
-
-- Remove the upstream-release update mechanism (this is now a fork): the "Update Downloaded" install prompt, the background GitHub-release check / auto-download, and the "Automatically Download Updates" setting are all gone, and any periodic update job a previous build scheduled is cancelled on launch.
+- Gate the GitHub-release auto-updater behind a compile-time flag (`UpdateConfig.AUTO_UPDATE_ENABLED`, off by default) and route the GitHub owner/repo through the same config. While the flag is off the periodic update check, "Update Downloaded" install prompt, and "Automatically Download Updates" toggle are all dormant; flipping the flag (and pointing the owner/repo at your fork) brings the original updater back online.
 
 ### Fixed
 
