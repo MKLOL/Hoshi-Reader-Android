@@ -54,7 +54,10 @@ fun HttpSyncSettingsView(
     val scope = rememberCoroutineScope()
     val settings by repository.settings.collectAsState(initial = null)
 
-    var status by rememberSaveable { mutableStateOf<SyncStatus>(SyncStatus.Idle) }
+    // Status is transient — a sync result doesn't need to survive process death — and
+    // `SyncStatus` is a sealed interface with non-Parcelable payloads, so `rememberSaveable`'s
+    // default saver crashes at composition trying to validate it. Plain `remember` is fine.
+    var status by remember { mutableStateOf<SyncStatus>(SyncStatus.Idle) }
     var tokenVisible by rememberSaveable { mutableStateOf(false) }
 
     SettingsDetailScaffold(title = "HTTP Sync", onClose = onClose, modifier = modifier) { innerPadding ->
