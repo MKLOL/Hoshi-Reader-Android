@@ -571,14 +571,9 @@ private fun MangaReaderChrome(
                     tint = contentColor,
                 )
             }
-            Text(
-                text = title,
-                color = contentColor,
-                modifier = Modifier
-                    .align(Alignment.Center)
-                    .padding(horizontal = 56.dp),
-                maxLines = 1,
-            )
+            // Title intentionally omitted — the chrome bars are transparent and the title
+            // strip was the most distracting block on top of the artwork. The back icon and
+            // ⋯ menu still anchor the corners.
             Box(modifier = Modifier.align(Alignment.CenterEnd)) {
                 var menuExpanded by remember { mutableStateOf(false) }
                 IconButton(onClick = { menuExpanded = true }) {
@@ -681,15 +676,12 @@ private fun MangaReaderBottomBar(
 }
 
 /**
- * Background for the reader chrome bars. On e-ink the bar is solid black/white — a
- * translucent scrim dithers to a muddy grey over the artwork — while a colour display keeps
- * the translucent scrim so the page edge still shows through.
+ * Background for the reader chrome bars. Fully transparent so the bars (back, ⋯, page-turn
+ * arrows) sit directly over the artwork without a coloured strip blocking the top and
+ * bottom of the page. The icons themselves are tinted via [Color.White] / [Color.Black]
+ * based on dark mode so they stay legible against the manga underneath.
  */
-private fun mangaChromeScrim(darkInterface: Boolean, eInkMode: Boolean): Color = when {
-    eInkMode -> if (darkInterface) Color.Black else Color.White
-    darkInterface -> Color.Black.copy(alpha = 0.45f)
-    else -> Color.White.copy(alpha = 0.55f)
-}
+private fun mangaChromeScrim(darkInterface: Boolean, eInkMode: Boolean): Color = Color.Transparent
 
 internal fun shouldAnimateMangaPageTurns(settings: ReaderSettings): Boolean =
     !settings.eInkMode && !settings.disablePageTurnAnimation
