@@ -10,7 +10,10 @@ import moe.antimony.hoshi.epub.ContentType
 import moe.antimony.hoshi.epub.bookContentType
 import moe.antimony.hoshi.features.ai.AiChatEntry
 import moe.antimony.hoshi.features.ai.AiChatHistoryStore
+import moe.antimony.hoshi.features.ai.AiChatSettings
+import moe.antimony.hoshi.features.ai.AiChatSettingsRepository
 import moe.antimony.hoshi.epub.BookMetadata
+import kotlinx.coroutines.flow.first
 import java.io.File
 import java.util.UUID
 
@@ -38,6 +41,11 @@ import java.util.UUID
 class HttpSyncReconciler(
     private val bookRepository: BookRepository,
     private val aiHistoryStore: AiChatHistoryStore = AiChatHistoryStore(),
+    /**
+     * Optional in tests that don't care about the AI-settings sync path. Production wiring
+     * in [moe.antimony.hoshi.HoshiAppContainer] always supplies a real repo.
+     */
+    private val aiSettingsRepository: AiChatSettingsRepository? = null,
     private val payloadCodec: HttpSyncPayloadCodec = HttpSyncPayloadCodec(),
     private val transportFactory: (HttpSyncSettings) -> HttpSyncKvTransport = { settings ->
         HttpSyncKvClient(settings.baseUrl, settings.bearerToken)
@@ -59,10 +67,11 @@ class HttpSyncReconciler(
 
         val inbound = pullChangedKeys(transport, settings.lastSyncedAt)
         val outbound = pushAllLocal(transport)
+        val appSettings = syncAppSettings(transport)
 
         val newCursor = maxRfc(
             maxRfc(settings.lastSyncedAt, inbound.maxLastModified),
-            outbound.maxLastModified,
+            maxRfc(outbound.maxLastModified, appSettings.maxLastModified),
         )
         val cursorChanged = newCursor != null && newCursor != settings.lastSyncedAt
 
@@ -71,13 +80,123 @@ class HttpSyncReconciler(
             uploadedChatEntries = outbound.uploadedChatEntries,
             uploadedMetadata = outbound.uploadedMetadata,
             uploadedPayloads = outbound.uploadedPayloads,
+            uploadedAppSettings = appSettings.uploaded,
             downloadedBookmarks = inbound.downloadedBookmarks,
             downloadedChatEntries = inbound.downloadedChatEntries,
             downloadedPayloads = inbound.downloadedPayloads,
+            downloadedAppSettings = appSettings.downloaded,
             remoteOnlyBooks = inbound.remoteOnlyBooks,
-            errors = inbound.errors + outbound.errors,
+            errors = inbound.errors + outbound.errors + appSettings.errors,
             newLastSyncedAt = newCursor.takeIf { cursorChanged },
         )
+    }
+
+    // ----- App-level (non-per-book) settings sync -----------------------------------------
+
+    private data class AppSettingsResult(
+        val uploaded: Boolean,
+        val downloaded: Boolean,
+        val maxLastModified: String?,
+        val errors: List<String>,
+    )
+
+    /**
+     * Bidirectional LWW sync of the cross-device ChatGPT settings (`model` + `promptText`).
+     *
+     * Algorithm:
+     *  1. Read local [AiChatSettings] and remote [HttpSyncAiChatSettingsBlob].
+     *  2. If only one side has a value, that side wins. If both, the higher `lastModified`
+     *     wins. Equal timestamps → no-op (presumed already in sync).
+     *  3. The API key is **never** read or written here — that field stays per-device.
+     *
+     * Skipped silently if no [aiSettingsRepository] was supplied (test-only path).
+     */
+    private suspend fun syncAppSettings(transport: HttpSyncKvTransport): AppSettingsResult {
+        val repo = aiSettingsRepository ?: return AppSettingsResult(
+            uploaded = false, downloaded = false, maxLastModified = null, errors = emptyList(),
+        )
+        val errors = mutableListOf<String>()
+
+        val local = runCatching { repo.settings.first() }.getOrElse {
+            errors += "ai_chat_settings: ${it.message ?: it.javaClass.simpleName}"
+            return AppSettingsResult(false, false, null, errors)
+        }
+        val remoteFetched = runCatching { transport.get(AI_CHAT_SETTINGS_KEY) }.getOrElse {
+            errors += "ai_chat_settings GET: ${it.message ?: it.javaClass.simpleName}"
+            return AppSettingsResult(false, false, null, errors)
+        }
+        val remoteBlob = remoteFetched?.let {
+            runCatching {
+                json.decodeFromString(
+                    HttpSyncAiChatSettingsBlob.serializer(),
+                    it.body.toString(Charsets.UTF_8),
+                )
+            }.getOrElse { e ->
+                errors += "ai_chat_settings decode: ${e.message ?: e.javaClass.simpleName}"
+                null
+            }
+        }
+
+        val localStamp = local.lastEditedAt
+        val remoteStamp = remoteBlob?.lastModified
+
+        return when {
+            remoteBlob == null && localStamp != null -> {
+                // Server has nothing; we have something. Push.
+                pushLocalAppSettings(transport, local, errors)?.let {
+                    AppSettingsResult(uploaded = true, downloaded = false, maxLastModified = it.lastModified, errors = errors)
+                } ?: AppSettingsResult(false, false, null, errors)
+            }
+            remoteBlob != null && localStamp == null -> {
+                // We have nothing user-edited; pull. Stamp uses the remote's lastModified
+                // (verbatim) so the next sync is a no-op rather than oscillating.
+                runCatching { repo.applyFromSync(remoteBlob.model, remoteBlob.promptText, remoteBlob.lastModified) }
+                    .onFailure { errors += "ai_chat_settings apply: ${it.message ?: it.javaClass.simpleName}" }
+                AppSettingsResult(false, true, remoteStamp, errors)
+            }
+            remoteBlob != null && localStamp != null -> {
+                val cmp = compareRfc3339(localStamp, remoteStamp)
+                when {
+                    cmp > 0 -> {
+                        // Local newer → push.
+                        pushLocalAppSettings(transport, local, errors)?.let {
+                            AppSettingsResult(uploaded = true, downloaded = false, maxLastModified = it.lastModified, errors = errors)
+                        } ?: AppSettingsResult(false, false, remoteStamp, errors)
+                    }
+                    cmp < 0 -> {
+                        // Remote newer → apply.
+                        runCatching { repo.applyFromSync(remoteBlob.model, remoteBlob.promptText, remoteBlob.lastModified) }
+                            .onFailure { errors += "ai_chat_settings apply: ${it.message ?: it.javaClass.simpleName}" }
+                        AppSettingsResult(false, true, remoteStamp, errors)
+                    }
+                    else -> AppSettingsResult(false, false, remoteStamp, errors)
+                }
+            }
+            else -> AppSettingsResult(false, false, null, errors)
+        }
+    }
+
+    private suspend fun pushLocalAppSettings(
+        transport: HttpSyncKvTransport,
+        local: AiChatSettings,
+        errors: MutableList<String>,
+    ): HttpSyncKvWriteResponse? {
+        val stamp = local.lastEditedAt ?: return null
+        val blob = HttpSyncAiChatSettingsBlob(
+            model = local.model,
+            promptText = local.promptText,
+            lastModified = stamp,
+        )
+        return try {
+            transport.put(
+                key = AI_CHAT_SETTINGS_KEY,
+                contentType = HttpSyncPusher.JSON_CONTENT_TYPE,
+                body = json.encodeToString(HttpSyncAiChatSettingsBlob.serializer(), blob).toByteArray(),
+            )
+        } catch (e: HttpSyncException) {
+            errors += "ai_chat_settings PUT: ${e.message}"
+            null
+        }
     }
 
     // ----- Inbound -----------------------------------------------------------------------
@@ -102,8 +221,6 @@ class HttpSyncReconciler(
         val errors = mutableListOf<String>()
 
         val localBookEntries = bookRepository.loadBookEntries()
-        // Mutable so a payload download in this pass makes the new book visible for the
-        // bookmark/chat handlers that come later (same pass, later keys).
         val rootsBySyncId: MutableMap<String, File> = mutableMapOf<String, File>().apply {
             for (entry in localBookEntries) {
                 val syncId = deriveSyncId(entry.metadata.title) ?: continue
@@ -112,6 +229,12 @@ class HttpSyncReconciler(
         }
         val remoteSyncIds = mutableSetOf<String>()
 
+        // ── Pass 1: page through the entire listing and buffer keys by kind. We can't
+        //    process bookmark/chat keys inline because they may arrive lex-before the
+        //    payload manifest that imports the book they belong to (regression caught by
+        //    `freshDeviceSyncDownloadsPayloadBookmarkAndChatInOnePass`).
+        val payloadManifests = mutableListOf<HttpSyncKvKeyMeta>()
+        val bookmarksAndChats = mutableListOf<Pair<ParsedBookKey, HttpSyncKvKeyMeta>>()
         var cursor: String? = null
         do {
             val page = transport.list(
@@ -125,37 +248,48 @@ class HttpSyncReconciler(
                 }
                 val parsed = parseBookKey(meta.key) ?: continue
                 remoteSyncIds += parsed.syncId
-                runCatching {
-                    when (parsed.kind) {
-                        BookKeyKind.Bookmark -> {
-                            val root = rootsBySyncId[parsed.syncId] ?: return@runCatching
-                            if (applyBookmarkFromRemote(transport, root, meta)) downloadedBookmarks += 1
-                        }
-                        BookKeyKind.Chat -> {
-                            val root = rootsBySyncId[parsed.syncId] ?: return@runCatching
-                            if (applyChatEntryFromRemote(transport, root, meta)) downloadedChatEntries += 1
-                        }
-                        BookKeyKind.PayloadManifest -> {
-                            // Only act on payload manifests for books we don't have locally.
-                            // Updates to existing books are out of scope for v2.0 (very rare:
-                            // would mean someone re-imported the same titled book with new pages).
-                            if (parsed.syncId !in rootsBySyncId.keys) {
-                                val imported = importRemoteOnlyBook(transport, parsed.syncId)
-                                if (imported != null) {
-                                    rootsBySyncId[parsed.syncId] = imported
-                                    downloadedPayloads += 1
-                                }
-                            }
-                        }
-                        BookKeyKind.PayloadZip -> Unit // followed via the manifest
-                        BookKeyKind.Metadata -> Unit // v2 doesn't act on metadata yet — reserved for tombstones
-                    }
-                }.onFailure { e ->
-                    errors += "${parsed.kind.name.lowercase()} ${parsed.syncId}: ${e.message ?: e.javaClass.simpleName}"
+                when (parsed.kind) {
+                    BookKeyKind.PayloadManifest -> payloadManifests += meta
+                    BookKeyKind.Bookmark, BookKeyKind.Chat -> bookmarksAndChats += parsed to meta
+                    BookKeyKind.PayloadZip -> Unit // followed via the manifest
+                    BookKeyKind.Metadata -> Unit // v2 doesn't act on metadata yet — reserved for tombstones
                 }
             }
             cursor = page.nextCursor
         } while (cursor != null && page.truncated)
+
+        // ── Pass 2: import remote-only books by their payload manifests, BEFORE applying
+        //    bookmarks/chats. This is what fixes the ordering bug: once this pass runs,
+        //    every syncId on the server has a local root in `rootsBySyncId`.
+        for (meta in payloadManifests) {
+            val parsed = parseBookKey(meta.key) ?: continue
+            if (parsed.syncId in rootsBySyncId.keys) continue
+            runCatching {
+                val imported = importRemoteOnlyBook(transport, parsed.syncId)
+                if (imported != null) {
+                    rootsBySyncId[parsed.syncId] = imported
+                    downloadedPayloads += 1
+                }
+            }.onFailure { e ->
+                errors += "payload ${parsed.syncId}: ${e.message ?: e.javaClass.simpleName}"
+            }
+        }
+
+        // ── Pass 3: bookmarks and chats now find their local roots and get applied.
+        for ((parsed, meta) in bookmarksAndChats) {
+            val root = rootsBySyncId[parsed.syncId] ?: continue
+            runCatching {
+                when (parsed.kind) {
+                    BookKeyKind.Bookmark ->
+                        if (applyBookmarkFromRemote(transport, root, meta)) downloadedBookmarks += 1
+                    BookKeyKind.Chat ->
+                        if (applyChatEntryFromRemote(transport, root, meta)) downloadedChatEntries += 1
+                    else -> Unit
+                }
+            }.onFailure { e ->
+                errors += "${parsed.kind.name.lowercase()} ${parsed.syncId}: ${e.message ?: e.javaClass.simpleName}"
+            }
+        }
 
         val remoteOnly = remoteSyncIds.count { it !in rootsBySyncId.keys }
         return InboundResult(
@@ -255,15 +389,24 @@ class HttpSyncReconciler(
             try {
                 val bookmark = bookRepository.loadBookmark(root)
                 if (bookmark != null) {
-                    val response = transport.put(
-                        key = bookmarkKey(syncId),
-                        contentType = HttpSyncPusher.JSON_CONTENT_TYPE,
-                        body = json.encodeToString(HttpSyncBookmarkBlob.serializer(), bookmark.toBlob()).toByteArray(),
-                    )
-                    uploadedBookmarks += 1
-                    maxLastModified = maxRfc(maxLastModified, response.lastModified)
+                    // Don't overwrite a newer server bookmark — see the same guard in
+                    // HttpSyncPusher.pushBookmark for the rationale. Inbound just ran (so in
+                    // most cases local IS the freshest), but a concurrent push from another
+                    // device between inbound and outbound is still possible.
+                    val pushed = pushBookmarkIfLocalNewer(transport, syncId, bookmark)
+                    if (pushed != null) {
+                        uploadedBookmarks += 1
+                        maxLastModified = maxRfc(maxLastModified, pushed.lastModified)
+                    }
                 }
 
+                // Preserve the server's deletion tombstone — if another device flipped
+                // `deletedAt` on the metadata, our push must not erase it.
+                val remoteMetadataBlob = runCatching {
+                    transport.get(metadataKey(syncId))
+                        ?.body?.toString(Charsets.UTF_8)
+                        ?.let { json.decodeFromString(HttpSyncMetadataBlob.serializer(), it) }
+                }.getOrNull()
                 val metadataResponse = transport.put(
                     key = metadataKey(syncId),
                     contentType = HttpSyncPusher.JSON_CONTENT_TYPE,
@@ -272,6 +415,8 @@ class HttpSyncReconciler(
                         HttpSyncMetadataBlob(
                             title = title,
                             contentType = HttpSyncContentType.fromLocal(bookContentType(root)),
+                            importedAt = remoteMetadataBlob?.importedAt,
+                            deletedAt = remoteMetadataBlob?.deletedAt,
                         ),
                     ).toByteArray(),
                 )
@@ -328,6 +473,42 @@ class HttpSyncReconciler(
             uploadedPayloads = uploadedPayloads,
             maxLastModified = maxLastModified,
             errors = errors,
+        )
+    }
+
+    /**
+     * Conditional bookmark PUT: fetches the remote bookmark, returns `null` and applies
+     * locally if remote is newer; otherwise PUTs local and returns the write response.
+     * Mirrors [HttpSyncPusher.pushBookmark]'s overwrite guard.
+     */
+    private suspend fun pushBookmarkIfLocalNewer(
+        transport: HttpSyncKvTransport,
+        syncId: String,
+        local: moe.antimony.hoshi.epub.Bookmark,
+    ): HttpSyncKvWriteResponse? {
+        val key = bookmarkKey(syncId)
+        val remote = transport.get(key)
+        if (remote != null) {
+            val remoteBlob = runCatching {
+                json.decodeFromString(
+                    HttpSyncBookmarkBlob.serializer(),
+                    remote.body.toString(Charsets.UTF_8),
+                )
+            }.getOrNull()
+            if (remoteBlob != null) {
+                val localStamp = local.lastModified?.let(::appleSecondsToRfc3339)
+                if (compareRfc3339(remoteBlob.lastModified, localStamp) > 0) {
+                    // Remote is newer — applyBookmarkFromRemote already ran during the
+                    // inbound pass for this same key (or will on next sync if it slipped
+                    // in between). Either way: don't downgrade. Just don't push.
+                    return null
+                }
+            }
+        }
+        return transport.put(
+            key = key,
+            contentType = HttpSyncPusher.JSON_CONTENT_TYPE,
+            body = json.encodeToString(HttpSyncBookmarkBlob.serializer(), local.toBlob()).toByteArray(),
         )
     }
 
@@ -407,9 +588,11 @@ data class HttpSyncResult(
     val uploadedChatEntries: Int,
     val uploadedMetadata: Int,
     val uploadedPayloads: Int = 0,
+    val uploadedAppSettings: Boolean = false,
     val downloadedBookmarks: Int,
     val downloadedChatEntries: Int,
     val downloadedPayloads: Int = 0,
+    val downloadedAppSettings: Boolean = false,
     val remoteOnlyBooks: Int,
     val errors: List<String>,
     /**
@@ -424,9 +607,11 @@ data class HttpSyncResult(
         if (uploadedBookmarks > 0) parts += "$uploadedBookmarks bookmark${plural(uploadedBookmarks)} up"
         if (uploadedChatEntries > 0) parts += "$uploadedChatEntries chat${plural(uploadedChatEntries)} up"
         if (uploadedPayloads > 0) parts += "$uploadedPayloads book payload${plural(uploadedPayloads)} up"
+        if (uploadedAppSettings) parts += "ChatGPT settings up"
         if (downloadedBookmarks > 0) parts += "$downloadedBookmarks bookmark${plural(downloadedBookmarks)} down"
         if (downloadedChatEntries > 0) parts += "$downloadedChatEntries chat${plural(downloadedChatEntries)} down"
         if (downloadedPayloads > 0) parts += "$downloadedPayloads book payload${plural(downloadedPayloads)} down"
+        if (downloadedAppSettings) parts += "ChatGPT settings down"
         if (remoteOnlyBooks > 0) parts += "$remoteOnlyBooks remote-only book${plural(remoteOnlyBooks)}"
         if (parts.isEmpty()) parts += "nothing to sync"
         return parts.joinToString(", ")

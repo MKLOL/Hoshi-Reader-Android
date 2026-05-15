@@ -33,8 +33,17 @@ internal fun readerHardwareKeyActionForKeyEvent(
 ): ReaderHardwareKeyAction? {
     if (action != KeyEvent.ACTION_DOWN || repeatCount != 0) return null
     return when (keyCode) {
+        // Standard page-down / -up bindings (USB / Bluetooth keyboards, some e-readers).
         KeyEvent.KEYCODE_PAGE_DOWN -> ReaderHardwareKeyAction.ReaderNavigation(ReaderNavigationDirection.Forward)
         KeyEvent.KEYCODE_PAGE_UP -> ReaderHardwareKeyAction.ReaderNavigation(ReaderNavigationDirection.Backward)
+        // E-reader physical buttons that emit dedicated "navigate" keys instead of volume.
+        // BOOX firmware variants and various Kobo-derived devices use these — wire them
+        // unconditionally because they aren't ambiguous like volume keys.
+        KeyEvent.KEYCODE_NAVIGATE_NEXT ->
+            ReaderHardwareKeyAction.ReaderNavigation(ReaderNavigationDirection.Forward)
+        KeyEvent.KEYCODE_NAVIGATE_PREVIOUS ->
+            ReaderHardwareKeyAction.ReaderNavigation(ReaderNavigationDirection.Backward)
+        // Volume-up/down go through the user-gated path so phone users aren't hijacked.
         KeyEvent.KEYCODE_VOLUME_DOWN,
         KeyEvent.KEYCODE_VOLUME_UP,
         -> readerVolumeKeyAction(

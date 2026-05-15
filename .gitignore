@@ -13,3 +13,6 @@ local.properties
 .codex-*
 .bootstrap-env
 .claude/
+# Local secrets for the live-server smoke tests (HOSHI_KV_TOKEN etc).
+# Copy `.hoshi-sync-secret.env.example` to `.hoshi-sync-secret.env` and fill it in.
+.hoshi-sync-secret.env

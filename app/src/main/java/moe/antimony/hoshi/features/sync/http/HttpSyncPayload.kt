@@ -44,7 +44,15 @@ data class HttpSyncPayloadManifest(
 internal val PAYLOAD_EXCLUDED_FILES: Set<String> = setOf(
     "bookmark.json",
     "ai_chat_log.json",
+    PAYLOAD_SHA_CACHE_FILENAME,
 )
+
+/**
+ * Sidecar that caches the last-computed payload sha so subsequent syncs of an unchanged
+ * book don't have to re-zip and re-hash the entire directory. Living alongside the
+ * bookmark / chat sidecars is fine — like them, it never travels in the zip itself.
+ */
+internal const val PAYLOAD_SHA_CACHE_FILENAME: String = ".payload.sha256.cache"
 
 internal fun payloadZipKey(syncId: String): String = "books/$syncId/payload.zip"
 internal fun payloadManifestKey(syncId: String): String = "books/$syncId/payload.manifest"
@@ -69,6 +77,14 @@ class HttpSyncPayloadCodec(
      * Outbound: returns `true` if a zip+manifest was uploaded, `false` if the server's
      * manifest already matched (no-op fast path). Throws [HttpSyncException] on network /
      * IO failure.
+     *
+     * **Fast path (the common case):** fetch the remote manifest first; if we have a valid
+     * cached local sha256 that matches, return without re-zipping. A 50 MB mokuro volume
+     * therefore costs one HTTPS GET (a few hundred bytes) on every sync after the first,
+     * instead of multi-second zip + sha256 work.
+     *
+     * **Slow path:** zip + hash + compare; upload only if the sha actually differs from
+     * what's on the server. Cache the freshly-computed sha so the next sync is fast.
      */
     suspend fun uploadIfChanged(
         transport: HttpSyncKvTransport,
@@ -77,11 +93,23 @@ class HttpSyncPayloadCodec(
         originalName: String,
         format: HttpSyncContentType,
     ): Boolean = withContext(ioDispatcher) {
+        val cacheFile = bookRoot.resolve(PAYLOAD_SHA_CACHE_FILENAME)
+        val cachedSha = readCachedShaIfFresh(bookRoot, cacheFile)
+
+        // Cheapest possible check: ask the server what it has, compare to our cached sha.
+        // If they agree, we don't even open the zip path.
+        val remoteManifest = fetchManifest(transport, syncId)
+        if (cachedSha != null && remoteManifest != null && remoteManifest.sha256 == cachedSha) {
+            return@withContext false
+        }
+
+        // We have to zip. This is the multi-second path on big books.
         val (zipBytes, sha) = zipDirectory(bookRoot)
         val localSize = zipBytes.size.toLong()
+        writeCachedSha(cacheFile, sha)
 
-        // Fast path: if the server already has this exact payload, skip the upload entirely.
-        val remoteManifest = fetchManifest(transport, syncId)
+        // The cache may have been stale (mtimes outdated) but the actual content might
+        // still match the server. Re-check with the fresh sha before committing the upload.
         if (remoteManifest != null && remoteManifest.sha256 == sha && remoteManifest.sizeBytes == localSize) {
             return@withContext false
         }
@@ -104,6 +132,29 @@ class HttpSyncPayloadCodec(
             body = json.encodeToString(HttpSyncPayloadManifest.serializer(), manifest).toByteArray(),
         )
         true
+    }
+
+    /**
+     * Returns the cached payload sha iff the cache sidecar exists AND no file under the
+     * book root (excluding the per-key sidecars [PAYLOAD_EXCLUDED_FILES] which legitimately
+     * change every page turn) has a `lastModified` newer than the cache itself.
+     */
+    private fun readCachedShaIfFresh(bookRoot: File, cacheFile: File): String? {
+        if (!cacheFile.exists()) return null
+        val cacheMtime = cacheFile.lastModified()
+        val anyContentNewerThanCache = bookRoot.walkTopDown().any { file ->
+            file.isFile &&
+                file.name !in PAYLOAD_EXCLUDED_FILES &&
+                file.lastModified() > cacheMtime
+        }
+        if (anyContentNewerThanCache) return null
+        val raw = runCatching { cacheFile.readText().trim() }.getOrNull() ?: return null
+        return raw.takeIf { it.startsWith("sha256:") }
+    }
+
+    private fun writeCachedSha(cacheFile: File, sha: String) {
+        runCatching { cacheFile.writeText(sha) }
+        // Failure here just means subsequent syncs will recompute. Not fatal.
     }
 
     /**

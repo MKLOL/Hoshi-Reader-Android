@@ -640,6 +640,225 @@ class HttpSyncTest {
     }
 
     @Test
+    fun freshDeviceSyncDownloadsPayloadBookmarkAndChatInOnePass() = runBlocking {
+        // Regression: on a fresh device with no local books, a single syncOnce must
+        // download the payload AND the bookmark AND the chat entries — even though the
+        // server returns them in lex order (`bookmark` before `payload.manifest`).
+        //
+        // Before the fix, the bookmark / chat keys were seen first, the local book didn't
+        // exist yet, so they were silently skipped. Only the payload was applied.
+
+        val filesDir = tempFolder.newFolder("files")
+        val repo = BookRepository(filesDir)
+        val transport = FakeKvTransport()
+        val syncId = "fresh_device_book"
+        val title = "Fresh Device Book"
+
+        // Stage the "other device" state on the server: payload zip + manifest + bookmark + chat.
+        run {
+            val srcRoot = tempFolder.newFolder("device-a")
+            srcRoot.resolve("mokuro.json").writeText("""{"v":1}""")
+            srcRoot.resolve("pages").mkdirs()
+            srcRoot.resolve("pages/p1.png").writeBytes(byteArrayOf(0x42))
+            HttpSyncPayloadCodec(kotlinx.coroutines.Dispatchers.Unconfined)
+                .uploadIfChanged(transport, syncId, srcRoot, title, HttpSyncContentType.Mokuro)
+        }
+        transport.kv[bookmarkKey(syncId)] = FakeKvTransport.Stored(
+            body = json.encodeToString(
+                HttpSyncBookmarkBlob.serializer(),
+                HttpSyncBookmarkBlob(chapterIndex = 42, progress = 0.0, characterCount = 100, lastModified = "2030-01-01T00:00:00Z"),
+            ).toByteArray(),
+            contentType = "application/json; charset=utf-8",
+            lastModified = "2030-01-01T00:00:00Z",
+        )
+        val chatBlob = HttpSyncChatEntryBlob("hello", "p", "m", "world", 12345.0)
+        val chatSuffix = chatEntryKeySuffix(chatBlob.timestampSeconds, chatBlob.bubbleText, chatBlob.response)
+        transport.kv[chatKey(syncId, chatSuffix)] = FakeKvTransport.Stored(
+            body = json.encodeToString(HttpSyncChatEntryBlob.serializer(), chatBlob).toByteArray(),
+            contentType = "application/json; charset=utf-8",
+            lastModified = "2030-01-01T00:00:00Z",
+        )
+
+        // Fresh device: empty BookRepository, no AI history.
+        val historyStore = AiChatHistoryStore()
+        val reconciler = HttpSyncReconciler(
+            bookRepository = repo,
+            aiHistoryStore = historyStore,
+            transportFactory = { transport },
+            ioDispatcher = kotlinx.coroutines.Dispatchers.Unconfined,
+        )
+
+        val result = reconciler.syncOnce(configured)
+
+        assertEquals("payload should have been downloaded", 1, result.downloadedPayloads)
+        assertEquals("bookmark should have been downloaded in the SAME sync", 1, result.downloadedBookmarks)
+        assertEquals("chat entry should have been downloaded in the SAME sync", 1, result.downloadedChatEntries)
+
+        // The book is now on the shelf with bookmark + chat in place.
+        val importedBook = repo.loadBookEntries().single { deriveSyncId(it.metadata.title) == syncId }
+        assertEquals(42, repo.loadBookmark(importedBook.root)!!.chapterIndex)
+        assertEquals(1, historyStore.load(importedBook.root).entries.size)
+        assertEquals("hello", historyStore.load(importedBook.root).entries.single().bubbleText)
+    }
+
+    @Test
+    fun pushBookmarkDoesNotOverwriteNewerServerBookmark() = runBlocking {
+        // Device A is stale on page 50 (T1); server has page 100 (T2 > T1) from device B.
+        // The fix: pushBookmark must fetch + compare, refuse to clobber, pull instead.
+        val repo = newBookRepository()
+        val (root, _) = importMokuroBook(repo, "Stale Push")
+        val staleApple = 800_000_000.0
+        repo.saveBookmark(root, Bookmark(chapterIndex = 50, progress = 0.0, characterCount = 50, lastModified = staleApple))
+
+        val transport = FakeKvTransport()
+        // Server has a NEWER bookmark (lexicographically > the stale one's RFC).
+        val serverStamp = "2099-01-01T00:00:00Z"
+        transport.putJson(
+            key = bookmarkKey("stale_push"),
+            serializer = HttpSyncBookmarkBlob.serializer(),
+            value = HttpSyncBookmarkBlob(chapterIndex = 100, progress = 0.0, characterCount = 100, lastModified = serverStamp),
+            json = json,
+            lastModified = serverStamp,
+        )
+
+        val pusher = HttpSyncPusher(
+            bookRepository = repo,
+            transportFactory = { transport },
+            ioDispatcher = kotlinx.coroutines.Dispatchers.Unconfined,
+        )
+        pusher.pushBookmark(root, "Stale Push", configured)
+
+        // Server's bookmark is unchanged — we did NOT overwrite it.
+        val serverNow = transport.kv[bookmarkKey("stale_push")]!!
+        val serverBlob = json.decodeFromString(HttpSyncBookmarkBlob.serializer(), serverNow.body.toString(Charsets.UTF_8))
+        assertEquals("server bookmark must not be clobbered", 100, serverBlob.chapterIndex)
+        // And local got pulled forward to match.
+        assertEquals("local should have been bumped to server's value", 100, repo.loadBookmark(root)!!.chapterIndex)
+    }
+
+    @Test
+    fun pushBookmarkPushesWhenLocalIsStrictlyNewer() = runBlocking {
+        val repo = newBookRepository()
+        val (root, _) = importMokuroBook(repo, "Fresh Push")
+        // Local apple-seconds → RFC will be NEWER than the server's old stamp.
+        repo.saveBookmark(root, Bookmark(chapterIndex = 100, progress = 0.0, characterCount = 100, lastModified = 1_000_000_000.0))
+
+        val transport = FakeKvTransport()
+        transport.putJson(
+            key = bookmarkKey("fresh_push"),
+            serializer = HttpSyncBookmarkBlob.serializer(),
+            value = HttpSyncBookmarkBlob(chapterIndex = 1, progress = 0.0, characterCount = 1, lastModified = "2000-01-01T00:00:00Z"),
+            json = json,
+            lastModified = "2000-01-01T00:00:00Z",
+        )
+
+        val pusher = HttpSyncPusher(
+            bookRepository = repo,
+            transportFactory = { transport },
+            ioDispatcher = kotlinx.coroutines.Dispatchers.Unconfined,
+        )
+        pusher.pushBookmark(root, "Fresh Push", configured)
+
+        val serverNow = transport.kv[bookmarkKey("fresh_push")]!!
+        val serverBlob = json.decodeFromString(HttpSyncBookmarkBlob.serializer(), serverNow.body.toString(Charsets.UTF_8))
+        assertEquals("local is newer → push wins", 100, serverBlob.chapterIndex)
+    }
+
+    @Test
+    fun reconcilerPreservesServerDeletionTombstoneOnMetadataPush() = runBlocking {
+        // If another device set `deletedAt`, our metadata push must not erase it.
+        val repo = newBookRepository()
+        val (root, _) = importMokuroBook(repo, "Tombstone Book")
+        repo.saveBookmark(root, Bookmark(1, 0.0, 1, 800_000_000.0))
+
+        val transport = FakeKvTransport()
+        transport.putJson(
+            key = metadataKey("tombstone_book"),
+            serializer = HttpSyncMetadataBlob.serializer(),
+            value = HttpSyncMetadataBlob(
+                title = "Tombstone Book",
+                contentType = HttpSyncContentType.Mokuro,
+                deletedAt = "2030-06-01T00:00:00Z",
+            ),
+            json = json,
+            lastModified = "2030-06-01T00:00:00Z",
+        )
+
+        val manager = managerFor(repo, transport)
+        manager.syncOnce(configured)
+
+        // After the sync, the server's metadata still has the tombstone preserved.
+        val finalMeta = json.decodeFromString(
+            HttpSyncMetadataBlob.serializer(),
+            transport.kv[metadataKey("tombstone_book")]!!.body.toString(Charsets.UTF_8),
+        )
+        assertEquals(
+            "deletion tombstone must survive the outbound metadata push",
+            "2030-06-01T00:00:00Z",
+            finalMeta.deletedAt,
+        )
+    }
+
+    @Test
+    fun failedPayloadImportDoesNotPoisonOtherBooksInSameSync() = runBlocking {
+        // Fresh device: server has TWO books. The first one's payload zip is corrupted
+        // (sha256 won't match the manifest). The second one is fine. Both have bookmarks.
+        // The corrupted one should produce a per-book error; the second should sync cleanly.
+        val repo = newBookRepository()
+        val transport = FakeKvTransport()
+
+        // Book 1: corrupted payload (manifest claims a sha that the zip bytes don't match).
+        run {
+            val bogusZip = byteArrayOf(0x50, 0x4B, 0x05, 0x06).plus(ByteArray(20))  // "valid" but empty zip
+            transport.kv[payloadZipKey("corrupted_book")] = FakeKvTransport.Stored(
+                body = bogusZip, contentType = "application/zip", lastModified = "2030-01-01T00:00:00Z",
+            )
+            transport.putJson(
+                key = payloadManifestKey("corrupted_book"),
+                serializer = HttpSyncPayloadManifest.serializer(),
+                value = HttpSyncPayloadManifest(
+                    sha256 = "sha256:" + "ff".repeat(32),
+                    sizeBytes = 9_999_999L,
+                    originalName = "Corrupted Book",
+                    format = HttpSyncContentType.Mokuro,
+                ),
+                json = json,
+                lastModified = "2030-01-01T00:00:00Z",
+            )
+        }
+
+        // Book 2: clean payload via the codec, plus a bookmark.
+        run {
+            val src = tempFolder.newFolder("source-book2").apply {
+                resolve("mokuro.json").writeText("""{"good":true}""")
+            }
+            HttpSyncPayloadCodec(kotlinx.coroutines.Dispatchers.Unconfined)
+                .uploadIfChanged(transport, "good_book", src, "Good Book", HttpSyncContentType.Mokuro)
+            transport.putJson(
+                key = bookmarkKey("good_book"),
+                serializer = HttpSyncBookmarkBlob.serializer(),
+                value = HttpSyncBookmarkBlob(7, 0.0, 7, "2030-02-01T00:00:00Z"),
+                json = json,
+                lastModified = "2030-02-01T00:00:00Z",
+            )
+        }
+
+        val manager = managerFor(repo, transport)
+        val result = manager.syncOnce(configured)
+
+        // Good book made it through.
+        val imported = repo.loadBookEntries().singleOrNull { deriveSyncId(it.metadata.title) == "good_book" }
+        assertNotNull("good_book should have been imported", imported)
+        assertEquals(7, repo.loadBookmark(imported!!.root)!!.chapterIndex)
+
+        // Corrupted book did NOT crash the sync — it just surfaced as an error.
+        assertTrue(
+            "expected a corrupted_book error, got ${result.errors}",
+            result.errors.any { "corrupted_book" in it.lowercase() || "corrupted_book" in it },
+        )
+    }
+
+    @Test
     fun summaryRendersHumanReadableCountsOrNothingToSync() {
         val empty = HttpSyncResult(
             uploadedBookmarks = 0,

@@ -59,6 +59,18 @@ data class HttpSyncChatEntryBlob(
     val timestampSeconds: Double,
 )
 
+/**
+ * Cross-device ChatGPT settings: the model and the system prompt. **The API key is NOT
+ * in here on purpose** — it stays per-device for security; pasting a key on one phone
+ * never leaks it through sync to anywhere else. `lastModified` is the LWW tiebreaker.
+ */
+@Serializable
+data class HttpSyncAiChatSettingsBlob(
+    val model: String,
+    val promptText: String,
+    val lastModified: String,
+)
+
 @Serializable
 enum class HttpSyncContentType {
     @SerialName("epub") Epub,
@@ -105,6 +117,9 @@ internal fun metadataKey(syncId: String): String = "books/$syncId/metadata"
 internal fun chatPrefixForBook(syncId: String): String = "books/$syncId/chat/"
 internal fun chatKey(syncId: String, suffix: String): String = "books/$syncId/chat/$suffix"
 internal const val ALL_BOOKS_PREFIX: String = "books/"
+
+/** Single key for the cross-device ChatGPT settings (model + system prompt). */
+internal const val AI_CHAT_SETTINGS_KEY: String = "app/ai_chat_settings"
 
 /**
  * Builds the suffix of a chat entry's KV key: `{rfc3339_utc}-{8-hex-content-hash}`.

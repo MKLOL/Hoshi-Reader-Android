@@ -135,6 +135,33 @@ class HttpSyncPayloadTest {
     // ===== uploadIfChanged + manifest comparison ==============================================
 
     @Test
+    fun shaCacheSurvivesBookmarkAndChatLogMtimeChange() = runBlocking {
+        // The point of the cache is to make the SECOND sync fast — and the per-page-turn
+        // hooks rewrite bookmark.json + ai_chat_log.json constantly. If those legitimate
+        // mtime bumps invalidated the cache, every Sync now would re-zip a multi-MB book.
+        val src = tempFolder.newFolder("hot-reader-book").apply {
+            resolve("mokuro.json").writeText("""{"static":"content"}""")
+        }
+        val transport = FakeKvTransport()
+        codec.uploadIfChanged(transport, "hot_reader_book", src, "Hot Reader", HttpSyncContentType.Mokuro)
+        // Simulate the reader writing the bookmark sidecar (well after the cache was written).
+        val cacheFile = src.resolve(PAYLOAD_SHA_CACHE_FILENAME)
+        val later = cacheFile.lastModified() + 10_000
+        src.resolve("bookmark.json").apply {
+            writeText("""{"chapterIndex":99}""")
+            setLastModified(later)
+        }
+        src.resolve("ai_chat_log.json").apply {
+            writeText("""{"entries":[]}""")
+            setLastModified(later)
+        }
+        // Second sync must hit the fast path — bookmark/chat sidecar mtimes are explicitly
+        // excluded from the staleness check.
+        val uploaded = codec.uploadIfChanged(transport, "hot_reader_book", src, "Hot Reader", HttpSyncContentType.Mokuro)
+        assertFalse("bookmark/chat sidecar mtime changes must NOT invalidate the payload cache", uploaded)
+    }
+
+    @Test
     fun uploadIfChangedSkipsWhenServerManifestMatches() = runBlocking {
         val src = tempFolder.newFolder("hot-book").apply {
             resolve("mokuro.json").writeText("""{"v":1}""")
@@ -172,9 +199,20 @@ class HttpSyncPayloadTest {
         }
         val transport = FakeKvTransport()
         codec.uploadIfChanged(transport, "growing_book", src, "Growing Book", HttpSyncContentType.Mokuro)
-        // Mutate the source so the sha shifts.
-        src.resolve("mokuro.json").writeText("""{"pages":2}""")
-        src.resolve("new-page.png").writeBytes(byteArrayOf(1, 2, 3))
+        // Mutate the source so the sha shifts. Bump mtimes past the cache file's mtime —
+        // `File.lastModified()` has 1-second resolution on some filesystems, and unit tests
+        // run faster than that. Production code doesn't see this because real edits are
+        // separated by seconds at minimum.
+        val cacheFile = src.resolve(PAYLOAD_SHA_CACHE_FILENAME)
+        val futureMtime = cacheFile.lastModified() + 2_000
+        src.resolve("mokuro.json").apply {
+            writeText("""{"pages":2}""")
+            setLastModified(futureMtime)
+        }
+        src.resolve("new-page.png").apply {
+            writeBytes(byteArrayOf(1, 2, 3))
+            setLastModified(futureMtime)
+        }
         val uploaded = codec.uploadIfChanged(transport, "growing_book", src, "Growing Book", HttpSyncContentType.Mokuro)
         assertTrue("content changed = re-upload", uploaded)
     }

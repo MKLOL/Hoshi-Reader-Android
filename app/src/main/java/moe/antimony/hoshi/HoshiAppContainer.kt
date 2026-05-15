@@ -8,6 +8,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import moe.antimony.hoshi.dictionary.DictionaryRepository
 import moe.antimony.hoshi.epub.BookRepository
+import moe.antimony.hoshi.features.ai.AiChatSettingsRepository
+import moe.antimony.hoshi.features.ai.aiChatSettingsRepository
 import moe.antimony.hoshi.features.audio.AudioSettingsRepository
 import moe.antimony.hoshi.features.audio.LocalAudioRepository
 import moe.antimony.hoshi.features.audio.audioSettingsRepository
@@ -79,8 +81,12 @@ internal class HoshiAppContainer(context: Context) {
         drive = googleDriveClient,
     )
     val httpSyncSettingsRepository: HttpSyncSettingsRepository = appContext.httpSyncSettingsRepository()
+    val aiChatSettingsRepository: AiChatSettingsRepository = appContext.aiChatSettingsRepository()
     val httpSyncPusher: HttpSyncPusher = HttpSyncPusher(bookRepository = bookRepository)
-    val httpSyncReconciler: HttpSyncReconciler = HttpSyncReconciler(bookRepository = bookRepository)
+    val httpSyncReconciler: HttpSyncReconciler = HttpSyncReconciler(
+        bookRepository = bookRepository,
+        aiSettingsRepository = aiChatSettingsRepository,
+    )
     val ankiRepository: AnkiRepository = AnkiRepository(
         context = appContext,
         backend = AnkiDroidBackendAdapter(AndroidAnkiContentApi(appContext)),
