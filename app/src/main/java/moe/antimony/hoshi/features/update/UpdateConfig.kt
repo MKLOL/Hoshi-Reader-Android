@@ -20,14 +20,14 @@ internal object UpdateConfig {
      *
      * Fork owners flip this here, rebuild, and ship.
      */
-    const val AUTO_UPDATE_ENABLED: Boolean = false
+    const val AUTO_UPDATE_ENABLED: Boolean = true
 
     /**
      * The GitHub `<owner>/<repo>` whose releases the updater polls. Change these to point
      * at your fork's releases. The repo must publish releases with a `.apk` asset, matching
      * upstream's release layout (see [GitHubReleaseUpdateRepository] for the parser).
      */
-    const val GITHUB_OWNER: String = "HuangAntimony"
+    const val GITHUB_OWNER: String = "MKLOL"
     const val GITHUB_REPO: String = "Hoshi-Reader-Android"
 
     /** Human-facing repository URL used by the About screen's "Source" link. */

@@ -39,22 +39,27 @@ class GitHubReleaseUpdateRepositoryTest {
 
     @Test
     fun fallsBackToMirroredLatestReleaseAndPrefersMirroredDownloads() = runBlocking {
+        // URLs are derived from [GitHubReleaseUpdateRepository.LatestReleaseUrl] so the test
+        // tracks the fork's configured GitHub owner/repo automatically.
+        val primaryApi = GitHubReleaseUpdateRepository.LatestReleaseUrl
+        val mirroredApi = "https://ghproxy.vip/$primaryApi"
+        val assetUrl = "https://example.com/Hoshi-Reader-v0.3.5.apk"
         val client = FakeGitHubHttpClient(
             responses = mapOf(
-                "https://ghproxy.vip/https://api.github.com/repos/HuangAntimony/Hoshi-Reader-Android/releases/latest" to """
+                mirroredApi to """
                     {
                       "tag_name": "v0.3.5",
-                      "html_url": "https://github.com/HuangAntimony/Hoshi-Reader-Android/releases/tag/v0.3.5",
+                      "html_url": "https://example.com/releases/tag/v0.3.5",
                       "assets": [
                         {
                           "name": "Hoshi-Reader-v0.3.5.apk",
-                          "browser_download_url": "https://github.com/HuangAntimony/Hoshi-Reader-Android/releases/download/v0.3.5/Hoshi-Reader-v0.3.5.apk"
+                          "browser_download_url": "$assetUrl"
                         }
                       ]
                     }
                 """.trimIndent(),
             ),
-            failures = setOf(GitHubReleaseUpdateRepository.LatestReleaseUrl),
+            failures = setOf(primaryApi),
         )
         val repository = GitHubReleaseUpdateRepository(httpClient = client)
 
@@ -62,18 +67,9 @@ class GitHubReleaseUpdateRepositoryTest {
         val update = release.availableUpdateOrNull(currentVersionName = "0.3.4")
 
         requireNotNull(update)
-        assertEquals(
-            listOf(
-                GitHubReleaseUpdateRepository.LatestReleaseUrl,
-                "https://ghproxy.vip/https://api.github.com/repos/HuangAntimony/Hoshi-Reader-Android/releases/latest",
-            ),
-            client.requestedUrls.take(2),
-        )
-        assertEquals(
-            "https://gh-proxy.com/https://github.com/HuangAntimony/Hoshi-Reader-Android/releases/download/v0.3.5/Hoshi-Reader-v0.3.5.apk",
-            update.downloadUrl,
-        )
-        assertTrue(update.fallbackDownloadUrls.contains("https://github.com/HuangAntimony/Hoshi-Reader-Android/releases/download/v0.3.5/Hoshi-Reader-v0.3.5.apk"))
+        assertEquals(listOf(primaryApi, mirroredApi), client.requestedUrls.take(2))
+        assertEquals("https://gh-proxy.com/$assetUrl", update.downloadUrl)
+        assertTrue(update.fallbackDownloadUrls.contains(assetUrl))
     }
 
     @Test
