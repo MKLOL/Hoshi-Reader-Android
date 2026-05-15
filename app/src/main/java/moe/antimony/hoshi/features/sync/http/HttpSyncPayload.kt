@@ -40,10 +40,28 @@ data class HttpSyncPayloadManifest(
     val format: HttpSyncContentType,
 )
 
-/** Files inside a book directory that should NOT be zipped — they're synced per-key. */
+/**
+ * Files inside a book directory that should NOT be zipped — they're per-device or synced
+ * via their own key path. Including them in the payload would either:
+ *
+ *  - corrupt cross-device convergence (`metadata.json` has a per-device `id` UUID and a
+ *    `lastAccess` timestamp that gets rewritten every time the user opens the book, so
+ *    the payload zip would mutate on every open and re-upload churn forever — this was
+ *    the bug the user reported as "scrolled a bit, pressed Sync, took forever and said
+ *    book payload up");
+ *  - waste bytes on state that already syncs through its own key (`bookmark.json` and
+ *    `ai_chat_log.json` flow through `books/{syncId}/bookmark` and `…/chat/…`);
+ *  - feed the staleness check noise that isn't real content change
+ *    (`.payload.sha256.cache` is the cache itself).
+ *
+ * The receiving device generates its own [moe.antimony.hoshi.epub.BookMetadata] via
+ * [HttpSyncReconciler.importRemoteOnlyBook] after unpacking, so excluding it loses
+ * nothing across-device.
+ */
 internal val PAYLOAD_EXCLUDED_FILES: Set<String> = setOf(
     "bookmark.json",
     "ai_chat_log.json",
+    "metadata.json",
     PAYLOAD_SHA_CACHE_FILENAME,
 )
 

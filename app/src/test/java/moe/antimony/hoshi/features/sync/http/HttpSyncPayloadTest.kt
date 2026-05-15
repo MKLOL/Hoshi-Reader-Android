@@ -54,21 +54,54 @@ class HttpSyncPayloadTest {
     }
 
     @Test
-    fun zipExcludesBookmarkAndChatLogSidecars() = runBlocking {
+    fun zipExcludesPerDeviceSidecars() = runBlocking {
         val src = tempFolder.newFolder("book").apply {
             resolve("mokuro.json").writeText("{}")
             resolve("bookmark.json").writeText("""{"chapterIndex": 5}""")
             resolve("ai_chat_log.json").writeText("""{"entries":[]}""")
-            resolve("metadata.json").writeText("""{"title":"Hi"}""")
+            // metadata.json carries per-device fields (UUID id, lastAccess timestamp)
+            // that rewrite on every book-open. Including it in the zip would make every
+            // device's payload sha differ and re-upload forever — the regression the
+            // user reported as "scrolled a bit, pressed Sync, said book payload up."
+            resolve("metadata.json").writeText("""{"title":"Hi","id":"device-a-uuid","lastAccess":12345}""")
         }
         val (zipBytes, _) = codec.zipDirectory(src)
         val dest = tempFolder.newFolder("unpacked")
         codec.unzipInto(zipBytes, dest)
 
-        assertTrue(dest.resolve("mokuro.json").exists())
-        assertTrue(dest.resolve("metadata.json").exists())
+        assertTrue("content file (mokuro.json) round-trips", dest.resolve("mokuro.json").exists())
         assertFalse("bookmark.json must not round-trip via the payload", dest.resolve("bookmark.json").exists())
         assertFalse("ai_chat_log.json must not round-trip via the payload", dest.resolve("ai_chat_log.json").exists())
+        assertFalse("metadata.json must not round-trip — receiving device makes its own", dest.resolve("metadata.json").exists())
+    }
+
+    @Test
+    fun shaCacheSurvivesMetadataJsonMtimeChange() = runBlocking {
+        // Companion to shaCacheSurvivesBookmarkAndChatLogMtimeChange — the user reported
+        // "scrolled a bit, pressed Sync, took a long time and said book payload up". Root
+        // cause was metadata.json being rewritten with a new lastAccess every book-open,
+        // bumping its mtime past the cache, invalidating cache, re-zipping, re-hashing,
+        // sha differs because metadata.json is per-device, re-upload. The fix excludes
+        // metadata.json from the zip AND from the staleness check. Verify the cache stays
+        // fresh after a metadata.json rewrite.
+        val src = tempFolder.newFolder("metadata-thrash-book").apply {
+            resolve("mokuro.json").writeText("""{"v":1}""")
+            resolve("metadata.json").writeText("""{"title":"T","id":"abc","lastAccess":0}""")
+        }
+        val transport = FakeKvTransport()
+        codec.uploadIfChanged(transport, "metadata_thrash", src, "Metadata Thrash", HttpSyncContentType.Mokuro)
+
+        // User opens the book; bookshelf rewrites metadata.json with a new lastAccess.
+        val cacheFile = src.resolve(PAYLOAD_SHA_CACHE_FILENAME)
+        val later = cacheFile.lastModified() + 5_000
+        src.resolve("metadata.json").apply {
+            writeText("""{"title":"T","id":"abc","lastAccess":99999}""")
+            setLastModified(later)
+        }
+
+        // Second sync must hit the fast path.
+        val uploaded = codec.uploadIfChanged(transport, "metadata_thrash", src, "Metadata Thrash", HttpSyncContentType.Mokuro)
+        assertFalse("metadata.json mtime/content change must NOT trigger a re-upload", uploaded)
     }
 
     @Test
