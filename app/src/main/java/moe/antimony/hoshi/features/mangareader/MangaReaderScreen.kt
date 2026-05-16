@@ -12,11 +12,14 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.systemBars
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -48,11 +51,18 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import androidx.core.graphics.createBitmap
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.findViewTreeLifecycleOwner
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -76,6 +86,8 @@ import moe.antimony.hoshi.features.dictionary.createLookupPopupItem
 import moe.antimony.hoshi.features.reader.ReaderNavigationDirection
 import moe.antimony.hoshi.features.reader.ReaderSelectionData
 import moe.antimony.hoshi.features.reader.ReaderSettings
+import moe.antimony.hoshi.features.reader.findHoshiActivity
+import moe.antimony.hoshi.features.reader.readerShouldUseImmersiveSystemBars
 import moe.antimony.hoshi.features.reader.readerHardwareKeyActionForKeyEvent
 import moe.antimony.hoshi.features.reader.ReaderHardwareKeyAction
 import moe.antimony.hoshi.features.reader.usesDarkInterface
@@ -111,6 +123,9 @@ internal fun MangaReaderScreen(
     val backgroundColor = Color(readerSettings.backgroundColor(systemDark))
     val backgroundCssColor = remember(backgroundColor) { backgroundColor.toCssHex() }
     val pageCount = book.pages.size
+    val context = LocalContext.current
+    val view = LocalView.current
+    val lifecycle = view.findViewTreeLifecycleOwner()?.lifecycle
 
     var pageIndex by remember(book) {
         mutableIntStateOf(initialPageIndex.coerceIn(0, book.pages.lastIndex.coerceAtLeast(0)))
@@ -133,7 +148,6 @@ internal fun MangaReaderScreen(
 
     // ChatGPT speech-bubble feature. Deliberately self-contained — its own settings repo and
     // per-manga history store (see features/ai) — so it never touches shared/upstream files.
-    val context = LocalContext.current
     val aiSettingsRepository = remember { context.applicationContext.aiChatSettingsRepository() }
     val aiSettings by aiSettingsRepository.settings.collectAsState(initial = null)
     val aiHistoryStore = remember { AiChatHistoryStore() }
@@ -328,6 +342,37 @@ internal fun MangaReaderScreen(
         onReaderKeyEventHandlerChange { event -> currentKeyHandler.value(event) }
         onDispose { onReaderKeyEventHandlerChange(null) }
     }
+    DisposableEffect(context, view, lifecycle) {
+        val activity = context.findHoshiActivity()
+        val window = activity?.window
+        val controller = window?.let { currentWindow ->
+            WindowCompat.getInsetsController(currentWindow, view)
+        }
+        val previousSystemBarsBehavior = controller?.systemBarsBehavior
+        fun applyReaderSystemBars() {
+            if (readerShouldUseImmersiveSystemBars(focusMode = false, immersiveReaderContent = true)) {
+                controller?.systemBarsBehavior =
+                    WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+                controller?.hide(WindowInsetsCompat.Type.systemBars())
+            } else {
+                controller?.show(WindowInsetsCompat.Type.systemBars())
+            }
+        }
+        applyReaderSystemBars()
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                applyReaderSystemBars()
+            }
+        }
+        lifecycle?.addObserver(observer)
+        onDispose {
+            lifecycle?.removeObserver(observer)
+            if (previousSystemBarsBehavior != null) {
+                controller?.systemBarsBehavior = previousSystemBarsBehavior
+            }
+            controller?.show(WindowInsetsCompat.Type.systemBars())
+        }
+    }
 
     // Flush a still-pending debounced bookmark save when the reader is left, so closing it
     // within the debounce window doesn't lose the last page turn. rememberCoroutineScope is
@@ -393,89 +438,98 @@ internal fun MangaReaderScreen(
             .fillMaxSize()
             .background(backgroundColor),
     ) {
-        val activeTransition = pageTransition
-        val animating = animatingTransition
-        val containerWidthPx = constraints.maxWidth
-        // The WebView's viewport size in CSS pixels — Dp values are 1:1 with CSS px for a
-        // WebView at default scale. Passed into the page so `.frame` is sized from a
-        // known-good size instead of a possibly-stale `window.innerWidth` during a
-        // page-turn reload, which would otherwise resize the incoming artwork mid-slide.
-        val viewportCssWidth = maxWidth.value.roundToInt()
-        val viewportCssHeight = maxHeight.value.roundToInt()
-        // Slide direction for a right-to-left manga, modelled as a filmstrip with page 1 at
-        // the right: a forward turn slides the outgoing page off to the *right* and pulls the
-        // incoming page in from the left; a backward turn does the reverse. The incoming page
-        // slides in from the opposite edge, so the two stay edge to edge with no gap.
-        // `transitionProgress` is read inside the offset lambdas so each animation frame only
-        // re-lays-out, never recomposes.
-        val leavingSign =
-            if (activeTransition?.direction == ReaderNavigationDirection.Backward) -1 else 1
-
-        MangaReaderWebView(
-            book = book,
-            bookRoot = bookRoot,
-            pageIndex = pageIndex,
-            backgroundCssColor = backgroundCssColor,
-            scanNonJapaneseText = dictionarySettings.scanNonJapaneseText,
-            eInkMode = readerSettings.eInkMode,
-            viewportCssWidth = viewportCssWidth,
-            viewportCssHeight = viewportCssHeight,
-            onNavigate = { direction -> navigate(direction) },
-            onTextSelected = handleTextSelected,
-            onSelectionCleared = { lookupPopups = emptyList() },
-            onAskAi = { bubbleText -> askAi(bubbleText) },
-            onPageReady = { readyPageIndex ->
-                if (pageTransition != null && readyPageIndex == pageIndex) {
-                    readyTransition = pageTransition
-                }
-            },
-            onWebViewReady = { webView = it },
+        BoxWithConstraints(
             modifier = Modifier
                 .fillMaxSize()
-                .offset {
-                    val transition = activeTransition ?: return@offset IntOffset.Zero
-                    // Hold progress at 0 until the LaunchedEffect has adopted this transition,
-                    // so the snapshot below covers the reloading WebView from the first frame.
-                    val progress =
-                        if (transition === animating) transitionProgress.value else 0f
-                    val entering = -leavingSign * containerWidthPx * (1f - progress)
-                    IntOffset(entering.roundToInt(), 0)
-                },
-        )
+                .windowInsetsPadding(WindowInsets.systemBars),
+        ) {
+            val activeTransition = pageTransition
+            val animating = animatingTransition
+            val containerWidthPx = constraints.maxWidth
+            // The WebView's viewport size in CSS pixels — Dp values are 1:1 with CSS px for a
+            // WebView at default scale. Passed into the page so `.frame` is sized from a
+            // known-good size instead of a possibly-stale `window.innerWidth` during a
+            // page-turn reload. If a device keeps a top system bar visible, systemBars
+            // reduces this viewport so the page artwork is contained below that bar instead
+            // of being clipped behind it; when immersive mode succeeds these insets are
+            // empty and manga uses the full screen.
+            val viewportCssWidth = maxWidth.value.roundToInt()
+            val viewportCssHeight = maxHeight.value.roundToInt()
+            // Slide direction for a right-to-left manga, modelled as a filmstrip with page 1 at
+            // the right: a forward turn slides the outgoing page off to the *right* and pulls the
+            // incoming page in from the left; a backward turn does the reverse. The incoming page
+            // slides in from the opposite edge, so the two stay edge to edge with no gap.
+            // `transitionProgress` is read inside the offset lambdas so each animation frame only
+            // re-lays-out, never recomposes.
+            val leavingSign =
+                if (activeTransition?.direction == ReaderNavigationDirection.Backward) -1 else 1
 
-        if (activeTransition != null) {
-            // The outgoing page, drawn on top of the (incoming) WebView and slid off-screen.
-            Image(
-                bitmap = activeTransition.snapshot,
-                contentDescription = null,
-                contentScale = ContentScale.FillBounds,
+            MangaReaderWebView(
+                book = book,
+                bookRoot = bookRoot,
+                pageIndex = pageIndex,
+                backgroundCssColor = backgroundCssColor,
+                scanNonJapaneseText = dictionarySettings.scanNonJapaneseText,
+                eInkMode = readerSettings.eInkMode,
+                viewportCssWidth = viewportCssWidth,
+                viewportCssHeight = viewportCssHeight,
+                onNavigate = { direction -> navigate(direction) },
+                onTextSelected = handleTextSelected,
+                onSelectionCleared = { lookupPopups = emptyList() },
+                onAskAi = { bubbleText -> askAi(bubbleText) },
+                onPageReady = { readyPageIndex ->
+                    if (pageTransition != null && readyPageIndex == pageIndex) {
+                        readyTransition = pageTransition
+                    }
+                },
+                onWebViewReady = { webView = it },
                 modifier = Modifier
                     .fillMaxSize()
                     .offset {
-                        val progress = if (activeTransition === animating) {
-                            transitionProgress.value
-                        } else {
-                            0f
-                        }
-                        val leaving = leavingSign * containerWidthPx * progress
-                        IntOffset(leaving.roundToInt(), 0)
+                        val transition = activeTransition ?: return@offset IntOffset.Zero
+                        // Hold progress at 0 until the LaunchedEffect has adopted this transition,
+                        // so the snapshot below covers the reloading WebView from the first frame.
+                        val progress =
+                            if (transition === animating) transitionProgress.value else 0f
+                        val entering = -leavingSign * containerWidthPx * (1f - progress)
+                        IntOffset(entering.roundToInt(), 0)
                     },
             )
-        }
 
-        LookupPopupStackView(
-            popups = lookupPopups,
-            onPopupsChange = { lookupPopups = it },
-            lookupChildPopup = ::lookupPopupFor,
-            onRootPopupDismissed = {
-                // Clear the in-page selection highlight, then return false so the stack view
-                // still removes the dismissed popup from the list (the manga reader has no
-                // separate root-popup teardown to own the dismissal).
-                webView?.clearMangaSelection()
-                false
-            },
-            modifier = Modifier.fillMaxSize(),
-        )
+            if (activeTransition != null) {
+                // The outgoing page, drawn on top of the (incoming) WebView and slid off-screen.
+                Image(
+                    bitmap = activeTransition.snapshot,
+                    contentDescription = null,
+                    contentScale = ContentScale.FillBounds,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .offset {
+                            val progress = if (activeTransition === animating) {
+                                transitionProgress.value
+                            } else {
+                                0f
+                            }
+                            val leaving = leavingSign * containerWidthPx * progress
+                            IntOffset(leaving.roundToInt(), 0)
+                        },
+                )
+            }
+
+            LookupPopupStackView(
+                popups = lookupPopups,
+                onPopupsChange = { lookupPopups = it },
+                lookupChildPopup = ::lookupPopupFor,
+                onRootPopupDismissed = {
+                    // Clear the in-page selection highlight, then return false so the stack view
+                    // still removes the dismissed popup from the list (the manga reader has no
+                    // separate root-popup teardown to own the dismissal).
+                    webView?.clearMangaSelection()
+                    false
+                },
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
 
         MangaReaderCloseButton(
             darkInterface = readerSettings.usesDarkInterface(systemDark),

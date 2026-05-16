@@ -47,6 +47,22 @@ class ReaderSystemBarsTest {
     }
 
     @Test
+    fun mangaAndOtherImmersiveReaderContentUsesImmersiveSystemBarsOnEveryDevice() {
+        assertTrue(
+            readerShouldUseImmersiveSystemBars(
+                focusMode = false,
+                immersiveReaderContent = true,
+                deviceProfile = ReaderDeviceProfile(
+                    manufacturer = "Google",
+                    brand = "google",
+                    model = "Pixel",
+                    device = "raven",
+                ),
+            ),
+        )
+    }
+
+    @Test
     fun otherDevicesKeepNormalBarsUntilFocusMode() {
         assertFalse(
             readerShouldUseImmersiveSystemBars(

@@ -1,5 +1,8 @@
 package moe.antimony.hoshi.features.reader
 
+import android.app.Activity
+import android.content.Context
+import android.content.ContextWrapper
 import android.os.Build
 import java.util.Locale
 
@@ -20,9 +23,16 @@ internal fun currentReaderDeviceProfile(): ReaderDeviceProfile =
 
 internal fun readerShouldUseImmersiveSystemBars(
     focusMode: Boolean,
+    immersiveReaderContent: Boolean = false,
     deviceProfile: ReaderDeviceProfile = currentReaderDeviceProfile(),
 ): Boolean =
-    focusMode || deviceProfile.isBooxReaderDevice()
+    focusMode || immersiveReaderContent || deviceProfile.isBooxReaderDevice()
+
+internal tailrec fun Context.findHoshiActivity(): Activity? = when (this) {
+    is Activity -> this
+    is ContextWrapper -> baseContext.findHoshiActivity()
+    else -> null
+}
 
 private fun ReaderDeviceProfile.isBooxReaderDevice(): Boolean =
     listOfNotNull(manufacturer, brand, model, device)

@@ -106,7 +106,8 @@ page images) that reuses the bookshelf, dictionary lookup, and Anki mining.
   pages, zoomed OCR bubble taps hit the visible bubble position, and the floating controls
   / page chip have subtle independent backgrounds without full-width input bars.
 - Boox/Onyx fullscreen reader bars still need real-device validation with a tall manga
-  page: the top status strip should hide while reading and must not cover page artwork.
+  page after emulator validation: the top status strip should hide while reading, and if
+  a device keeps a system bar visible then page artwork must be inset below it.
 - Not yet done: reader appearance/settings sheet for manga, two-page spreads, manga
   reading statistics. Manual validation should cover import of both source layouts and RTL
   paging boundaries.

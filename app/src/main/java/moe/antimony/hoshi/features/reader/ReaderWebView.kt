@@ -5,9 +5,7 @@ import moe.antimony.hoshi.epub.SasayakiMatchData
 import moe.antimony.hoshi.epub.SasayakiMatch
 
 import android.annotation.SuppressLint
-import android.app.Activity
 import android.content.Context
-import android.content.ContextWrapper
 import android.net.Uri
 import android.os.SystemClock
 import android.webkit.JavascriptInterface
@@ -720,7 +718,7 @@ fun ReaderWebView(
         sasayakiAutoScroll = sasayakiSettings.autoScroll,
     )
     DisposableEffect(context, keepScreenOn) {
-        val window = context.findActivity()?.window
+        val window = context.findHoshiActivity()?.window
         if (keepScreenOn) {
             window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         } else {
@@ -793,7 +791,7 @@ fun ReaderWebView(
         ReaderTheme.Light, ReaderTheme.Sepia -> true
     }
     DisposableEffect(context, view, useLightSystemBars, systemDarkTheme) {
-        val activity = context.findActivity()
+        val activity = context.findHoshiActivity()
         val controller = activity?.window?.let { window ->
             WindowCompat.getInsetsController(window, view)
         }
@@ -806,7 +804,7 @@ fun ReaderWebView(
     }
     val useImmersiveSystemBars = readerShouldUseImmersiveSystemBars(focusMode)
     DisposableEffect(context, view, lifecycle, useImmersiveSystemBars) {
-        val activity = context.findActivity()
+        val activity = context.findHoshiActivity()
         val window = activity?.window
         val controller = window?.let { currentWindow ->
             WindowCompat.getInsetsController(currentWindow, view)
@@ -2045,12 +2043,6 @@ private var readerPageTurnProgressRequestId = 0L
 private const val MAX_SELECTION_LENGTH = 16
 private const val CONTINUOUS_PROGRESS_THROTTLE_MS = 50L
 private const val CONTINUOUS_SCROLL_SAVE_IDLE_DELAY_MS = 250L
-
-private tailrec fun Context.findActivity(): Activity? = when (this) {
-    is Activity -> this
-    is ContextWrapper -> baseContext.findActivity()
-    else -> null
-}
 
 private fun resolveBookCoverFile(bookRoot: File?, coverHref: String?): File? {
     val root = bookRoot?.canonicalFile ?: return null
