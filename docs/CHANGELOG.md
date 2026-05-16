@@ -5,6 +5,12 @@ The format follows a Keep a Changelog style, and release sections use Semantic V
 
 ## [Unreleased]
 
+## [v0.7.14] - 2026-05-16
+
+### Fixed
+
+- Keep manga pages from being covered by the Boox/Onyx top system bar by entering Android immersive reader mode on those devices, and make reader focus mode hide both status and navigation bars.
+
 ## [v0.7.13] - 2026-05-15
 
 ### Fixed

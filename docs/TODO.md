@@ -1,6 +1,6 @@
 # Hoshi Android Agent TODO
 
-Last updated: 2026-05-15
+Last updated: 2026-05-16
 
 This file is the short operational handoff for future agents.
 
@@ -105,6 +105,8 @@ page images) that reuses the bookshelf, dictionary lookup, and Anki mining.
   page is not zoomed or pannable, two-finger pinch zooms and one-finger panning do not turn
   pages, zoomed OCR bubble taps hit the visible bubble position, and the floating controls
   / page chip have subtle independent backgrounds without full-width input bars.
+- Boox/Onyx fullscreen reader bars still need real-device validation with a tall manga
+  page: the top status strip should hide while reading and must not cover page artwork.
 - Not yet done: reader appearance/settings sheet for manga, two-page spreads, manga
   reading statistics. Manual validation should cover import of both source layouts and RTL
   paging boundaries.

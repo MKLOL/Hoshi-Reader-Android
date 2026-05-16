@@ -93,6 +93,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.zIndex
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.findViewTreeLifecycleOwner
@@ -803,18 +804,36 @@ fun ReaderWebView(
             controller?.isAppearanceLightNavigationBars = !systemDarkTheme
         }
     }
-    DisposableEffect(context, view, focusMode) {
+    val useImmersiveSystemBars = readerShouldUseImmersiveSystemBars(focusMode)
+    DisposableEffect(context, view, lifecycle, useImmersiveSystemBars) {
         val activity = context.findActivity()
-        val controller = activity?.window?.let { window ->
-            WindowCompat.getInsetsController(window, view)
+        val window = activity?.window
+        val controller = window?.let { currentWindow ->
+            WindowCompat.getInsetsController(currentWindow, view)
         }
-        if (focusMode) {
-            controller?.hide(WindowInsetsCompat.Type.statusBars())
-        } else {
-            controller?.show(WindowInsetsCompat.Type.statusBars())
+        val previousSystemBarsBehavior = controller?.systemBarsBehavior
+        fun applyReaderSystemBars() {
+            if (useImmersiveSystemBars) {
+                controller?.systemBarsBehavior =
+                    WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+                controller?.hide(WindowInsetsCompat.Type.systemBars())
+            } else {
+                controller?.show(WindowInsetsCompat.Type.systemBars())
+            }
         }
+        applyReaderSystemBars()
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                applyReaderSystemBars()
+            }
+        }
+        lifecycle?.addObserver(observer)
         onDispose {
-            controller?.show(WindowInsetsCompat.Type.statusBars())
+            lifecycle?.removeObserver(observer)
+            if (previousSystemBarsBehavior != null) {
+                controller?.systemBarsBehavior = previousSystemBarsBehavior
+            }
+            controller?.show(WindowInsetsCompat.Type.systemBars())
         }
     }
 
