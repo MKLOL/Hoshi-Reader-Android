@@ -58,6 +58,7 @@ class V3SyncEngine(
         aiHistoryStore = aiHistoryStore,
         payloadCodec = payloadCodec,
         pushOps = pushOps,
+        bookLocks = bookLocks,
     )
 
     // Serialize syncOnce calls. The shelf-state and deleted-book sidecars are written
@@ -89,10 +90,12 @@ class V3SyncEngine(
             onProgress(V3Progress(V3Phase.Planning, "Computing plan"))
             val plan = planner.compute(local, remoteResult.snapshot)
 
-            // Per-key remote-listing errors (decoding failures, etc) accumulate alongside
-            // any per-action executor errors so the UI surfaces them in one place.
+            // Per-key remote-listing errors (decoding failures, etc) and planner-level
+            // conflicts (e.g. cross-content-type syncId collisions, Bug 6) accumulate
+            // alongside any per-action executor errors so the UI surfaces them in one
+            // place.
             val executed = executor.run(plan, transport, onProgress)
-            executed.copy(errors = remoteResult.errors + executed.errors)
+            executed.copy(errors = remoteResult.errors + plan.errors + executed.errors)
         }
     }
 }

@@ -41,6 +41,41 @@ class V3LocalState(
         val entries = bookRepository.loadBookEntries()
         val shelfRecords = shelfStateStore.load(bookRepository.booksDirectory)
         val deletedRecords = deletedBookStateStore.load(bookRepository.booksDirectory)
+            .let { records ->
+                // Bug 1: a live local book with the same syncId as a recorded
+                // tombstone means the user re-imported the title after deleting
+                // (and before the next sync flushed the tombstone). The user wants
+                // this book — drop the stale tombstone BEFORE building the snapshot
+                // so the planner sees an ordinary live book, and persist the cleanup
+                // so future syncs don't re-trigger the wipe.
+                // Spec contract (`docs/SYNC_V3_SPEC.md` §449): "Re-import after delete.
+                // A deletes; tombstone is on server; A re-imports the same title —
+                // local re-import survives, doesn't get wiped by its own tombstone."
+                val liveSyncIds = entries.asSequence()
+                    .mapNotNull { e -> e.metadata.title.takeUnless { it.isNullOrBlank() }?.let(::deriveSyncId) }
+                    .toSet()
+                val stale = records.keys.intersect(liveSyncIds)
+                if (stale.isEmpty()) {
+                    records
+                } else {
+                    // Bug 3 coordination: clear stale entries one at a time via
+                    // the atomic per-key store helper instead of a full-map
+                    // `save(pruned)`. The full-map save would clobber any
+                    // tombstone added concurrently by the user's delete path
+                    // (BookshelfRepository.recordHttpSyncTombstone) between this
+                    // load and the save. The per-key remove re-reads disk under
+                    // the store's lock and only touches the keys we want gone.
+                    for (syncId in stale) {
+                        runCatching {
+                            deletedBookStateStore.removeDeletedBook(
+                                bookRepository.booksDirectory,
+                                syncId,
+                            )
+                        }
+                    }
+                    records.filterKeys { it !in stale }
+                }
+            }
         val shelves = bookRepository.loadShelves()
         val shelvesUpdatedAt: String? = bookRepository.shelvesLastModifiedMillis()
             ?.let { Instant.ofEpochMilli(it).toString() }
@@ -92,6 +127,7 @@ class V3LocalState(
                 bookmark = bookmark,
                 chatEntries = chatEntries,
                 pendingDeletion = pendingDeletion,
+                importedAt = entry.metadata.importedAt,
             )
         }
 

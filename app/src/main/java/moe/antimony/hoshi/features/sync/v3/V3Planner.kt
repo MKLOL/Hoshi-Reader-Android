@@ -5,6 +5,8 @@ import moe.antimony.hoshi.features.sync.http.appleSecondsToRfc3339
 import moe.antimony.hoshi.features.sync.http.chatEntryKeySuffix
 import moe.antimony.hoshi.features.sync.http.chatKey
 import moe.antimony.hoshi.features.sync.http.compareRfc3339
+import moe.antimony.hoshi.features.sync.http.localImportedAtOverridesRemoteDeletion
+import moe.antimony.hoshi.features.sync.http.maxRfc
 
 /**
  * Step 3 of the v3 algorithm — **PURE**. Given a snapshot of local and remote
@@ -36,6 +38,7 @@ class V3Planner {
         val pushPayloads = mutableListOf<V3Action.PushPayload>()
         val pushMetadatas = mutableListOf<V3Action.PushMetadata>()
         val pushAiSettings = mutableListOf<V3Action.PushAiSettings>()
+        val plannerErrors = mutableListOf<V3Error>()
 
         val pendingRemoteOnly = mutableSetOf<String>()
 
@@ -57,9 +60,17 @@ class V3Planner {
                 continue
             }
 
-            // Server-side tombstone short-circuits everything else.
+            // Server-side tombstone short-circuits everything else — UNLESS the local copy
+            // was imported strictly after the tombstone was published. That's the re-import-
+            // after-delete path: the user re-imported the same title after deleting it on
+            // another device, the tombstone is stale, and we publish fresh `deletedAt = null`
+            // metadata that overrides it. Falls through to the normal local-and-remote
+            // branch below so the metadata push emits with `deletedAt = null` and the local
+            // import stamp.
             val remoteDeletedAt = r?.metadata?.deletedAt
-            if (r != null && remoteDeletedAt != null) {
+            val tombstoneOverridden = remoteDeletedAt != null &&
+                localImportedAtOverridesRemoteDeletion(l?.importedAt, remoteDeletedAt)
+            if (r != null && remoteDeletedAt != null && !tombstoneOverridden) {
                 // Always apply the remote metadata (so we have the tombstone locally indexed).
                 applyRemoteMetadata += V3Action.ApplyRemoteMetadata(
                     root = l?.root,
@@ -76,9 +87,20 @@ class V3Planner {
             // pending-remote-only when no manifest is available.
             if (l == null && r != null) {
                 if (r.manifest != null) {
+                    // Bug 2: thread shelf placement (when remote metadata has one) into the
+                    // import action itself so the executor can apply it in the same step
+                    // the directory is created. Emitting a separate ApplyRemoteMetadata
+                    // here doesn't work — bucket ordering puts ApplyRemoteMetadata BEFORE
+                    // ImportRemoteBook, so the executor would see `rootBySyncId[syncId] ==
+                    // null` and silently skip the shelf branch. Remote tombstones are
+                    // handled earlier (above), so any metadata reaching here is guaranteed
+                    // to have `deletedAt == null`.
                     importRemoteBooks += V3Action.ImportRemoteBook(
                         syncId = syncId,
                         manifest = r.manifest,
+                        shelfName = r.metadata?.shelfName,
+                        shelfUpdatedAt = r.metadata?.shelfUpdatedAt
+                            ?: r.metadata?.let { r.metadataLastModified },
                     )
                     // After import, apply any remote bookmark / chat the server has too.
                     if (r.bookmark != null) {
@@ -89,13 +111,6 @@ class V3Planner {
                             root = sentinelRoot(syncId),
                             syncId = syncId,
                             blob = r.bookmark,
-                        )
-                    }
-                    if (r.metadata != null) {
-                        applyRemoteMetadata += V3Action.ApplyRemoteMetadata(
-                            root = null, // unknown until after ImportRemoteBook materializes the root
-                            syncId = syncId,
-                            blob = r.metadata,
                         )
                     }
                     for (chatKey in r.chatKeys) {
@@ -114,8 +129,40 @@ class V3Planner {
 
             // Both sides exist (or local-only).
             if (l != null) {
+                // ── Content-type collision guard (Bug 6) ──
+                // If the server has a payload manifest whose format disagrees with our
+                // local content type, pushing EPUB-typed metadata against a Mokuro payload
+                // (or vice versa) would corrupt every other client. The manifest is the
+                // authoritative pointer at the bytes already on the server — we leave it
+                // alone, skip ALL pushes for this syncId, and surface a structured error.
+                // Apply-side actions (e.g. tombstone, remote shelf placement) are
+                // already short-circuited above where appropriate; here we just block
+                // anything that would write our wrong-typed state up to the server.
+                val remoteManifestFormat = r?.manifest?.format
+                if (remoteManifestFormat != null &&
+                    remoteManifestFormat != HttpSyncContentType.fromLocal(l.contentType)
+                ) {
+                    plannerErrors += V3Error(
+                        syncId = syncId,
+                        action = "ContentTypeCollision",
+                        message = "local content type ${l.contentType} does not match remote payload format $remoteManifestFormat for syncId '$syncId'; skipping metadata/bookmark/chat/payload push to avoid corrupting remote-pointed-at payload",
+                    )
+                    continue
+                }
+
                 // ── Bookmark LWW ──
-                if (r?.bookmark != null) {
+                // Bug 5: if the remote bookmark blob was present-but-malformed, refuse
+                // to push local over it — that would destroy the only copy of the
+                // corrupt remote bytes the user might still want to recover. The decode
+                // error is already in V3RemoteSnapshotResult.errors; surface a planner-
+                // level marker too so the cause is clear at this layer.
+                if (r?.bookmarkMalformed == true) {
+                    plannerErrors += V3Error(
+                        syncId = syncId,
+                        action = "MalformedRemoteBookmark",
+                        message = "remote bookmark for syncId '$syncId' is malformed; skipping bookmark push to avoid overwriting the only copy of corrupt remote data",
+                    )
+                } else if (r?.bookmark != null) {
                     val localBookmark = l.bookmark
                     val localStampRfc = localBookmark?.lastModified?.let(::appleSecondsToRfc3339)
                     val cmp = compareRfc3339(r.bookmark.lastModified, localStampRfc)
@@ -149,10 +196,19 @@ class V3Planner {
                             localShelfUpdatedAt = l.shelfUpdatedAt,
                         ) && r.metadata.shelfName != l.shelfName
                     ) {
+                        // When the local importedAt overrode a stale remote tombstone, scrub
+                        // `deletedAt` out of the blob we hand to the executor. Otherwise the
+                        // executor's ApplyRemoteMetadata path would still see deletedAt != null
+                        // and re-delete the local book we just decided to keep.
+                        val blobForApply = if (tombstoneOverridden) {
+                            r.metadata.copy(deletedAt = null)
+                        } else {
+                            r.metadata
+                        }
                         applyRemoteMetadata += V3Action.ApplyRemoteMetadata(
                             root = l.root,
                             syncId = syncId,
-                            blob = r.metadata,
+                            blob = blobForApply,
                         )
                     }
                 }
@@ -160,7 +216,17 @@ class V3Planner {
                 // ── Always push our own metadata if local exists. Even if the shelf merge
                 //    chose to apply remote first, we re-push so importedAt/title stay
                 //    consistent with the live local state on the server.
-                if (l.bookId.isNotEmpty()) {
+                // Bug 5: but NEVER push over a present-but-malformed remote metadata blob —
+                // that would silently destroy the only copy of corrupt data alongside an
+                // error message saying we couldn't decode it. Skip the push and surface
+                // the cause at the planner layer.
+                if (r?.metadataMalformed == true) {
+                    plannerErrors += V3Error(
+                        syncId = syncId,
+                        action = "MalformedRemoteMetadata",
+                        message = "remote metadata for syncId '$syncId' is malformed; skipping metadata push to avoid overwriting the only copy of corrupt remote data",
+                    )
+                } else if (l.bookId.isNotEmpty()) {
                     val uploadShelfName = if (r?.metadata != null && shouldApplyRemoteShelfPlacement(
                             remoteShelfUpdatedAt = r.metadata.shelfUpdatedAt,
                             localShelfUpdatedAt = l.shelfUpdatedAt,
@@ -171,6 +237,19 @@ class V3Planner {
                             localShelfUpdatedAt = l.shelfUpdatedAt,
                         )
                     ) (r.metadata.shelfUpdatedAt ?: r.metadataLastModified) else l.shelfUpdatedAt
+                    // importedAt write-out:
+                    //  - If we just overrode a server tombstone, publish the LOCAL import stamp
+                    //    verbatim so peers can in turn compare it against any older `deletedAt`
+                    //    they might still observe.
+                    //  - Otherwise keep whatever timestamp is newer between local and remote.
+                    //    This preserves the prior behavior of propagating an existing remote
+                    //    stamp while still ensuring the field is non-null on first push from
+                    //    a device that imported locally.
+                    val uploadImportedAt = if (tombstoneOverridden) {
+                        l.importedAt
+                    } else {
+                        maxRfc(r?.metadata?.importedAt, l.importedAt)
+                    }
                     pushMetadatas += V3Action.PushMetadata(
                         syncId = syncId,
                         title = l.title,
@@ -179,7 +258,7 @@ class V3Planner {
                             contentType = HttpSyncContentType.fromLocal(l.contentType),
                             shelfName = uploadShelfName,
                             shelfUpdatedAt = uploadShelfUpdatedAt,
-                            importedAt = r?.metadata?.importedAt,
+                            importedAt = uploadImportedAt,
                             deletedAt = null,
                         ),
                     )
@@ -220,7 +299,18 @@ class V3Planner {
                 }
 
                 // ── Payload push (widened gate: Mokuro OR EPUB) ──
-                if (l.bookId.isNotEmpty() && r?.manifest == null) {
+                // Bug 5: if the remote manifest blob is present-but-malformed, treat the
+                // payload slot as occupied — re-uploading would overwrite the manifest
+                // (the change-detector) with our local sha and hide the corruption. The
+                // decode error is already surfaced; flag the cause at the planner layer
+                // for visibility.
+                if (r?.manifestMalformed == true) {
+                    plannerErrors += V3Error(
+                        syncId = syncId,
+                        action = "MalformedRemoteManifest",
+                        message = "remote manifest for syncId '$syncId' is malformed; skipping payload push to avoid overwriting the only copy of corrupt remote data",
+                    )
+                } else if (l.bookId.isNotEmpty() && r?.manifest == null) {
                     pushPayloads += V3Action.PushPayload(
                         root = l.root,
                         syncId = syncId,
@@ -232,24 +322,41 @@ class V3Planner {
         }
 
         // ── App settings LWW (single global key) ──
-        val localAi = local.aiSettings
-        val remoteAi = remote.aiSettings
-        val localAiStamp = localAi?.lastEditedAt
-        val remoteAiStamp = remoteAi?.lastModified
-        when {
-            remoteAi != null && localAi == null -> applyAiSettings += V3Action.ApplyAiSettings(remoteAi)
-            remoteAi == null && localAi != null && localAiStamp != null ->
-                pushAiSettings += V3Action.PushAiSettings(localAi)
-            remoteAi != null && localAi != null && localAiStamp != null -> {
-                val cmp = compareRfc3339(localAiStamp, remoteAiStamp)
-                when {
-                    cmp > 0 -> pushAiSettings += V3Action.PushAiSettings(localAi)
-                    cmp < 0 -> applyAiSettings += V3Action.ApplyAiSettings(remoteAi)
-                    else -> Unit // tie
+        // Bug 5: if the remote `app/ai_chat_settings` blob is present-but-malformed,
+        // skip the push so we don't destroy the only copy of corrupt remote data, and
+        // surface the cause as a planner-level error alongside the existing decode
+        // error from the read stage.
+        if (remote.aiSettingsMalformed) {
+            plannerErrors += V3Error(
+                syncId = null,
+                action = "MalformedRemoteAiSettings",
+                message = "remote app/ai_chat_settings is malformed; skipping AI settings push to avoid overwriting the only copy of corrupt remote data",
+            )
+        } else {
+            val localAi = local.aiSettings
+            val remoteAi = remote.aiSettings
+            val localAiStamp = localAi?.lastEditedAt
+            val remoteAiStamp = remoteAi?.lastModified
+            when {
+                // Pull remote when local is either truly absent OR a fresh-install default
+                // (no `lastEditedAt` stamp yet). The repository emits a non-null default
+                // AiChatSettings on first run, so the bare `localAi == null` check is dead
+                // in practice — Bug 7 fix broadens this to also cover `localAiStamp == null`.
+                remoteAi != null && (localAi == null || localAiStamp == null) ->
+                    applyAiSettings += V3Action.ApplyAiSettings(remoteAi)
+                remoteAi == null && localAi != null && localAiStamp != null ->
+                    pushAiSettings += V3Action.PushAiSettings(localAi)
+                remoteAi != null && localAi != null && localAiStamp != null -> {
+                    val cmp = compareRfc3339(localAiStamp, remoteAiStamp)
+                    when {
+                        cmp > 0 -> pushAiSettings += V3Action.PushAiSettings(localAi)
+                        cmp < 0 -> applyAiSettings += V3Action.ApplyAiSettings(remoteAi)
+                        else -> Unit // tie
+                    }
                 }
+                // remote=null, local=null OR localAiStamp=null → no action.
+                else -> Unit
             }
-            // remote=null, local=null OR localAiStamp=null → no action.
-            else -> Unit
         }
 
         // Build the final action list in the spec's order; sort each bucket by syncId.
@@ -271,7 +378,11 @@ class V3Planner {
             addAll(pushAiSettings)
         }
 
-        return V3Plan(actions = actions, pendingRemoteOnlyBooks = pendingRemoteOnly)
+        return V3Plan(
+            actions = actions,
+            pendingRemoteOnlyBooks = pendingRemoteOnly,
+            errors = plannerErrors.toList(),
+        )
     }
 
     /**

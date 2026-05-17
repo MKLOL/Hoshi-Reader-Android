@@ -49,6 +49,15 @@ data class V3LocalBook(
     val chatEntries: List<AiChatEntry>,
     /** Set when a local delete is staged but not yet pushed. */
     val pendingDeletion: HttpSyncDeletedBookRecord?,
+    /**
+     * RFC 3339 UTC stamp read from `BookMetadata.importedAt`. The planner compares this
+     * against any remote tombstone (`metadata.deletedAt`): if local is strictly newer the
+     * user re-imported AFTER the deletion was published, so the tombstone is overwritten
+     * instead of wiping the local book. Optional — legacy books written before the field
+     * existed leave this null, and the planner falls back to the conservative "tombstone
+     * wins" path.
+     */
+    val importedAt: String? = null,
 )
 
 /**
@@ -62,6 +71,8 @@ data class V3RemoteSnapshot(
     val books: Map<String, V3RemoteBook>,
     val aiSettings: HttpSyncAiChatSettingsBlob? = null,
     val aiSettingsLastModified: String? = null,
+    /** Bug 5: see [V3RemoteBook.metadataMalformed]. Same idea for `app/ai_chat_settings`. */
+    val aiSettingsMalformed: Boolean = false,
 )
 
 data class V3RemoteBook(
@@ -74,6 +85,17 @@ data class V3RemoteBook(
     val bookmarkLastModified: String? = null,
     /** All `books/{syncId}/chat/...` keys observed on the server. */
     val chatKeys: Set<String> = emptySet(),
+    /**
+     * Bug 5: per-field "remote returned bytes but they didn't decode" markers. The
+     * decoded field (e.g. [metadata]) is left null on decode failure, but the planner
+     * needs to distinguish "absent" from "present-but-corrupt" — otherwise it would
+     * happily push local-over-malformed-remote and destroy the only copy of the
+     * corrupt bytes the user might still want to recover. When any of these are true,
+     * the planner skips push for that field and surfaces a structured V3Error.
+     */
+    val metadataMalformed: Boolean = false,
+    val manifestMalformed: Boolean = false,
+    val bookmarkMalformed: Boolean = false,
 )
 
 // ─── Plan and actions ────────────────────────────────────────────────────────────
@@ -82,7 +104,20 @@ sealed interface V3Action {
     val syncId: String?
 
     data class DeleteLocalBook(val root: File, override val syncId: String) : V3Action
-    data class ImportRemoteBook(override val syncId: String, val manifest: HttpSyncPayloadManifest) : V3Action
+
+    /**
+     * Bug 2: when a remote-only book carries shelf placement in its metadata blob, the
+     * planner used to emit a separate [ApplyRemoteMetadata] (with `root = null`) ordered
+     * BEFORE this import — so the executor's shelf branch silently skipped (no root yet).
+     * Carrying shelf info inline here lets the executor apply it in the same step the
+     * directory is created, with no cross-action root threading required.
+     */
+    data class ImportRemoteBook(
+        override val syncId: String,
+        val manifest: HttpSyncPayloadManifest,
+        val shelfName: String? = null,
+        val shelfUpdatedAt: String? = null,
+    ) : V3Action
     data class ApplyRemoteBookmark(val root: File, override val syncId: String, val blob: HttpSyncBookmarkBlob) : V3Action
     data class ApplyRemoteMetadata(val root: File?, override val syncId: String, val blob: HttpSyncMetadataBlob) : V3Action
     data class ImportChat(val root: File, override val syncId: String, val key: String) : V3Action
@@ -103,6 +138,12 @@ data class V3Plan(
     val actions: List<V3Action>,
     /** Books that exist on the server but cannot be imported yet (e.g. manifest missing). */
     val pendingRemoteOnlyBooks: Set<String> = emptySet(),
+    /**
+     * Planner-level conflicts/errors discovered while building the plan (for example, a
+     * syncId collision where local and remote disagree on content type). The engine
+     * surfaces these alongside remote-listing and executor errors in [V3SyncResult.errors].
+     */
+    val errors: List<V3Error> = emptyList(),
 )
 
 // ─── Result ──────────────────────────────────────────────────────────────────────

@@ -43,6 +43,7 @@ class V3PlannerTest {
         bookmark: Bookmark? = null,
         chatEntries: List<AiChatEntry> = emptyList(),
         pendingDeletion: HttpSyncDeletedBookRecord? = null,
+        importedAt: String? = null,
     ) = V3LocalBook(
         bookId = bookId,
         syncId = syncId,
@@ -54,6 +55,7 @@ class V3PlannerTest {
         bookmark = bookmark,
         chatEntries = chatEntries,
         pendingDeletion = pendingDeletion,
+        importedAt = importedAt,
     )
 
     private fun remoteBook(
@@ -62,6 +64,9 @@ class V3PlannerTest {
         manifest: HttpSyncPayloadManifest? = null,
         bookmark: HttpSyncBookmarkBlob? = null,
         chatKeys: Set<String> = emptySet(),
+        metadataMalformed: Boolean = false,
+        manifestMalformed: Boolean = false,
+        bookmarkMalformed: Boolean = false,
     ) = V3RemoteBook(
         syncId = syncId,
         metadata = metadata,
@@ -71,6 +76,9 @@ class V3PlannerTest {
         bookmark = bookmark,
         bookmarkLastModified = bookmark?.lastModified,
         chatKeys = chatKeys,
+        metadataMalformed = metadataMalformed,
+        manifestMalformed = manifestMalformed,
+        bookmarkMalformed = bookmarkMalformed,
     )
 
     private fun snapshot(
@@ -273,6 +281,117 @@ class V3PlannerTest {
         assertFalse("no PushMetadata when tombstoned", kinds.contains("PushMetadata"))
     }
 
+    // --- re-import-after-tombstone (importedAt > deletedAt) ------------------
+    //
+    // The protocol contract: when a local book has been freshly re-imported AFTER a
+    // remote tombstone was published, the import wins — the planner must NOT emit a
+    // `DeleteLocalBook` and must emit a `PushMetadata` whose blob carries
+    // `deletedAt = null` and the local `importedAt`. When the local import stamp is
+    // older (legacy book, or genuine post-tombstone import that we missed earlier),
+    // the conservative behaviour is preserved: the tombstone wins.
+
+    @Test
+    fun reImportAfterTombstoneKeepsLocalAndPushesOverrideMetadata() {
+        // Local has importedAt T2; remote tombstone has deletedAt T1 < T2. Both sides agree
+        // on shelf placement (none) so the shelf-merge branch doesn't interfere with the
+        // assertion that no DeleteLocalBook / no tombstone-bearing ApplyRemoteMetadata is
+        // emitted for this syncId.
+        val l = localBook(
+            "reimport_after_tomb",
+            importedAt = "2030-06-02T00:00:00Z",
+        )
+        val r = remoteBook(
+            "reimport_after_tomb",
+            metadata = HttpSyncMetadataBlob(
+                title = "Re-Imported",
+                contentType = HttpSyncContentType.Mokuro,
+                deletedAt = "2030-06-01T00:00:00Z",
+                importedAt = "2030-05-01T00:00:00Z",
+            ),
+        )
+        val plan = planner.compute(snapshot(local = listOf(l)), remoteSnapshot(listOf(r)))
+
+        val kinds = plan.actions.map { it::class.simpleName!! }
+        assertFalse(
+            "must NOT delete the freshly re-imported local book (kinds=$kinds)",
+            kinds.contains("DeleteLocalBook"),
+        )
+        // The executor's ApplyRemoteMetadata path keys on `blob.deletedAt != null` to delete
+        // the local copy — when we override the tombstone we must NOT hand it any blob that
+        // still carries the stale `deletedAt`, no matter which branch emitted it.
+        assertTrue(
+            "must NOT hand executor a tombstone-bearing ApplyRemoteMetadata for the overridden syncId (kinds=$kinds)",
+            plan.actions.none {
+                it is V3Action.ApplyRemoteMetadata &&
+                    it.syncId == "reimport_after_tomb" &&
+                    it.blob.deletedAt != null
+            },
+        )
+        // PushMetadata is emitted with `deletedAt = null` and the local importedAt.
+        val pushes = plan.actions.filterIsInstance<V3Action.PushMetadata>()
+            .filter { it.syncId == "reimport_after_tomb" }
+        assertEquals(1, pushes.size)
+        val pushed = pushes.single().blob
+        assertNull("push must clear the server tombstone", pushed.deletedAt)
+        assertEquals(
+            "push must carry the local importedAt verbatim so peers compare against it",
+            "2030-06-02T00:00:00Z",
+            pushed.importedAt,
+        )
+    }
+
+    @Test
+    fun olderLocalImportedAtThanRemoteDeletedAtStillDeletesLocal() {
+        // Local has importedAt T1; remote tombstone has deletedAt T2 > T1 → tombstone wins.
+        val l = localBook(
+            "stale_local",
+            importedAt = "2030-05-01T00:00:00Z",
+        )
+        val r = remoteBook(
+            "stale_local",
+            metadata = HttpSyncMetadataBlob(
+                title = "Stale Local",
+                contentType = HttpSyncContentType.Mokuro,
+                deletedAt = "2030-06-01T00:00:00Z",
+            ),
+        )
+        val plan = planner.compute(snapshot(local = listOf(l)), remoteSnapshot(listOf(r)))
+
+        val kinds = plan.actions.map { it::class.simpleName!! }
+        assertTrue(
+            "tombstone must still win when local was imported before the deletion",
+            kinds.contains("DeleteLocalBook"),
+        )
+        assertTrue("must still apply remote tombstone metadata", kinds.contains("ApplyRemoteMetadata"))
+        assertFalse("no metadata push when tombstone wins", kinds.contains("PushMetadata"))
+    }
+
+    @Test
+    fun missingLocalImportedAtFallsBackToTombstoneWin() {
+        // Legacy book: no importedAt at all → can't prove a post-tombstone import →
+        // conservative path: tombstone wins.
+        val l = localBook(
+            "legacy_book",
+            importedAt = null,
+        )
+        val r = remoteBook(
+            "legacy_book",
+            metadata = HttpSyncMetadataBlob(
+                title = "Legacy",
+                contentType = HttpSyncContentType.Mokuro,
+                deletedAt = "2030-06-01T00:00:00Z",
+            ),
+        )
+        val plan = planner.compute(snapshot(local = listOf(l)), remoteSnapshot(listOf(r)))
+
+        val kinds = plan.actions.map { it::class.simpleName!! }
+        assertTrue(
+            "legacy book with no local importedAt must still honour the remote tombstone",
+            kinds.contains("DeleteLocalBook"),
+        )
+        assertFalse("no metadata push when tombstone wins", kinds.contains("PushMetadata"))
+    }
+
     @Test
     fun localPendingDeletionOverridesEverythingElseForSyncId() {
         val pending = HttpSyncDeletedBookRecord(
@@ -436,33 +555,182 @@ class V3PlannerTest {
         assertFalse(plan.actions.any { it is V3Action.ApplyAiSettings })
     }
 
-    // --- syncId collision across content types --------------------------------
+    /**
+     * Bug 7 reproducer. On a fresh install the AI-settings repository emits a non-null
+     * default [AiChatSettings] with `lastEditedAt = null` (DataStore is empty). The
+     * planner must treat that as "no real local settings yet" and pull the remote blob
+     * — otherwise the device never learns about the server's settings.
+     */
+    @Test
+    fun appSettingsFreshInstallWithRemoteEmitsApply() {
+        // Mimic the repository's fresh-install emission: default object, no timestamp.
+        val freshLocal = AiChatSettings(lastEditedAt = null)
+        val remote = HttpSyncAiChatSettingsBlob(
+            model = "remote-model",
+            promptText = "remote prompt",
+            imagePromptText = "remote image prompt",
+            lastModified = "2030-01-01T00:00:00Z",
+        )
+        val plan = planner.compute(snapshot(aiSettings = freshLocal), remoteSnapshot(aiSettings = remote))
+        assertTrue(
+            "fresh install must pull remote AI settings, got ${plan.actions}",
+            plan.actions.any { it is V3Action.ApplyAiSettings },
+        )
+        assertFalse(plan.actions.any { it is V3Action.PushAiSettings })
+    }
+
+    /**
+     * Regression guard for the Bug 7 fix: when local settings DO have a real timestamp
+     * and it's newer than remote, LWW must still keep local — the broadened
+     * "localAiStamp == null" branch must not steal the LWW comparison.
+     */
+    @Test
+    fun appSettingsLocalStampedAndNewerStillWinsAfterBug7Fix() {
+        val local = AiChatSettings(model = "local-model", lastEditedAt = "2040-01-01T00:00:00Z")
+        val remote = HttpSyncAiChatSettingsBlob(
+            model = "remote-model",
+            promptText = "x",
+            imagePromptText = "y",
+            lastModified = "2030-01-01T00:00:00Z",
+        )
+        val plan = planner.compute(snapshot(aiSettings = local), remoteSnapshot(aiSettings = remote))
+        assertTrue(plan.actions.any { it is V3Action.PushAiSettings })
+        assertFalse(plan.actions.any { it is V3Action.ApplyAiSettings })
+    }
+
+    // --- Bug 5: malformed remote must not be overwritten by local -------------
+
+    /**
+     * Bug 5 regression. When V3RemoteState fails to decode a remote metadata blob, it
+     * surfaces an error AND marks the field as malformed on V3RemoteBook. The planner
+     * MUST NOT push local metadata over the malformed remote bytes — that would destroy
+     * the only remaining copy of corrupt data while the user is told there was an
+     * error. Instead, the planner skips the PushMetadata and surfaces a V3Error.
+     */
+    @Test
+    fun malformedRemoteMetadataSkipsPushMetadataAndEmitsError() {
+        val l = localBook("m")
+        val r = remoteBook("m", metadataMalformed = true)
+        val plan = planner.compute(snapshot(local = listOf(l)), remoteSnapshot(listOf(r)))
+
+        assertNull(
+            "must NOT push metadata when remote metadata is malformed",
+            plan.actions.filterIsInstance<V3Action.PushMetadata>()
+                .firstOrNull { it.syncId == "m" },
+        )
+        assertTrue(
+            "must surface a malformed-remote error, got ${plan.errors}",
+            plan.errors.any { it.syncId == "m" && "malformed" in it.message.lowercase() },
+        )
+    }
 
     @Test
-    fun syncIdCollisionAcrossContentTypesProducesStablePlan() {
+    fun malformedRemoteBookmarkSkipsPushBookmarkAndApplyAndEmitsError() {
+        val l = localBook(
+            "bm",
+            bookmark = Bookmark(1, 0.0, 1, 2_000_000_000.0),
+        )
+        val r = remoteBook("bm", bookmarkMalformed = true)
+        val plan = planner.compute(snapshot(local = listOf(l)), remoteSnapshot(listOf(r)))
+
+        assertNull(
+            "must NOT push bookmark when remote bookmark is malformed",
+            plan.actions.filterIsInstance<V3Action.PushBookmark>()
+                .firstOrNull { it.syncId == "bm" },
+        )
+        assertNull(
+            "must NOT apply remote bookmark when malformed (decoded blob is absent anyway)",
+            plan.actions.filterIsInstance<V3Action.ApplyRemoteBookmark>()
+                .firstOrNull { it.syncId == "bm" },
+        )
+        assertTrue(
+            "must surface a malformed-remote error, got ${plan.errors}",
+            plan.errors.any { it.syncId == "bm" && "malformed" in it.message.lowercase() },
+        )
+    }
+
+    @Test
+    fun malformedRemoteAiSettingsSkipsPushAndEmitsError() {
+        val localAi = AiChatSettings(model = "m", lastEditedAt = "2040-01-01T00:00:00Z")
+        val local = snapshot(aiSettings = localAi)
+        // Remote AI settings malformed: V3RemoteState leaves aiSettings null AND
+        // sets aiSettingsMalformed = true on the snapshot.
+        val remote = V3RemoteSnapshot(
+            books = emptyMap(),
+            aiSettings = null,
+            aiSettingsLastModified = null,
+            aiSettingsMalformed = true,
+        )
+        val plan = planner.compute(local, remote)
+
+        assertFalse(
+            "must NOT push AI settings when remote AI settings are malformed",
+            plan.actions.any { it is V3Action.PushAiSettings },
+        )
+        assertTrue(
+            "must surface a malformed-remote AI settings error, got ${plan.errors}",
+            plan.errors.any { it.action.contains("AiSettings", ignoreCase = true) && "malformed" in it.message.lowercase() },
+        )
+    }
+
+    // --- syncId collision across content types --------------------------------
+
+    /**
+     * Bug 6 regression. Local has an EPUB book and the server has a Mokuro payload
+     * manifest for the same syncId (a different device imported the book as Mokuro
+     * under the same title-derived syncId). The planner MUST NOT push EPUB-typed
+     * metadata at the server — the metadata would point at a Mokuro payload and
+     * corrupt every other client. Instead, the planner surfaces a `V3Error` for
+     * the colliding syncId and emits no metadata / bookmark / chat push for it.
+     */
+    @Test
+    fun syncIdCollisionAcrossContentTypesEmitsErrorAndSkipsPushMetadata() {
         // Both sides have a book with the same syncId but different content types
-        // (e.g., A imported Mokuro "X", B imported EPUB "X").
-        val l = localBook("x", contentType = ContentType.Epub)
+        // (e.g., A imported Mokuro "X", B imported EPUB "X"). Give local a bookmark
+        // too so we can assert it ALSO gets blocked (don't push EPUB chapter offsets
+        // against a Mokuro-typed book).
+        val l = localBook(
+            "x",
+            contentType = ContentType.Epub,
+            bookmark = Bookmark(1, 0.0, 1, 2_000_000_000.0),
+        )
         val r = remoteBook(
             "x",
+            metadata = HttpSyncMetadataBlob(
+                title = "X",
+                contentType = HttpSyncContentType.Mokuro,
+                shelfUpdatedAt = "2030-01-01T00:00:00Z",
+            ),
             manifest = HttpSyncPayloadManifest(
                 sha256 = "sha256:0", sizeBytes = 1,
                 originalName = "x", format = HttpSyncContentType.Mokuro,
             ),
         )
-        // Planner sees a manifest on the server; since local exists, no ImportRemoteBook.
         val plan = planner.compute(snapshot(local = listOf(l)), remoteSnapshot(listOf(r)))
-        // The local book has a payload manifest on the server, so PushPayload is skipped
-        // (manifest-existence policy). PushMetadata still emitted for the local book.
+
+        // No PushPayload (manifest-existence policy already covers this).
         assertNull(
             "no PushPayload because remote already has a manifest",
             plan.actions.filterIsInstance<V3Action.PushPayload>()
                 .firstOrNull { it.syncId == "x" },
         )
-        assertNotNull(
-            "still pushes its local metadata",
+        // Bug 6: NO PushMetadata for the colliding syncId.
+        assertNull(
+            "must NOT push EPUB metadata when remote payload is Mokuro",
             plan.actions.filterIsInstance<V3Action.PushMetadata>()
                 .firstOrNull { it.syncId == "x" },
+        )
+        // Bug 6: also block bookmark push — chapter index / progress are content-type
+        // specific and would corrupt the Mokuro reader's view on other devices.
+        assertNull(
+            "must NOT push bookmark when remote payload is a different content type",
+            plan.actions.filterIsInstance<V3Action.PushBookmark>()
+                .firstOrNull { it.syncId == "x" },
+        )
+        // Surface the collision as a structured error.
+        assertTrue(
+            "planner must surface a V3Error for the colliding syncId, got ${plan.errors}",
+            plan.errors.any { it.syncId == "x" },
         )
     }
 }

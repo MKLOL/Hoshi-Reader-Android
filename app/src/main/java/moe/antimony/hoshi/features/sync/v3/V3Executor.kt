@@ -7,13 +7,17 @@ import moe.antimony.hoshi.epub.BookShelf
 import moe.antimony.hoshi.epub.Bookmark
 import moe.antimony.hoshi.features.ai.AiChatEntry
 import moe.antimony.hoshi.features.ai.AiChatHistoryStore
+import moe.antimony.hoshi.features.sync.http.HttpSyncBookLocks
 import moe.antimony.hoshi.features.sync.http.HttpSyncBookmarkBlob
 import moe.antimony.hoshi.features.sync.http.HttpSyncChatEntryBlob
 import moe.antimony.hoshi.features.sync.http.HttpSyncDeletedBookStateStore
 import moe.antimony.hoshi.features.sync.http.HttpSyncKvTransport
 import moe.antimony.hoshi.features.sync.http.HttpSyncPayloadCodec
 import moe.antimony.hoshi.features.sync.http.HttpSyncShelfPlacementRecord
+import moe.antimony.hoshi.features.sync.http.resolveSyncImportedCoverPath
 import moe.antimony.hoshi.features.sync.http.HttpSyncShelfStateStore
+import moe.antimony.hoshi.features.sync.http.appleSecondsToRfc3339
+import moe.antimony.hoshi.features.sync.http.compareRfc3339
 import moe.antimony.hoshi.features.sync.http.rfc3339ToAppleSeconds
 import java.io.File
 import java.util.UUID
@@ -34,6 +38,7 @@ class V3Executor(
     private val aiHistoryStore: AiChatHistoryStore,
     private val payloadCodec: HttpSyncPayloadCodec,
     private val pushOps: V3PushOps,
+    private val bookLocks: HttpSyncBookLocks = HttpSyncBookLocks(),
 ) {
     private val json = Json {
         ignoreUnknownKeys = true
@@ -66,8 +71,14 @@ class V3Executor(
         // Tracks any shelf-state mutations so we save the sidecar exactly once.
         val existingShelfState = shelfStateStore.load(bookRepository.booksDirectory).toMutableMap()
         var shelfStateDirty = false
-        val pendingDeletions = deletedBookStateStore.load(bookRepository.booksDirectory).toMutableMap()
-        var deletedStateDirty = false
+        // Bug 3: the deleted-book sidecar must NOT be mutated through a
+        // snapshot + dirty-flag + final-save pattern. The same file is also
+        // written by `BookshelfRepository.recordHttpSyncTombstone` on
+        // user-initiated deletes, which can happen during sync. If we held a
+        // snapshot here and wrote it back at the end of sync, we'd clobber any
+        // concurrent user delete recorded mid-sync. Instead, mutate via the
+        // atomic per-key helpers (`recordDeletedBook` / `removeDeletedBook`),
+        // which re-read the latest disk state under a process-wide lock.
 
         val actions = plan.actions
         for ((index, action) in actions.withIndex()) {
@@ -86,8 +97,13 @@ class V3Executor(
                     is V3Action.PushTombstone -> {
                         pushOps.pushTombstone(transport, action.syncId, action.record)
                         pushedTombstones += 1
-                        pendingDeletions.remove(action.syncId)
-                        deletedStateDirty = true
+                        // Atomic per-key clear: re-reads disk under the store's
+                        // lock so a concurrent recordDeletedBook for a different
+                        // key (Bug 3) survives.
+                        deletedBookStateStore.removeDeletedBook(
+                            bookRepository.booksDirectory,
+                            action.syncId,
+                        )
                         existingShelfState.remove(action.syncId)
                         shelfStateDirty = true
                     }
@@ -128,21 +144,57 @@ class V3Executor(
                         if (newRoot != null) {
                             rootBySyncId[action.syncId] = newRoot
                             appliedPayloads += 1
+                            // Bug 2: apply shelf placement carried inline on the import
+                            // action. We can't rely on a separate ApplyRemoteMetadata
+                            // because bucket ordering puts metadata-apply BEFORE import,
+                            // so the executor would have no root for this syncId yet.
+                            if (action.shelfName != null || action.shelfUpdatedAt != null) {
+                                val applied = applyShelfPlacement(newRoot, action.shelfName)
+                                if (applied) {
+                                    existingShelfState[action.syncId] = HttpSyncShelfPlacementRecord(
+                                        shelfName = action.shelfName,
+                                        updatedAt = action.shelfUpdatedAt ?: java.time.Instant.now().toString(),
+                                    )
+                                    shelfStateDirty = true
+                                    appliedShelfPlacements += 1
+                                }
+                            }
                         }
                     }
                     is V3Action.ApplyRemoteBookmark -> {
                         val targetRoot = resolveRoot(action.root, action.syncId, rootBySyncId)
                             ?: continue
-                        bookRepository.saveBookmark(
-                            targetRoot,
-                            Bookmark(
-                                chapterIndex = action.blob.chapterIndex,
-                                progress = action.blob.progress,
-                                characterCount = action.blob.characterCount,
-                                lastModified = rfc3339ToAppleSeconds(action.blob.lastModified),
-                            ),
-                        )
-                        appliedBookmarks += 1
+                        // Hold the per-book lock and re-read local before overwriting.
+                        // The planner's snapshot was taken at the start of sync; if the
+                        // user (or the reader-hook pusher) advanced the bookmark in the
+                        // meantime, blindly applying the remote blob from the plan would
+                        // clobber the newer local with an older remote. Mirrors the
+                        // recheck-under-lock pattern in V3PushOps.pushBookmarkConditional.
+                        val applied = bookLocks.withBookLock(targetRoot) {
+                            val currentLocal = runCatching { bookRepository.loadBookmark(targetRoot) }
+                                .getOrNull()
+                            val localStamp = currentLocal?.lastModified?.let(::appleSecondsToRfc3339)
+                            // compareRfc3339 returns positive when remote is strictly newer.
+                            val cmp = compareRfc3339(action.blob.lastModified, localStamp)
+                            if (cmp > 0) {
+                                bookRepository.saveBookmark(
+                                    targetRoot,
+                                    Bookmark(
+                                        chapterIndex = action.blob.chapterIndex,
+                                        progress = action.blob.progress,
+                                        characterCount = action.blob.characterCount,
+                                        lastModified = rfc3339ToAppleSeconds(action.blob.lastModified),
+                                    ),
+                                )
+                                true
+                            } else {
+                                // Local is newer (or equal) than the remote blob this plan
+                                // was computed against — drop the apply. The next sync's
+                                // push phase will reconcile via pushBookmarkConditional.
+                                false
+                            }
+                        }
+                        if (applied) appliedBookmarks += 1
                     }
                     is V3Action.ImportChat -> {
                         val targetRoot = resolveRoot(action.root, action.syncId, rootBySyncId)
@@ -218,6 +270,11 @@ class V3Executor(
                         }
                     }
                 }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                // Never swallow cancellation: structured concurrency requires the
+                // CancellationException to flow back to the caller so the parent job
+                // sees the sync as cancelled rather than as a normal `Done`.
+                throw e
             } catch (e: Exception) {
                 errors += V3Error(
                     syncId = action.syncId,
@@ -232,11 +289,10 @@ class V3Executor(
                 shelfStateStore.save(bookRepository.booksDirectory, existingShelfState)
             }
         }
-        if (deletedStateDirty) {
-            runCatching {
-                deletedBookStateStore.save(bookRepository.booksDirectory, pendingDeletions)
-            }
-        }
+        // Bug 3: no final `save(pendingDeletions)` here — every mutation has
+        // already gone through the atomic per-key store helpers. A trailing
+        // full-map write would clobber any tombstone recorded concurrently by
+        // the user's delete path (BookshelfRepository.recordHttpSyncTombstone).
 
         onProgress(V3Progress(V3Phase.Done, "Sync complete"))
         return V3SyncResult(
@@ -278,14 +334,23 @@ class V3Executor(
             targetRoot.deleteRecursively()
             throw e
         }
+        // Mirror the user-side import path: parse the freshly-unzipped book and resolve a
+        // cover path so the bookshelf can render a thumbnail before the user opens it. Without
+        // this, `metadata.cover` stayed null until the first open triggered the parser via
+        // `BookshelfRepository.openBook`, and the bookshelf showed a blank cover slot.
+        val coverPath = resolveSyncImportedCoverPath(bookRepository, targetRoot)
         bookRepository.saveMetadata(
             targetRoot,
             BookMetadata(
                 id = UUID.randomUUID().toString(),
                 title = manifest.originalName,
-                cover = null,
+                cover = coverPath,
                 folder = targetRoot.name,
                 lastAccess = 0.0,
+                // Stamp the import the same way the user-side import path does. Lets the
+                // planner's next pass compare local `importedAt` against any remote tombstone
+                // and overwrite the tombstone when the local re-import is strictly newer.
+                importedAt = java.time.Instant.now().toString(),
             ),
         )
         return targetRoot

@@ -160,6 +160,51 @@ class V3SyncEngineTest {
     }
 
     @Test
+    fun freshDeviceImportPopulatesCoverPathSoBookshelfDoesNotShowBlankCover() = runBlocking {
+        // Regression: the v3 executor's `importRemoteBook` used to write `cover = null` after
+        // unpacking the payload, leaving the bookshelf with a blank cover slot until the user
+        // opened the book (at which point `BookshelfRepository.openBook` parsed it and rewrote
+        // metadata). The fix mirrors the user-side import: parse the freshly-unzipped book
+        // and resolve `metadata.cover` via `BookRepository.metadataCoverPath` so the
+        // bookshelf cover loader has something to render immediately.
+        val syncId = "cover_v3_book"
+        val title = "Cover V3 Book"
+        val transport = FakeKvTransport()
+        // Stage a valid Mokuro payload on the server. `mokuro.json` references
+        // `pages/0001.jpg`, which the parser surfaces as the volume's `coverImagePath`.
+        run {
+            val srcRoot = tempFolder.newFolder("cover-v3-src")
+            srcRoot.resolve("mokuro.json").writeText(
+                """{"version":"1.0","title":"Cover V3 Book","pages":[{"img_path":"pages/0001.jpg","img_width":100,"img_height":200,"blocks":[]}]}""",
+            )
+            srcRoot.resolve("pages").mkdirs()
+            srcRoot.resolve("pages/0001.jpg").writeBytes(byteArrayOf(0x42, 0x43, 0x44))
+            HttpSyncPayloadCodec(kotlinx.coroutines.Dispatchers.Unconfined)
+                .uploadIfChanged(transport, syncId, srcRoot, title, HttpSyncContentType.Mokuro)
+        }
+
+        val repo = newRepo()
+        val engine = engineFor(repo, transport)
+        val result = engine.syncOnce(configured)
+
+        assertEquals(emptyList<V3Error>(), result.errors)
+        assertEquals(1, result.applied.payloads)
+
+        val imported = repo.loadBookEntries().single { deriveSyncId(it.metadata.title) == syncId }
+        assertNotNull(
+            "cover path must be populated after v3 sync import",
+            imported.metadata.cover,
+        )
+        assertEquals(
+            "Books/${imported.root.name}/0001.jpg",
+            imported.metadata.cover,
+        )
+        val coverFile = repo.coverFile(imported)
+        assertNotNull("repo must resolve metadata.cover to a real file", coverFile)
+        assertTrue("cover file exists", coverFile!!.isFile)
+    }
+
+    @Test
     fun freshDeviceColdStartImportsEpubBook() = runBlocking {
         // v3 widens the payload sync gate to EPUBs.
         val syncId = "fresh_epub_book"

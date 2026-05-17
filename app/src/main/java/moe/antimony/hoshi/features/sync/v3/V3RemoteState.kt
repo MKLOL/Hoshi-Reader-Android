@@ -80,10 +80,13 @@ class V3RemoteState {
             )
             var metadata: HttpSyncMetadataBlob? = null
             var metadataLastModified: String? = null
+            var metadataMalformed = false
             var manifest: HttpSyncPayloadManifest? = null
             var manifestLastModified: String? = null
+            var manifestMalformed = false
             var bookmark: HttpSyncBookmarkBlob? = null
             var bookmarkLastModified: String? = null
+            var bookmarkMalformed = false
             val chatKeys = mutableSetOf<String>()
             for (k in grouped.getValue(syncId)) {
                 when (k.kind) {
@@ -98,6 +101,10 @@ class V3RemoteState {
                                 metadataLastModified = fetched.lastModified
                             }
                         } catch (e: Exception) {
+                            // Bug 5: surface the decode error AND mark the field as
+                            // malformed so the planner refuses to overwrite the corrupt
+                            // remote bytes with our local copy.
+                            metadataMalformed = true
                             errors += V3Error(
                                 syncId = syncId,
                                 action = "ReadRemoteMetadata",
@@ -116,6 +123,7 @@ class V3RemoteState {
                                 manifestLastModified = fetched.lastModified
                             }
                         } catch (e: Exception) {
+                            manifestMalformed = true
                             errors += V3Error(
                                 syncId = syncId,
                                 action = "ReadRemoteManifest",
@@ -134,6 +142,7 @@ class V3RemoteState {
                                 bookmarkLastModified = fetched.lastModified
                             }
                         } catch (e: Exception) {
+                            bookmarkMalformed = true
                             errors += V3Error(
                                 syncId = syncId,
                                 action = "ReadRemoteBookmark",
@@ -154,6 +163,9 @@ class V3RemoteState {
                 bookmark = bookmark,
                 bookmarkLastModified = bookmarkLastModified,
                 chatKeys = chatKeys,
+                metadataMalformed = metadataMalformed,
+                manifestMalformed = manifestMalformed,
+                bookmarkMalformed = bookmarkMalformed,
             )
         }
 
@@ -161,6 +173,7 @@ class V3RemoteState {
         onProgress(V3Progress(V3Phase.ListingRemote, "Reading remote app settings"))
         var aiSettings: HttpSyncAiChatSettingsBlob? = null
         var aiSettingsLastModified: String? = null
+        var aiSettingsMalformed = false
         try {
             val fetched = transport.get(AI_CHAT_SETTINGS_KEY)
             if (fetched != null) {
@@ -171,6 +184,9 @@ class V3RemoteState {
                 aiSettingsLastModified = fetched.lastModified
             }
         } catch (e: Exception) {
+            // Bug 5: same as the per-book fields — surface AND mark as malformed so the
+            // planner doesn't push our local AI settings over the corrupt remote.
+            aiSettingsMalformed = true
             errors += V3Error(
                 syncId = null,
                 action = "ReadRemoteAiSettings",
@@ -183,6 +199,7 @@ class V3RemoteState {
                 books = books,
                 aiSettings = aiSettings,
                 aiSettingsLastModified = aiSettingsLastModified,
+                aiSettingsMalformed = aiSettingsMalformed,
             ),
             errors = errors,
         )

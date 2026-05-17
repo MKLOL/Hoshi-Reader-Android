@@ -242,13 +242,24 @@ class V3EdgeCaseTest {
         )
         rootB.resolve("book.html").writeText("<html/>")
 
-        // B syncs: server has Mokuro payload, local is EPUB. Importing would conflict.
-        // The planner currently emits PushMetadata + skips PushPayload (manifest exists),
-        // and does not import (local already exists). This is the "stable choice" the spec
-        // calls out — survive without corrupting either side.
+        // B syncs: server has Mokuro payload, local is EPUB. The planner blocks the
+        // EPUB-typed PushMetadata so other clients keep seeing Mokuro-typed metadata
+        // matching the actual Mokuro payload, and surfaces the collision as a V3Error
+        // (Bug 6).
+        val transportBefore = transport.kv.toMap()
         val result = engineFor(repoB, transport).syncOnce(configured)
-        // No fatal error, but also no payload overwrite.
-        assertTrue("EPUB local + Mokuro remote should not crash sync", result.errors.none { it.syncId == "x" })
+        // Conflict is surfaced as a per-book error rather than silent corruption.
+        assertTrue(
+            "EPUB-local vs Mokuro-remote collision must surface a per-book error, got ${result.errors}",
+            result.errors.any { it.syncId == "x" },
+        )
+        // Server-side Mokuro metadata is NOT overwritten with EPUB-typed metadata.
+        val metaAfter = transport.kv[metadataKey("x")]
+        assertEquals(
+            "Mokuro metadata blob on the server must be left intact",
+            transportBefore[metadataKey("x")]?.body?.toList(),
+            metaAfter?.body?.toList(),
+        )
     }
 
     // --- malformed book directory --------------------------------------------
@@ -271,6 +282,140 @@ class V3EdgeCaseTest {
         assertEquals(emptyList<V3Error>(), result.errors)
         // EPUB books push their metadata and (v3) payload.
         assertTrue("EPUB metadata key written", transport.kv.containsKey(metadataKey(deriveSyncId(title)!!)))
+    }
+
+    // --- Bug 5: malformed remote must not be overwritten by local --------------
+
+    /**
+     * Bug 5 regression. The server has a malformed metadata blob (server bug, partial
+     * write, etc). Before the fix, the planner saw `remote.metadata == null`
+     * (decode failure left it null) and pushed the local metadata, destroying the
+     * only copy of the corrupt remote data. The fix: per-field "malformed" markers
+     * propagated through V3RemoteState → V3RemoteBook → V3Planner. The planner must
+     * skip PushMetadata for syncIds where the remote metadata is marked malformed,
+     * and the error from the read stage must still surface.
+     */
+    @Test
+    fun malformedRemoteMetadataDoesNotOverwriteRemote() = runBlocking {
+        val repo = newRepo()
+        // Local has a real Mokuro book under this syncId — without the fix, the planner
+        // would push our local metadata over the malformed remote.
+        val root = importMokuroBook(repo, "bad meta")
+        root.resolve("pages").mkdirs()
+        root.resolve("pages/p1.png").writeBytes(byteArrayOf(0x42))
+        val transport = FakeKvTransport()
+        val malformed = "{not-valid-json".toByteArray()
+        val syncId = moe.antimony.hoshi.features.sync.http.deriveSyncId("bad meta")!!
+        transport.kv[metadataKey(syncId)] = FakeKvTransport.Stored(
+            body = malformed,
+            contentType = "application/json; charset=utf-8",
+            lastModified = "2030-01-01T00:00:00Z",
+        )
+        val engine = engineFor(repo, transport)
+        val result = engine.syncOnce(configured)
+
+        // The error from the decode must still be surfaced.
+        assertTrue(
+            "expected a metadata decode error, got ${result.errors}",
+            result.errors.any { it.syncId == syncId && "metadata" in it.message.lowercase() },
+        )
+        // The bytes on the server must be the original malformed bytes — NOT replaced
+        // by a serialized local HttpSyncMetadataBlob.
+        assertEquals(
+            "remote malformed metadata must be left intact",
+            malformed.toList(),
+            transport.kv[metadataKey(syncId)]?.body?.toList(),
+        )
+    }
+
+    @Test
+    fun malformedRemoteBookmarkDoesNotOverwriteRemote() = runBlocking {
+        val repo = newRepo()
+        val root = importMokuroBook(repo, "bad bm")
+        root.resolve("pages").mkdirs()
+        root.resolve("pages/p1.png").writeBytes(byteArrayOf(0x11))
+        // Local has a bookmark — without the fix, the planner would push it over the
+        // malformed remote bookmark blob.
+        repo.saveBookmark(root, Bookmark(1, 0.0, 1, 800_000_000.0))
+        val transport = FakeKvTransport()
+        val syncId = moe.antimony.hoshi.features.sync.http.deriveSyncId("bad bm")!!
+        val malformed = "this is not json {".toByteArray()
+        transport.kv[bookmarkKey(syncId)] = FakeKvTransport.Stored(
+            body = malformed,
+            contentType = "application/json; charset=utf-8",
+            lastModified = "2030-01-01T00:00:00Z",
+        )
+        val engine = engineFor(repo, transport)
+        val result = engine.syncOnce(configured)
+
+        assertTrue(
+            "expected a bookmark decode error, got ${result.errors}",
+            result.errors.any { it.syncId == syncId && "bookmark" in it.message.lowercase() },
+        )
+        assertEquals(
+            "remote malformed bookmark must be left intact",
+            malformed.toList(),
+            transport.kv[bookmarkKey(syncId)]?.body?.toList(),
+        )
+    }
+
+    // --- remote-only import preserves shelf placement (Bug 2) -----------------
+
+    /**
+     * Bug 2 reproducer. A book that exists only on the remote, with a manifest AND a
+     * metadata blob carrying a `shelfName` / `shelfUpdatedAt`, must end up assigned to
+     * that shelf on first import. The planner used to emit `ApplyRemoteMetadata` with
+     * `root = null` ahead of `ImportRemoteBook`, so the executor's shelf-apply branch
+     * silently skipped (no root yet for that syncId in `rootBySyncId`).
+     */
+    @Test
+    fun remoteOnlyImportAppliesShelfPlacement() = runBlocking {
+        val syncId = "shelved_remote"
+        val title = "Shelved Remote"
+        val shelfName = "Light Novels"
+        val shelfUpdatedAt = "2030-01-01T00:00:00Z"
+
+        val transport = FakeKvTransport()
+        // Build a real payload + manifest via the codec so import succeeds.
+        val src = tempFolder.newFolder("src-shelved-remote")
+        src.resolve("mokuro.json").writeText("""{"v":1}""")
+        src.resolve("pages").mkdirs()
+        src.resolve("pages/p1.png").writeBytes(byteArrayOf(0x55))
+        HttpSyncPayloadCodec(kotlinx.coroutines.Dispatchers.Unconfined)
+            .uploadIfChanged(transport, syncId, src, title, HttpSyncContentType.Mokuro)
+        // Remote metadata stamped with shelf placement.
+        transport.putJson(
+            key = metadataKey(syncId),
+            serializer = HttpSyncMetadataBlob.serializer(),
+            value = HttpSyncMetadataBlob(
+                title = title,
+                contentType = HttpSyncContentType.Mokuro,
+                shelfName = shelfName,
+                shelfUpdatedAt = shelfUpdatedAt,
+            ),
+            json = json,
+            lastModified = shelfUpdatedAt,
+        )
+
+        val repo = newRepo()
+        val engine = engineFor(repo, transport)
+        val result = engine.syncOnce(configured)
+
+        assertEquals(emptyList<V3Error>(), result.errors)
+        // Book made it to disk.
+        val imported = repo.loadBookEntries().single { deriveSyncId(it.metadata.title) == syncId }
+        // Shelf assignment must have followed.
+        val shelves = repo.loadShelves()
+        val targetShelf = shelves.find { it.name == shelfName }
+        assertTrue(
+            "expected a '$shelfName' shelf containing the imported book, got shelves=$shelves",
+            targetShelf != null && imported.metadata.id in targetShelf.bookIds,
+        )
+        assertEquals(
+            "executor should report exactly one applied shelf placement",
+            1,
+            result.applied.shelfPlacements,
+        )
     }
 
     // --- future-shape chat key ------------------------------------------------
