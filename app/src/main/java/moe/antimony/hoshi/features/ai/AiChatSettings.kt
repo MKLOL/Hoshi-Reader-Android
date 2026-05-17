@@ -11,23 +11,24 @@ import kotlinx.coroutines.flow.map
 import java.time.Instant
 
 /**
- * Settings for the ChatGPT speech-bubble feature: the OpenAI API key, the prompt text that is
- * sent ahead of a bubble's OCR text, and the model name.
+ * Settings for the ChatGPT manga features: the OpenAI API key, the prompt text that is sent
+ * ahead of a bubble's OCR text, the prompt text sent with a screenshot crop, and the model name.
  *
  * The model is a free-text field rather than a fixed list: the user asked for "GPT-5.5", which
  * is not a model id this code can validate, so it is editable — if OpenAI rejects it the error
  * surfaces in the chat popup and the value can be corrected here.
  *
- * **Sync behavior** (see [HttpSyncReconciler]): [model] and [promptText] sync across devices
- * via the v2 KV protocol. [apiKey] stays strictly local — pasting a key on one phone never
- * leaks it through sync to anywhere else. [lastEditedAt] is the LWW key, automatically
- * stamped on user edits via [AiChatSettingsRepository.update] but **not** on sync-applied
- * writes via [AiChatSettingsRepository.applyFromSync] (otherwise a pull would always look
- * newer than the just-pushed remote state and we'd oscillate).
+ * **Sync behavior** (see [HttpSyncReconciler]): [model], [promptText], and [imagePromptText]
+ * sync across devices via the v2 KV protocol. [apiKey] stays strictly local — pasting a key
+ * on one phone never leaks it through sync to anywhere else. [lastEditedAt] is the LWW key,
+ * automatically stamped on user edits via [AiChatSettingsRepository.update] but **not** on
+ * sync-applied writes via [AiChatSettingsRepository.applyFromSync] (otherwise a pull would
+ * always look newer than the just-pushed remote state and we'd oscillate).
  */
 data class AiChatSettings(
     val apiKey: String = "",
     val promptText: String = DEFAULT_PROMPT,
+    val imagePromptText: String = DEFAULT_IMAGE_PROMPT,
     val model: String = DEFAULT_MODEL,
     /** RFC 3339 UTC timestamp of the most recent user-driven edit, or `null` if never edited. */
     val lastEditedAt: String? = null,
@@ -40,6 +41,10 @@ data class AiChatSettings(
             "You are a helpful Japanese reading tutor. For the manga speech bubble below, " +
                 "give a natural English translation, then a short, concise breakdown of any " +
                 "tricky vocabulary or grammar."
+        const val DEFAULT_IMAGE_PROMPT: String =
+            "Transcribe any Japanese text visible in this image crop and translate it into " +
+                "natural English. If useful, include a short vocabulary or grammar note. If no " +
+                "readable Japanese text is visible, say so."
     }
 }
 
@@ -55,8 +60,8 @@ class AiChatSettingsRepository(
 
     /**
      * User-driven update. Auto-stamps [AiChatSettings.lastEditedAt] iff the sync-relevant
-     * fields (`model` / `promptText`) actually changed. API-key-only edits don't bump the
-     * stamp because the API key doesn't sync.
+     * fields (`model` / `promptText` / `imagePromptText`) actually changed. API-key-only
+     * edits don't bump the stamp because the API key doesn't sync.
      *
      * **Lamport-monotonic stamping.** The new stamp is `max(now, currentStamp + 1ms)`.
      * That guarantees every user-driven edit is strictly newer than any prior stamp the
@@ -71,7 +76,9 @@ class AiChatSettingsRepository(
         dataStore.edit { preferences ->
             val current = preferences.toAiChatSettings()
             val next = transform(current)
-            val syncRelevantChanged = next.model != current.model || next.promptText != current.promptText
+            val syncRelevantChanged = next.model != current.model ||
+                next.promptText != current.promptText ||
+                next.imagePromptText != current.imagePromptText
             val stamped = if (syncRelevantChanged) {
                 next.copy(lastEditedAt = stampStrictlyNewerThan(current.lastEditedAt))
             } else {
@@ -93,8 +100,9 @@ class AiChatSettingsRepository(
     }
 
     /**
-     * Sync-side application of a remote value. Writes [model] / [promptText] / [lastEditedAt]
-     * exactly as supplied; does NOT touch [AiChatSettings.apiKey], which stays per-device.
+     * Sync-side application of a remote value. Writes [model] / [promptText] /
+     * [imagePromptText] / [lastEditedAt] exactly as supplied; does NOT touch
+     * [AiChatSettings.apiKey], which stays per-device.
      *
      * **Returns** `true` if the write was performed, `false` if the local store already had
      * a [lastEditedAt] strictly newer than [remoteLastEditedAt] at write time. This is the
@@ -104,7 +112,12 @@ class AiChatSettingsRepository(
      * loses the LWW comparison) or after this write (and stamps a fresh `lastEditedAt`
      * that the next sync will push back up).
      */
-    suspend fun applyFromSync(model: String, promptText: String, remoteLastEditedAt: String): Boolean {
+    suspend fun applyFromSync(
+        model: String,
+        promptText: String,
+        imagePromptText: String,
+        remoteLastEditedAt: String,
+    ): Boolean {
         var applied = false
         dataStore.edit { preferences ->
             val currentStamp = preferences[KEY_LAST_EDITED_AT]
@@ -112,6 +125,7 @@ class AiChatSettingsRepository(
                 compareRfc3339String(remoteLastEditedAt, currentStamp) > 0
             if (remoteIsNewer) {
                 preferences[KEY_PROMPT] = promptText
+                preferences[KEY_IMAGE_PROMPT] = imagePromptText
                 preferences[KEY_MODEL] = model
                 preferences[KEY_LAST_EDITED_AT] = remoteLastEditedAt
                 applied = true
@@ -130,6 +144,7 @@ class AiChatSettingsRepository(
     private fun writeAll(preferences: androidx.datastore.preferences.core.MutablePreferences, settings: AiChatSettings) {
         preferences[KEY_API_KEY] = settings.apiKey
         preferences[KEY_PROMPT] = settings.promptText
+        preferences[KEY_IMAGE_PROMPT] = settings.imagePromptText
         preferences[KEY_MODEL] = settings.model
         val stamp = settings.lastEditedAt
         if (stamp.isNullOrBlank()) {
@@ -143,15 +158,15 @@ class AiChatSettingsRepository(
         AiChatSettings(
             apiKey = this[KEY_API_KEY] ?: "",
             promptText = this[KEY_PROMPT] ?: AiChatSettings.DEFAULT_PROMPT,
+            imagePromptText = this[KEY_IMAGE_PROMPT] ?: AiChatSettings.DEFAULT_IMAGE_PROMPT,
             model = this[KEY_MODEL]?.takeIf { it.isNotBlank() } ?: AiChatSettings.DEFAULT_MODEL,
             lastEditedAt = this[KEY_LAST_EDITED_AT],
         )
 
-    private fun nowRfc3339(): String = Instant.now().toString()
-
     private companion object {
         val KEY_API_KEY = stringPreferencesKey("apiKey")
         val KEY_PROMPT = stringPreferencesKey("promptText")
+        val KEY_IMAGE_PROMPT = stringPreferencesKey("imagePromptText")
         val KEY_MODEL = stringPreferencesKey("model")
         val KEY_LAST_EDITED_AT = stringPreferencesKey("lastEditedAt")
     }

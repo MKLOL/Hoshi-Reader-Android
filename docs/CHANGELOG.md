@@ -5,11 +5,21 @@ The format follows a Keep a Changelog style, and release sections use Semantic V
 
 ## [Unreleased]
 
+### Added
+
+- Add manga screenshot translation from the reader overflow menu: draw a crop rectangle, send the selected image to ChatGPT, and customize the synced image-translation prompt separately from the speech-bubble prompt.
+
 ## [v0.7.15] - 2026-05-16
 
 ### Fixed
 
 - Keep manga pages from being covered by the Boox/Onyx top system bar by entering immersive reader mode for manga, and keep the manga page viewport inset-safe if a device keeps system bars visible.
+
+## [v0.7.14] - 2026-05-16
+
+### Fixed
+
+- Hide the top system status bar while reading on Boox/Onyx devices so manga pages keep the full viewport instead of sitting under a persistent strip.
 
 ## [v0.7.13] - 2026-05-15
 

@@ -32,8 +32,8 @@ import kotlinx.coroutines.launch
 import moe.antimony.hoshi.features.settings.SettingsDetailScaffold
 
 /**
- * Settings for the manga speech-bubble ChatGPT feature: OpenAI API key, model, and the prompt
- * text sent ahead of a bubble's OCR text.
+ * Settings for the manga ChatGPT features: OpenAI API key, model, speech-bubble prompt, and
+ * screenshot prompt.
  *
  * This is a fork addition, so it is deliberately reachable from the manga reader's overflow
  * (⋯) menu rather than wired into the shared Settings navigation — that keeps the feature
@@ -72,6 +72,7 @@ private fun AiChatSettingsContent(
     var apiKey by rememberSaveable { mutableStateOf(settings.apiKey) }
     var model by rememberSaveable { mutableStateOf(settings.model) }
     var promptText by rememberSaveable { mutableStateOf(settings.promptText) }
+    var imagePromptText by rememberSaveable { mutableStateOf(settings.imagePromptText) }
     var apiKeyVisible by rememberSaveable { mutableStateOf(false) }
 
     Column(
@@ -81,8 +82,8 @@ private fun AiChatSettingsContent(
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         Text(
-            text = "Powers the ChatGPT button on a manga speech bubble — tapping it sends " +
-                "the prompt plus the bubble's text to OpenAI.",
+            text = "Powers manga ChatGPT actions. Speech bubbles send OCR text; screenshot " +
+                "translation sends the cropped image.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -130,8 +131,19 @@ private fun AiChatSettingsContent(
                 promptText = value
                 onUpdate { it.copy(promptText = value) }
             },
-            label = { Text("Prompt") },
+            label = { Text("Bubble prompt") },
             supportingText = { Text("Sent before the speech bubble's OCR text.") },
+            minLines = 4,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        OutlinedTextField(
+            value = imagePromptText,
+            onValueChange = { value ->
+                imagePromptText = value
+                onUpdate { it.copy(imagePromptText = value) }
+            },
+            label = { Text("Image prompt") },
+            supportingText = { Text("Sent with cropped screenshot translations.") },
             minLines = 4,
             modifier = Modifier.fillMaxWidth(),
         )

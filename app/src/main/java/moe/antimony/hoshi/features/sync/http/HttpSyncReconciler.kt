@@ -4,6 +4,7 @@ import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
 import moe.antimony.hoshi.epub.BookRepository
 import moe.antimony.hoshi.epub.Bookmark
 import moe.antimony.hoshi.epub.ContentType
@@ -103,8 +104,13 @@ class HttpSyncReconciler(
         val errors: List<String>,
     )
 
+    private data class RemoteAiChatSettings(
+        val blob: HttpSyncAiChatSettingsBlob,
+        val hasImagePromptText: Boolean,
+    )
+
     /**
-     * Bidirectional LWW sync of the cross-device ChatGPT settings (`model` + `promptText`).
+     * Bidirectional LWW sync of the cross-device ChatGPT settings (`model` + prompts).
      *
      * Algorithm:
      *  1. Read local [AiChatSettings] and remote [HttpSyncAiChatSettingsBlob].
@@ -128,17 +134,26 @@ class HttpSyncReconciler(
             errors += "ai_chat_settings GET: ${it.message ?: it.javaClass.simpleName}"
             return AppSettingsResult(false, false, null, errors)
         }
-        val remoteBlob = remoteFetched?.let {
+        val remoteSettings = remoteFetched?.let {
             runCatching {
+                val body = it.body.toString(Charsets.UTF_8)
                 json.decodeFromString(
                     HttpSyncAiChatSettingsBlob.serializer(),
-                    it.body.toString(Charsets.UTF_8),
-                )
+                    body,
+                ).let { blob ->
+                    RemoteAiChatSettings(
+                        blob = blob,
+                        hasImagePromptText = runCatching {
+                            json.parseToJsonElement(body).jsonObject.containsKey("imagePromptText")
+                        }.getOrDefault(false),
+                    )
+                }
             }.getOrElse { e ->
                 errors += "ai_chat_settings decode: ${e.message ?: e.javaClass.simpleName}"
                 null
             }
         }
+        val remoteBlob = remoteSettings?.blob
 
         val localStamp = local.lastEditedAt
         val remoteStamp = remoteBlob?.lastModified
@@ -153,9 +168,31 @@ class HttpSyncReconciler(
             remoteBlob != null && localStamp == null -> {
                 // We have nothing user-edited; pull. Stamp uses the remote's lastModified
                 // (verbatim) so the next sync is a no-op rather than oscillating.
-                runCatching { repo.applyFromSync(remoteBlob.model, remoteBlob.promptText, remoteBlob.lastModified) }
+                val applied = runCatching {
+                    repo.applyFromSync(
+                        model = remoteBlob.model,
+                        promptText = remoteBlob.promptText,
+                        imagePromptText = remoteImagePromptText(remoteSettings, local),
+                        remoteLastEditedAt = remoteBlob.lastModified,
+                    )
+                }
                     .onFailure { errors += "ai_chat_settings apply: ${it.message ?: it.javaClass.simpleName}" }
-                AppSettingsResult(false, true, remoteStamp, errors)
+                    .getOrDefault(false)
+                val backfill = if (applied && remoteSettings?.hasImagePromptText == false) {
+                    // Older clients can upload a newer settings blob without the image prompt
+                    // field. After preserving our local/default image prompt, immediately
+                    // write a full blob back so other new clients do not keep seeing a
+                    // legacy/default image prompt forever.
+                    pushLocalAppSettings(transport, repo.settings.first(), errors)
+                } else {
+                    null
+                }
+                AppSettingsResult(
+                    uploaded = backfill != null,
+                    downloaded = true,
+                    maxLastModified = backfill?.lastModified ?: remoteStamp,
+                    errors = errors,
+                )
             }
             remoteBlob != null && localStamp != null -> {
                 val cmp = compareRfc3339(localStamp, remoteStamp)
@@ -171,14 +208,56 @@ class HttpSyncReconciler(
                         // applyFromSync is CAS: if the user edited locally between our read
                         // (line above) and this write, it returns false and we leave the
                         // newer local state alone. The next sync will push it up.
-                        runCatching { repo.applyFromSync(remoteBlob.model, remoteBlob.promptText, remoteBlob.lastModified) }
+                        val applied = runCatching {
+                            repo.applyFromSync(
+                                model = remoteBlob.model,
+                                promptText = remoteBlob.promptText,
+                                imagePromptText = remoteImagePromptText(remoteSettings, local),
+                                remoteLastEditedAt = remoteBlob.lastModified,
+                            )
+                        }
                             .onFailure { errors += "ai_chat_settings apply: ${it.message ?: it.javaClass.simpleName}" }
-                        AppSettingsResult(false, true, remoteStamp, errors)
+                            .getOrDefault(false)
+                        val backfill = if (applied && remoteSettings?.hasImagePromptText == false) {
+                            pushLocalAppSettings(transport, repo.settings.first(), errors)
+                        } else {
+                            null
+                        }
+                        AppSettingsResult(
+                            uploaded = backfill != null,
+                            downloaded = true,
+                            maxLastModified = backfill?.lastModified ?: remoteStamp,
+                            errors = errors,
+                        )
                     }
-                    else -> AppSettingsResult(false, false, remoteStamp, errors)
+                    else -> {
+                        val backfill = if (remoteSettings?.hasImagePromptText == false) {
+                            pushLocalAppSettings(transport, local, errors)
+                        } else {
+                            null
+                        }
+                        AppSettingsResult(
+                            uploaded = backfill != null,
+                            downloaded = false,
+                            maxLastModified = backfill?.lastModified ?: remoteStamp,
+                            errors = errors,
+                        )
+                    }
                 }
             }
             else -> AppSettingsResult(false, false, null, errors)
+        }
+    }
+
+    private fun remoteImagePromptText(
+        remoteSettings: RemoteAiChatSettings?,
+        local: AiChatSettings,
+    ): String {
+        val remote = remoteSettings ?: return local.imagePromptText
+        return if (remote.hasImagePromptText) {
+            remote.blob.imagePromptText
+        } else {
+            local.imagePromptText
         }
     }
 
@@ -191,6 +270,7 @@ class HttpSyncReconciler(
         val blob = HttpSyncAiChatSettingsBlob(
             model = local.model,
             promptText = local.promptText,
+            imagePromptText = local.imagePromptText,
             lastModified = stamp,
         )
         return try {

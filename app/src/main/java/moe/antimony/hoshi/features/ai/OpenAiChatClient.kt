@@ -6,6 +6,11 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import java.net.HttpURLConnection
 import java.net.URL
 
@@ -44,6 +49,37 @@ object OpenAiChatClient {
             throw OpenAiException("Set your OpenAI API key in Settings → AI.")
         }
         val requestBody = buildRequestBody(model, prompt, bubbleText)
+        completeRequest(apiKey, requestBody)
+    }
+
+    /**
+     * Sends [prompt] plus an image crop to [model] and returns the assistant's reply.
+     *
+     * The image is sent as a `data:` URL content part, matching OpenAI's Chat Completions
+     * vision input shape. The caller owns cropping/compression so UI code can decide whether
+     * to send the rendered WebView pixels or an original image crop.
+     */
+    suspend fun completeImage(
+        apiKey: String,
+        model: String,
+        prompt: String,
+        imageBase64: String,
+        imageMimeType: String,
+        dispatcher: CoroutineDispatcher = Dispatchers.IO,
+    ): String = withContext(dispatcher) {
+        if (apiKey.isBlank()) {
+            throw OpenAiException("Set your OpenAI API key in Settings → AI.")
+        }
+        val requestBody = buildImageRequestBody(
+            model = model,
+            prompt = prompt,
+            imageBase64 = imageBase64,
+            imageMimeType = imageMimeType,
+        )
+        completeRequest(apiKey, requestBody)
+    }
+
+    private fun completeRequest(apiKey: String, requestBody: String): String {
         val connection = (URL(ENDPOINT).openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
             doOutput = true
@@ -53,7 +89,7 @@ object OpenAiChatClient {
             setRequestProperty("Content-Type", "application/json")
             setRequestProperty("Accept", "application/json")
         }
-        try {
+        return try {
             connection.outputStream.use { it.write(requestBody.toByteArray(Charsets.UTF_8)) }
             val code = connection.responseCode
             val stream = if (code in 200..299) connection.inputStream else connection.errorStream
@@ -78,7 +114,42 @@ object OpenAiChatClient {
             ChatRequest.serializer(),
             ChatRequest(
                 model = model.trim().ifBlank { AiChatSettings.DEFAULT_MODEL },
-                messages = listOf(ChatMessage(role = "user", content = content)),
+                messages = listOf(ChatMessage(role = "user", content = JsonPrimitive(content))),
+            ),
+        )
+    }
+
+    /** Builds the JSON request body for a single image crop plus text prompt. */
+    internal fun buildImageRequestBody(
+        model: String,
+        prompt: String,
+        imageBase64: String,
+        imageMimeType: String,
+    ): String {
+        val mimeType = imageMimeType.trim().ifBlank { "image/png" }
+        val imageUrl = "data:$mimeType;base64,${imageBase64.trim()}"
+        val contentParts = JsonArray(
+            listOf(
+                buildJsonObject {
+                    put("type", "text")
+                    put("text", prompt.trim().ifBlank { AiChatSettings.DEFAULT_IMAGE_PROMPT })
+                },
+                buildJsonObject {
+                    put("type", "image_url")
+                    put(
+                        "image_url",
+                        buildJsonObject {
+                            put("url", imageUrl)
+                        },
+                    )
+                },
+            ),
+        )
+        return json.encodeToString(
+            ChatRequest.serializer(),
+            ChatRequest(
+                model = model.trim().ifBlank { AiChatSettings.DEFAULT_MODEL },
+                messages = listOf(ChatMessage(role = "user", content = contentParts)),
             ),
         )
     }
@@ -113,7 +184,7 @@ object OpenAiChatClient {
     @Serializable
     private data class ChatMessage(
         val role: String,
-        val content: String,
+        val content: JsonElement,
     )
 
     @Serializable

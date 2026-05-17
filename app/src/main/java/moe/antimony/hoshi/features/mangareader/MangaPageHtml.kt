@@ -400,6 +400,15 @@ internal object MangaPageHtml {
                 height: rect.height * scale
               };
             },
+            clearRevealed: function() {
+              var revealed = document.querySelectorAll('.ocr-box.revealed');
+              for (var i = 0; i < revealed.length; i++) {
+                revealed[i].classList.remove('revealed');
+              }
+              if (window.hoshiSelection) {
+                window.hoshiSelection.clearSelection();
+              }
+            },
             installTapListener: function(maxLength) {
               if (this.tapListenerInstalled) return;
               this.tapListenerInstalled = true;
@@ -444,11 +453,7 @@ internal object MangaPageHtml {
                 // Second tap on an already-revealed bubble: look the tapped word up.
                 return window.hoshiSelection.selectText(x, y, maxLength);
               }
-              var revealed = document.querySelectorAll('.ocr-box.revealed');
-              for (var i = 0; i < revealed.length; i++) {
-                revealed[i].classList.remove('revealed');
-              }
-              window.hoshiSelection.clearSelection();
+              window.hoshiManga.clearRevealed();
               return null;
             }
           };

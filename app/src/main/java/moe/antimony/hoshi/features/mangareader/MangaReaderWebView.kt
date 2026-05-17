@@ -309,6 +309,14 @@ internal fun WebView.clearMangaSelection() {
     evaluateJavascript(ReaderSelectionCommand.ClearSelection.source, null)
 }
 
+/** Hides any revealed OCR bubble plates/action buttons before taking a raw page crop. */
+internal fun WebView.clearMangaRevealedBubbles() {
+    evaluateJavascript(
+        "window.hoshiManga && window.hoshiManga.clearRevealed && window.hoshiManga.clearRevealed()",
+        null,
+    )
+}
+
 private class MangaWebViewClient(
     private val resourceBridge: MangaWebResourceBridge,
     private val onPageReady: (Int) -> Unit,

@@ -2,6 +2,7 @@ package moe.antimony.hoshi.features.mangareader
 
 import android.graphics.Bitmap
 import android.graphics.Canvas
+import android.util.Base64
 import android.view.KeyEvent
 import android.webkit.WebView
 import androidx.activity.compose.BackHandler
@@ -64,16 +65,19 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.findViewTreeLifecycleOwner
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import moe.antimony.hoshi.LocalHoshiAppContainer
 import moe.antimony.hoshi.epub.BookRepository
 import moe.antimony.hoshi.features.ai.AiChatEntry
 import moe.antimony.hoshi.features.ai.AiChatHistoryStore
 import moe.antimony.hoshi.features.ai.AiChatHistoryView
 import moe.antimony.hoshi.features.ai.AiChatPopupView
+import moe.antimony.hoshi.features.ai.AiChatSettings
 import moe.antimony.hoshi.features.ai.AiChatSettingsScreen
 import moe.antimony.hoshi.features.ai.AiChatUiState
 import moe.antimony.hoshi.features.ai.OpenAiChatClient
@@ -93,10 +97,13 @@ import moe.antimony.hoshi.features.reader.ReaderHardwareKeyAction
 import moe.antimony.hoshi.features.reader.usesDarkInterface
 import moe.antimony.hoshi.features.sync.http.rememberHttpSyncReaderHooks
 import moe.antimony.hoshi.mokuro.MokuroBook
+import java.io.ByteArrayOutputStream
 import java.io.File
 import kotlin.math.roundToInt
 
 private const val BOOKMARK_SAVE_DEBOUNCE_MS = 400L
+private const val MANGA_SCREENSHOT_TRANSLATION_LABEL = "Screenshot translation"
+private const val MANGA_SCREENSHOT_IMAGE_MIME_TYPE = "image/png"
 
 /**
  * The mokuro manga reader once the book is loaded: a page WebView, RTL page navigation,
@@ -155,9 +162,11 @@ internal fun MangaReaderScreen(
     // history, and whether the history / settings overlays are open.
     var aiChatState by remember(book) { mutableStateOf<AiChatUiState?>(null) }
     var aiRequestJob by remember(book) { mutableStateOf<Job?>(null) }
+    var aiRetryAction by remember(book) { mutableStateOf<(() -> Unit)?>(null) }
     var aiHistory by remember(book) { mutableStateOf<List<AiChatEntry>>(emptyList()) }
     var showAiHistory by remember(book) { mutableStateOf(false) }
     var showAiSettings by remember(book) { mutableStateOf(false) }
+    var screenshotCropMode by remember(book) { mutableStateOf(false) }
 
     val scope = rememberCoroutineScope()
     // A scope that outlives the reader route, used only to flush a pending bookmark save on
@@ -224,6 +233,7 @@ internal fun MangaReaderScreen(
 
     fun dismissAiChat() {
         aiRequestJob?.cancel()
+        aiRetryAction = null
         aiChatState = null
     }
 
@@ -233,6 +243,7 @@ internal fun MangaReaderScreen(
      * and the coroutine bails without touching state once cancelled.
      */
     fun askAi(bubbleText: String) {
+        aiRetryAction = { askAi(bubbleText) }
         val settings = aiSettings
         if (settings == null) {
             // DataStore's first emission is async; a tap in that brief window would otherwise
@@ -297,6 +308,96 @@ internal fun MangaReaderScreen(
         }
     }
 
+    fun translateScreenshotCrop(rect: MangaScreenshotCropRect) {
+        aiRetryAction = { translateScreenshotCrop(rect) }
+        val settings = aiSettings
+        if (settings == null) {
+            aiChatState = AiChatUiState.Failed(
+                MANGA_SCREENSHOT_TRANSLATION_LABEL,
+                "ChatGPT is still loading — tap again in a moment.",
+            )
+            return
+        }
+        if (!settings.isConfigured) {
+            aiChatState = AiChatUiState.Failed(
+                MANGA_SCREENSHOT_TRANSLATION_LABEL,
+                "Set your OpenAI API key first: open the ⋯ menu → ChatGPT settings.",
+            )
+            return
+        }
+        val currentWebView = webView
+        if (currentWebView == null) {
+            aiChatState = AiChatUiState.Failed(
+                MANGA_SCREENSHOT_TRANSLATION_LABEL,
+                "The manga page is not ready yet.",
+            )
+            return
+        }
+        val bitmap = captureWebViewBitmap(currentWebView)
+        if (bitmap == null) {
+            aiChatState = AiChatUiState.Failed(
+                MANGA_SCREENSHOT_TRANSLATION_LABEL,
+                "Could not capture the selected area.",
+            )
+            return
+        }
+        aiRequestJob?.cancel()
+        aiChatState = AiChatUiState.Loading(MANGA_SCREENSHOT_TRANSLATION_LABEL)
+        val prompt = settings.imagePromptText.trim().ifBlank { AiChatSettings.DEFAULT_IMAGE_PROMPT }
+        aiRequestJob = scope.launch {
+            val imageBase64 = withContext(Dispatchers.Default) {
+                cropWebViewBitmapPng(bitmap, rect)?.let { bytes ->
+                    Base64.encodeToString(bytes, Base64.NO_WRAP)
+                }
+            }
+            if (!isActive) return@launch
+            if (imageBase64 == null) {
+                aiChatState = AiChatUiState.Failed(
+                    MANGA_SCREENSHOT_TRANSLATION_LABEL,
+                    "Could not capture the selected area.",
+                )
+                return@launch
+            }
+            val result = runCatching {
+                OpenAiChatClient.completeImage(
+                    apiKey = settings.apiKey,
+                    model = settings.model,
+                    prompt = prompt,
+                    imageBase64 = imageBase64,
+                    imageMimeType = MANGA_SCREENSHOT_IMAGE_MIME_TYPE,
+                )
+            }
+            if (!isActive) return@launch
+            result.fold(
+                onSuccess = { response ->
+                    val entry = AiChatEntry(
+                        bubbleText = MANGA_SCREENSHOT_TRANSLATION_LABEL,
+                        prompt = prompt,
+                        model = settings.model,
+                        response = response,
+                        timestampSeconds = repository.currentAppleReferenceDateSeconds(),
+                    )
+                    aiChatState = AiChatUiState.Loaded(entry)
+                    val appended = runCatching { aiHistoryStore.append(bookRoot, entry).entries }
+                        .getOrElse { error ->
+                            if (error is CancellationException) throw error
+                            null
+                        }
+                    if (appended != null) {
+                        aiHistory = appended
+                        httpSyncHooks.onChatEntryPersisted(entry)
+                    }
+                },
+                onFailure = { error ->
+                    aiChatState = AiChatUiState.Failed(
+                        MANGA_SCREENSHOT_TRANSLATION_LABEL,
+                        error.message ?: "ChatGPT request failed.",
+                    )
+                },
+            )
+        }
+    }
+
     val lookupOptions = LookupPopupOptions(
         isVertical = false,
         width = readerSettings.popupWidth,
@@ -325,17 +426,21 @@ internal fun MangaReaderScreen(
     // Volume-key / page-key navigation, wired through the host the same way the EPUB reader
     // does (see ReaderHardwareKeyNavigation): a Forward action turns the page forward.
     val currentKeyHandler = rememberUpdatedState<(KeyEvent) -> Boolean> { event ->
-        val action = readerHardwareKeyActionForKeyEvent(
-            keyCode = event.keyCode,
-            action = event.action,
-            repeatCount = event.repeatCount,
-            settings = readerSettings,
-            sasayakiEnabled = false,
-            hasSasayakiAudio = false,
-        )
-        when (action) {
-            is ReaderHardwareKeyAction.ReaderNavigation -> navigate(action.direction)
-            else -> false
+        if (screenshotCropMode) {
+            true
+        } else {
+            val action = readerHardwareKeyActionForKeyEvent(
+                keyCode = event.keyCode,
+                action = event.action,
+                repeatCount = event.repeatCount,
+                settings = readerSettings,
+                sasayakiEnabled = false,
+                hasSasayakiAudio = false,
+            )
+            when (action) {
+                is ReaderHardwareKeyAction.ReaderNavigation -> navigate(action.direction)
+                else -> false
+            }
         }
     }
     DisposableEffect(onReaderKeyEventHandlerChange) {
@@ -427,6 +532,7 @@ internal fun MangaReaderScreen(
         // The ChatGPT history / settings overlays own their own back handling (via
         // SettingsDetailScaffold); this handles the ChatGPT popup and lookup popups.
         when {
+            screenshotCropMode -> screenshotCropMode = false
             aiChatState != null -> dismissAiChat()
             lookupPopups.isNotEmpty() -> clearSelectionAndPopups()
             else -> onClose()
@@ -438,6 +544,10 @@ internal fun MangaReaderScreen(
             .fillMaxSize()
             .background(backgroundColor),
     ) {
+        val canTakeScreenshot = webView != null &&
+            pageTransition == null &&
+            animatingTransition == null
+
         BoxWithConstraints(
             modifier = Modifier
                 .fillMaxSize()
@@ -542,6 +652,14 @@ internal fun MangaReaderScreen(
         )
         MangaReaderOverflowMenu(
             darkInterface = readerSettings.usesDarkInterface(systemDark),
+            takeScreenshotEnabled = canTakeScreenshot,
+            onTakeScreenshot = {
+                if (canTakeScreenshot) {
+                    clearSelectionAndPopups()
+                    webView?.clearMangaRevealedBubbles()
+                    screenshotCropMode = true
+                }
+            },
             onShowAiHistory = { showAiHistory = true },
             onShowAiSettings = { showAiSettings = true },
             modifier = Modifier
@@ -586,6 +704,31 @@ internal fun MangaReaderScreen(
                 .zIndex(1f),
         )
 
+        if (screenshotCropMode) {
+            BoxWithConstraints(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .windowInsetsPadding(WindowInsets.systemBars)
+                    .zIndex(2f),
+            ) {
+                val screenshotContainerWidthPx =
+                    webView?.width?.takeIf { it > 0 } ?: constraints.maxWidth
+                val screenshotContainerHeightPx =
+                    webView?.height?.takeIf { it > 0 } ?: constraints.maxHeight
+                MangaScreenshotCropOverlay(
+                    containerWidthPx = screenshotContainerWidthPx,
+                    containerHeightPx = screenshotContainerHeightPx,
+                    darkInterface = readerSettings.usesDarkInterface(systemDark),
+                    onCancel = { screenshotCropMode = false },
+                    onConfirm = { rect ->
+                        screenshotCropMode = false
+                        translateScreenshotCrop(rect)
+                    },
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
+        }
+
         // ChatGPT overlays. The response popup sits above the page and the lookup popups;
         // the history / settings screens are full-screen and sit above everything.
         val activeAiChat = aiChatState
@@ -593,7 +736,7 @@ internal fun MangaReaderScreen(
             AiChatPopupView(
                 state = activeAiChat,
                 onDismiss = { dismissAiChat() },
-                onRetry = { askAi(activeAiChat.bubbleText) },
+                onRetry = { aiRetryAction?.invoke() },
                 modifier = Modifier.zIndex(3f),
             )
         }
@@ -647,6 +790,8 @@ private fun MangaReaderCloseButton(
 @Composable
 private fun MangaReaderOverflowMenu(
     darkInterface: Boolean,
+    takeScreenshotEnabled: Boolean,
+    onTakeScreenshot: () -> Unit,
     onShowAiHistory: () -> Unit,
     onShowAiSettings: () -> Unit,
     modifier: Modifier = Modifier,
@@ -668,6 +813,14 @@ private fun MangaReaderOverflowMenu(
             expanded = menuExpanded,
             onDismissRequest = { menuExpanded = false },
         ) {
+            DropdownMenuItem(
+                text = { Text("Take screenshot") },
+                enabled = takeScreenshotEnabled,
+                onClick = {
+                    menuExpanded = false
+                    onTakeScreenshot()
+                },
+            )
             DropdownMenuItem(
                 text = { Text("ChatGPT history") },
                 onClick = {
@@ -783,4 +936,34 @@ private fun captureWebViewBitmap(view: WebView): Bitmap? {
         view.draw(Canvas(bitmap))
         bitmap
     }.getOrNull()
+}
+
+internal fun cropWebViewBitmapPng(bitmap: Bitmap, rect: MangaScreenshotCropRect): ByteArray? {
+    var cropped: Bitmap? = null
+    try {
+        val crop = normalizedMangaScreenshotCropRect(
+            startX = rect.left.toFloat(),
+            startY = rect.top.toFloat(),
+            endX = rect.right.toFloat(),
+            endY = rect.bottom.toFloat(),
+            containerWidth = bitmap.width,
+            containerHeight = bitmap.height,
+        ) ?: return null
+        val croppedBitmap = runCatching {
+            Bitmap.createBitmap(bitmap, crop.left, crop.top, crop.width, crop.height)
+        }.getOrNull() ?: return null
+        cropped = croppedBitmap
+        return ByteArrayOutputStream().use { output ->
+            if (!croppedBitmap.compress(Bitmap.CompressFormat.PNG, 100, output)) {
+                null
+            } else {
+                output.toByteArray()
+            }
+        }
+    } finally {
+        if (cropped !== bitmap) {
+            cropped?.recycle()
+        }
+        bitmap.recycle()
+    }
 }

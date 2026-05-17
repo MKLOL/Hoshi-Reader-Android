@@ -240,6 +240,7 @@ class HttpSyncLiveServerSmokeTest {
                 val aiBlob = HttpSyncAiChatSettingsBlob(
                     model = "smoke-test-model",
                     promptText = "Smoke test prompt.",
+                    imagePromptText = "Smoke test image prompt.",
                     lastModified = "2099-01-01T00:00:00Z",
                 )
                 client.put(
@@ -287,6 +288,7 @@ class HttpSyncLiveServerSmokeTest {
             val finalAi = aiRepo.settings.first()
             assertEquals("smoke-test-model", finalAi.model)
             assertEquals("Smoke test prompt.", finalAi.promptText)
+            assertEquals("Smoke test image prompt.", finalAi.imagePromptText)
         } finally {
             cleanupKeys.forEach { key -> runCatching { client.delete(key) } }
             // Best-effort: leave AI_CHAT_SETTINGS_KEY's original state alone (nobody else

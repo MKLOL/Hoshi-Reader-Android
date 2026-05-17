@@ -42,6 +42,53 @@ class OpenAiChatClientTest {
     }
 
     @Test
+    fun buildImageRequestBodySendsCustomPromptAndDataUrlImagePart() {
+        val body = OpenAiChatClient.buildImageRequestBody(
+            model = "gpt-5.5",
+            prompt = "Translate this crop with terse notes.",
+            imageBase64 = "abc123",
+            imageMimeType = "image/png",
+        )
+
+        val root = Json.parseToJsonElement(body).jsonObject
+        assertEquals("gpt-5.5", root["model"]!!.jsonPrimitive.content)
+        val contentParts = root["messages"]!!.jsonArray[0].jsonObject["content"]!!.jsonArray
+        assertEquals(2, contentParts.size)
+        assertEquals("text", contentParts[0].jsonObject["type"]!!.jsonPrimitive.content)
+        assertEquals(
+            "Translate this crop with terse notes.",
+            contentParts[0].jsonObject["text"]!!.jsonPrimitive.content,
+        )
+        assertEquals("image_url", contentParts[1].jsonObject["type"]!!.jsonPrimitive.content)
+        assertEquals(
+            "data:image/png;base64,abc123",
+            contentParts[1].jsonObject["image_url"]!!.jsonObject["url"]!!.jsonPrimitive.content,
+        )
+    }
+
+    @Test
+    fun buildImageRequestBodyFallsBackToDefaultModelAndPngMimeType() {
+        val body = OpenAiChatClient.buildImageRequestBody(
+            model = "  ",
+            prompt = "   ",
+            imageBase64 = "  xyz  ",
+            imageMimeType = "  ",
+        )
+
+        val root = Json.parseToJsonElement(body).jsonObject
+        assertEquals(AiChatSettings.DEFAULT_MODEL, root["model"]!!.jsonPrimitive.content)
+        val contentParts = root["messages"]!!.jsonArray[0].jsonObject["content"]!!.jsonArray
+        assertEquals(
+            AiChatSettings.DEFAULT_IMAGE_PROMPT,
+            contentParts[0].jsonObject["text"]!!.jsonPrimitive.content,
+        )
+        assertEquals(
+            "data:image/png;base64,xyz",
+            contentParts[1].jsonObject["image_url"]!!.jsonObject["url"]!!.jsonPrimitive.content,
+        )
+    }
+
+    @Test
     fun parseResponseExtractsAssistantContent() {
         val raw = """
             {"id":"chatcmpl-1","choices":[

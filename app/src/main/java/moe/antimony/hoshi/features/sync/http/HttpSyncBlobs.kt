@@ -5,6 +5,7 @@ import kotlinx.serialization.Serializable
 import moe.antimony.hoshi.epub.Bookmark
 import moe.antimony.hoshi.epub.ContentType
 import moe.antimony.hoshi.features.ai.AiChatEntry
+import moe.antimony.hoshi.features.ai.AiChatSettings
 import java.security.MessageDigest
 import java.time.Instant
 
@@ -60,14 +61,16 @@ data class HttpSyncChatEntryBlob(
 )
 
 /**
- * Cross-device ChatGPT settings: the model and the system prompt. **The API key is NOT
- * in here on purpose** — it stays per-device for security; pasting a key on one phone
- * never leaks it through sync to anywhere else. `lastModified` is the LWW tiebreaker.
+ * Cross-device ChatGPT settings: the model, speech-bubble prompt, and screenshot image prompt.
+ * **The API key is NOT in here on purpose** — it stays per-device for security; pasting a key
+ * on one phone never leaks it through sync to anywhere else. `lastModified` is the LWW
+ * tiebreaker.
  */
 @Serializable
 data class HttpSyncAiChatSettingsBlob(
     val model: String,
     val promptText: String,
+    val imagePromptText: String = AiChatSettings.DEFAULT_IMAGE_PROMPT,
     val lastModified: String,
 )
 
@@ -136,7 +139,7 @@ internal fun chatPrefixForBook(syncId: String): String = "books/$syncId/chat/"
 internal fun chatKey(syncId: String, suffix: String): String = "books/$syncId/chat/$suffix"
 internal const val ALL_BOOKS_PREFIX: String = "books/"
 
-/** Single key for the cross-device ChatGPT settings (model + system prompt). */
+/** Single key for the cross-device ChatGPT settings (model + prompts). */
 internal const val AI_CHAT_SETTINGS_KEY: String = "app/ai_chat_settings"
 
 /**
