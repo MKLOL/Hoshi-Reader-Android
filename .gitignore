@@ -16,3 +16,9 @@ local.properties
 # Local secrets for the live-server smoke tests (HOSHI_KV_TOKEN etc).
 # Copy `.hoshi-sync-secret.env.example` to `.hoshi-sync-secret.env` and fill it in.
 .hoshi-sync-secret.env
+
+# Fork release signing keystore + procedure. Local-only — the upstream copy
+# lives in Dropbox at hoshi-manga-bundle/android-debug.keystore. See
+# signing/README.md for the exact two-step build-then-re-sign flow that
+# keeps the cert matching every previously-released fork APK.
+/signing/
