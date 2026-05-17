@@ -5,6 +5,10 @@ The format follows a Keep a Changelog style, and release sections use Semantic V
 
 ## [Unreleased]
 
+### Changed
+
+- Show live HTTP Sync progress while a manual sync is running, including the current phase and book/item counters for remote listing, payload checks, reading data, chat history, and local uploads.
+
 ## [v0.7.16] - 2026-05-17
 
 ### Added

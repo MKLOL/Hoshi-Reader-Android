@@ -17,6 +17,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
@@ -34,7 +35,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import moe.antimony.hoshi.LocalHoshiAppContainer
 import moe.antimony.hoshi.features.settings.SettingsDetailScaffold
 
@@ -133,9 +136,20 @@ fun HttpSyncSettingsView(
                 enabled = loaded.isConfigured && status !is SyncStatus.Running,
                 running = status is SyncStatus.Running,
                 onClick = {
-                    status = SyncStatus.Running
+                    status = SyncStatus.Running(
+                        HttpSyncProgress(
+                            message = "Starting sync",
+                            detail = "Preparing to compare this device with the server.",
+                        ),
+                    )
                     scope.launch {
-                        status = runCatching { reconciler.syncOnce(loaded) }
+                        status = runCatching {
+                            reconciler.syncOnce(loaded) { progress ->
+                                withContext(Dispatchers.Main.immediate) {
+                                    status = SyncStatus.Running(progress)
+                                }
+                            }
+                        }
                             .fold(
                                 onSuccess = { result ->
                                     // Persist the inbound cursor so the next sync can use
@@ -211,9 +225,13 @@ private fun SyncNowButton(
 
 @Composable
 private fun StatusLine(status: SyncStatus) {
+    if (status is SyncStatus.Running) {
+        SyncProgressView(status.progress)
+        return
+    }
     val (text, color) = when (status) {
         SyncStatus.Idle -> "" to MaterialTheme.colorScheme.onSurfaceVariant
-        SyncStatus.Running -> "Syncing…" to MaterialTheme.colorScheme.onSurfaceVariant
+        is SyncStatus.Running -> "" to MaterialTheme.colorScheme.onSurfaceVariant
         is SyncStatus.Done -> {
             val errorTail = if (status.result.errors.isEmpty()) "" else
                 "\nErrors:\n" + status.result.errors.joinToString("\n") { " • $it" }
@@ -226,9 +244,36 @@ private fun StatusLine(status: SyncStatus) {
     }
 }
 
+@Composable
+private fun SyncProgressView(progress: HttpSyncProgress) {
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        val fraction = progress.fraction
+        if (fraction == null) {
+            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+        } else {
+            LinearProgressIndicator(
+                progress = { fraction },
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+        Text(
+            text = progress.message,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurface,
+        )
+        progress.detail?.takeIf { it.isNotBlank() }?.let { detail ->
+            Text(
+                text = detail,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
 private sealed interface SyncStatus {
     data object Idle : SyncStatus
-    data object Running : SyncStatus
+    data class Running(val progress: HttpSyncProgress) : SyncStatus
     data class Done(val result: HttpSyncResult) : SyncStatus
     data class Failed(val message: String) : SyncStatus
 }

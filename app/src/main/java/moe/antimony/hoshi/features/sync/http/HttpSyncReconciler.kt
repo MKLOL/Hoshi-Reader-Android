@@ -68,16 +68,21 @@ class HttpSyncReconciler(
      * One reconciliation pass. Inbound first so a newer server bookmark is not stomped
      * by our outbound push.
      */
-    suspend fun syncOnce(settings: HttpSyncSettings): HttpSyncResult = withContext(ioDispatcher) {
+    suspend fun syncOnce(
+        settings: HttpSyncSettings,
+        onProgress: suspend (HttpSyncProgress) -> Unit = {},
+    ): HttpSyncResult = withContext(ioDispatcher) {
         require(settings.isConfigured) { "HTTP sync is not configured." }
         val transport = transportFactory(settings)
 
-        val inbound = pullChangedKeys(transport, settings.lastSyncedAt)
-        val outbound = pushAllLocal(transport)
-        val appSettings = syncAppSettings(transport)
+        onProgress(HttpSyncProgress(message = "Preparing sync", detail = "Connecting to the HTTP sync server."))
+        val inbound = pullChangedKeys(transport, settings.lastSyncedAt, onProgress)
+        val outbound = pushAllLocal(transport, onProgress)
+        val appSettings = syncAppSettings(transport, onProgress)
 
         val newCursor = safeNewCursor(currentCursor = settings.lastSyncedAt, inbound = inbound)
         val cursorChanged = newCursor != null && newCursor != settings.lastSyncedAt
+        onProgress(HttpSyncProgress(message = "Finishing sync", detail = "Saving the sync cursor."))
 
         HttpSyncResult(
             uploadedBookmarks = outbound.uploadedBookmarks,
@@ -120,11 +125,15 @@ class HttpSyncReconciler(
      *
      * Skipped silently if no [aiSettingsRepository] was supplied (test-only path).
      */
-    private suspend fun syncAppSettings(transport: HttpSyncKvTransport): AppSettingsResult {
+    private suspend fun syncAppSettings(
+        transport: HttpSyncKvTransport,
+        onProgress: suspend (HttpSyncProgress) -> Unit,
+    ): AppSettingsResult {
         val repo = aiSettingsRepository ?: return AppSettingsResult(
             uploaded = false, downloaded = false, maxLastModified = null, errors = emptyList(),
         )
         val errors = mutableListOf<String>()
+        onProgress(HttpSyncProgress(message = "Syncing ChatGPT settings", detail = "Checking shared model and prompt settings."))
 
         val local = runCatching { repo.settings.first() }.getOrElse {
             errors += "ai_chat_settings: ${it.message ?: it.javaClass.simpleName}"
@@ -319,6 +328,7 @@ class HttpSyncReconciler(
     private suspend fun pullChangedKeys(
         transport: HttpSyncKvTransport,
         sinceCursor: String?,
+        onProgress: suspend (HttpSyncProgress) -> Unit,
     ): InboundResult {
         var downloadedBookmarks = 0
         var downloadedChatEntries = 0
@@ -340,6 +350,7 @@ class HttpSyncReconciler(
             }
         }
 
+        onProgress(HttpSyncProgress(message = "Scanning local books", detail = "Preparing to match local and remote sync IDs."))
         val localBookEntries = bookRepository.loadBookEntries()
         val rootsBySyncId: MutableMap<String, File> = mutableMapOf<String, File>().apply {
             for (entry in localBookEntries) {
@@ -357,12 +368,24 @@ class HttpSyncReconciler(
         val bookmarksAndChats = mutableListOf<Pair<ParsedBookKey, HttpSyncKvKeyMeta>>()
         val listSinceCursor = inboundListSinceCursor(sinceCursor)
         var cursor: String? = null
+        var listedPages = 0
         do {
+            onProgress(
+                HttpSyncProgress(
+                    message = "Listing remote changes",
+                    detail = if (listedPages == 0) {
+                        "Asking the server what changed."
+                    } else {
+                        "Read $listedPages remote page${plural(listedPages)} so far."
+                    },
+                ),
+            )
             val page = transport.list(
                 prefix = ALL_BOOKS_PREFIX,
                 since = listSinceCursor,
                 cursor = cursor,
             )
+            listedPages += 1
             for (meta in page.keys) {
                 val parsed = parseBookKey(meta.key)
                 if (parsed == null) {
@@ -383,8 +406,16 @@ class HttpSyncReconciler(
         // ── Pass 2: import remote-only books by their payload manifests, BEFORE applying
         //    bookmarks/chats. This is what fixes the ordering bug: once this pass runs,
         //    every syncId on the server has a local root in `rootsBySyncId`.
-        for (meta in payloadManifests) {
+        for ((index, meta) in payloadManifests.withIndex()) {
             val parsed = parseBookKey(meta.key) ?: continue
+            onProgress(
+                HttpSyncProgress(
+                    message = "Checking remote book payloads",
+                    detail = "Book ${index + 1} of ${payloadManifests.size}: ${parsed.syncId}",
+                    completed = index + 1,
+                    total = payloadManifests.size,
+                ),
+            )
             if (parsed.syncId in rootsBySyncId.keys) {
                 markHandled(meta)
                 continue
@@ -405,7 +436,16 @@ class HttpSyncReconciler(
         }
 
         // ── Pass 3: bookmarks and chats now find their local roots and get applied.
-        for ((parsed, meta) in bookmarksAndChats) {
+        for ((index, pair) in bookmarksAndChats.withIndex()) {
+            val (parsed, meta) = pair
+            onProgress(
+                HttpSyncProgress(
+                    message = "Applying remote reading data",
+                    detail = "Item ${index + 1} of ${bookmarksAndChats.size}: ${parsed.kind.name.lowercase()} for ${parsed.syncId}",
+                    completed = index + 1,
+                    total = bookmarksAndChats.size,
+                ),
+            )
             val root = rootsBySyncId[parsed.syncId]
             if (root == null) {
                 markUnhandled(meta)
@@ -432,8 +472,18 @@ class HttpSyncReconciler(
         // chat prefixes for local mokuro books so manual Sync now can recover those skipped
         // ChatGPT entries without forcing a full payload rescan.
         if (sinceCursor != null) {
-            for ((syncId, root) in rootsBySyncId) {
+            val rootEntries = rootsBySyncId.entries.toList()
+            for ((index, entry) in rootEntries.withIndex()) {
+                val (syncId, root) = entry
                 if (bookContentType(root) != ContentType.Mokuro) continue
+                onProgress(
+                    HttpSyncProgress(
+                        message = "Backfilling manga chats",
+                        detail = "Book ${index + 1} of ${rootEntries.size}: $syncId",
+                        completed = index + 1,
+                        total = rootEntries.size,
+                    ),
+                )
                 val knownChatKeys = runCatching {
                     aiHistoryStore.load(root).entries
                         .map { entry ->
@@ -573,7 +623,10 @@ class HttpSyncReconciler(
         val errors: List<String>,
     )
 
-    private suspend fun pushAllLocal(transport: HttpSyncKvTransport): OutboundResult {
+    private suspend fun pushAllLocal(
+        transport: HttpSyncKvTransport,
+        onProgress: suspend (HttpSyncProgress) -> Unit,
+    ): OutboundResult {
         var uploadedBookmarks = 0
         var uploadedChatEntries = 0
         var uploadedMetadata = 0
@@ -582,11 +635,19 @@ class HttpSyncReconciler(
         val errors = mutableListOf<String>()
 
         val localBooks = bookRepository.loadBookEntries()
-        for (entry in localBooks) {
+        for ((index, entry) in localBooks.withIndex()) {
             val title = entry.metadata.title.orEmpty().ifBlank { continue }
             val syncId = deriveSyncId(title) ?: continue
             val root = entry.root
             try {
+                onProgress(
+                    HttpSyncProgress(
+                        message = "Uploading local book state",
+                        detail = "Book ${index + 1} of ${localBooks.size}: $title",
+                        completed = index + 1,
+                        total = localBooks.size,
+                    ),
+                )
                 val bookmark = bookRepository.loadBookmark(root)
                 if (bookmark != null) {
                     // Don't overwrite a newer server bookmark — see the same guard in
@@ -630,6 +691,14 @@ class HttpSyncReconciler(
                 // can be added by widening the gate.
                 val contentType = bookContentType(root)
                 if (contentType == ContentType.Mokuro) {
+                    onProgress(
+                        HttpSyncProgress(
+                            message = "Checking manga payload upload",
+                            detail = "Book ${index + 1} of ${localBooks.size}: $title",
+                            completed = index + 1,
+                            total = localBooks.size,
+                        ),
+                    )
                     val uploaded = payloadCodec.uploadIfChanged(
                         transport = transport,
                         syncId = syncId,
@@ -659,7 +728,15 @@ class HttpSyncReconciler(
                             for (meta in page.keys) existing += meta.key
                             chatCursor = page.nextCursor
                         } while (chatCursor != null && page.truncated)
-                        for (chatEntry in chatEntries) {
+                        for ((chatIndex, chatEntry) in chatEntries.withIndex()) {
+                            onProgress(
+                                HttpSyncProgress(
+                                    message = "Uploading manga chat history",
+                                    detail = "$title: chat ${chatIndex + 1} of ${chatEntries.size}",
+                                    completed = chatIndex + 1,
+                                    total = chatEntries.size,
+                                ),
+                            )
                             val suffix = chatEntryKeySuffix(chatEntry.timestampSeconds, chatEntry.bubbleText, chatEntry.response)
                             val key = chatKey(syncId, suffix)
                             if (key in existing) continue
@@ -809,6 +886,21 @@ private fun inboundListSinceCursor(cursor: String?): String? {
     return instant.minusMillis(INBOUND_CURSOR_LOOKBACK_MILLIS).toString()
 }
 
+data class HttpSyncProgress(
+    val message: String,
+    val detail: String? = null,
+    val completed: Int? = null,
+    val total: Int? = null,
+) {
+    val fraction: Float?
+        get() {
+            val done = completed ?: return null
+            val count = total ?: return null
+            if (count <= 0) return null
+            return (done.toFloat() / count.toFloat()).coerceIn(0f, 1f)
+        }
+}
+
 /**
  * Outcome of one [HttpSyncReconciler.syncOnce] pass. Granular counts so the UI can show a
  * one-line summary ("uploaded 3 bookmarks, 12 chat entries; downloaded 1 bookmark").
@@ -849,3 +941,5 @@ data class HttpSyncResult(
 
     private fun plural(n: Int): String = if (n == 1) "" else "s"
 }
+
+private fun plural(n: Int): String = if (n == 1) "" else "s"

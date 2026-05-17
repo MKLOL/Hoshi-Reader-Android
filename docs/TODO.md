@@ -69,6 +69,7 @@ This file is the short operational handoff for future agents.
 - Preserve the shared lifecycle-aware loaded-settings collection pattern when adding settings pages so controls do not flash default values before saved preferences load.
 - Keep reader auto-export save/upload work on a scope that survives reader route disposal so close and background flushes can finish after navigation.
 - Keep HTTP Sync `payload.zip` upload/download file-backed; large Mokuro manga must not be materialized as a single `ByteArray` in production sync paths.
+- Preserve HTTP Sync manual-progress callbacks when adding reconciliation phases; long-running work should update the Settings screen with a real phase and item counter.
 - Harden the HTTP Sync KV server with mutation-safe pagination and conditional bookmark PUTs so concurrent writes cannot be missed or overwritten between Android reconciliation passes.
 - Device-validate the first Android Google Drive sync slice with `testdata/test.epub` on a user-configured Device Code OAuth client from the same project as iOS/ッツ: connect/sign-out state, long-press manual import/export result dialogs, reader-open import-only, iOS-aligned paginated/continuous auto-export timing, close/background flush export, statistics Merge/Replace, and Sasayaki last-position sync.
 

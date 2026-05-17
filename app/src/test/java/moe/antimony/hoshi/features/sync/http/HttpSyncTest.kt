@@ -1221,6 +1221,29 @@ class HttpSyncTest {
         assertTrue(summary.contains("1 remote-only book"))
     }
 
+    @Test
+    fun syncOnceReportsUserVisibleProgress() = runBlocking {
+        val repo = newBookRepository()
+        val (root, _) = importMokuroBook(repo, "Progress Book")
+        repo.saveBookmark(root, Bookmark(1, 0.0, 1, 800_000_000.0))
+        val transport = FakeKvTransport()
+        val progress = mutableListOf<HttpSyncProgress>()
+        val reconciler = HttpSyncReconciler(
+            bookRepository = repo,
+            transportFactory = { transport },
+            ioDispatcher = kotlinx.coroutines.Dispatchers.Unconfined,
+        )
+
+        reconciler.syncOnce(configured) { progress += it }
+
+        assertTrue(progress.any { it.message == "Preparing sync" })
+        assertTrue(progress.any { it.message == "Listing remote changes" })
+        assertTrue(progress.any { it.message == "Uploading local book state" && it.total == 1 })
+        assertTrue(progress.any { it.message == "Checking manga payload upload" && it.total == 1 })
+        assertTrue(progress.any { it.message == "Finishing sync" })
+        assertTrue(progress.any { it.fraction != null })
+    }
+
     // ===== helpers ============================================================================
 
     private fun newBookRepository(): BookRepository =
