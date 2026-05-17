@@ -5,6 +5,8 @@ The format follows a Keep a Changelog style, and release sections use Semantic V
 
 ## [Unreleased]
 
+## [v0.7.16] - 2026-05-17
+
 ### Added
 
 - Add manga screenshot translation from the reader overflow menu: draw a crop rectangle, send the selected image to ChatGPT, and customize the synced image-translation prompt separately from the speech-bubble prompt.
