@@ -5,6 +5,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
@@ -63,6 +64,13 @@ data class HttpSyncKvFetched(
     override fun hashCode(): Int = System.identityHashCode(this)
 }
 
+/** Headers from a successful `GET /v1/kv/{key}` streamed directly to disk. */
+data class HttpSyncKvFileFetched(
+    val contentType: String,
+    val lastModified: String,
+    val etag: String,
+)
+
 @Serializable
 private data class HttpSyncKvError(val error: String? = null)
 
@@ -77,8 +85,33 @@ class HttpSyncException(message: String) : Exception(message)
 interface HttpSyncKvTransport {
     suspend fun put(key: String, contentType: String, body: ByteArray): HttpSyncKvWriteResponse
 
+    /**
+     * Uploads [file] without requiring callers to materialize it as a [ByteArray].
+     * The default keeps older fakes simple; production transports should stream.
+     */
+    suspend fun putFile(
+        key: String,
+        contentType: String,
+        file: File,
+    ): HttpSyncKvWriteResponse = put(key, contentType, file.readBytes())
+
     /** Returns `null` on `404` (key not present). All other non-2xx responses throw. */
     suspend fun get(key: String): HttpSyncKvFetched?
+
+    /**
+     * Downloads [key] into [targetFile] without requiring callers to keep the body in memory.
+     * The default keeps older fakes simple; production transports should stream.
+     */
+    suspend fun downloadToFile(key: String, targetFile: File): HttpSyncKvFileFetched? {
+        val fetched = get(key) ?: return null
+        targetFile.parentFile?.mkdirs()
+        targetFile.writeBytes(fetched.body)
+        return HttpSyncKvFileFetched(
+            contentType = fetched.contentType,
+            lastModified = fetched.lastModified,
+            etag = fetched.etag,
+        )
+    }
 
     suspend fun list(
         prefix: String? = null,
@@ -130,6 +163,32 @@ class HttpSyncKvClient(
         }
     }
 
+    override suspend fun putFile(
+        key: String,
+        contentType: String,
+        file: File,
+    ): HttpSyncKvWriteResponse = withContext(ioDispatcher) {
+        val connection = openConnection("PUT", "/v1/kv/${encodeKey(key)}", contentType)
+        connection.doOutput = true
+        connection.setFixedLengthStreamingMode(file.length())
+        try {
+            file.inputStream().buffered(DEFAULT_STREAM_BUFFER_SIZE).use { input ->
+                connection.outputStream.buffered(DEFAULT_STREAM_BUFFER_SIZE).use { output ->
+                    input.copyTo(output, DEFAULT_STREAM_BUFFER_SIZE)
+                }
+            }
+            val (code, raw) = readBody(connection)
+            if (code !in 200..299) throw HttpSyncException(parseError(code, raw))
+            json.decodeFromString(HttpSyncKvWriteResponse.serializer(), raw)
+        } catch (e: HttpSyncException) {
+            throw e
+        } catch (e: Exception) {
+            throw HttpSyncException(friendlyMessage(e))
+        } finally {
+            connection.disconnect()
+        }
+    }
+
     override suspend fun get(key: String): HttpSyncKvFetched? = withContext(ioDispatcher) {
         val connection = openConnection("GET", "/v1/kv/${encodeKey(key)}", contentType = null)
         try {
@@ -160,6 +219,41 @@ class HttpSyncKvClient(
             connection.disconnect()
         }
     }
+
+    override suspend fun downloadToFile(key: String, targetFile: File): HttpSyncKvFileFetched? =
+        withContext(ioDispatcher) {
+            val connection = openConnection("GET", "/v1/kv/${encodeKey(key)}", contentType = null)
+            try {
+                val code = connection.responseCode
+                if (code == 404) return@withContext null
+                if (code !in 200..299) {
+                    val raw = (connection.errorStream ?: connection.inputStream)
+                        ?.bufferedReader()?.use { it.readText() }
+                        .orEmpty()
+                    throw HttpSyncException(parseError(code, raw))
+                }
+                targetFile.parentFile?.mkdirs()
+                connection.inputStream.buffered(DEFAULT_STREAM_BUFFER_SIZE).use { input ->
+                    targetFile.outputStream().buffered(DEFAULT_STREAM_BUFFER_SIZE).use { output ->
+                        input.copyTo(output, DEFAULT_STREAM_BUFFER_SIZE)
+                    }
+                }
+                HttpSyncKvFileFetched(
+                    contentType = connection.getHeaderField("Content-Type")
+                        ?: "application/octet-stream",
+                    lastModified = connection.getHeaderField("Last-Modified") ?: "",
+                    etag = connection.getHeaderField("ETag") ?: "",
+                )
+            } catch (e: HttpSyncException) {
+                targetFile.delete()
+                throw e
+            } catch (e: Exception) {
+                targetFile.delete()
+                throw HttpSyncException(friendlyMessage(e))
+            } finally {
+                connection.disconnect()
+            }
+        }
 
     override suspend fun list(
         prefix: String?,
@@ -290,3 +384,5 @@ class HttpSyncKvClient(
     private fun urlEncode(value: String): String =
         URLEncoder.encode(value, Charsets.UTF_8.name()).replace("+", "%20")
 }
+
+private const val DEFAULT_STREAM_BUFFER_SIZE = 64 * 1024

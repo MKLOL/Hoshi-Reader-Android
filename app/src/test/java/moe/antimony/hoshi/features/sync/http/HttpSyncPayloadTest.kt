@@ -54,6 +54,80 @@ class HttpSyncPayloadTest {
     }
 
     @Test
+    fun zipDirectoryToFileMatchesByteArrayZipHelper() = runBlocking {
+        val src = tempFolder.newFolder("spooled-source-book").apply {
+            resolve("mokuro.json").writeText("""{"version":"1.0"}""")
+            resolve("pages").mkdirs()
+            resolve("pages/0001.png").writeBytes(byteArrayOf(0x89.toByte(), 0x50, 0x4E, 0x47))
+        }
+        val (zipBytes, byteArraySha) = codec.zipDirectory(src)
+        val zipFile = tempFolder.newFile("payload.zip")
+        val fileSha = codec.zipDirectoryToFile(src, zipFile)
+
+        assertEquals(byteArraySha, fileSha)
+        assertEquals(zipBytes.size.toLong(), zipFile.length())
+    }
+
+    @Test
+    fun uploadUsesFileBackedPayloadZipInsteadOfByteArrayPut() = runBlocking {
+        val src = tempFolder.newFolder("stream-upload-book").apply {
+            resolve("mokuro.json").writeText("""{"version":"1.0"}""")
+            resolve("pages").mkdirs()
+            resolve("pages/0001.png").writeBytes(ByteArray(128 * 1024) { (it % 251).toByte() })
+        }
+        val transport = PayloadStreamingOnlyTransport()
+
+        val uploaded = codec.uploadIfChanged(
+            transport = transport,
+            syncId = "stream_upload",
+            bookRoot = src,
+            originalName = "Stream Upload",
+            format = HttpSyncContentType.Mokuro,
+        )
+
+        assertTrue(uploaded)
+        assertEquals(1, transport.payloadPutFileCalls)
+        assertEquals(0, transport.payloadByteArrayPutCalls)
+        assertNotNull(transport.kv[payloadZipKey("stream_upload")])
+        val manifest = json.decodeFromString(
+            HttpSyncPayloadManifest.serializer(),
+            transport.kv[payloadManifestKey("stream_upload")]!!.body.toString(Charsets.UTF_8),
+        )
+        assertEquals(transport.kv[payloadZipKey("stream_upload")]!!.body.size.toLong(), manifest.sizeBytes)
+        assertFalse(
+            "upload spool should be deleted",
+            src.parentFile!!.listFiles().orEmpty().any { it.name.startsWith("hoshi-sync-upload-") },
+        )
+    }
+
+    @Test
+    fun downloadUsesFileBackedPayloadZipInsteadOfByteArrayGet() = runBlocking {
+        val src = tempFolder.newFolder("stream-download-source").apply {
+            resolve("mokuro.json").writeText("""{"hello":"stream"}""")
+            resolve("pages").mkdirs()
+            resolve("pages/p1.png").writeBytes(ByteArray(96 * 1024) { (it % 127).toByte() })
+        }
+        val seeded = FakeKvTransport()
+        codec.uploadIfChanged(seeded, "stream_download", src, "Stream Download", HttpSyncContentType.Mokuro)
+        val transport = PayloadStreamingOnlyTransport().apply {
+            kv.putAll(seeded.kv)
+        }
+
+        val downloadTarget = tempFolder.newFolder("stream-download-target")
+        val manifest = codec.downloadAndUnpack(transport, "stream_download", downloadTarget)
+
+        assertEquals("Stream Download", manifest.originalName)
+        assertEquals(1, transport.payloadDownloadToFileCalls)
+        assertEquals(0, transport.payloadByteArrayGetCalls)
+        assertEquals("""{"hello":"stream"}""", downloadTarget.resolve("mokuro.json").readText())
+        assertEquals(96 * 1024, downloadTarget.resolve("pages/p1.png").readBytes().size)
+        assertFalse(
+            "download spool should be deleted",
+            downloadTarget.parentFile!!.listFiles().orEmpty().any { it.name.startsWith("hoshi-sync-download-") },
+        )
+    }
+
+    @Test
     fun zipExcludesPerDeviceSidecars() = runBlocking {
         val src = tempFolder.newFolder("book").apply {
             resolve("mokuro.json").writeText("{}")
@@ -282,7 +356,7 @@ class HttpSyncPayloadTest {
             ex.message!!.contains("zip-slip", ignoreCase = true),
         )
         // And critically, the parent directory of `target` did not gain the malicious file.
-        assertFalse(target.parentFile.resolve("escape.txt").exists())
+        assertFalse(target.parentFile!!.resolve("escape.txt").exists())
     }
 
     @Test
@@ -515,3 +589,127 @@ class HttpSyncPayloadTest {
         assertNotNull(transport.kv[payloadManifestKey("mokuro_with_payload")])
     }
 }
+
+private class PayloadStreamingOnlyTransport : HttpSyncKvTransport {
+    val kv: MutableMap<String, FakeKvTransport.Stored> = linkedMapOf()
+    var payloadPutFileCalls: Int = 0
+        private set
+    var payloadDownloadToFileCalls: Int = 0
+        private set
+    var payloadByteArrayPutCalls: Int = 0
+        private set
+    var payloadByteArrayGetCalls: Int = 0
+        private set
+    private var clock: Long = 0L
+
+    override suspend fun put(
+        key: String,
+        contentType: String,
+        body: ByteArray,
+    ): HttpSyncKvWriteResponse {
+        if (isPayloadZipKey(key)) {
+            payloadByteArrayPutCalls += 1
+            throw AssertionError("payload.zip must be uploaded with putFile, not put(ByteArray)")
+        }
+        return store(key, contentType, body)
+    }
+
+    override suspend fun putFile(
+        key: String,
+        contentType: String,
+        file: File,
+    ): HttpSyncKvWriteResponse {
+        if (isPayloadZipKey(key)) {
+            payloadPutFileCalls += 1
+            assertTrue("payload spool should exist while upload is running", file.isFile)
+            assertTrue("payload spool should be non-empty", file.length() > 0L)
+            return store(key, contentType, file.readBytes())
+        }
+        return put(key, contentType, file.readBytes())
+    }
+
+    override suspend fun get(key: String): HttpSyncKvFetched? {
+        if (isPayloadZipKey(key)) {
+            payloadByteArrayGetCalls += 1
+            throw AssertionError("payload.zip must be downloaded with downloadToFile, not get(ByteArray)")
+        }
+        val stored = kv[key] ?: return null
+        return HttpSyncKvFetched(
+            body = stored.body,
+            contentType = stored.contentType,
+            lastModified = stored.lastModified,
+            etag = "sha256:fake",
+        )
+    }
+
+    override suspend fun downloadToFile(key: String, targetFile: File): HttpSyncKvFileFetched? {
+        if (isPayloadZipKey(key)) {
+            payloadDownloadToFileCalls += 1
+            val stored = kv[key] ?: return null
+            targetFile.parentFile?.mkdirs()
+            targetFile.writeBytes(stored.body)
+            return HttpSyncKvFileFetched(
+                contentType = stored.contentType,
+                lastModified = stored.lastModified,
+                etag = "sha256:fake",
+            )
+        }
+        val fetched = get(key) ?: return null
+        targetFile.parentFile?.mkdirs()
+        targetFile.writeBytes(fetched.body)
+        return HttpSyncKvFileFetched(
+            contentType = fetched.contentType,
+            lastModified = fetched.lastModified,
+            etag = fetched.etag,
+        )
+    }
+
+    override suspend fun list(
+        prefix: String?,
+        since: String?,
+        cursor: String?,
+        limit: Int?,
+    ): HttpSyncKvList {
+        val filtered = kv.entries
+            .filter { (key, _) -> prefix == null || key.startsWith(prefix) }
+            .filter { (_, stored) -> since == null || stored.lastModified > since }
+            .map { (key, stored) ->
+                HttpSyncKvKeyMeta(
+                    key = key,
+                    lastModified = stored.lastModified,
+                    etag = "sha256:fake",
+                    size = stored.body.size,
+                    contentType = stored.contentType,
+                )
+            }
+            .sortedBy { it.key }
+        return HttpSyncKvList(keys = filtered, truncated = false, nextCursor = null)
+    }
+
+    override suspend fun delete(key: String) {
+        kv.remove(key)
+    }
+
+    private fun store(key: String, contentType: String, body: ByteArray): HttpSyncKvWriteResponse {
+        val timestamp = nextTimestamp()
+        kv[key] = FakeKvTransport.Stored(
+            body = body,
+            contentType = contentType,
+            lastModified = timestamp,
+        )
+        return HttpSyncKvWriteResponse(
+            key = key,
+            lastModified = timestamp,
+            etag = "sha256:fake",
+            size = body.size,
+            contentType = contentType,
+        )
+    }
+
+    private fun nextTimestamp(): String {
+        clock += 1
+        return "2027-02-01T00:00:%02dZ".format(clock % 60)
+    }
+}
+
+private fun isPayloadZipKey(key: String): Boolean = key.endsWith("/payload.zip")

@@ -28,8 +28,9 @@ import java.util.UUID
  *     ./gradlew :app:testDebugUnitTest \
  *         --tests moe.antimony.hoshi.features.sync.http.HttpSyncLiveServerSmokeTest
  *
- * The test writes under a per-run `__smoke/{uuid}/...` prefix and cleans up after itself
- * so it doesn't pollute the live namespace.
+ * The test writes book data under a per-run `__smoke/{uuid}/...` prefix and cleans up after
+ * itself. App settings are a global key, so the test snapshots and restores that blob instead
+ * of deleting it.
  */
 class HttpSyncLiveServerSmokeTest {
 
@@ -201,6 +202,13 @@ class HttpSyncLiveServerSmokeTest {
         val syncId = deriveSyncId(title)
             ?: error("test title must derive to a non-null syncId")
         val cleanupKeys = mutableListOf<String>()
+        val originalAiSettings = runCatching { client.get(AI_CHAT_SETTINGS_KEY) }
+            .getOrElse { error ->
+                throw AssertionError(
+                    "Could not read current AI settings; refusing to overwrite the live global key.",
+                    error,
+                )
+            }
 
         try {
             // ── Device A: build a complete state on the server ────────────────────────────
@@ -249,9 +257,8 @@ class HttpSyncLiveServerSmokeTest {
                     kotlinx.serialization.json.Json.encodeToString(HttpSyncAiChatSettingsBlob.serializer(), aiBlob)
                         .toByteArray(),
                 )
-                // Don't add AI_CHAT_SETTINGS_KEY to cleanupKeys — it's a global key, deleting
-                // it would affect any concurrent run. Best-effort restore in the finally
-                // block instead.
+                // Don't add AI_CHAT_SETTINGS_KEY to cleanupKeys — it's a global key. Restore
+                // the exact pre-test blob in the finally block instead.
             }
 
             // ── Device B: fresh repo + fresh AI settings ──────────────────────────────────
@@ -291,8 +298,17 @@ class HttpSyncLiveServerSmokeTest {
             assertEquals("Smoke test image prompt.", finalAi.imagePromptText)
         } finally {
             cleanupKeys.forEach { key -> runCatching { client.delete(key) } }
-            // Best-effort: leave AI_CHAT_SETTINGS_KEY's original state alone (nobody else
-            // should be using a __smoke_xdev book in production, so it's contained).
+            runCatching {
+                if (originalAiSettings != null) {
+                    client.put(
+                        AI_CHAT_SETTINGS_KEY,
+                        originalAiSettings.contentType,
+                        originalAiSettings.body,
+                    )
+                } else {
+                    client.delete(AI_CHAT_SETTINGS_KEY)
+                }
+            }
         }
     }
 

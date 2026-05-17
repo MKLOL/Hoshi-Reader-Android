@@ -7,6 +7,7 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import java.io.ByteArrayOutputStream
 import java.io.File
+import java.security.DigestOutputStream
 import java.security.MessageDigest
 import java.util.zip.ZipEntry
 import java.util.zip.ZipInputStream
@@ -98,9 +99,9 @@ internal fun payloadManifestKey(syncId: String): String = "books/$syncId/payload
  * Zips a book directory, computes sha256 of the resulting bytes, uploads zip + manifest
  * to the KV server iff the server's manifest sha256 differs from local.
  *
- * Memory: the zip is buffered in a `ByteArrayOutputStream`. For typical mokuro volumes
- * (30–100 MB) this is fine on a phone with 4 GB RAM. For 500 MB book payloads we'd want
- * to spool to a temp file; that's a future iteration.
+ * Large book payloads are spooled to temp files. Mokuro page bundles can exceed Android's
+ * per-process heap when held as one `ByteArray`, so the production upload/download path
+ * never materializes `payload.zip` in memory.
  */
 class HttpSyncPayloadCodec(
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
@@ -161,30 +162,36 @@ class HttpSyncPayloadCodec(
             return@withContext false
         }
 
-        // First upload of this book from this device. This is the only path that does the
-        // multi-second zip + hash.
-        val (zipBytes, sha) = zipDirectory(bookRoot)
-        val localSize = zipBytes.size.toLong()
-        writeCachedSha(bookRoot.resolve(PAYLOAD_SHA_CACHE_FILENAME), sha)
+        val spoolDir = bookRoot.parentFile ?: bookRoot
+        val zipFile = File.createTempFile("hoshi-sync-upload-", ".zip", spoolDir)
+        try {
+            // First upload of this book from this device. This is the only path that does the
+            // multi-second zip + hash.
+            val sha = zipDirectoryToFile(bookRoot, zipFile)
+            val localSize = zipFile.length()
+            writeCachedSha(bookRoot.resolve(PAYLOAD_SHA_CACHE_FILENAME), sha)
 
-        // PUT zip first so the manifest never points at a missing or stale blob.
-        transport.put(
-            key = payloadZipKey(syncId),
-            contentType = "application/zip",
-            body = zipBytes,
-        )
-        val manifest = HttpSyncPayloadManifest(
-            sha256 = sha,
-            sizeBytes = localSize,
-            originalName = originalName,
-            format = format,
-        )
-        transport.put(
-            key = payloadManifestKey(syncId),
-            contentType = "application/json; charset=utf-8",
-            body = json.encodeToString(HttpSyncPayloadManifest.serializer(), manifest).toByteArray(),
-        )
-        true
+            // PUT zip first so the manifest never points at a missing or stale blob.
+            transport.putFile(
+                key = payloadZipKey(syncId),
+                contentType = "application/zip",
+                file = zipFile,
+            )
+            val manifest = HttpSyncPayloadManifest(
+                sha256 = sha,
+                sizeBytes = localSize,
+                originalName = originalName,
+                format = format,
+            )
+            transport.put(
+                key = payloadManifestKey(syncId),
+                contentType = "application/json; charset=utf-8",
+                body = json.encodeToString(HttpSyncPayloadManifest.serializer(), manifest).toByteArray(),
+            )
+            true
+        } finally {
+            zipFile.delete()
+        }
     }
 
     /**
@@ -274,18 +281,24 @@ class HttpSyncPayloadCodec(
     ): HttpSyncPayloadManifest = withContext(ioDispatcher) {
         val manifest = fetchManifest(transport, syncId)
             ?: throw HttpSyncException("No payload manifest for $syncId.")
-        val fetched = transport.get(payloadZipKey(syncId))
-            ?: throw HttpSyncException("Payload zip missing for $syncId (manifest existed).")
-        // Validate sha256 before unpacking — a corrupted zip should fail loud, not produce a
-        // half-imported book directory.
-        val actualSha = sha256Hex(fetched.body)
-        if (actualSha != manifest.sha256) {
-            throw HttpSyncException(
-                "Payload zip for $syncId failed sha256 check (expected ${manifest.sha256}, got $actualSha).",
-            )
+        val spoolDir = targetDir.parentFile ?: targetDir
+        val zipFile = File.createTempFile("hoshi-sync-download-", ".zip", spoolDir)
+        try {
+            transport.downloadToFile(payloadZipKey(syncId), zipFile)
+                ?: throw HttpSyncException("Payload zip missing for $syncId (manifest existed).")
+            // Validate sha256 before unpacking — a corrupted zip should fail loud, not produce a
+            // half-imported book directory.
+            val actualSha = sha256Hex(zipFile)
+            if (actualSha != manifest.sha256) {
+                throw HttpSyncException(
+                    "Payload zip for $syncId failed sha256 check (expected ${manifest.sha256}, got $actualSha).",
+                )
+            }
+            unzipInto(zipFile, targetDir)
+            manifest
+        } finally {
+            zipFile.delete()
         }
-        unzipInto(fetched.body, targetDir)
-        manifest
     }
 
     /**
@@ -309,32 +322,42 @@ class HttpSyncPayloadCodec(
 
     // ----- Zip helpers (internal so tests can target them) -------------------------------
 
-    /**
-     * Streams every regular file under [root] (except [PAYLOAD_EXCLUDED_FILES]) into a zip,
-     * also feeding bytes through a SHA-256 digest as they're written. Returns the zip bytes
-     * and the lowercase hex `sha256:<hex>` digest.
-     */
+    /** Test helper for small fixtures; production upload uses [zipDirectoryToFile]. */
     internal fun zipDirectory(root: File): Pair<ByteArray, String> {
         require(root.isDirectory) { "Book root is not a directory: $root" }
         val buffer = ByteArrayOutputStream()
-        val digest = MessageDigest.getInstance("SHA-256")
         ZipOutputStream(buffer).use { zip ->
-            zipRecursive(root, root, zip, digest)
+            zipRecursive(root, root, zip)
         }
-        // The zip's central directory is part of the bytes too, so we re-digest the final
-        // buffer instead of trying to digest entry-by-entry. Cheap; just one more pass over
-        // the same bytes we already have.
         val finalBytes = buffer.toByteArray()
-        val finalDigest = MessageDigest.getInstance("SHA-256").digest(finalBytes)
-        return finalBytes to "sha256:" + finalDigest.joinToString("") { "%02x".format(it) }
+        return finalBytes to sha256Hex(finalBytes)
     }
 
-    private fun zipRecursive(rootDir: File, current: File, zip: ZipOutputStream, digest: MessageDigest) {
+    /**
+     * Streams every regular file under [root] (except [PAYLOAD_EXCLUDED_FILES]) into
+     * [targetZip], hashing the exact zip bytes as they are written. Returns the lowercase
+     * hex `sha256:<hex>` digest.
+     */
+    internal fun zipDirectoryToFile(root: File, targetZip: File): String {
+        require(root.isDirectory) { "Book root is not a directory: $root" }
+        targetZip.parentFile?.mkdirs()
+        val digest = MessageDigest.getInstance("SHA-256")
+        targetZip.outputStream().buffered(STREAM_BUFFER_SIZE).use { fileOut ->
+            DigestOutputStream(fileOut, digest).use { digestOut ->
+                ZipOutputStream(digestOut).use { zip ->
+                    zipRecursive(root, root, zip)
+                }
+            }
+        }
+        return "sha256:" + digest.digest().joinToString("") { "%02x".format(it) }
+    }
+
+    private fun zipRecursive(rootDir: File, current: File, zip: ZipOutputStream) {
         val children = current.listFiles()?.sortedBy { it.name } ?: return
         for (child in children) {
             if (child.isDirectory) {
                 if (child.name in PAYLOAD_EXCLUDED_DIRS) continue
-                zipRecursive(rootDir, child, zip, digest)
+                zipRecursive(rootDir, child, zip)
                 continue
             }
             if (child.name in PAYLOAD_EXCLUDED_FILES) continue
@@ -349,7 +372,6 @@ class HttpSyncPayloadCodec(
                     val read = input.read(buf)
                     if (read <= 0) break
                     zip.write(buf, 0, read)
-                    digest.update(buf, 0, read)
                 }
             }
             zip.closeEntry()
@@ -361,10 +383,18 @@ class HttpSyncPayloadCodec(
      * (zip-slip defense). Throws [HttpSyncException] on malformed zip or escape attempts.
      */
     internal fun unzipInto(bytes: ByteArray, targetDir: File) {
+        unzipStream({ bytes.inputStream() }, targetDir)
+    }
+
+    internal fun unzipInto(zipFile: File, targetDir: File) {
+        unzipStream({ zipFile.inputStream().buffered(STREAM_BUFFER_SIZE) }, targetDir)
+    }
+
+    private fun unzipStream(openInput: () -> java.io.InputStream, targetDir: File) {
         targetDir.mkdirs()
         val canonicalTarget = targetDir.canonicalFile
         try {
-            ZipInputStream(bytes.inputStream()).use { zin ->
+            ZipInputStream(openInput()).use { zin ->
                 while (true) {
                     val entry = zin.nextEntry ?: break
                     val outFile = canonicalTarget.resolve(entry.name).canonicalFile
@@ -392,4 +422,19 @@ class HttpSyncPayloadCodec(
         val d = MessageDigest.getInstance("SHA-256").digest(bytes)
         return "sha256:" + d.joinToString("") { "%02x".format(it) }
     }
+
+    private fun sha256Hex(file: File): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        file.inputStream().buffered(STREAM_BUFFER_SIZE).use { input ->
+            val buffer = ByteArray(STREAM_BUFFER_SIZE)
+            while (true) {
+                val read = input.read(buffer)
+                if (read <= 0) break
+                digest.update(buffer, 0, read)
+            }
+        }
+        return "sha256:" + digest.digest().joinToString("") { "%02x".format(it) }
+    }
 }
+
+private const val STREAM_BUFFER_SIZE = 64 * 1024

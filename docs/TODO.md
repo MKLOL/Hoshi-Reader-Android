@@ -1,6 +1,6 @@
 # Hoshi Android Agent TODO
 
-Last updated: 2026-05-16
+Last updated: 2026-05-17
 
 This file is the short operational handoff for future agents.
 
@@ -68,6 +68,7 @@ This file is the short operational handoff for future agents.
 
 - Preserve the shared lifecycle-aware loaded-settings collection pattern when adding settings pages so controls do not flash default values before saved preferences load.
 - Keep reader auto-export save/upload work on a scope that survives reader route disposal so close and background flushes can finish after navigation.
+- Keep HTTP Sync `payload.zip` upload/download file-backed; large Mokuro manga must not be materialized as a single `ByteArray` in production sync paths.
 - Harden the HTTP Sync KV server with mutation-safe pagination and conditional bookmark PUTs so concurrent writes cannot be missed or overwritten between Android reconciliation passes.
 - Device-validate the first Android Google Drive sync slice with `testdata/test.epub` on a user-configured Device Code OAuth client from the same project as iOS/ッツ: connect/sign-out state, long-press manual import/export result dialogs, reader-open import-only, iOS-aligned paginated/continuous auto-export timing, close/background flush export, statistics Merge/Replace, and Sasayaki last-position sync.
 
@@ -88,8 +89,9 @@ page images) that reuses the bookshelf, dictionary lookup, and Anki mining.
   iOS-shared `metadata.json`; `Bookmark.chapterIndex` carries the page index.
 - Architecture invariants for future work: keep using the shared `ReaderSelectionScripts`
   / `ReaderSelectionBridge` / `LookupPopupStackView` for lookup; the manga page WebView is
-  sized from `window.innerWidth/innerHeight` (CSS `vw`/`vh` resolve to 0 in this WebView
-  config) — do not reintroduce `useWideViewPort`/`loadWithOverviewMode` or `vh`-based sizing.
+  sized from the host-provided viewport dimensions (CSS `vw`/`vh` resolve to 0 in this
+  WebView config) — do not reintroduce `useWideViewPort`/`loadWithOverviewMode` or
+  `vh`-based sizing.
 - Emulator-verified: OCR text is hidden until a bubble is tapped (a tap reveals that
   bubble on a near-opaque plate and looks the tapped word up; tapping empty artwork hides
   revealed bubbles again), a revealed bubble shows a copy button that copies its whole

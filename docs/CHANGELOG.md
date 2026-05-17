@@ -9,6 +9,10 @@ The format follows a Keep a Changelog style, and release sections use Semantic V
 
 - Add manga screenshot translation from the reader overflow menu: draw a crop rectangle, send the selected image to ChatGPT, and customize the synced image-translation prompt separately from the speech-bubble prompt.
 
+### Fixed
+
+- Fix HTTP Sync out-of-memory failures when uploading or downloading large Mokuro manga payloads by streaming `payload.zip` through temporary files instead of holding the full zip in memory.
+
 ## [v0.7.15] - 2026-05-16
 
 ### Fixed

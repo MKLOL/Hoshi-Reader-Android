@@ -651,6 +651,9 @@ class HttpSyncTest {
                 object : HttpSyncKvTransport by transport {
                     override suspend fun put(key: String, contentType: String, body: ByteArray) =
                         HttpSyncKvWriteResponse(key, "2030-01-01T00:00:00Z", "etag", body.size, contentType)
+
+                    override suspend fun putFile(key: String, contentType: String, file: File) =
+                        HttpSyncKvWriteResponse(key, "2030-01-01T00:00:00Z", "etag", file.length().toInt(), contentType)
                 }
             },
             ioDispatcher = kotlinx.coroutines.Dispatchers.Unconfined,
