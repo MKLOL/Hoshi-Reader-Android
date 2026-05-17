@@ -7,12 +7,12 @@ import kotlinx.serialization.json.Json
 import java.io.File
 
 @Serializable
-internal data class HttpSyncShelfPlacementRecord(
+data class HttpSyncShelfPlacementRecord(
     val shelfName: String? = null,
     val updatedAt: String,
 )
 
-internal class HttpSyncShelfStateStore(
+class HttpSyncShelfStateStore(
     private val json: Json,
 ) {
     fun load(booksRoot: File?): Map<String, HttpSyncShelfPlacementRecord> {
@@ -39,13 +39,13 @@ internal class HttpSyncShelfStateStore(
 }
 
 @Serializable
-internal data class HttpSyncDeletedBookRecord(
+data class HttpSyncDeletedBookRecord(
     val title: String,
     val contentType: HttpSyncContentType,
     val deletedAt: String,
 )
 
-internal class HttpSyncDeletedBookStateStore(
+class HttpSyncDeletedBookStateStore(
     private val json: Json,
 ) {
     fun load(booksRoot: File?): Map<String, HttpSyncDeletedBookRecord> {
