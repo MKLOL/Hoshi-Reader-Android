@@ -5,6 +5,8 @@ The format follows a Keep a Changelog style, and release sections use Semantic V
 
 ## [Unreleased]
 
+## [v0.7.17] - 2026-05-17
+
 ### Changed
 
 - Show live HTTP Sync progress while a manual sync is running, including the current phase and book/item counters for payload checks, reading data, chat history, and local uploads.
