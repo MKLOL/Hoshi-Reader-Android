@@ -389,7 +389,15 @@ class HttpSyncReconciler(
         val payloadManifests = mutableListOf<HttpSyncKvKeyMeta>()
         val metadataKeys = mutableListOf<Pair<ParsedBookKey, HttpSyncKvKeyMeta>>()
         val bookmarksAndChats = mutableListOf<Pair<ParsedBookKey, HttpSyncKvKeyMeta>>()
-        val listSinceCursor = inboundListSinceCursor(sinceCursor)
+        // Manual `Sync now` always does a full pull. The incremental `since=` filter was
+        // hiding payload manifests for books that were uploaded from another device while
+        // this device's cursor pointed at a later wallclock — server clock skew, a partially-
+        // completed prior sync that markHandled keys it didn't actually apply, or a future-
+        // stamped cursor from an older buggy build would all silently swallow new books.
+        // Listing is cheap (a few hundred bytes per key, paginated), and the per-key GETs
+        // are still short-circuited by the local-vs-remote LWW checks below, so the extra
+        // work is one list pass — not a re-download of every book.
+        val listSinceCursor: String? = null
         var cursor: String? = null
         var listedPages = 0
         do {
@@ -1200,14 +1208,6 @@ class HttpSyncReconciler(
         )
         return targetRoot
     }
-}
-
-private const val INBOUND_CURSOR_LOOKBACK_MILLIS: Long = 5 * 60 * 1000L
-
-private fun inboundListSinceCursor(cursor: String?): String? {
-    if (cursor == null) return null
-    val instant = runCatching { Instant.parse(cursor) }.getOrNull() ?: return cursor
-    return instant.minusMillis(INBOUND_CURSOR_LOOKBACK_MILLIS).toString()
 }
 
 data class HttpSyncProgress(

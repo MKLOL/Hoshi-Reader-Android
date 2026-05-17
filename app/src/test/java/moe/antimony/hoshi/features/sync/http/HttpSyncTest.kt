@@ -823,6 +823,176 @@ class HttpSyncTest {
     }
 
     @Test
+    fun manualSyncIgnoresStaleCursorAndStillDownloadsNewBooks() = runBlocking {
+        // Regression for the user-reported bug: device A uploaded new books, but device B's
+        // persisted lastSyncedAt cursor was somehow stamped at a later wallclock than the
+        // new uploads (clock skew, an older build that markHandled keys it didn't apply,
+        // partial sync, etc). With a `since=cursor` filter on the listing, device B's
+        // server-side LIST returns zero keys and the books never download. The fix is to
+        // always do a full pull on manual `Sync now`.
+
+        val repoA = newBookRepository()
+        val (rootA, _) = importMokuroBook(repoA, "Stale Cursor Book")
+        rootA.resolve("pages").mkdirs()
+        rootA.resolve("pages/p1.png").writeBytes(byteArrayOf(0x77))
+        val transport = StaleCursorTransport()
+        val managerA = managerFor(repoA, transport)
+        managerA.syncOnce(configured)
+        assertNotNull(transport.kv["books/stale_cursor_book/payload.manifest"])
+
+        val repoB = newBookRepository()
+        val managerB = managerFor(repoB, transport)
+        // Device B's cursor is from THE FUTURE relative to device A's uploads.
+        val futureCursor = "2099-12-31T23:59:59Z"
+        val result = managerB.syncOnce(configured.copy(lastSyncedAt = futureCursor))
+
+        assertTrue(
+            "transport should have received list calls without a since= filter",
+            transport.listsObserved.isNotEmpty(),
+        )
+        assertTrue(
+            "every list call from a manual sync must omit since= (got: ${transport.listsObserved})",
+            transport.listsObserved.all { it == null },
+        )
+        assertEquals("device B should have no errors", emptyList<String>(), result.errors)
+        assertEquals(
+            "device B should download the manga even though its cursor is in the future",
+            1,
+            result.downloadedPayloads,
+        )
+        val titles = repoB.loadBookEntries().map { it.metadata.title }
+        assertTrue("device B should now have the book", titles.contains("Stale Cursor Book"))
+    }
+
+    /** FakeKvTransport plus a record of every `since` value the reconciler passed to `list`. */
+    private class StaleCursorTransport : HttpSyncKvTransport {
+        private val inner = FakeKvTransport()
+        val kv: MutableMap<String, FakeKvTransport.Stored> get() = inner.kv
+        val listsObserved: MutableList<String?> = mutableListOf()
+
+        override suspend fun put(key: String, contentType: String, body: ByteArray): HttpSyncKvWriteResponse =
+            inner.put(key, contentType, body)
+
+        override suspend fun putFile(key: String, contentType: String, file: File): HttpSyncKvWriteResponse =
+            inner.putFile(key, contentType, file)
+
+        override suspend fun get(key: String): HttpSyncKvFetched? = inner.get(key)
+
+        override suspend fun downloadToFile(key: String, targetFile: File): HttpSyncKvFileFetched? =
+            inner.downloadToFile(key, targetFile)
+
+        override suspend fun list(
+            prefix: String?,
+            since: String?,
+            cursor: String?,
+            limit: Int?,
+        ): HttpSyncKvList {
+            // Only record the top-level books/ listing; chat-backfill listings are a separate
+            // concern and DO still use the cursor's prefix.
+            if (prefix == ALL_BOOKS_PREFIX) listsObserved += since
+            return inner.list(prefix, since, cursor, limit)
+        }
+
+        override suspend fun delete(key: String) = inner.delete(key)
+    }
+
+    @Test
+    fun incrementalSyncDownloadsBookAddedOnDeviceASinceLastSync() = runBlocking {
+        // Regression: device B already synced once (so its lastSyncedAt is non-null), then
+        // device A imports a NEW book and syncs. Device B's next syncOnce must pick it up
+        // even though `since=` filters out everything that existed at the previous sync.
+
+        val repoA = newBookRepository()
+        val (firstA, _) = importMokuroBook(repoA, "First Manga")
+        firstA.resolve("pages").mkdirs()
+        firstA.resolve("pages/p1.png").writeBytes(byteArrayOf(0x01))
+        val transport = FakeKvTransport()
+        val managerA = managerFor(repoA, transport)
+
+        // Device A's initial push.
+        managerA.syncOnce(configured)
+        assertNotNull(transport.kv["books/first_manga/payload.manifest"])
+
+        // Device B's initial sync — picks up "First Manga" and persists a cursor.
+        val repoB = newBookRepository()
+        val managerB = managerFor(repoB, transport)
+        val initial = managerB.syncOnce(configured)
+        assertEquals(1, initial.downloadedPayloads)
+        val cursorAfterFirstSync = initial.newLastSyncedAt
+        assertNotNull("first sync should produce a cursor", cursorAfterFirstSync)
+
+        // Device A imports a second manga and pushes it.
+        val (secondA, _) = importMokuroBook(repoA, "Second Manga")
+        secondA.resolve("pages").mkdirs()
+        secondA.resolve("pages/p1.png").writeBytes(byteArrayOf(0x02))
+        managerA.syncOnce(configured)
+        assertNotNull(
+            "device A should have uploaded the second manga's manifest",
+            transport.kv["books/second_manga/payload.manifest"],
+        )
+
+        // Device B's incremental sync — must pick up the new book.
+        val incremental = managerB.syncOnce(configured.copy(lastSyncedAt = cursorAfterFirstSync))
+        assertEquals("incremental sync should have no errors", emptyList<String>(), incremental.errors)
+        assertEquals(
+            "device B's incremental sync should download the new manga from device A",
+            1,
+            incremental.downloadedPayloads,
+        )
+        val titles = repoB.loadBookEntries().map { it.metadata.title }
+        assertTrue("device B should now have First Manga", titles.contains("First Manga"))
+        assertTrue("device B should now have Second Manga", titles.contains("Second Manga"))
+    }
+
+    @Test
+    fun freshDeviceSyncDownloadsBookAfterDeviceAFullOutboundPush() = runBlocking {
+        // Regression: device A imports a Mokuro book and runs a normal outbound sync — that
+        // writes `books/{syncId}/metadata` and the `payload.*` keys. Device B (fresh, empty
+        // BookRepository) then runs syncOnce against the same transport and must end up
+        // with the imported book on its shelf.
+        //
+        // Reproduces the user-reported bug "I uploaded new books from one device and the
+        // other device doesn't pick them up": the metadata key was being marked handled
+        // before the payload import had a chance to materialize a local root.
+
+        val repoA = newBookRepository()
+        val (rootA, _) = importMokuroBook(repoA, "Cross Device Book")
+        rootA.resolve("pages").mkdirs()
+        rootA.resolve("pages/p1.png").writeBytes(byteArrayOf(0x11))
+        val transport = FakeKvTransport()
+        val managerA = managerFor(repoA, transport)
+
+        // Device A pushes everything to the fake server.
+        val resultA = managerA.syncOnce(configured)
+        assertEquals(emptyList<String>(), resultA.errors)
+        assertEquals("device A should have uploaded one metadata blob", 1, resultA.uploadedMetadata)
+        assertEquals("device A should have uploaded one payload", 1, resultA.uploadedPayloads)
+        assertNotNull(
+            "device A should have left a metadata key on the server",
+            transport.kv[metadataKey("cross_device_book")],
+        )
+        assertNotNull(
+            "device A should have left a payload manifest on the server",
+            transport.kv["books/cross_device_book/payload.manifest"],
+        )
+
+        // Device B is a brand-new install: empty repo, fresh history, no shelves.
+        val repoB = newBookRepository()
+        val managerB = managerFor(repoB, transport)
+
+        val resultB = managerB.syncOnce(configured)
+
+        assertEquals("device B should have no errors", emptyList<String>(), resultB.errors)
+        assertEquals(
+            "device B should have downloaded the payload from device A",
+            1,
+            resultB.downloadedPayloads,
+        )
+        val downloaded = repoB.loadBookEntries().single { deriveSyncId(it.metadata.title) == "cross_device_book" }
+        assertEquals("Cross Device Book", downloaded.metadata.title)
+    }
+
+    @Test
     fun freshDeviceSyncDownloadsPayloadBookmarkAndChatInOnePass() = runBlocking {
         // Regression: on a fresh device with no local books, a single syncOnce must
         // download the payload AND the bookmark AND the chat entries — even though the
