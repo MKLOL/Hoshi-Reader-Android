@@ -5,6 +5,12 @@ The format follows a Keep a Changelog style, and release sections use Semantic V
 
 ## [Unreleased]
 
+## [v0.7.18] - 2026-05-17
+
+### Fixed
+
+- Fix HTTP Sync not downloading newly-uploaded books from another device when the receiving device's local sync cursor was ahead of the server-stamped upload time. Manual `Sync now` now always does a full listing pass, so server-state drift can't hide new manga.
+
 ## [v0.7.17] - 2026-05-17
 
 ### Changed
