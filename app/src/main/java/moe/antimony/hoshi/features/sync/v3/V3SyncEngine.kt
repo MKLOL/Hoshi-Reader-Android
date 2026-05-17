@@ -2,6 +2,8 @@ package moe.antimony.hoshi.features.sync.v3
 
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import moe.antimony.hoshi.epub.BookRepository
 import moe.antimony.hoshi.features.ai.AiChatHistoryStore
@@ -58,28 +60,39 @@ class V3SyncEngine(
         pushOps = pushOps,
     )
 
+    // Serialize syncOnce calls. The shelf-state and deleted-book sidecars are written
+    // once at the end of each sync; two concurrent passes against the same engine
+    // would race on those file writes and clobber one device's state. The reader hook
+    // does NOT take this lock — it uses per-book locks via V3PushOps so a page-turn
+    // push can still interleave with a running sync, just not with the shared write.
+    private val syncMutex = Mutex()
+
     /**
-     * Run one sync pass. See spec for ordering + error semantics.
+     * Run one sync pass. See spec for ordering + error semantics. Calls are serialized
+     * — a concurrent invocation waits for the in-flight sync to finish rather than
+     * racing on the shelf-state / deleted-book sidecar writes at the end of execution.
      */
     suspend fun syncOnce(
         settings: HttpSyncSettings,
         onProgress: suspend (V3Progress) -> Unit = {},
     ): V3SyncResult = withContext(ioDispatcher) {
         require(settings.isConfigured) { "HTTP sync is not configured." }
-        val transport = transportFactory(settings)
+        syncMutex.withLock {
+            val transport = transportFactory(settings)
 
-        onProgress(V3Progress(V3Phase.ReadingLocal, "Reading local books"))
-        val local = localState.read()
+            onProgress(V3Progress(V3Phase.ReadingLocal, "Reading local books"))
+            val local = localState.read()
 
-        onProgress(V3Progress(V3Phase.ListingRemote, "Listing remote state"))
-        val remoteResult = remoteState.read(transport) { progress -> onProgress(progress) }
+            onProgress(V3Progress(V3Phase.ListingRemote, "Listing remote state"))
+            val remoteResult = remoteState.read(transport) { progress -> onProgress(progress) }
 
-        onProgress(V3Progress(V3Phase.Planning, "Computing plan"))
-        val plan = planner.compute(local, remoteResult.snapshot)
+            onProgress(V3Progress(V3Phase.Planning, "Computing plan"))
+            val plan = planner.compute(local, remoteResult.snapshot)
 
-        // Per-key remote-listing errors (decoding failures, etc) accumulate alongside
-        // any per-action executor errors so the UI surfaces them in one place.
-        val executed = executor.run(plan, transport, onProgress)
-        executed.copy(errors = remoteResult.errors + executed.errors)
+            // Per-key remote-listing errors (decoding failures, etc) accumulate alongside
+            // any per-action executor errors so the UI surfaces them in one place.
+            val executed = executor.run(plan, transport, onProgress)
+            executed.copy(errors = remoteResult.errors + executed.errors)
+        }
     }
 }

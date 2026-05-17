@@ -396,12 +396,12 @@ class StubKvServer(
             return jsonResponse(
                 Response.Status.OK,
                 json.encodeToString(
-                    StubWriteResponse.serializer(),
-                    StubWriteResponse(
+                    StubMultipartCompleteResponse.serializer(),
+                    StubMultipartCompleteResponse(
                         key = upload.key,
                         lastModified = entry.lastModified,
                         etag = entry.etag,
-                        size = merged.size,
+                        size = merged.size.toLong(),
                         contentType = entry.contentType,
                     ),
                 ),
@@ -513,6 +513,20 @@ private data class StubWriteResponse(
     val lastModified: String,
     val etag: String,
     val size: Int,
+    val contentType: String,
+)
+
+/**
+ * Multipart-complete response mirrors [moe.antimony.hoshi.features.sync.http.HttpSyncKv]'s
+ * private `HttpSyncMultipartCompleteResponse`, whose `size` is `Long` (per protocol —
+ * single-PUT bodies fit in an Int, but multipart payloads can exceed 2 GiB).
+ */
+@Serializable
+private data class StubMultipartCompleteResponse(
+    val key: String,
+    val lastModified: String,
+    val etag: String,
+    val size: Long,
     val contentType: String,
 )
 

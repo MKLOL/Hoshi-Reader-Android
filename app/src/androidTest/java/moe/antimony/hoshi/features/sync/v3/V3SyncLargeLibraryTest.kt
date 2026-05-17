@@ -4,6 +4,7 @@ import kotlinx.coroutines.runBlocking
 import moe.antimony.hoshi.features.sync.http.deriveSyncId
 import moe.antimony.hoshi.features.sync.http.metadataKey
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -161,12 +162,22 @@ class V3SyncLargeLibraryTest {
                 } else BehaviorAction.Passthrough
             }
             val pulled = b.sync()
+            // The metadata blob is still on the server, so V3RemoteState observes the
+            // book and registers it under pendingRemoteOnlyBooks (manifest GET returns
+            // 404, so the importer can't run). Concretely: nothing landed locally,
+            // and remoteOnlyBooks counts the un-importable book.
             assertTrue(
-                "B should treat pending manifest as soft-incomplete: errors=${pulled.errors} remote=${pulled.remoteOnlyBooks}",
-                pulled.remoteOnlyBooks >= 0,
+                "metadata for the pending book should still be on the server: ${server.keys()}",
+                metadataKey(syncId) in server.keys(),
             )
-            // Metadata key still present; that's enough to know the book was visible.
-            assertTrue(metadataKey(syncId) in server.keys() || pulled.remoteOnlyBooks >= 0)
+            assertFalse(
+                "B must not have imported the book locally — manifest is 404",
+                b.repo.loadBookEntries().any { it.metadata.title == "Pending Vol" },
+            )
+            assertTrue(
+                "B should report at least one pending remote-only book: ${pulled.remoteOnlyBooks}",
+                pulled.remoteOnlyBooks >= 1,
+            )
         }
     }
 }

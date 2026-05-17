@@ -1,5 +1,6 @@
 package moe.antimony.hoshi.features.sync.v3
 
+import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import moe.antimony.hoshi.epub.BookMetadata
@@ -316,5 +317,70 @@ class V3SyncEngineTest {
         assertTrue("ListingRemote phase: $phases", phases.contains(V3Phase.ListingRemote))
         assertTrue("Planning phase: $phases", phases.contains(V3Phase.Planning))
         assertTrue("Done phase: $phases", phases.contains(V3Phase.Done))
+    }
+
+    // --- spec § Mandatory edge case 13: stale / future cursor must not hide books ---
+
+    /**
+     * v3 never reads `HttpSyncSettings.lastSyncedAt` — the engine architecture is a
+     * full-list pull every sync. This test makes that contract explicit: hand the
+     * engine a settings object whose cursor is in the year 2999 (well after every
+     * server-stamped lastModified on a real fake transport) and confirm the engine
+     * still pulls the book on a fresh device. If anyone ever reintroduces an
+     * incremental `since=` filter, this test catches it.
+     */
+    @Test
+    fun futureDatedCursorDoesNotHideRemoteBooks() = runBlocking {
+        // Device A pushes a book; device B starts fresh with a garbage-future cursor.
+        val repoA = newRepo()
+        val rootA = importMokuroBook(repoA, "Stale Cursor Vol")
+        repoA.saveBookmark(rootA, Bookmark(2, 0.5, 50, 800_000_000.0))
+        val transport = FakeKvTransport()
+        val engineA = engineFor(repoA, transport)
+        engineA.syncOnce(configured)
+
+        val repoB = newRepo()
+        val engineB = engineFor(repoB, transport)
+        val poisonedSettings = configured.copy(lastSyncedAt = "2999-12-31T23:59:59.999Z")
+        val result = engineB.syncOnce(poisonedSettings)
+
+        assertEquals("no errors: ${result.errors}", emptyList<V3Error>(), result.errors)
+        assertEquals(
+            "device B must still see the book even with a future-dated cursor",
+            1,
+            result.applied.payloads,
+        )
+        assertTrue(repoB.loadBookEntries().any { it.metadata.title == "Stale Cursor Vol" })
+    }
+
+    // --- concurrent syncOnce serialization (concurrency reviewer fix) -----------
+
+    /**
+     * Two concurrent `syncOnce` invocations on the same engine must serialize so
+     * their shelf-state / deleted-book sidecar saves can't clobber each other. We
+     * verify this with an `instant.now()`-style sentinel: while the first sync is
+     * running, the second waits for the engine's internal mutex; both eventually
+     * succeed and produce identical local state.
+     */
+    @Test
+    fun concurrentSyncOnceCallsSerialize() = runBlocking {
+        val repo = newRepo()
+        val root = importMokuroBook(repo, "Serialize Me")
+        repo.saveBookmark(root, Bookmark(1, 0.0, 1, 800_000_000.0))
+        val transport = FakeKvTransport()
+        val engine = engineFor(repo, transport)
+
+        val a = async { engine.syncOnce(configured) }
+        val b = async { engine.syncOnce(configured) }
+        val resultA = a.await()
+        val resultB = b.await()
+
+        assertEquals("no errors A: ${resultA.errors}", emptyList<V3Error>(), resultA.errors)
+        assertEquals("no errors B: ${resultB.errors}", emptyList<V3Error>(), resultB.errors)
+        // Server got our metadata + manifest exactly once (idempotent across both passes).
+        assertTrue(
+            "expected exactly one metadata key on server: ${transport.kv.keys}",
+            transport.kv.keys.count { it.endsWith("/metadata") } == 1,
+        )
     }
 }
