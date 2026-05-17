@@ -54,6 +54,7 @@ fun HttpSyncSettingsView(
     val appContainer = LocalHoshiAppContainer.current
     val repository = appContainer.httpSyncSettingsRepository
     val reconciler = appContainer.httpSyncReconciler
+    val v3Engine = appContainer.v3SyncEngine
     val scope = rememberCoroutineScope()
     val settings by repository.settings.collectAsState(initial = null)
 
@@ -144,7 +145,14 @@ fun HttpSyncSettingsView(
                     )
                     scope.launch {
                         status = runCatching {
-                            reconciler.syncOnce(loaded) { progress ->
+                            // Branches on loaded.useV3Sync. Default = v2 = production
+                            // behavior. See HttpSyncEngineDispatcher for the v3 cutover
+                            // safety net and the reader-hook TODO.
+                            HttpSyncEngineDispatcher.syncOnce(
+                                reconciler = reconciler,
+                                v3Engine = v3Engine,
+                                settings = loaded,
+                            ) { progress ->
                                 withContext(Dispatchers.Main.immediate) {
                                     status = SyncStatus.Running(progress)
                                 }

@@ -45,6 +45,7 @@ import moe.antimony.hoshi.features.sync.http.HttpSyncPusher
 import moe.antimony.hoshi.features.sync.http.HttpSyncReconciler
 import moe.antimony.hoshi.features.sync.http.HttpSyncSettingsRepository
 import moe.antimony.hoshi.features.sync.http.httpSyncSettingsRepository
+import moe.antimony.hoshi.features.sync.v3.V3SyncEngine
 import moe.antimony.hoshi.features.update.AndroidUpdateDownloadManager
 import moe.antimony.hoshi.features.update.GitHubReleaseUpdateRepository
 import moe.antimony.hoshi.features.update.UpdateCheckService
@@ -95,6 +96,15 @@ internal class HoshiAppContainer(context: Context) {
         bookLocks = httpSyncBookLocks,
     )
     val httpSyncReconciler: HttpSyncReconciler = HttpSyncReconciler(
+        bookRepository = bookRepository,
+        aiSettingsRepository = aiChatSettingsRepository,
+        bookLocks = httpSyncBookLocks,
+    )
+    // v3 engine ships side-by-side with v2 (HttpSyncReconciler). The "Sync now" UI
+    // dispatches between them based on the HttpSyncSettings.useV3Sync flag (default v2).
+    // Both write the same on-disk + remote state, so flipping mid-life is safe. See
+    // HttpSyncEngineDispatcher for the call-site branch.
+    val v3SyncEngine: V3SyncEngine = V3SyncEngine(
         bookRepository = bookRepository,
         aiSettingsRepository = aiChatSettingsRepository,
         bookLocks = httpSyncBookLocks,

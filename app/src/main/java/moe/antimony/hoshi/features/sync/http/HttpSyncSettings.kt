@@ -35,6 +35,22 @@ data class HttpSyncSettings(
      * `null` until the first successful [HttpSyncReconciler.syncOnce].
      */
     val lastSyncedAt: String? = null,
+    /**
+     * Selects the "Sync now" backend. `true` (default) runs the v3 engine
+     * ([moe.antimony.hoshi.features.sync.v3.V3SyncEngine]); `false` falls back to the
+     * legacy [HttpSyncReconciler] (kept as a rollback path).
+     *
+     * Both engines write the same on-disk and remote state (shared sidecar files + KV
+     * keys), so the flag can be flipped at any time without data migration. There is no
+     * UI to flip it yet; flip via dev tools / debug menu / an `adb` DataStore write if
+     * you need to roll back to v2 on a specific device.
+     *
+     * Reader-side fire-and-forget pushes ([HttpSyncReaderHooks] / [HttpSyncPusher]) DO
+     * NOT consult this flag — they always use the v2 push path. See
+     * [moe.antimony.hoshi.features.sync.http.HttpSyncEngineDispatcher] for the rationale
+     * and a TODO if/when we want page-turn pushes to honor the flag too.
+     */
+    val useV3Sync: Boolean = true,
 ) {
     val isConfigured: Boolean
         get() = baseUrl.isNotBlank() && bearerToken.isNotBlank()
@@ -65,6 +81,7 @@ class HttpSyncSettingsRepository(
             preferences[KEY_BASE_URL] = next.baseUrl.trim().trimEnd('/')
             preferences[KEY_TOKEN] = next.bearerToken.trim()
             preferences[KEY_ENABLED] = next.enabled
+            preferences[KEY_USE_V3_SYNC] = next.useV3Sync
             val cursor = next.lastSyncedAt?.trim()
             if (cursor.isNullOrEmpty()) {
                 preferences.remove(KEY_LAST_SYNCED_AT)
@@ -82,6 +99,10 @@ class HttpSyncSettingsRepository(
             bearerToken = this[KEY_TOKEN].orEmpty(),
             enabled = this[KEY_ENABLED] ?: false,
             lastSyncedAt = this[KEY_LAST_SYNCED_AT],
+            // Default = v3 (the production engine). Devices that pinned v2 will keep that
+            // setting; everyone else gets v3 on next launch. Flip back to v2 only as a
+            // device-local rollback if v3 misbehaves.
+            useV3Sync = this[KEY_USE_V3_SYNC] ?: true,
         )
 
     private companion object {
@@ -89,5 +110,6 @@ class HttpSyncSettingsRepository(
         val KEY_TOKEN = stringPreferencesKey("bearerToken")
         val KEY_ENABLED = booleanPreferencesKey("enabled")
         val KEY_LAST_SYNCED_AT = stringPreferencesKey("lastSyncedAt")
+        val KEY_USE_V3_SYNC = booleanPreferencesKey("useV3Sync")
     }
 }
