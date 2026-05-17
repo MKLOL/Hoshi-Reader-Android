@@ -380,6 +380,23 @@ class HttpSyncReconciler(
                 put(syncId, entry.root)
             }
         }
+        // Per-syncId `BookMetadata.importedAt` so Pass 2 (tombstone application) can compare
+        // local import stamps against remote `deletedAt`. A strictly-newer local stamp means
+        // the user re-imported the book after the tombstone was published — we keep the
+        // local copy and let the outbound pass push fresh `deletedAt = null` metadata.
+        val localImportedAtBySyncId: Map<String, String?> = buildMap {
+            for (entry in localBookEntries) {
+                val syncId = deriveSyncId(entry.metadata.title) ?: continue
+                put(syncId, entry.metadata.importedAt)
+            }
+        }
+        // Snapshot pending tombstones up front so Pass 3 (remote-only import) can refuse to
+        // re-create a book the user just deleted. Without this, the inbound-first ordering
+        // re-imports the remote payload, the subsequent push then sees a live local book and
+        // computes an empty `tombstonesToPush`, and the user's delete is silently lost on
+        // their other devices. The outbound pass owns the actual tombstone write — it's the
+        // one that clears the sidecar atomically — so we only READ the map here.
+        val pendingTombstoneSyncIds = deletedBookStateStore.load(bookRepository.booksDirectory).keys
         val remoteSyncIds = mutableSetOf<String>()
 
         // ── Pass 1: page through the entire listing and buffer keys by kind. We can't
@@ -444,12 +461,24 @@ class HttpSyncReconciler(
             runCatching {
                 val remote = fetchRemoteMetadata(transport, meta.key)
                     ?: throw HttpSyncException("Metadata at ${meta.key}: missing.")
-                if (remote.blob.deletedAt != null) {
-                    rootsBySyncId[parsed.syncId]?.let { bookRepository.deleteBook(it) }
-                    rootsBySyncId.remove(parsed.syncId)
-                    updatedShelfState.remove(parsed.syncId)
-                    deletedSyncIds += parsed.syncId
-                    markHandled(meta)
+                val remoteDeletedAt = remote.blob.deletedAt
+                if (remoteDeletedAt != null) {
+                    val localImportedAt = localImportedAtBySyncId[parsed.syncId]
+                    if (localImportedAtOverridesRemoteDeletion(localImportedAt, remoteDeletedAt)) {
+                        // Re-import after tombstone: the user imported this book AFTER the
+                        // remote `deletedAt` was published, so the live local copy wins.
+                        // Keep the book, leave it as an outbound-pass candidate that will
+                        // re-publish metadata with `deletedAt = null`. We mark the metadata
+                        // as unhandled so this tombstone-bearing key is re-fetched (and the
+                        // cursor is not advanced past it) until the outbound push lands.
+                        markUnhandled(meta)
+                    } else {
+                        rootsBySyncId[parsed.syncId]?.let { bookRepository.deleteBook(it) }
+                        rootsBySyncId.remove(parsed.syncId)
+                        updatedShelfState.remove(parsed.syncId)
+                        deletedSyncIds += parsed.syncId
+                        markHandled(meta)
+                    }
                 } else {
                     placementMetadataKeys += parsed to meta
                 }
@@ -477,6 +506,17 @@ class HttpSyncReconciler(
                 continue
             }
             if (parsed.syncId in rootsBySyncId.keys) {
+                markHandled(meta)
+                continue
+            }
+            if (parsed.syncId in pendingTombstoneSyncIds) {
+                // User staged a delete locally but we haven't pushed the tombstone yet.
+                // Importing here would re-create the book, the subsequent push would see
+                // a "live" local book for this syncId, filter the tombstone out of
+                // `tombstonesToPush`, clear it from the sidecar, and then PUT plain
+                // metadata — overwriting the server with `deletedAt = null`. Skip the
+                // import; the outbound pass in this same `syncOnce` will turn the remote
+                // metadata into a tombstone.
                 markHandled(meta)
                 continue
             }
@@ -867,6 +907,13 @@ class HttpSyncReconciler(
         val root: File,
         val contentType: ContentType,
         val shelfName: String?,
+        /**
+         * RFC 3339 UTC stamp from `BookMetadata.importedAt`. Read once when we build the
+         * local snapshot; used by both Pass 2 of [pullChangedKeys] and the outbound pass
+         * in [pushAllLocal] to compare against `remote.metadata.deletedAt` so a re-import
+         * after a server-side tombstone is not wiped on the next sync.
+         */
+        val importedAt: String?,
     )
 
     private data class LocalChatUpload(
@@ -888,7 +935,12 @@ class HttpSyncReconciler(
         val entries = bookRepository.loadBookEntries()
         val shelfSnapshot = loadShelfSnapshot()
         val updatedShelfState = shelfSnapshot.recordsBySyncId.toMutableMap()
-        val pendingDeletedBooks = deletedBookStateStore.load(bookRepository.booksDirectory).toMutableMap()
+        // Snapshot the deleted-book sidecar ONLY to drive iteration. Every
+        // mutation of the sidecar below goes through the store's atomic per-key
+        // helpers (`recordDeletedBook` / `removeDeletedBook`) so a concurrent
+        // `BookshelfRepository.recordHttpSyncTombstone` mid-sync survives —
+        // same Bug 3 fix the v3 executor applies.
+        val pendingDeletedBooks = deletedBookStateStore.load(bookRepository.booksDirectory)
         val localBooks = entries.mapNotNull { entry ->
             val title = entry.metadata.title.orEmpty().ifBlank { return@mapNotNull null }
             val syncId = deriveSyncId(title) ?: return@mapNotNull null
@@ -899,12 +951,21 @@ class HttpSyncReconciler(
                 root = entry.root,
                 contentType = bookContentType(entry.root),
                 shelfName = shelfSnapshot.namesByBookId[entry.metadata.id],
+                importedAt = entry.metadata.importedAt,
             )
         }
-        pendingDeletedBooks.keys.removeAll(localBooks.map { it.syncId }.toSet())
+        // Prune stale tombstones (a tombstone whose syncId now matches a live
+        // local book) one key at a time through the atomic remove helper.
+        val liveLocalSyncIds = localBooks.map { it.syncId }.toSet()
+        val tombstonesToPush = pendingDeletedBooks.filterKeys { it !in liveLocalSyncIds }
+        for (syncId in pendingDeletedBooks.keys) {
+            if (syncId in liveLocalSyncIds) {
+                deletedBookStateStore.removeDeletedBook(bookRepository.booksDirectory, syncId)
+            }
+        }
         val payloadBookCount = localBooks.count { it.contentType == ContentType.Mokuro }
         var payloadBookIndex = 0
-        for ((syncId, deleted) in pendingDeletedBooks.toMap()) {
+        for ((syncId, deleted) in tombstonesToPush) {
             try {
                 onProgress(
                     HttpSyncProgress(
@@ -926,14 +987,24 @@ class HttpSyncReconciler(
                 )
                 uploadedMetadata += 1
                 maxLastModified = maxRfc(maxLastModified, response.lastModified)
-                pendingDeletedBooks.remove(syncId)
+                // Atomic per-key clear: re-reads disk under the store's lock so
+                // a concurrent recordDeletedBook for a different syncId during
+                // sync (Bug 3) survives. Critically, we ONLY remove the
+                // tombstone after the remote PUT succeeded — matching the
+                // previous behavior where `pendingDeletedBooks.remove(syncId)`
+                // sat inside the same try block.
+                deletedBookStateStore.removeDeletedBook(bookRepository.booksDirectory, syncId)
                 updatedShelfState.remove(syncId)
             } catch (e: HttpSyncException) {
                 errors += "${deleted.title}: ${e.message}"
             }
         }
         for ((index, book) in localBooks.withIndex()) {
-            val (_, title, syncId, root, contentType, shelfName) = book
+            val title = book.title
+            val syncId = book.syncId
+            val root = book.root
+            val contentType = book.contentType
+            val shelfName = book.shelfName
             try {
                 onProgress(
                     HttpSyncProgress(
@@ -944,7 +1015,10 @@ class HttpSyncReconciler(
                     ),
                 )
                 val remoteMetadata = fetchRemoteMetadataForUpload(transport, metadataKey(syncId))
-                if (remoteMetadata?.blob?.deletedAt != null) {
+                val remoteDeletedAt = remoteMetadata?.blob?.deletedAt
+                val tombstoneOverridden = remoteDeletedAt != null &&
+                    localImportedAtOverridesRemoteDeletion(book.importedAt, remoteDeletedAt)
+                if (remoteDeletedAt != null && !tombstoneOverridden) {
                     bookRepository.deleteBook(root)
                     updatedShelfState.remove(syncId)
                     continue
@@ -980,6 +1054,17 @@ class HttpSyncReconciler(
                     }
                 }
 
+                // If our local importedAt overrides the remote tombstone, publish the local
+                // stamp + `deletedAt = null` so every other device pulling next will see the
+                // book come back to life. Otherwise preserve whatever importedAt the server
+                // already had (or this device's stamp if the server's is null/older) so the
+                // freshly re-imported state propagates correctly.
+                val uploadImportedAt = if (tombstoneOverridden) {
+                    book.importedAt
+                } else {
+                    maxRfc(remoteMetadata?.blob?.importedAt, book.importedAt)
+                }
+                val uploadDeletedAt = if (tombstoneOverridden) null else remoteMetadata?.blob?.deletedAt
                 val metadataResponse = transport.put(
                     key = metadataKey(syncId),
                     contentType = HttpSyncPusher.JSON_CONTENT_TYPE,
@@ -990,8 +1075,8 @@ class HttpSyncReconciler(
                             contentType = HttpSyncContentType.fromLocal(contentType),
                             shelfName = uploadShelfName,
                             shelfUpdatedAt = uploadShelfUpdatedAt,
-                            importedAt = remoteMetadata?.blob?.importedAt,
-                            deletedAt = remoteMetadata?.blob?.deletedAt,
+                            importedAt = uploadImportedAt,
+                            deletedAt = uploadDeletedAt,
                         ),
                     ).toByteArray(),
                 )
@@ -1085,7 +1170,10 @@ class HttpSyncReconciler(
         if (updatedShelfState != shelfSnapshot.recordsBySyncId) {
             shelfStateStore.save(bookRepository.booksDirectory, updatedShelfState)
         }
-        deletedBookStateStore.save(bookRepository.booksDirectory, pendingDeletedBooks)
+        // No final full-map save for the deleted-books sidecar — every mutation
+        // above went through atomic per-key helpers under the store's lock so a
+        // concurrent `BookshelfRepository.recordHttpSyncTombstone` can't be
+        // clobbered. See the Bug 3 comment at the top of `pushAllLocal`.
         return OutboundResult(
             uploadedBookmarks = uploadedBookmarks,
             uploadedChatEntries = uploadedChatEntries,
@@ -1194,6 +1282,11 @@ class HttpSyncReconciler(
             targetRoot.deleteRecursively()
             throw e
         }
+        // Mirror the user-side import path: parse the freshly-unzipped book and resolve a
+        // cover path so the bookshelf can render a thumbnail before the user opens it. Without
+        // this, `metadata.cover` stayed null until the first open triggered the parser via
+        // `BookshelfRepository.openBook`, and the bookshelf showed a blank cover slot.
+        val coverPath = resolveSyncImportedCoverPath(bookRepository, targetRoot)
         // Write a minimal metadata sidecar — title comes from the manifest, id is fresh per
         // device (consistent with how local imports generate UUIDs).
         bookRepository.saveMetadata(
@@ -1201,9 +1294,12 @@ class HttpSyncReconciler(
             BookMetadata(
                 id = UUID.randomUUID().toString(),
                 title = manifest.originalName,
-                cover = null,
+                cover = coverPath,
                 folder = targetRoot.name,
                 lastAccess = 0.0,
+                // Stamp the import so this device participates in the re-import-after-tombstone
+                // protocol (see `compareRfc3339(local.importedAt, remote.deletedAt)` callers below).
+                importedAt = Instant.now().toString(),
             ),
         )
         return targetRoot

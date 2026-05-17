@@ -993,6 +993,60 @@ class HttpSyncTest {
     }
 
     @Test
+    fun freshDeviceSyncPopulatesCoverPathSoBookshelfDoesNotShowBlankCover() = runBlocking {
+        // Regression: when a book is materialized via the v2 inbound import path
+        // (`importRemoteOnlyBook`), the resulting metadata sidecar must carry a `cover` field
+        // pointing at a page in the freshly-unpacked book — the same shape user-side imports
+        // produce. Before the fix, the sync path wrote `cover = null` and the bookshelf
+        // showed a blank slot until the user opened the book, which kicked the parser via
+        // `BookshelfRepository.openBook` and rewrote metadata.
+        val syncId = "cover_book"
+        val title = "Cover Book"
+        val transport = FakeKvTransport()
+        // Stage a valid Mokuro payload on the server so the receiving device parses it after
+        // unpacking. `mokuro.json` references `pages/0001.jpg` as page 0; that's what the
+        // parser surfaces as `coverImagePath`.
+        run {
+            val srcRoot = tempFolder.newFolder("cover-book-src")
+            srcRoot.resolve("mokuro.json").writeText(
+                """{"version":"1.0","title":"Cover Book","pages":[{"img_path":"pages/0001.jpg","img_width":100,"img_height":200,"blocks":[]}]}""",
+            )
+            srcRoot.resolve("pages").mkdirs()
+            srcRoot.resolve("pages/0001.jpg").writeBytes(byteArrayOf(0x42, 0x43, 0x44))
+            HttpSyncPayloadCodec(kotlinx.coroutines.Dispatchers.Unconfined)
+                .uploadIfChanged(transport, syncId, srcRoot, title, HttpSyncContentType.Mokuro)
+        }
+
+        val repo = newBookRepository()
+        val reconciler = HttpSyncReconciler(
+            bookRepository = repo,
+            transportFactory = { transport },
+            ioDispatcher = kotlinx.coroutines.Dispatchers.Unconfined,
+        )
+        val result = reconciler.syncOnce(configured)
+
+        assertEquals(emptyList<String>(), result.errors)
+        assertEquals(1, result.downloadedPayloads)
+
+        val imported = repo.loadBookEntries().single { deriveSyncId(it.metadata.title) == syncId }
+        assertNotNull(
+            "cover path must be populated after sync import so the bookshelf renders a thumbnail",
+            imported.metadata.cover,
+        )
+        // `metadataCoverPath` copies the cover to the book root and returns an iOS-style
+        // `Books/{folder}/{name}` path. The exact value here is the implementation's contract.
+        assertEquals(
+            "Books/${imported.root.name}/0001.jpg",
+            imported.metadata.cover,
+        )
+        // The cover file must actually resolve to bytes on disk via the repository's
+        // bookshelf-loader path; otherwise the cover slot would still render blank.
+        val coverFile = repo.coverFile(imported)
+        assertNotNull("repo must resolve metadata.cover to a real file", coverFile)
+        assertTrue("cover file exists", coverFile!!.isFile)
+    }
+
+    @Test
     fun freshDeviceSyncDownloadsPayloadBookmarkAndChatInOnePass() = runBlocking {
         // Regression: on a fresh device with no local books, a single syncOnce must
         // download the payload AND the bookmark AND the chat entries — even though the
@@ -1346,6 +1400,225 @@ class HttpSyncTest {
         )
         assertEquals("2030-06-01T00:00:00Z", uploaded.deletedAt)
         assertTrue(HttpSyncDeletedBookStateStore(json).load(repo.booksDirectory).isEmpty())
+    }
+
+    /**
+     * Regression for the v2 "delete lost on the user's other devices" bug.
+     *
+     * Scenario: the user deletes a book locally (so the local book root is gone and a
+     * tombstone is staged in `.http_sync_deleted_books.json`), but the server still has the
+     * **live** metadata + payload manifest from a previous sync. They tap "Sync now".
+     *
+     * Pre-fix, `pullChangedKeys` ran first and Pass 3 re-imported the remote payload
+     * because the metadata's `deletedAt` was still null. That re-created the local book,
+     * pushed `liveLocalSyncIds` to include the syncId, made `tombstonesToPush` empty in
+     * `pushAllLocal`, cleared the staged tombstone from disk, and finally PUT plain
+     * metadata (`deletedAt = null`) — silently overwriting the server's live state with…
+     * the same live state. Net: the user's deletion was lost on every other device.
+     *
+     * Post-fix, Pass 3 consults the pending-tombstone sidecar before importing and skips
+     * the re-import when a tombstone is staged. `pushAllLocal` then sees the syncId only
+     * in `pendingDeletedBooks` (not `liveLocalSyncIds`), pushes the tombstone, and clears
+     * the sidecar atomically.
+     */
+    @Test
+    fun syncOncePushesPendingTombstoneEvenWhenRemoteStillHasLivePayload() = runBlocking {
+        val repo = newBookRepository()
+        val deletedStore = HttpSyncDeletedBookStateStore(json)
+        val syncId = "vanishing_volume"
+        val title = "Vanishing Volume"
+
+        // Stage the tombstone the same way `BookshelfRepository.recordHttpSyncTombstone`
+        // does on a user-initiated delete. The local book root is intentionally absent —
+        // the user already pressed delete.
+        deletedStore.recordDeletedBook(
+            booksRoot = repo.booksDirectory,
+            syncId = syncId,
+            record = HttpSyncDeletedBookRecord(
+                title = title,
+                contentType = HttpSyncContentType.Mokuro,
+                deletedAt = "2030-06-01T00:00:00Z",
+            ),
+        )
+
+        // Server has the live remote: metadata with deletedAt=null + a payload manifest.
+        // This is exactly the state that triggered the re-import bug.
+        val transport = FakeKvTransport()
+        transport.putJson(
+            key = metadataKey(syncId),
+            serializer = HttpSyncMetadataBlob.serializer(),
+            value = HttpSyncMetadataBlob(
+                title = title,
+                contentType = HttpSyncContentType.Mokuro,
+                deletedAt = null,
+            ),
+            json = json,
+            lastModified = "2030-05-01T00:00:00Z",
+        )
+        val src = tempFolder.newFolder("source-vanishing").apply {
+            resolve("mokuro.json").writeText("""{"v":1}""")
+        }
+        HttpSyncPayloadCodec(kotlinx.coroutines.Dispatchers.Unconfined)
+            .uploadIfChanged(transport, syncId, src, title, HttpSyncContentType.Mokuro)
+
+        val manager = managerFor(repo, transport)
+        val result = manager.syncOnce(configured)
+
+        assertEquals(emptyList<String>(), result.errors)
+        // Server metadata now carries a non-null deletedAt — the tombstone won.
+        val finalMeta = json.decodeFromString(
+            HttpSyncMetadataBlob.serializer(),
+            transport.kv[metadataKey(syncId)]!!.body.toString(Charsets.UTF_8),
+        )
+        assertEquals(
+            "v2 must push the tombstone even when the remote still has live metadata + manifest",
+            "2030-06-01T00:00:00Z",
+            finalMeta.deletedAt,
+        )
+        // Local book was NOT re-imported (the bug's smoking gun).
+        assertTrue(
+            "v2 should not re-import a remote-only book whose syncId has a staged tombstone",
+            repo.loadBookEntries().none { deriveSyncId(it.metadata.title) == syncId },
+        )
+        // The pending-tombstone sidecar is cleared once the push succeeds.
+        assertTrue(
+            "pending tombstone must be cleared after a successful push",
+            deletedStore.load(repo.booksDirectory).isEmpty(),
+        )
+    }
+
+    // --- re-import-after-tombstone (v2 reconciler, mirrors V3PlannerTest) ---
+
+    /**
+     * v2 reconciler equivalent of `V3PlannerTest.reImportAfterTombstoneKeepsLocalAndPushesOverrideMetadata`.
+     * Local book has `importedAt = T2`; server-side metadata has `deletedAt = T1 < T2`.
+     * The reconciler must NOT delete the local book and the outbound metadata push must
+     * carry `deletedAt = null` + the local `importedAt`.
+     */
+    @Test
+    fun syncOnceReImportAfterRemoteTombstoneKeepsLocalAndOverwritesServer() = runBlocking {
+        val repo = newBookRepository()
+        val (root, _) = importMokuroBook(repo, "Re-Imported Tomb")
+        // Stamp a local `importedAt` strictly newer than the server-side `deletedAt`.
+        val localImported = "2030-06-02T00:00:00Z"
+        val original = repo.loadMetadata(root)!!
+        repo.saveMetadata(root, original.copy(importedAt = localImported))
+
+        val transport = FakeKvTransport()
+        transport.putJson(
+            key = metadataKey("re_imported_tomb"),
+            serializer = HttpSyncMetadataBlob.serializer(),
+            value = HttpSyncMetadataBlob(
+                title = "Re-Imported Tomb",
+                contentType = HttpSyncContentType.Mokuro,
+                deletedAt = "2030-06-01T00:00:00Z",
+                importedAt = "2030-05-01T00:00:00Z",
+            ),
+            json = json,
+            lastModified = "2030-06-01T00:00:00Z",
+        )
+
+        val manager = managerFor(repo, transport)
+        val result = manager.syncOnce(configured)
+
+        assertEquals(emptyList<String>(), result.errors)
+        // Local book must survive — neither Pass 2 of pullChangedKeys nor the outbound
+        // pass should have deleted it.
+        assertTrue(
+            "local book must survive the re-import-after-tombstone path",
+            repo.loadBookEntries().any { it.metadata.title == "Re-Imported Tomb" },
+        )
+        // Server metadata must now have `deletedAt = null` and carry the local import stamp.
+        val finalMeta = json.decodeFromString(
+            HttpSyncMetadataBlob.serializer(),
+            transport.kv[metadataKey("re_imported_tomb")]!!.body.toString(Charsets.UTF_8),
+        )
+        assertNull(
+            "v2 outbound must overwrite the stale remote tombstone with deletedAt=null",
+            finalMeta.deletedAt,
+        )
+        assertEquals(
+            "outbound must publish the local importedAt verbatim so peers can compare",
+            localImported,
+            finalMeta.importedAt,
+        )
+    }
+
+    /**
+     * Conservative case: local `importedAt` is older than the remote `deletedAt`. The
+     * tombstone wins — the v2 reconciler must delete the local book on the inbound pass
+     * (just like the pre-fix behaviour for this scenario).
+     */
+    @Test
+    fun syncOnceOlderLocalImportedAtThanRemoteDeletedAtStillDeletes() = runBlocking {
+        val repo = newBookRepository()
+        val (root, _) = importMokuroBook(repo, "Stale Local Tomb")
+        val original = repo.loadMetadata(root)!!
+        repo.saveMetadata(root, original.copy(importedAt = "2030-05-01T00:00:00Z"))
+
+        val transport = FakeKvTransport()
+        transport.putJson(
+            key = metadataKey("stale_local_tomb"),
+            serializer = HttpSyncMetadataBlob.serializer(),
+            value = HttpSyncMetadataBlob(
+                title = "Stale Local Tomb",
+                contentType = HttpSyncContentType.Mokuro,
+                deletedAt = "2030-06-01T00:00:00Z",
+            ),
+            json = json,
+            lastModified = "2030-06-01T00:00:00Z",
+        )
+
+        val manager = managerFor(repo, transport)
+        val result = manager.syncOnce(configured)
+
+        assertEquals(emptyList<String>(), result.errors)
+        assertTrue(
+            "tombstone must still win when local was imported before the deletion",
+            repo.loadBookEntries().none { it.metadata.title == "Stale Local Tomb" },
+        )
+        // Server metadata still carries the tombstone — no local push overwrote it.
+        val finalMeta = json.decodeFromString(
+            HttpSyncMetadataBlob.serializer(),
+            transport.kv[metadataKey("stale_local_tomb")]!!.body.toString(Charsets.UTF_8),
+        )
+        assertEquals("2030-06-01T00:00:00Z", finalMeta.deletedAt)
+    }
+
+    /**
+     * Legacy local book written before `BookMetadata.importedAt` existed (so the field is
+     * null). The reconciler can't prove a post-tombstone import — conservative path: the
+     * tombstone wins. This is what the importMokuroBook helper would have produced before
+     * the importedAt feature landed; we simulate it here by clearing the field.
+     */
+    @Test
+    fun syncOnceLegacyLocalBookWithoutImportedAtStillHonoursTombstone() = runBlocking {
+        val repo = newBookRepository()
+        val (root, _) = importMokuroBook(repo, "Legacy No Imported")
+        val original = repo.loadMetadata(root)!!
+        repo.saveMetadata(root, original.copy(importedAt = null))
+
+        val transport = FakeKvTransport()
+        transport.putJson(
+            key = metadataKey("legacy_no_imported"),
+            serializer = HttpSyncMetadataBlob.serializer(),
+            value = HttpSyncMetadataBlob(
+                title = "Legacy No Imported",
+                contentType = HttpSyncContentType.Mokuro,
+                deletedAt = "2030-06-01T00:00:00Z",
+            ),
+            json = json,
+            lastModified = "2030-06-01T00:00:00Z",
+        )
+
+        val manager = managerFor(repo, transport)
+        val result = manager.syncOnce(configured)
+
+        assertEquals(emptyList<String>(), result.errors)
+        assertTrue(
+            "legacy book with null importedAt must still honour the remote tombstone",
+            repo.loadBookEntries().none { it.metadata.title == "Legacy No Imported" },
+        )
     }
 
     @Test

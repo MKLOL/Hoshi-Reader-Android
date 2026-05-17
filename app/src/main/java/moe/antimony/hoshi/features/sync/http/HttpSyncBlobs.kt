@@ -206,6 +206,33 @@ internal fun maxRfc(left: String?, right: String?): String? = when {
     else -> right
 }
 
+/**
+ * Re-import-after-tombstone guard shared by the v2 reconciler and the v3 planner.
+ *
+ * Returns `true` iff the local `BookMetadata.importedAt` is **strictly later** than the
+ * remote `metadata.deletedAt`, in which case the user re-imported the book after the
+ * tombstone was published and the live local copy wins (the tombstone gets overwritten
+ * with `deletedAt = null` on the next push).
+ *
+ * Conservative on missing data:
+ *  - If [localImportedAt] is null (legacy book written before this field existed) or fails
+ *    RFC 3339 parsing, we cannot prove a post-tombstone import and the tombstone wins.
+ *  - If [remoteDeletedAt] is null, the call site already skipped the tombstone branch — we
+ *    return `false` for safety.
+ *  - Strict `>` (not `>=`): a tie on the wallclock isn't strong enough evidence that the
+ *    import happened after the deletion. Both engines stamp with RFC 3339 millisecond
+ *    precision, so true ties only happen for hand-crafted timestamps.
+ */
+internal fun localImportedAtOverridesRemoteDeletion(
+    localImportedAt: String?,
+    remoteDeletedAt: String?,
+): Boolean {
+    if (localImportedAt == null || remoteDeletedAt == null) return false
+    val localInstant = runCatching { Instant.parse(localImportedAt) }.getOrNull() ?: return false
+    val remoteInstant = runCatching { Instant.parse(remoteDeletedAt) }.getOrNull() ?: return false
+    return localInstant.isAfter(remoteInstant)
+}
+
 // ----- Local ⇄ wire conversions ----------------------------------------------------------
 // Lives here (next to the wire schemas) rather than in HttpSyncManager so the manager
 // doesn't have to know about the Bookmark / AiChatEntry shapes beyond what these helpers
