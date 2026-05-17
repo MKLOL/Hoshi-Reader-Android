@@ -225,6 +225,9 @@ private fun ReaderAppearanceContent(
                         label = "E-ink Mode",
                         checked = settings.eInkMode,
                         onCheckedChange = { onSettingsChange(settings.copy(eInkMode = it)) },
+                        description = "Optimizes the app for e-ink screens: pure black & white. " +
+                            "Enable it yourself — the app " +
+                            "can't detect an e-ink display on its own.",
                     )
                     if (settings.theme == ReaderTheme.System) {
                         AppearanceDivider(palette)
@@ -803,6 +806,7 @@ private fun SwitchRow(
     label: String,
     checked: Boolean,
     onCheckedChange: (Boolean) -> Unit,
+    description: String? = null,
 ) {
     val metrics = readerSheetDensityMetrics()
     Row(
@@ -812,13 +816,26 @@ private fun SwitchRow(
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(
-            text = label,
-            modifier = Modifier.weight(1f),
-            style = MaterialTheme.typography.bodyLarge,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .padding(end = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.bodyLarge,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (description != null) {
+                Text(
+                    text = description,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
         CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides metrics.appearanceSwitchMinimumInteractiveSizeDp.dp) {
             Switch(checked = checked, onCheckedChange = onCheckedChange)
         }
