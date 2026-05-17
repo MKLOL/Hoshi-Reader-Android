@@ -6,6 +6,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import moe.antimony.hoshi.epub.BookRepository
+import moe.antimony.hoshi.epub.BookShelf
 import moe.antimony.hoshi.epub.Bookmark
 import moe.antimony.hoshi.epub.ContentType
 import moe.antimony.hoshi.epub.bookContentType
@@ -63,6 +64,8 @@ class HttpSyncReconciler(
         ignoreUnknownKeys = true
         encodeDefaults = true
     }
+    private val shelfStateStore = HttpSyncShelfStateStore(json)
+    private val deletedBookStateStore = HttpSyncDeletedBookStateStore(json)
 
     /**
      * One reconciliation pass. Inbound first so a newer server bookmark is not stomped
@@ -113,6 +116,25 @@ class HttpSyncReconciler(
         val blob: HttpSyncAiChatSettingsBlob,
         val hasImagePromptText: Boolean,
     )
+
+    private data class RemoteBookMetadata(
+        val blob: HttpSyncMetadataBlob,
+        val hasShelfName: Boolean,
+    )
+
+    private data class RemoteBookMetadataFetched(
+        val blob: HttpSyncMetadataBlob,
+        val hasShelfName: Boolean,
+        val lastModified: String,
+    )
+
+    private data class ShelfSnapshot(
+        val namesByBookId: Map<String, String>,
+        val recordsBySyncId: Map<String, HttpSyncShelfPlacementRecord>,
+        val shelvesUpdatedAt: String?,
+    )
+
+    private enum class MetadataApplyResult { Applied, Deleted, MissingLocal, Noop }
 
     /**
      * Bidirectional LWW sync of the cross-device ChatGPT settings (`model` + prompts).
@@ -365,6 +387,7 @@ class HttpSyncReconciler(
         //    payload manifest that imports the book they belong to (regression caught by
         //    `freshDeviceSyncDownloadsPayloadBookmarkAndChatInOnePass`).
         val payloadManifests = mutableListOf<HttpSyncKvKeyMeta>()
+        val metadataKeys = mutableListOf<Pair<ParsedBookKey, HttpSyncKvKeyMeta>>()
         val bookmarksAndChats = mutableListOf<Pair<ParsedBookKey, HttpSyncKvKeyMeta>>()
         val listSinceCursor = inboundListSinceCursor(sinceCursor)
         var cursor: String? = null
@@ -397,25 +420,54 @@ class HttpSyncReconciler(
                     BookKeyKind.PayloadManifest -> payloadManifests += meta
                     BookKeyKind.Bookmark, BookKeyKind.Chat -> bookmarksAndChats += parsed to meta
                     BookKeyKind.PayloadZip -> markHandled(meta) // followed via the manifest
-                    BookKeyKind.Metadata -> markHandled(meta) // v2 doesn't act on metadata yet — reserved for tombstones
+                    BookKeyKind.Metadata -> metadataKeys += parsed to meta
                 }
             }
             cursor = page.nextCursor
         } while (cursor != null && page.truncated)
 
-        // ── Pass 2: import remote-only books by their payload manifests, BEFORE applying
+        // ── Pass 2: apply metadata tombstones before payload import so a deleted remote
+        //    book never causes a fresh device to download a payload just to delete it.
+        val shelfSnapshotBeforeMetadata = loadShelfSnapshot()
+        val updatedShelfState = shelfSnapshotBeforeMetadata.recordsBySyncId.toMutableMap()
+        val deletedSyncIds = mutableSetOf<String>()
+        val placementMetadataKeys = mutableListOf<Pair<ParsedBookKey, HttpSyncKvKeyMeta>>()
+        for ((parsed, meta) in metadataKeys) {
+            runCatching {
+                val remote = fetchRemoteMetadata(transport, meta.key)
+                    ?: throw HttpSyncException("Metadata at ${meta.key}: missing.")
+                if (remote.blob.deletedAt != null) {
+                    rootsBySyncId[parsed.syncId]?.let { bookRepository.deleteBook(it) }
+                    rootsBySyncId.remove(parsed.syncId)
+                    updatedShelfState.remove(parsed.syncId)
+                    deletedSyncIds += parsed.syncId
+                    markHandled(meta)
+                } else {
+                    placementMetadataKeys += parsed to meta
+                }
+            }.onFailure { e ->
+                errors += "metadata ${parsed.syncId}: ${e.message ?: e.javaClass.simpleName}"
+                markUnhandled(meta)
+            }
+        }
+
+        // ── Pass 3: import remote-only books by their payload manifests, BEFORE applying
         //    bookmarks/chats. This is what fixes the ordering bug: once this pass runs,
-        //    every syncId on the server has a local root in `rootsBySyncId`.
+        //    every non-deleted syncId on the server has a local root in `rootsBySyncId`.
         for ((index, meta) in payloadManifests.withIndex()) {
             val parsed = parseBookKey(meta.key) ?: continue
             onProgress(
                 HttpSyncProgress(
                     message = "Checking remote book payloads",
                     detail = "Book ${index + 1} of ${payloadManifests.size}: ${parsed.syncId}",
-                    completed = index + 1,
+                    completed = index,
                     total = payloadManifests.size,
                 ),
             )
+            if (parsed.syncId in deletedSyncIds) {
+                markHandled(meta)
+                continue
+            }
             if (parsed.syncId in rootsBySyncId.keys) {
                 markHandled(meta)
                 continue
@@ -435,18 +487,57 @@ class HttpSyncReconciler(
             }
         }
 
-        // ── Pass 3: bookmarks and chats now find their local roots and get applied.
+        // ── Pass 4: metadata shelf placement now has local roots too.
+        for ((index, pair) in placementMetadataKeys.withIndex()) {
+            val (parsed, meta) = pair
+            onProgress(
+                HttpSyncProgress(
+                    message = "Applying bookshelf folders",
+                    detail = "Book ${index + 1} of ${placementMetadataKeys.size}: ${parsed.syncId}",
+                    completed = index,
+                    total = placementMetadataKeys.size,
+                ),
+            )
+            runCatching {
+                when (applyMetadataFromRemote(
+                    transport = transport,
+                    syncId = parsed.syncId,
+                    bookRoot = rootsBySyncId[parsed.syncId],
+                    meta = meta,
+                    shelfSnapshot = shelfSnapshotBeforeMetadata,
+                    updatedShelfState = updatedShelfState,
+                )) {
+                    MetadataApplyResult.MissingLocal -> {
+                        markUnhandled(meta)
+                        return@runCatching
+                    }
+                    else -> markHandled(meta)
+                }
+            }.onFailure { e ->
+                errors += "metadata ${parsed.syncId}: ${e.message ?: e.javaClass.simpleName}"
+                markUnhandled(meta)
+            }
+        }
+        if (updatedShelfState != shelfSnapshotBeforeMetadata.recordsBySyncId) {
+            shelfStateStore.save(bookRepository.booksDirectory, updatedShelfState)
+        }
+
+        // ── Pass 5: bookmarks and chats now find their local roots and get applied.
         for ((index, pair) in bookmarksAndChats.withIndex()) {
             val (parsed, meta) = pair
             onProgress(
                 HttpSyncProgress(
                     message = "Applying remote reading data",
                     detail = "Item ${index + 1} of ${bookmarksAndChats.size}: ${parsed.kind.name.lowercase()} for ${parsed.syncId}",
-                    completed = index + 1,
+                    completed = index,
                     total = bookmarksAndChats.size,
                 ),
             )
             val root = rootsBySyncId[parsed.syncId]
+            if (parsed.syncId in deletedSyncIds) {
+                markHandled(meta)
+                continue
+            }
             if (root == null) {
                 markUnhandled(meta)
                 continue
@@ -472,15 +563,15 @@ class HttpSyncReconciler(
         // chat prefixes for local mokuro books so manual Sync now can recover those skipped
         // ChatGPT entries without forcing a full payload rescan.
         if (sinceCursor != null) {
-            val rootEntries = rootsBySyncId.entries.toList()
+            val rootEntries = rootsBySyncId.entries
+                .filter { (_, root) -> bookContentType(root) == ContentType.Mokuro }
             for ((index, entry) in rootEntries.withIndex()) {
                 val (syncId, root) = entry
-                if (bookContentType(root) != ContentType.Mokuro) continue
                 onProgress(
                     HttpSyncProgress(
                         message = "Backfilling manga chats",
                         detail = "Book ${index + 1} of ${rootEntries.size}: $syncId",
-                        completed = index + 1,
+                        completed = index,
                         total = rootEntries.size,
                     ),
                 )
@@ -517,7 +608,6 @@ class HttpSyncReconciler(
                     }
                     for (meta in page.keys) {
                         if (meta.key in knownChatKeys) {
-                            markHandled(meta)
                             continue
                         }
                         runCatching {
@@ -525,10 +615,8 @@ class HttpSyncReconciler(
                                 downloadedChatEntries += 1
                             }
                             knownChatKeys += meta.key
-                            markHandled(meta)
                         }.onFailure { e ->
                             errors += "chat backfill $syncId: ${e.message ?: e.javaClass.simpleName}"
-                            markUnhandled(meta)
                         }
                     }
                     chatCursor = page.nextCursor
@@ -536,7 +624,7 @@ class HttpSyncReconciler(
             }
         }
 
-        val remoteOnly = remoteSyncIds.count { it !in rootsBySyncId.keys }
+        val remoteOnly = remoteSyncIds.count { it !in rootsBySyncId.keys && it !in deletedSyncIds }
         return InboundResult(
             downloadedBookmarks = downloadedBookmarks,
             downloadedChatEntries = downloadedChatEntries,
@@ -612,6 +700,147 @@ class HttpSyncReconciler(
         return true
     }
 
+    private suspend fun applyMetadataFromRemote(
+        transport: HttpSyncKvTransport,
+        syncId: String,
+        bookRoot: File?,
+        meta: HttpSyncKvKeyMeta,
+        shelfSnapshot: ShelfSnapshot,
+        updatedShelfState: MutableMap<String, HttpSyncShelfPlacementRecord>,
+    ): MetadataApplyResult {
+        val remote = fetchRemoteMetadata(transport, meta.key)
+            ?: throw HttpSyncException("Metadata at ${meta.key}: missing.")
+        if (remote.blob.deletedAt != null) {
+            if (bookRoot != null) {
+                bookRepository.deleteBook(bookRoot)
+            }
+            updatedShelfState.remove(syncId)
+            return MetadataApplyResult.Deleted
+        }
+        if (bookRoot == null) return MetadataApplyResult.MissingLocal
+        if (remote.hasShelfName) {
+            val bookId = bookRepository.loadMetadata(bookRoot)?.id
+            val localShelfName = bookId?.let { shelfSnapshot.namesByBookId[it] }
+            val localUpdatedAt = localShelfUpdatedAtForBook(
+                syncId = syncId,
+                shelfName = localShelfName,
+                snapshot = shelfSnapshot,
+            )
+            if (shouldApplyRemoteShelfPlacement(remote.blob.shelfUpdatedAt, localUpdatedAt)) {
+                val normalizedShelf = normalizeShelfName(remote.blob.shelfName)
+                applyShelfPlacement(bookRoot, normalizedShelf)
+                updatedShelfState[syncId] = HttpSyncShelfPlacementRecord(
+                    shelfName = normalizedShelf,
+                    updatedAt = remote.blob.shelfUpdatedAt ?: meta.lastModified,
+                )
+                return MetadataApplyResult.Applied
+            }
+        }
+        return MetadataApplyResult.Noop
+    }
+
+    private suspend fun localShelvesUpdatedAt(): String? =
+        bookRepository.shelvesLastModifiedMillis()?.let { Instant.ofEpochMilli(it).toString() }
+
+    private suspend fun loadShelfSnapshot(): ShelfSnapshot {
+        val namesByBookId = linkedMapOf<String, String>()
+        for (shelf in bookRepository.loadShelves()) {
+            for (bookId in shelf.bookIds) namesByBookId.putIfAbsent(bookId, shelf.name)
+        }
+        return ShelfSnapshot(
+            namesByBookId = namesByBookId,
+            recordsBySyncId = shelfStateStore.load(bookRepository.booksDirectory),
+            shelvesUpdatedAt = localShelvesUpdatedAt(),
+        )
+    }
+
+    private fun localShelfUpdatedAtForBook(
+        syncId: String,
+        shelfName: String?,
+        snapshot: ShelfSnapshot,
+    ): String? {
+        val record = snapshot.recordsBySyncId[syncId]
+        if (record != null && record.shelfName == shelfName) return record.updatedAt
+        if (record != null || shelfName != null) {
+            return snapshot.shelvesUpdatedAt ?: Instant.now().toString()
+        }
+        return null
+    }
+
+    private fun shouldApplyRemoteShelfPlacement(
+        remoteShelfUpdatedAt: String?,
+        localShelvesUpdatedAt: String?,
+    ): Boolean {
+        if (localShelvesUpdatedAt == null) return true
+        if (remoteShelfUpdatedAt == null) return false
+        return compareRfc3339(remoteShelfUpdatedAt, localShelvesUpdatedAt) >= 0
+    }
+
+    private suspend fun fetchRemoteMetadata(
+        transport: HttpSyncKvTransport,
+        key: String,
+    ): RemoteBookMetadata? {
+        val fetched = transport.get(key) ?: return null
+        val body = fetched.body.toString(Charsets.UTF_8)
+        return runCatching {
+            RemoteBookMetadata(
+                blob = json.decodeFromString(HttpSyncMetadataBlob.serializer(), body),
+                hasShelfName = json.parseToJsonElement(body).jsonObject.containsKey("shelfName"),
+            )
+        }.getOrElse { error ->
+            throw HttpSyncException("Metadata at $key: malformed JSON (${error.message ?: error.javaClass.simpleName})")
+        }
+    }
+
+    private suspend fun fetchRemoteMetadataForUpload(
+        transport: HttpSyncKvTransport,
+        key: String,
+    ): RemoteBookMetadataFetched? {
+        val fetched = try {
+            transport.get(key)
+        } catch (e: HttpSyncException) {
+            throw HttpSyncException("metadata GET: ${e.message}")
+        }
+        fetched ?: return null
+        val body = fetched.body.toString(Charsets.UTF_8)
+        return runCatching {
+            RemoteBookMetadataFetched(
+                blob = json.decodeFromString(HttpSyncMetadataBlob.serializer(), body),
+                hasShelfName = json.parseToJsonElement(body).jsonObject.containsKey("shelfName"),
+                lastModified = fetched.lastModified,
+            )
+        }.getOrElse { error ->
+            throw HttpSyncException("metadata decode: ${error.message ?: error.javaClass.simpleName}")
+        }
+    }
+
+    private suspend fun applyShelfPlacement(bookRoot: File, shelfName: String?) {
+        val bookId = bookRepository.loadMetadata(bookRoot)?.id ?: return
+        val normalizedShelf = normalizeShelfName(shelfName)
+        val shelves = bookRepository.loadShelves()
+        var foundTargetShelf = false
+        val updated = shelves.map { shelf ->
+            val withoutBook = shelf.bookIds.filterNot { it == bookId }
+            if (normalizedShelf != null && shelf.name == normalizedShelf) {
+                foundTargetShelf = true
+                shelf.copy(bookIds = (withoutBook + bookId).distinct())
+            } else {
+                shelf.copy(bookIds = withoutBook)
+            }
+        }
+        val finalShelves = if (normalizedShelf != null && !foundTargetShelf) {
+            updated + BookShelf(normalizedShelf, listOf(bookId))
+        } else {
+            updated
+        }
+        if (finalShelves != shelves) {
+            bookRepository.saveShelves(finalShelves)
+        }
+    }
+
+    private fun normalizeShelfName(shelfName: String?): String? =
+        shelfName?.trim()?.takeIf { it.isNotEmpty() }
+
     // ----- Outbound ----------------------------------------------------------------------
 
     private data class OutboundResult(
@@ -621,6 +850,20 @@ class HttpSyncReconciler(
         val uploadedPayloads: Int,
         val maxLastModified: String?,
         val errors: List<String>,
+    )
+
+    private data class LocalSyncBook(
+        val bookId: String,
+        val title: String,
+        val syncId: String,
+        val root: File,
+        val contentType: ContentType,
+        val shelfName: String?,
+    )
+
+    private data class LocalChatUpload(
+        val entry: AiChatEntry,
+        val key: String,
     )
 
     private suspend fun pushAllLocal(
@@ -634,20 +877,88 @@ class HttpSyncReconciler(
         var maxLastModified: String? = null
         val errors = mutableListOf<String>()
 
-        val localBooks = bookRepository.loadBookEntries()
-        for ((index, entry) in localBooks.withIndex()) {
-            val title = entry.metadata.title.orEmpty().ifBlank { continue }
-            val syncId = deriveSyncId(title) ?: continue
-            val root = entry.root
+        val entries = bookRepository.loadBookEntries()
+        val shelfSnapshot = loadShelfSnapshot()
+        val updatedShelfState = shelfSnapshot.recordsBySyncId.toMutableMap()
+        val pendingDeletedBooks = deletedBookStateStore.load(bookRepository.booksDirectory).toMutableMap()
+        val localBooks = entries.mapNotNull { entry ->
+            val title = entry.metadata.title.orEmpty().ifBlank { return@mapNotNull null }
+            val syncId = deriveSyncId(title) ?: return@mapNotNull null
+            LocalSyncBook(
+                bookId = entry.metadata.id,
+                title = title,
+                syncId = syncId,
+                root = entry.root,
+                contentType = bookContentType(entry.root),
+                shelfName = shelfSnapshot.namesByBookId[entry.metadata.id],
+            )
+        }
+        pendingDeletedBooks.keys.removeAll(localBooks.map { it.syncId }.toSet())
+        val payloadBookCount = localBooks.count { it.contentType == ContentType.Mokuro }
+        var payloadBookIndex = 0
+        for ((syncId, deleted) in pendingDeletedBooks.toMap()) {
+            try {
+                onProgress(
+                    HttpSyncProgress(
+                        message = "Uploading deleted book markers",
+                        detail = deleted.title,
+                    ),
+                )
+                val response = transport.put(
+                    key = metadataKey(syncId),
+                    contentType = HttpSyncPusher.JSON_CONTENT_TYPE,
+                    body = json.encodeToString(
+                        HttpSyncMetadataBlob.serializer(),
+                        HttpSyncMetadataBlob(
+                            title = deleted.title,
+                            contentType = deleted.contentType,
+                            deletedAt = deleted.deletedAt,
+                        ),
+                    ).toByteArray(),
+                )
+                uploadedMetadata += 1
+                maxLastModified = maxRfc(maxLastModified, response.lastModified)
+                pendingDeletedBooks.remove(syncId)
+                updatedShelfState.remove(syncId)
+            } catch (e: HttpSyncException) {
+                errors += "${deleted.title}: ${e.message}"
+            }
+        }
+        for ((index, book) in localBooks.withIndex()) {
+            val (_, title, syncId, root, contentType, shelfName) = book
             try {
                 onProgress(
                     HttpSyncProgress(
                         message = "Uploading local book state",
                         detail = "Book ${index + 1} of ${localBooks.size}: $title",
-                        completed = index + 1,
+                        completed = index,
                         total = localBooks.size,
                     ),
                 )
+                val remoteMetadata = fetchRemoteMetadataForUpload(transport, metadataKey(syncId))
+                if (remoteMetadata?.blob?.deletedAt != null) {
+                    bookRepository.deleteBook(root)
+                    updatedShelfState.remove(syncId)
+                    continue
+                }
+                var uploadShelfName = shelfName
+                var uploadShelfUpdatedAt = localShelfUpdatedAtForBook(
+                    syncId = syncId,
+                    shelfName = uploadShelfName,
+                    snapshot = shelfSnapshot,
+                )
+                if (
+                    remoteMetadata?.hasShelfName == true &&
+                    shouldApplyRemoteShelfPlacement(remoteMetadata.blob.shelfUpdatedAt, uploadShelfUpdatedAt)
+                ) {
+                    uploadShelfName = normalizeShelfName(remoteMetadata.blob.shelfName)
+                    uploadShelfUpdatedAt = remoteMetadata.blob.shelfUpdatedAt ?: remoteMetadata.lastModified
+                    applyShelfPlacement(root, uploadShelfName)
+                    updatedShelfState[syncId] = HttpSyncShelfPlacementRecord(
+                        shelfName = uploadShelfName,
+                        updatedAt = uploadShelfUpdatedAt,
+                    )
+                }
                 val bookmark = bookRepository.loadBookmark(root)
                 if (bookmark != null) {
                     // Don't overwrite a newer server bookmark — see the same guard in
@@ -661,13 +972,6 @@ class HttpSyncReconciler(
                     }
                 }
 
-                // Preserve the server's deletion tombstone — if another device flipped
-                // `deletedAt` on the metadata, our push must not erase it.
-                val remoteMetadataBlob = runCatching {
-                    transport.get(metadataKey(syncId))
-                        ?.body?.toString(Charsets.UTF_8)
-                        ?.let { json.decodeFromString(HttpSyncMetadataBlob.serializer(), it) }
-                }.getOrNull()
                 val metadataResponse = transport.put(
                     key = metadataKey(syncId),
                     contentType = HttpSyncPusher.JSON_CONTENT_TYPE,
@@ -675,28 +979,39 @@ class HttpSyncReconciler(
                         HttpSyncMetadataBlob.serializer(),
                         HttpSyncMetadataBlob(
                             title = title,
-                            contentType = HttpSyncContentType.fromLocal(bookContentType(root)),
-                            importedAt = remoteMetadataBlob?.importedAt,
-                            deletedAt = remoteMetadataBlob?.deletedAt,
+                            contentType = HttpSyncContentType.fromLocal(contentType),
+                            shelfName = uploadShelfName,
+                            shelfUpdatedAt = uploadShelfUpdatedAt,
+                            importedAt = remoteMetadata?.blob?.importedAt,
+                            deletedAt = remoteMetadata?.blob?.deletedAt,
                         ),
                     ).toByteArray(),
                 )
                 uploadedMetadata += 1
                 maxLastModified = maxRfc(maxLastModified, metadataResponse.lastModified)
+                if (uploadShelfUpdatedAt != null) {
+                    updatedShelfState[syncId] = HttpSyncShelfPlacementRecord(
+                        shelfName = uploadShelfName,
+                        updatedAt = uploadShelfUpdatedAt,
+                    )
+                } else {
+                    updatedShelfState.remove(syncId)
+                }
 
                 // Payload push: zip the book directory once, compare sha to remote manifest,
                 // upload zip + manifest only if different. The codec caches nothing, so this
                 // is roughly free on a second sync (it'll fetch the manifest, see the sha
                 // matches, skip the zip entirely). Mokuro-only for v2.0; EPUB payload sync
                 // can be added by widening the gate.
-                val contentType = bookContentType(root)
                 if (contentType == ContentType.Mokuro) {
+                    val currentPayloadIndex = payloadBookIndex
+                    payloadBookIndex += 1
                     onProgress(
                         HttpSyncProgress(
                             message = "Checking manga payload upload",
-                            detail = "Book ${index + 1} of ${localBooks.size}: $title",
-                            completed = index + 1,
-                            total = localBooks.size,
+                            detail = "Book ${currentPayloadIndex + 1} of $payloadBookCount: $title",
+                            completed = currentPayloadIndex,
+                            total = payloadBookCount,
                         ),
                     )
                     val uploaded = payloadCodec.uploadIfChanged(
@@ -728,22 +1043,27 @@ class HttpSyncReconciler(
                             for (meta in page.keys) existing += meta.key
                             chatCursor = page.nextCursor
                         } while (chatCursor != null && page.truncated)
-                        for ((chatIndex, chatEntry) in chatEntries.withIndex()) {
+                        val missingChatUploads = chatEntries.mapNotNull { chatEntry ->
+                            val suffix = chatEntryKeySuffix(chatEntry.timestampSeconds, chatEntry.bubbleText, chatEntry.response)
+                            val key = chatKey(syncId, suffix)
+                            if (key in existing) null else LocalChatUpload(chatEntry, key)
+                        }
+                        for ((chatIndex, upload) in missingChatUploads.withIndex()) {
                             onProgress(
                                 HttpSyncProgress(
                                     message = "Uploading manga chat history",
-                                    detail = "$title: chat ${chatIndex + 1} of ${chatEntries.size}",
-                                    completed = chatIndex + 1,
-                                    total = chatEntries.size,
+                                    detail = "$title: chat ${chatIndex + 1} of ${missingChatUploads.size}",
+                                    completed = chatIndex,
+                                    total = missingChatUploads.size,
                                 ),
                             )
-                            val suffix = chatEntryKeySuffix(chatEntry.timestampSeconds, chatEntry.bubbleText, chatEntry.response)
-                            val key = chatKey(syncId, suffix)
-                            if (key in existing) continue
                             val response = transport.put(
-                                key = key,
+                                key = upload.key,
                                 contentType = HttpSyncPusher.JSON_CONTENT_TYPE,
-                                body = json.encodeToString(HttpSyncChatEntryBlob.serializer(), chatEntry.toBlob()).toByteArray(),
+                                body = json.encodeToString(
+                                    HttpSyncChatEntryBlob.serializer(),
+                                    upload.entry.toBlob(),
+                                ).toByteArray(),
                             )
                             uploadedChatEntries += 1
                             maxLastModified = maxRfc(maxLastModified, response.lastModified)
@@ -754,6 +1074,10 @@ class HttpSyncReconciler(
                 errors += "$title: ${e.message}"
             }
         }
+        if (updatedShelfState != shelfSnapshot.recordsBySyncId) {
+            shelfStateStore.save(bookRepository.booksDirectory, updatedShelfState)
+        }
+        deletedBookStateStore.save(bookRepository.booksDirectory, pendingDeletedBooks)
         return OutboundResult(
             uploadedBookmarks = uploadedBookmarks,
             uploadedChatEntries = uploadedChatEntries,
@@ -897,7 +1221,7 @@ data class HttpSyncProgress(
             val done = completed ?: return null
             val count = total ?: return null
             if (count <= 0) return null
-            return (done.toFloat() / count.toFloat()).coerceIn(0f, 1f)
+            return ((done + 1).toFloat() / count.toFloat()).coerceIn(0f, 1f)
         }
 }
 

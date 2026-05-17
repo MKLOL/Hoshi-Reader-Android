@@ -101,6 +101,35 @@ class HttpSyncPayloadTest {
     }
 
     @Test
+    fun uploadDoesNotWriteManifestWhenPayloadUploadFails() = runBlocking {
+        val src = tempFolder.newFolder("failing-stream-upload-book").apply {
+            resolve("mokuro.json").writeText("""{"version":"1.0"}""")
+            resolve("pages").mkdirs()
+            resolve("pages/0001.png").writeBytes(ByteArray(128 * 1024) { (it % 251).toByte() })
+        }
+        val transport = FailingPayloadUploadTransport()
+
+        assertThrows(HttpSyncException::class.java) {
+            runBlocking {
+                codec.uploadIfChanged(
+                    transport = transport,
+                    syncId = "failing_stream_upload",
+                    bookRoot = src,
+                    originalName = "Failing Stream Upload",
+                    format = HttpSyncContentType.Mokuro,
+                )
+            }
+        }
+
+        assertTrue("payload upload should have been attempted", transport.payloadPutFileCalls == 1)
+        assertFalse("manifest must not point at a failed payload upload", payloadManifestKey("failing_stream_upload") in transport.kv)
+        assertFalse(
+            "failed upload spool should be deleted",
+            src.parentFile!!.listFiles().orEmpty().any { it.name.startsWith("hoshi-sync-upload-") },
+        )
+    }
+
+    @Test
     fun downloadUsesFileBackedPayloadZipInsteadOfByteArrayGet() = runBlocking {
         val src = tempFolder.newFolder("stream-download-source").apply {
             resolve("mokuro.json").writeText("""{"hello":"stream"}""")
@@ -587,6 +616,49 @@ class HttpSyncPayloadTest {
         assertEquals(1, result.uploadedPayloads)
         assertNotNull(transport.kv[payloadZipKey("mokuro_with_payload")])
         assertNotNull(transport.kv[payloadManifestKey("mokuro_with_payload")])
+    }
+}
+
+private class FailingPayloadUploadTransport : HttpSyncKvTransport {
+    val kv: MutableMap<String, FakeKvTransport.Stored> = linkedMapOf()
+    var payloadPutFileCalls: Int = 0
+        private set
+
+    override suspend fun put(
+        key: String,
+        contentType: String,
+        body: ByteArray,
+    ): HttpSyncKvWriteResponse {
+        kv[key] = FakeKvTransport.Stored(body, contentType, "2027-02-01T00:00:00Z")
+        return HttpSyncKvWriteResponse(
+            key = key,
+            lastModified = "2027-02-01T00:00:00Z",
+            etag = "sha256:fake",
+            size = body.size,
+            contentType = contentType,
+        )
+    }
+
+    override suspend fun putFile(
+        key: String,
+        contentType: String,
+        file: File,
+    ): HttpSyncKvWriteResponse {
+        payloadPutFileCalls += 1
+        throw HttpSyncException("payload upload failed")
+    }
+
+    override suspend fun get(key: String): HttpSyncKvFetched? = null
+
+    override suspend fun list(
+        prefix: String?,
+        since: String?,
+        cursor: String?,
+        limit: Int?,
+    ): HttpSyncKvList = HttpSyncKvList()
+
+    override suspend fun delete(key: String) {
+        kv.remove(key)
     }
 }
 

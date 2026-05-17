@@ -1,14 +1,21 @@
 package moe.antimony.hoshi.features.sync.http
 
 import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import java.io.File
+import java.io.InputStream
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 
 /**
  * Generic key/value blob transport for the v2 sync protocol (see `docs/HTTP_SYNC_KV.md`).
@@ -74,6 +81,31 @@ data class HttpSyncKvFileFetched(
 @Serializable
 private data class HttpSyncKvError(val error: String? = null)
 
+@Serializable
+private data class HttpSyncMultipartStartRequest(
+    val key: String,
+    val contentType: String,
+)
+
+@Serializable
+private data class HttpSyncMultipartStartResponse(
+    val uploadId: String,
+)
+
+@Serializable
+private data class HttpSyncMultipartCompleteRequest(
+    val parts: List<Int>,
+)
+
+@Serializable
+private data class HttpSyncMultipartCompleteResponse(
+    val key: String,
+    val lastModified: String,
+    val etag: String,
+    val size: Long,
+    val contentType: String? = null,
+)
+
 class HttpSyncException(message: String) : Exception(message)
 
 // ----- Transport interface ---------------------------------------------------------------
@@ -136,6 +168,8 @@ class HttpSyncKvClient(
     private val baseUrl: String,
     private val bearerToken: String,
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
+    private val multipartPartSizeBytes: Long = DEFAULT_MULTIPART_PART_SIZE_BYTES,
+    private val multipartThresholdBytes: Long = DEFAULT_MULTIPART_UPLOAD_THRESHOLD_BYTES,
 ) : HttpSyncKvTransport {
     private val json = Json {
         ignoreUnknownKeys = true
@@ -150,11 +184,18 @@ class HttpSyncKvClient(
         val connection = openConnection("PUT", "/v1/kv/${encodeKey(key)}", contentType)
         connection.doOutput = true
         try {
-            connection.outputStream.use { it.write(body) }
-            val (code, raw) = readBody(connection)
-            if (code !in 200..299) throw HttpSyncException(parseError(code, raw))
-            json.decodeFromString(HttpSyncKvWriteResponse.serializer(), raw)
+            val context = currentCoroutineContext()
+            connection.runCancellable {
+                connection.outputStream.use { it.write(body) }
+                context.ensureActive()
+                val (code, raw) = readBody(connection)
+                context.ensureActive()
+                if (code !in 200..299) throw HttpSyncException(parseError(code, raw))
+                json.decodeFromString(HttpSyncKvWriteResponse.serializer(), raw)
+            }
         } catch (e: HttpSyncException) {
+            throw e
+        } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             throw HttpSyncException(friendlyMessage(e))
@@ -168,22 +209,202 @@ class HttpSyncKvClient(
         contentType: String,
         file: File,
     ): HttpSyncKvWriteResponse = withContext(ioDispatcher) {
+        if (file.length() > multipartThresholdBytes) {
+            return@withContext putFileMultipart(key, contentType, file)
+        }
+        putFileSingleRequest(key, contentType, file)
+    }
+
+    private suspend fun putFileSingleRequest(
+        key: String,
+        contentType: String,
+        file: File,
+    ): HttpSyncKvWriteResponse {
         val connection = openConnection("PUT", "/v1/kv/${encodeKey(key)}", contentType)
         connection.doOutput = true
         connection.setFixedLengthStreamingMode(file.length())
-        try {
-            file.inputStream().buffered(DEFAULT_STREAM_BUFFER_SIZE).use { input ->
-                connection.outputStream.buffered(DEFAULT_STREAM_BUFFER_SIZE).use { output ->
-                    input.copyTo(output, DEFAULT_STREAM_BUFFER_SIZE)
+        return try {
+            val context = currentCoroutineContext()
+            val buffer = ByteArray(DEFAULT_STREAM_BUFFER_SIZE)
+            connection.runCancellable {
+                file.inputStream().buffered(DEFAULT_STREAM_BUFFER_SIZE).use { input ->
+                    connection.outputStream.buffered(DEFAULT_STREAM_BUFFER_SIZE).use { output ->
+                        while (true) {
+                            context.ensureActive()
+                            val read = input.read(buffer)
+                            if (read < 0) break
+                            output.write(buffer, 0, read)
+                        }
+                    }
                 }
+                context.ensureActive()
+                val (code, raw) = readBody(connection)
+                context.ensureActive()
+                if (code !in 200..299) throw HttpSyncException(parseError(code, raw))
+                json.decodeFromString(HttpSyncKvWriteResponse.serializer(), raw)
             }
-            val (code, raw) = readBody(connection)
-            if (code !in 200..299) throw HttpSyncException(parseError(code, raw))
-            json.decodeFromString(HttpSyncKvWriteResponse.serializer(), raw)
         } catch (e: HttpSyncException) {
+            throw e
+        } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             throw HttpSyncException(friendlyMessage(e))
+        } finally {
+            connection.disconnect()
+        }
+    }
+
+    private suspend fun putFileMultipart(
+        key: String,
+        contentType: String,
+        file: File,
+    ): HttpSyncKvWriteResponse {
+        require(multipartPartSizeBytes in 1..MAX_MULTIPART_PART_SIZE_BYTES) {
+            "multipartPartSizeBytes must be between 1 and $MAX_MULTIPART_PART_SIZE_BYTES."
+        }
+        var uploadId: String? = null
+        try {
+            uploadId = startMultipartUpload(key, contentType)
+            val parts = uploadMultipartParts(uploadId, file)
+            currentCoroutineContext().ensureActive()
+            return completeMultipartUpload(uploadId, parts, fallbackContentType = contentType)
+        } catch (e: CancellationException) {
+            uploadId?.let(::cancelMultipartUploadQuietly)
+            throw e
+        } catch (e: HttpSyncException) {
+            uploadId?.let(::cancelMultipartUploadQuietly)
+            throw e
+        } catch (e: Exception) {
+            uploadId?.let(::cancelMultipartUploadQuietly)
+            throw HttpSyncException(friendlyMessage(e))
+        }
+    }
+
+    private suspend fun startMultipartUpload(key: String, contentType: String): String {
+        val request = HttpSyncMultipartStartRequest(key = key, contentType = contentType)
+        val body = json.encodeToString(HttpSyncMultipartStartRequest.serializer(), request)
+            .toByteArray(Charsets.UTF_8)
+        val connection = openConnection(
+            "POST",
+            "/v1/kv-multipart/start",
+            "application/json; charset=utf-8",
+        )
+        connection.doOutput = true
+        connection.setFixedLengthStreamingMode(body.size)
+        try {
+            val context = currentCoroutineContext()
+            return connection.runCancellable {
+                connection.outputStream.use { it.write(body) }
+                context.ensureActive()
+                val (code, raw) = readBody(connection)
+                context.ensureActive()
+                if (code !in 200..299) throw HttpSyncException(parseError(code, raw))
+                json.decodeFromString(HttpSyncMultipartStartResponse.serializer(), raw).uploadId
+            }
+        } finally {
+            connection.disconnect()
+        }
+    }
+
+    private suspend fun uploadMultipartParts(uploadId: String, file: File): List<Int> {
+        val parts = mutableListOf<Int>()
+        val buffer = ByteArray(DEFAULT_STREAM_BUFFER_SIZE)
+        var partNumber = 1
+        var remainingFileBytes = file.length()
+        file.inputStream().buffered(DEFAULT_STREAM_BUFFER_SIZE).use { input ->
+            while (remainingFileBytes > 0L) {
+                currentCoroutineContext().ensureActive()
+                val partLength = minOf(multipartPartSizeBytes, remainingFileBytes)
+                uploadMultipartPart(uploadId, partNumber, input, partLength, buffer)
+                parts += partNumber
+                partNumber += 1
+                remainingFileBytes -= partLength
+            }
+        }
+        return parts
+    }
+
+    private suspend fun uploadMultipartPart(
+        uploadId: String,
+        partNumber: Int,
+        input: InputStream,
+        partLength: Long,
+        buffer: ByteArray,
+    ) {
+        val connection = openConnection(
+            "PUT",
+            "/v1/kv-multipart/${urlEncode(uploadId)}/$partNumber",
+            "application/octet-stream",
+        )
+        connection.doOutput = true
+        connection.setFixedLengthStreamingMode(partLength)
+        try {
+            val context = currentCoroutineContext()
+            connection.runCancellable {
+                connection.outputStream.buffered(DEFAULT_STREAM_BUFFER_SIZE).use { output ->
+                    var remaining = partLength
+                    while (remaining > 0L) {
+                        context.ensureActive()
+                        val requested = minOf(buffer.size.toLong(), remaining).toInt()
+                        val read = input.read(buffer, 0, requested)
+                        if (read < 0) throw HttpSyncException("Multipart upload ended before part $partNumber was complete.")
+                        output.write(buffer, 0, read)
+                        remaining -= read.toLong()
+                    }
+                }
+                context.ensureActive()
+                val (code, raw) = readBody(connection)
+                context.ensureActive()
+                if (code !in 200..299) throw HttpSyncException(parseError(code, raw))
+            }
+        } finally {
+            connection.disconnect()
+        }
+    }
+
+    private suspend fun completeMultipartUpload(
+        uploadId: String,
+        parts: List<Int>,
+        fallbackContentType: String,
+    ): HttpSyncKvWriteResponse {
+        val request = HttpSyncMultipartCompleteRequest(parts = parts)
+        val body = json.encodeToString(HttpSyncMultipartCompleteRequest.serializer(), request)
+            .toByteArray(Charsets.UTF_8)
+        val connection = openConnection(
+            "POST",
+            "/v1/kv-multipart/${urlEncode(uploadId)}/complete",
+            "application/json; charset=utf-8",
+        )
+        connection.doOutput = true
+        connection.setFixedLengthStreamingMode(body.size)
+        try {
+            val context = currentCoroutineContext()
+            return connection.runCancellable {
+                connection.outputStream.use { it.write(body) }
+                context.ensureActive()
+                val (code, raw) = readBody(connection)
+                context.ensureActive()
+                if (code !in 200..299) throw HttpSyncException(parseError(code, raw))
+                val response = json.decodeFromString(HttpSyncMultipartCompleteResponse.serializer(), raw)
+                HttpSyncKvWriteResponse(
+                    key = response.key,
+                    lastModified = response.lastModified,
+                    etag = response.etag,
+                    size = response.size.coerceAtMost(Int.MAX_VALUE.toLong()).toInt(),
+                    contentType = response.contentType ?: fallbackContentType,
+                )
+            }
+        } finally {
+            connection.disconnect()
+        }
+    }
+
+    private fun cancelMultipartUploadQuietly(uploadId: String) {
+        val connection = openConnection("DELETE", "/v1/kv-multipart/${urlEncode(uploadId)}", contentType = null)
+        try {
+            connection.responseCode
+        } catch (_: Exception) {
+            // Best effort only; the user-facing error should be the original upload failure.
         } finally {
             connection.disconnect()
         }
@@ -304,7 +525,7 @@ class HttpSyncKvClient(
     }
 
     private fun openConnection(method: String, path: String, contentType: String?): HttpURLConnection {
-        val connection = URL(baseUrl + path).openConnection() as HttpURLConnection
+        val connection = URL(baseUrl.trimEnd('/') + path).openConnection() as HttpURLConnection
         connection.requestMethod = method
         connection.connectTimeout = 15_000
         connection.readTimeout = 30_000
@@ -323,6 +544,21 @@ class HttpSyncKvClient(
         return code to body
     }
 
+    private suspend fun <T> HttpURLConnection.runCancellable(block: () -> T): T =
+        suspendCancellableCoroutine { continuation ->
+            continuation.invokeOnCancellation { disconnect() }
+            try {
+                val result = block()
+                if (continuation.isActive) {
+                    continuation.resume(result)
+                }
+            } catch (e: Throwable) {
+                if (continuation.isActive) {
+                    continuation.resumeWithException(e)
+                }
+            }
+        }
+
     private fun parseError(code: Int, rawBody: String): String {
         val message = runCatching {
             json.decodeFromString(HttpSyncKvError.serializer(), rawBody).error
@@ -331,6 +567,7 @@ class HttpSyncKvClient(
             code == 401 -> "Server rejected the bearer token (HTTP 401). Check the token in Settings → Advanced → HTTP Sync."
             code == 403 -> "Server forbids this request (HTTP 403)."
             code == 404 -> "Not found on server (HTTP 404)."
+            code in 500..599 && message != null -> "Server is having trouble (HTTP $code): $message"
             code in 500..599 -> "Server is having trouble (HTTP $code). Try again in a moment."
             message != null -> "HTTP $code: $message"
             else -> "HTTP sync request failed (HTTP $code)."
@@ -386,3 +623,6 @@ class HttpSyncKvClient(
 }
 
 private const val DEFAULT_STREAM_BUFFER_SIZE = 64 * 1024
+private const val MAX_MULTIPART_PART_SIZE_BYTES = 64L * 1024L * 1024L
+private const val DEFAULT_MULTIPART_PART_SIZE_BYTES = MAX_MULTIPART_PART_SIZE_BYTES
+private const val DEFAULT_MULTIPART_UPLOAD_THRESHOLD_BYTES = MAX_MULTIPART_PART_SIZE_BYTES

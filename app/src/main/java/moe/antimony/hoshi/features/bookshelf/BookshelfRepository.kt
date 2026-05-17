@@ -6,7 +6,9 @@ import android.net.Uri
 import androidx.documentfile.provider.DocumentFile
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.Json
 import moe.antimony.hoshi.dictionary.DictionaryRepository
 import moe.antimony.hoshi.epub.BookEntry
 import moe.antimony.hoshi.epub.BookInfo
@@ -24,12 +26,16 @@ import moe.antimony.hoshi.features.sync.StatisticsSyncMode
 import moe.antimony.hoshi.features.sync.SyncDirection
 import moe.antimony.hoshi.features.sync.SyncManager
 import moe.antimony.hoshi.features.sync.SyncResult
+import moe.antimony.hoshi.features.sync.http.HttpSyncContentType
+import moe.antimony.hoshi.features.sync.http.HttpSyncDeletedBookRecord
+import moe.antimony.hoshi.features.sync.http.HttpSyncDeletedBookStateStore
+import moe.antimony.hoshi.features.sync.http.deriveSyncId
 import moe.antimony.hoshi.mokuro.MokuroBook
 import moe.antimony.hoshi.mokuro.MokuroBookParser
 import moe.antimony.hoshi.mokuro.MokuroImportException
 import java.io.File
+import java.time.Instant
 import java.util.UUID
-import kotlinx.coroutines.flow.first
 
 internal interface BookshelfRepository {
     suspend fun loadBooks(sortOption: BookSortOption): BookshelfLoadResult
@@ -66,6 +72,13 @@ internal class AndroidBookshelfRepository(
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
 ) : BookshelfRepository {
     private val contentResolver = context.contentResolver
+    private val httpSyncDeletedBookStateStore = HttpSyncDeletedBookStateStore(
+        Json {
+            ignoreUnknownKeys = true
+            encodeDefaults = true
+        },
+    )
+
     override suspend fun loadBooks(sortOption: BookSortOption): BookshelfLoadResult = withContext(ioDispatcher) {
         val entries = bookRepository.loadBookEntries(sortOption)
         val shelves = bookRepository.loadShelves()
@@ -113,11 +126,15 @@ internal class AndroidBookshelfRepository(
     }
 
     override suspend fun deleteBook(entry: BookEntry) = withContext(ioDispatcher) {
+        recordHttpSyncTombstone(entry)
         bookRepository.deleteBook(entry.root, ::releasePersistedSasayakiAudioUri)
     }
 
     override suspend fun deleteBooks(entries: Collection<BookEntry>) = withContext(ioDispatcher) {
-        entries.forEach { bookRepository.deleteBook(it.root, ::releasePersistedSasayakiAudioUri) }
+        entries.forEach { entry ->
+            recordHttpSyncTombstone(entry)
+            bookRepository.deleteBook(entry.root, ::releasePersistedSasayakiAudioUri)
+        }
     }
 
     override suspend fun moveBooks(bookIds: Set<String>, shelfName: String?) = withContext(ioDispatcher) {
@@ -264,6 +281,20 @@ internal class AndroidBookshelfRepository(
 
     private suspend fun readerBookId(root: File): String =
         bookRepository.loadMetadata(root)?.id ?: root.name
+
+    private fun recordHttpSyncTombstone(entry: BookEntry) {
+        val title = entry.metadata.title?.takeIf { it.isNotBlank() } ?: return
+        val syncId = deriveSyncId(title) ?: return
+        httpSyncDeletedBookStateStore.recordDeletedBook(
+            booksRoot = bookRepository.booksDirectory,
+            syncId = syncId,
+            record = HttpSyncDeletedBookRecord(
+                title = title,
+                contentType = HttpSyncContentType.fromLocal(bookContentType(entry.root)),
+                deletedAt = Instant.now().toString(),
+            ),
+        )
+    }
 
     private fun releasePersistedSasayakiAudioUri(uriString: String) {
         contentResolver.releasePersistableUriPermission(

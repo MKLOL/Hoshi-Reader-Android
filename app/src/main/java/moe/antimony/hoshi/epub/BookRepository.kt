@@ -30,6 +30,7 @@ class BookRepository(
     private val importDataSource = BookImportDataSource(filesDir, fileDataSource, ioDispatcher = ioDispatcher)
 
     val currentBookFile: File get() = fileDataSource.currentBookFile
+    val booksDirectory: File get() = fileDataSource.booksDirectory
 
     suspend fun loadAllBooks(): List<File> = fileDataSource.loadAllBooks()
 
@@ -104,6 +105,9 @@ class BookRepository(
     suspend fun saveShelves(shelves: List<BookShelf>) {
         sidecarDataSource.saveShelves(fileDataSource.booksDirectory, shelves)
     }
+
+    suspend fun shelvesLastModifiedMillis(): Long? =
+        sidecarDataSource.shelvesLastModifiedMillis(fileDataSource.booksDirectory)
 
     private suspend fun replaceShelfBookIds(idReplacements: Map<String, String>) {
         saveShelves(
@@ -473,6 +477,10 @@ class BookSidecarDataSource(
 
     suspend fun saveShelves(booksRoot: File, shelves: List<BookShelf>) {
         saveJson(booksRoot, SHELVES_FILE_NAME, ListSerializer(BookShelf.serializer()), shelves)
+    }
+
+    suspend fun shelvesLastModifiedMillis(booksRoot: File): Long? = withContext(ioDispatcher) {
+        booksRoot.resolve(SHELVES_FILE_NAME).takeIf { it.isFile }?.lastModified()
     }
 
     private suspend fun <T> loadJson(serializer: KSerializer<T>, file: File): T? = withContext(ioDispatcher) {

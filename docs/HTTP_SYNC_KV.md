@@ -66,6 +66,61 @@ Response:
 }
 ```
 
+Small `payload.zip` uploads may still use this route. Large payloads should use the
+multipart routes below so every individual request stays below Cloudflare's body cap.
+
+### `POST /v1/kv-multipart/start`
+
+Start an upload for a large value. The server creates an opaque upload id and stores
+parts temporarily until `complete` or `cancel`.
+
+Request:
+```json
+{
+  "key": "books/yotsubato_01/payload.zip",
+  "contentType": "application/zip"
+}
+```
+
+Response:
+```json
+{
+  "uploadId": "opaque-upload-id"
+}
+```
+
+### `PUT /v1/kv-multipart/{uploadId}/{partNumber}`
+
+Upload one raw byte part. `partNumber` is 1-based. Android currently sends parts up to
+64 MiB so each request remains comfortably below Cloudflare's 100 MB limit.
+
+### `POST /v1/kv-multipart/{uploadId}/complete`
+
+Finish a multipart upload. The server concatenates the listed parts in order, upserts
+the finished value into KV, and deletes the temporary upload rows/files.
+
+Request:
+```json
+{
+  "parts": [1, 2, 3]
+}
+```
+
+Response:
+```json
+{
+  "key": "books/yotsubato_01/payload.zip",
+  "lastModified": "2026-05-15T12:34:56.789Z",
+  "etag": "sha256:9af1...c0",
+  "size": 104857601
+}
+```
+
+### `DELETE /v1/kv-multipart/{uploadId}`
+
+Cancel an unfinished multipart upload and delete all temporary parts. Android calls this
+best-effort if a part or complete request fails.
+
 ### `GET /v1/kv/{key}`
 
 Return the stored bytes. Returns the original `Content-Type`, plus `Last-Modified`
@@ -140,7 +195,7 @@ The Android client uses this layout under one shared root prefix `books/`:
 
 | Key | Content-Type | Schema | Mutability | Approx size |
 |---|---|---|---|---|
-| `books/{syncId}/metadata` | `application/json` | `{title, contentType, importedAt, deletedAt?}` | overwrite | ~200 B |
+| `books/{syncId}/metadata` | `application/json` | `{title, contentType, shelfName?, shelfUpdatedAt?, importedAt, deletedAt?}` | overwrite | ~250 B |
 | `books/{syncId}/bookmark` | `application/json` | `{chapterIndex, progress, characterCount, lastModified}` | overwrite (every page turn batch) | ~250 B |
 | `books/{syncId}/chat/{ts}-{nonce}` | `application/json` | `{bubbleText, prompt, model, response, timestampSeconds}` | **write-once** | ~500 B – 2 KB |
 | `books/{syncId}/payload.zip` | `application/zip` | zip of the original book directory | overwrite (rare; effectively immutable) | 10 MB – 200 MB |
@@ -148,6 +203,13 @@ The Android client uses this layout under one shared root prefix `books/`:
 
 - `syncId` = `deriveSyncId(title)` (the lowercase-alphanumeric sanitizer the v1 client
   already uses, see `HttpSync.kt:131`). Two devices with the same titled book converge.
+- `shelfName` syncs the book's bookshelf shelf/folder placement by visible shelf name.
+  Missing `shelfName` means an older client wrote the metadata and the receiver should
+  leave local shelf placement alone; explicit `null` means intentionally unshelved.
+- `shelfUpdatedAt` is an RFC 3339 UTC per-book placement timestamp retained in local
+  sync state. Receivers apply remote shelf placement only when this value is at least
+  as fresh as that book's local shelf placement, so moving one book cannot make stale
+  folder data for another book win.
 - `{ts}` in chat keys is the entry's RFC 3339 UTC timestamp; `{nonce}` is a short
   random suffix so two chats produced at the same second on different devices don't
   collide.
@@ -166,9 +228,14 @@ applied`. Two flows:
   current bookmark JSON. Coalesced so a burst of turns ends in one PUT.
 - New chat reply persisted → `PUT books/{syncId}/chat/{ts}-{nonce}` with that one
   entry. Never re-uploaded.
-- Book import → `PUT books/{syncId}/payload.zip` once, then
+- Book import → upload `books/{syncId}/payload.zip` once (single `PUT` for small
+  payloads, multipart for large payloads), then
   `PUT books/{syncId}/payload.manifest`, then `PUT books/{syncId}/metadata`.
-- Book delete → overwrite `books/{syncId}/metadata` with `deletedAt` set.
+- Book shelf/folder move → next manual sync overwrites each local book metadata blob
+  with the current `shelfName`/`shelfUpdatedAt`; the payload zip is not re-uploaded.
+- Book delete → record a local tombstone outside the deleted book folder; the next
+  manual sync overwrites `books/{syncId}/metadata` with `deletedAt` set, then clears
+  the pending tombstone once the server write succeeds.
 
 ### Inbound (reads)
 
@@ -180,8 +247,11 @@ On app resume / periodic timer:
      bookmark.
    - `chat/{ts}-{nonce}` → if the local chat log doesn't have that exact key, fetch
      and append. Order in-memory by `timestampSeconds`.
-   - `metadata` with `deletedAt` set → if local copy exists and we haven't already
-     processed this tombstone, delete locally.
+   - `metadata` with `deletedAt` set → if local copy exists, delete it locally and do
+     not upload replacement book state over the tombstone. If no local copy exists,
+     treat the tombstone as handled so it does not pin the incremental cursor.
+   - `metadata` with `shelfName` present → apply the book's shelf/folder placement if
+     `shelfUpdatedAt` is not older than that book's local shelf placement.
    - `payload.manifest` → if the manifest's `sha256` differs from local (or there is
      no local book), schedule a payload download.
    - `payload.zip` → only fetched when the manifest says we need it.
@@ -292,9 +362,10 @@ Notes for the server implementer:
 - **Persistence:** SQLite's `BLOB` column is fine up to ~1 GB total; if the user has more
   than ~50 manga (~5 GB of payloads), switch the body storage to filesystem files
   keyed by etag and keep only metadata in SQLite. Same API, different backing.
-- **Streaming:** `payload.zip` can be tens to hundreds of MB. Use chunked transfer
-  encoding on both PUT and GET — don't `request.get_data()` the whole thing into RAM
-  for the big ones. Flask + Werkzeug supports `request.stream`.
+- **Streaming / multipart:** `payload.zip` can be tens to hundreds of MB. For single
+  PUT and GET, don't `request.get_data()` the whole thing into RAM for the big ones.
+  Multipart uploads split the body into <=64 MiB requests; complete should concatenate
+  parts without materializing the entire finished blob in memory.
 - **Concurrency:** SQLite's serialized mode is fine for one user; switch to WAL mode
   (`PRAGMA journal_mode=WAL`) so reads don't block writes during a big payload PUT.
 - **Don't validate hoshi schemas.** If the client uploads a malformed bookmark, that

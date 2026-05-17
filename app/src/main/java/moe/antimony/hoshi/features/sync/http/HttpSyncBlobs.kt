@@ -35,6 +35,17 @@ import java.time.Instant
 data class HttpSyncMetadataBlob(
     val title: String,
     val contentType: HttpSyncContentType,
+    /**
+     * Bookshelf shelf/folder placement. `null` means the book is intentionally unshelved.
+     * Older blobs may omit this field entirely; pull code treats omission as "leave the
+     * local shelf alone" so legacy sync metadata cannot wipe local organization.
+     */
+    val shelfName: String? = null,
+    /**
+     * RFC 3339 UTC — when local shelf organization last changed. Used to avoid applying
+     * stale remote shelf placement over a newer local move. Optional for older blobs.
+     */
+    val shelfUpdatedAt: String? = null,
     /** RFC 3339 UTC — when the book was first imported on this device. Optional. */
     val importedAt: String? = null,
     /** RFC 3339 UTC — set when the user deletes the book; other devices honour it. */

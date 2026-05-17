@@ -4,6 +4,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import moe.antimony.hoshi.epub.BookMetadata
 import moe.antimony.hoshi.epub.BookRepository
+import moe.antimony.hoshi.epub.BookShelf
 import moe.antimony.hoshi.epub.Bookmark
 import moe.antimony.hoshi.features.ai.AiChatEntry
 import moe.antimony.hoshi.features.ai.AiChatHistoryStore
@@ -17,6 +18,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import java.io.File
+import java.time.Instant
 import java.util.UUID
 
 /**
@@ -510,6 +512,61 @@ class HttpSyncTest {
 
         assertEquals(1, result.downloadedChatEntries)
         assertEquals("missed bubble", historyStore.load(root).entries.single().bubbleText)
+    }
+
+    @Test
+    fun syncOnceDoesNotAdvanceCursorFromChatBackfill() = runBlocking {
+        val repo = newBookRepository()
+        val (root, _) = importMokuroBook(repo, "Backfill Cursor")
+        val historyStore = AiChatHistoryStore()
+        val skipped = AiChatEntry("late backfill", "p", "m", "reply", 900_000.0)
+        val skippedKey = chatKey(
+            "backfill_cursor",
+            chatEntryKeySuffix(skipped.timestampSeconds, skipped.bubbleText, skipped.response),
+        )
+        val transport = object : HttpSyncKvTransport by FakeKvTransport() {
+            override suspend fun list(prefix: String?, since: String?, cursor: String?, limit: Int?): HttpSyncKvList =
+                if (prefix == chatPrefixForBook("backfill_cursor")) {
+                    HttpSyncKvList(
+                        keys = listOf(
+                            HttpSyncKvKeyMeta(
+                                key = skippedKey,
+                                lastModified = "2099-01-01T00:00:00Z",
+                                etag = "etag",
+                                size = 1,
+                                contentType = "application/json; charset=utf-8",
+                            ),
+                        ),
+                    )
+                } else {
+                    HttpSyncKvList()
+                }
+
+            override suspend fun get(key: String): HttpSyncKvFetched? =
+                if (key == skippedKey) {
+                    HttpSyncKvFetched(
+                        body = json.encodeToString(
+                            HttpSyncChatEntryBlob.serializer(),
+                            skipped.toBlob(),
+                        ).toByteArray(),
+                        contentType = "application/json; charset=utf-8",
+                        lastModified = "2099-01-01T00:00:00Z",
+                        etag = "etag",
+                    )
+                } else {
+                    null
+                }
+
+            override suspend fun put(key: String, contentType: String, body: ByteArray): HttpSyncKvWriteResponse =
+                HttpSyncKvWriteResponse(key, "2027-01-01T00:00:00Z", "etag", body.size, contentType)
+        }
+        val manager = managerFor(repo, transport, historyStore)
+
+        val result = manager.syncOnce(configured.copy(lastSyncedAt = "2040-01-01T00:00:00Z"))
+
+        assertEquals(1, result.downloadedChatEntries)
+        assertEquals("late backfill", historyStore.load(root).entries.single().bubbleText)
+        assertNull("backfill recovery must not move the global incremental cursor", result.newLastSyncedAt)
     }
 
     @Test
@@ -1009,6 +1066,157 @@ class HttpSyncTest {
     }
 
     @Test
+    fun syncOnceAppliesRemoteDeletionTombstone() = runBlocking {
+        val repo = newBookRepository()
+        importMokuroBook(repo, "Deleted Remotely")
+        val transport = FakeKvTransport()
+        transport.putJson(
+            key = metadataKey("deleted_remotely"),
+            serializer = HttpSyncMetadataBlob.serializer(),
+            value = HttpSyncMetadataBlob(
+                title = "Deleted Remotely",
+                contentType = HttpSyncContentType.Mokuro,
+                deletedAt = "2030-06-01T00:00:00Z",
+            ),
+            json = json,
+            lastModified = "2030-06-01T00:00:00Z",
+        )
+        val manager = managerFor(repo, transport)
+
+        val result = manager.syncOnce(configured)
+
+        assertEquals(emptyList<String>(), result.errors)
+        assertTrue(repo.loadBookEntries().isEmpty())
+        assertEquals(0, result.remoteOnlyBooks)
+    }
+
+    @Test
+    fun syncOnceTreatsRemoteTombstoneForMissingLocalBookAsHandled() = runBlocking {
+        val repo = newBookRepository()
+        val transport = FakeKvTransport()
+        transport.putJson(
+            key = metadataKey("already_gone"),
+            serializer = HttpSyncMetadataBlob.serializer(),
+            value = HttpSyncMetadataBlob(
+                title = "Already Gone",
+                contentType = HttpSyncContentType.Mokuro,
+                deletedAt = "2030-06-01T00:00:00Z",
+            ),
+            json = json,
+            lastModified = "2030-06-01T00:00:00Z",
+        )
+        val manager = managerFor(repo, transport)
+
+        val result = manager.syncOnce(configured.copy(lastSyncedAt = "2020-01-01T00:00:00Z"))
+
+        assertEquals(emptyList<String>(), result.errors)
+        assertEquals(0, result.remoteOnlyBooks)
+        assertNotNull("rootless tombstone should not pin the cursor", result.newLastSyncedAt)
+    }
+
+    @Test
+    fun syncOnceSkipsRemotePayloadWhenMetadataTombstoneExists() = runBlocking {
+        val repo = newBookRepository()
+        val transport = FakeKvTransport()
+        transport.putJson(
+            key = metadataKey("deleted_payload"),
+            serializer = HttpSyncMetadataBlob.serializer(),
+            value = HttpSyncMetadataBlob(
+                title = "Deleted Payload",
+                contentType = HttpSyncContentType.Mokuro,
+                deletedAt = "2030-06-01T00:00:00Z",
+            ),
+            json = json,
+            lastModified = "2030-06-01T00:00:00Z",
+        )
+        transport.putJson(
+            key = payloadManifestKey("deleted_payload"),
+            serializer = HttpSyncPayloadManifest.serializer(),
+            value = HttpSyncPayloadManifest(
+                sha256 = "sha256:missing",
+                sizeBytes = 123,
+                originalName = "Deleted Payload",
+                format = HttpSyncContentType.Mokuro,
+            ),
+            json = json,
+            lastModified = "2030-06-01T00:00:01Z",
+        )
+        val manager = managerFor(repo, transport)
+
+        val result = manager.syncOnce(configured.copy(lastSyncedAt = "2020-01-01T00:00:00Z"))
+
+        assertEquals(emptyList<String>(), result.errors)
+        assertEquals(0, result.downloadedPayloads)
+        assertEquals(0, result.remoteOnlyBooks)
+        assertNotNull("tombstoned payload manifest should not pin the cursor", result.newLastSyncedAt)
+    }
+
+    @Test
+    fun syncOnceUploadsPendingLocalDeletionTombstoneAndClearsIt() = runBlocking {
+        val repo = newBookRepository()
+        HttpSyncDeletedBookStateStore(json).recordDeletedBook(
+            booksRoot = repo.booksDirectory,
+            syncId = "locally_deleted",
+            record = HttpSyncDeletedBookRecord(
+                title = "Locally Deleted",
+                contentType = HttpSyncContentType.Mokuro,
+                deletedAt = "2030-06-01T00:00:00Z",
+            ),
+        )
+        val transport = FakeKvTransport()
+        val manager = managerFor(repo, transport)
+
+        val result = manager.syncOnce(configured)
+
+        assertEquals(emptyList<String>(), result.errors)
+        assertEquals(1, result.uploadedMetadata)
+        val uploaded = json.decodeFromString(
+            HttpSyncMetadataBlob.serializer(),
+            transport.kv[metadataKey("locally_deleted")]!!.body.toString(Charsets.UTF_8),
+        )
+        assertEquals("2030-06-01T00:00:00Z", uploaded.deletedAt)
+        assertTrue(HttpSyncDeletedBookStateStore(json).load(repo.booksDirectory).isEmpty())
+    }
+
+    @Test
+    fun metadataGetFailureDoesNotClearRemoteTombstone() = runBlocking {
+        val repo = newBookRepository()
+        importMokuroBook(repo, "Tombstone Get Failure")
+        val base = FakeKvTransport()
+        base.putJson(
+            key = metadataKey("tombstone_get_failure"),
+            serializer = HttpSyncMetadataBlob.serializer(),
+            value = HttpSyncMetadataBlob(
+                title = "Tombstone Get Failure",
+                contentType = HttpSyncContentType.Mokuro,
+                deletedAt = "2030-06-01T00:00:00Z",
+            ),
+            json = json,
+            lastModified = "2030-06-01T00:00:00Z",
+        )
+        val transport = object : HttpSyncKvTransport by base {
+            override suspend fun list(prefix: String?, since: String?, cursor: String?, limit: Int?): HttpSyncKvList =
+                HttpSyncKvList()
+
+            override suspend fun get(key: String): HttpSyncKvFetched? {
+                if (key == metadataKey("tombstone_get_failure")) throw HttpSyncException("simulated metadata outage")
+                return base.get(key)
+            }
+        }
+        val manager = managerFor(repo, transport)
+
+        val result = manager.syncOnce(configured)
+
+        assertEquals(0, result.uploadedMetadata)
+        assertTrue(result.errors.any { it.contains("metadata GET") })
+        val finalMeta = json.decodeFromString(
+            HttpSyncMetadataBlob.serializer(),
+            base.kv[metadataKey("tombstone_get_failure")]!!.body.toString(Charsets.UTF_8),
+        )
+        assertEquals("2030-06-01T00:00:00Z", finalMeta.deletedAt)
+    }
+
+    @Test
     fun failedPayloadImportDoesNotPoisonOtherBooksInSameSync() = runBlocking {
         // Fresh device: server has TWO books. The first one's payload zip is corrupted
         // (sha256 won't match the manifest). The second one is fine. Both have bookmarks.
@@ -1189,6 +1397,293 @@ class HttpSyncTest {
     }
 
     @Test
+    fun syncOncePushesShelfPlacementInBookMetadata() = runBlocking {
+        val repo = newBookRepository()
+        val (root, _) = importMokuroBook(repo, "Shelved Manga")
+        val bookId = repo.loadMetadata(root)!!.id
+        repo.saveShelves(listOf(BookShelf("Favorites", listOf(bookId))))
+        val transport = FakeKvTransport()
+        val manager = managerFor(repo, transport)
+
+        val result = manager.syncOnce(configured)
+
+        assertEquals(1, result.uploadedMetadata)
+        val stored = transport.kv[metadataKey("shelved_manga")]
+        assertNotNull("metadata should be uploaded", stored)
+        val blob = json.decodeFromString(
+            HttpSyncMetadataBlob.serializer(),
+            stored!!.body.toString(Charsets.UTF_8),
+        )
+        assertEquals("Favorites", blob.shelfName)
+        assertNotNull("shelf timestamp should be uploaded", blob.shelfUpdatedAt)
+    }
+
+    @Test
+    fun syncOnceAppliesRemoteShelfPlacementToExistingLocalBook() = runBlocking {
+        val repo = newBookRepository()
+        val (root, _) = importMokuroBook(repo, "Remote Shelf Manga")
+        val bookId = repo.loadMetadata(root)!!.id
+        repo.saveShelves(
+            listOf(
+                BookShelf("Old Shelf", listOf(bookId)),
+                BookShelf("Other Shelf", emptyList()),
+            ),
+        )
+        val transport = FakeKvTransport().apply {
+            putJson(
+                key = metadataKey("remote_shelf_manga"),
+                serializer = HttpSyncMetadataBlob.serializer(),
+                value = HttpSyncMetadataBlob(
+                    title = "Remote Shelf Manga",
+                    contentType = HttpSyncContentType.Mokuro,
+                    shelfName = "New Shelf",
+                    shelfUpdatedAt = "2099-01-01T00:00:10Z",
+                ),
+                json = json,
+                lastModified = "2027-01-01T00:00:20Z",
+            )
+        }
+        val manager = managerFor(repo, transport)
+
+        val result = manager.syncOnce(configured)
+
+        assertEquals(emptyList<String>(), result.errors)
+        assertTrue(repo.loadShelves().any { it.name == "New Shelf" && it.bookIds == listOf(bookId) })
+        assertTrue(repo.loadShelves().single { it.name == "Old Shelf" }.bookIds.isEmpty())
+    }
+
+    @Test
+    fun syncOnceAppliesRemoteUnshelvedPlacement() = runBlocking {
+        val repo = newBookRepository()
+        val (root, _) = importMokuroBook(repo, "Unshelved Manga")
+        val bookId = repo.loadMetadata(root)!!.id
+        repo.saveShelves(listOf(BookShelf("Favorites", listOf(bookId))))
+        val transport = FakeKvTransport().apply {
+            put(
+                key = metadataKey("unshelved_manga"),
+                contentType = HttpSyncPusher.JSON_CONTENT_TYPE,
+                body = """
+                    {
+                      "title": "Unshelved Manga",
+                      "contentType": "mokuro",
+                      "shelfName": null,
+                      "shelfUpdatedAt": "2099-01-01T00:00:10Z"
+                    }
+                """.trimIndent().toByteArray(),
+            )
+        }
+        val manager = managerFor(repo, transport)
+
+        manager.syncOnce(configured)
+
+        assertTrue(repo.loadShelves().single { it.name == "Favorites" }.bookIds.isEmpty())
+    }
+
+    @Test
+    fun syncOnceDoesNotUnshelveWhenRemoteMetadataIsLegacyWithoutShelfName() = runBlocking {
+        val repo = newBookRepository()
+        val (root, _) = importMokuroBook(repo, "Legacy Metadata Manga")
+        val bookId = repo.loadMetadata(root)!!.id
+        repo.saveShelves(listOf(BookShelf("Keep Me", listOf(bookId))))
+        val transport = FakeKvTransport().apply {
+            put(
+                key = metadataKey("legacy_metadata_manga"),
+                contentType = HttpSyncPusher.JSON_CONTENT_TYPE,
+                body = """
+                    {
+                      "title": "Legacy Metadata Manga",
+                      "contentType": "mokuro"
+                    }
+                """.trimIndent().toByteArray(),
+            )
+        }
+        val manager = managerFor(repo, transport)
+
+        manager.syncOnce(configured)
+
+        assertEquals(listOf(bookId), repo.loadShelves().single { it.name == "Keep Me" }.bookIds)
+    }
+
+    @Test
+    fun freshDeviceImportsRemoteBookThenAppliesShelfPlacement() = runBlocking {
+        val sourceRepo = newBookRepository()
+        val (sourceRoot, _) = importMokuroBook(sourceRepo, "Fresh Shelf Manga")
+        val sourceTransport = FakeKvTransport()
+        HttpSyncPayloadCodec(kotlinx.coroutines.Dispatchers.Unconfined)
+            .uploadIfChanged(
+                sourceTransport,
+                "fresh_shelf_manga",
+                sourceRoot,
+                "Fresh Shelf Manga",
+                HttpSyncContentType.Mokuro,
+            )
+        sourceTransport.putJson(
+            key = metadataKey("fresh_shelf_manga"),
+            serializer = HttpSyncMetadataBlob.serializer(),
+            value = HttpSyncMetadataBlob(
+                title = "Fresh Shelf Manga",
+                contentType = HttpSyncContentType.Mokuro,
+                shelfName = "Synced Shelf",
+                shelfUpdatedAt = "2099-01-01T00:00:10Z",
+            ),
+            json = json,
+            lastModified = "2027-01-01T00:00:20Z",
+        )
+        val receivingRepo = newBookRepository()
+        val manager = managerFor(receivingRepo, sourceTransport)
+
+        val result = manager.syncOnce(configured)
+
+        assertEquals(1, result.downloadedPayloads)
+        val imported = receivingRepo.loadBookEntries().single()
+        assertEquals("Fresh Shelf Manga", imported.metadata.title)
+        assertEquals(
+            listOf(imported.metadata.id),
+            receivingRepo.loadShelves().single { it.name == "Synced Shelf" }.bookIds,
+        )
+        val finalMetadata = json.decodeFromString(
+            HttpSyncMetadataBlob.serializer(),
+            sourceTransport.kv[metadataKey("fresh_shelf_manga")]!!.body.toString(Charsets.UTF_8),
+        )
+        assertEquals("2099-01-01T00:00:10Z", finalMetadata.shelfUpdatedAt)
+    }
+
+    @Test
+    fun syncOnceDoesNotApplyStaleRemoteShelfPlacementOverNewerLocalShelves() = runBlocking {
+        val repo = newBookRepository()
+        val (root, _) = importMokuroBook(repo, "Local Shelf Wins")
+        val bookId = repo.loadMetadata(root)!!.id
+        repo.saveShelves(listOf(BookShelf("Local Shelf", listOf(bookId))))
+        val transport = FakeKvTransport().apply {
+            putJson(
+                key = metadataKey("local_shelf_wins"),
+                serializer = HttpSyncMetadataBlob.serializer(),
+                value = HttpSyncMetadataBlob(
+                    title = "Local Shelf Wins",
+                    contentType = HttpSyncContentType.Mokuro,
+                    shelfName = "Old Remote Shelf",
+                    shelfUpdatedAt = "2000-01-01T00:00:00Z",
+                ),
+                json = json,
+                lastModified = "2027-01-01T00:00:20Z",
+            )
+        }
+        val manager = managerFor(repo, transport)
+
+        val result = manager.syncOnce(configured)
+
+        assertEquals(emptyList<String>(), result.errors)
+        val shelves = repo.loadShelves()
+        assertEquals(listOf(bookId), shelves.single { it.name == "Local Shelf" }.bookIds)
+        assertTrue(shelves.none { it.name == "Old Remote Shelf" && it.bookIds.contains(bookId) })
+    }
+
+    @Test
+    fun syncOnceAppliesMultipleRemoteShelfPlacementsUsingOneLocalTimestampSnapshot() = runBlocking {
+        val repo = newBookRepository()
+        val (firstRoot, _) = importMokuroBook(repo, "Snapshot Shelf One")
+        val (secondRoot, _) = importMokuroBook(repo, "Snapshot Shelf Two")
+        val firstId = repo.loadMetadata(firstRoot)!!.id
+        val secondId = repo.loadMetadata(secondRoot)!!.id
+        repo.saveShelves(listOf(BookShelf("Existing", emptyList())))
+        val shelvesFile = firstRoot.parentFile!!.resolve("shelves.json")
+        assertTrue(
+            "test setup should be able to age the local shelves file",
+            shelvesFile.setLastModified(Instant.parse("2024-01-01T00:00:00Z").toEpochMilli()),
+        )
+        val transport = FakeKvTransport().apply {
+            putJson(
+                key = metadataKey("snapshot_shelf_one"),
+                serializer = HttpSyncMetadataBlob.serializer(),
+                value = HttpSyncMetadataBlob(
+                    title = "Snapshot Shelf One",
+                    contentType = HttpSyncContentType.Mokuro,
+                    shelfName = "Remote One",
+                    shelfUpdatedAt = "2025-01-01T00:00:00Z",
+                ),
+                json = json,
+                lastModified = "2099-01-01T00:00:10Z",
+            )
+            putJson(
+                key = metadataKey("snapshot_shelf_two"),
+                serializer = HttpSyncMetadataBlob.serializer(),
+                value = HttpSyncMetadataBlob(
+                    title = "Snapshot Shelf Two",
+                    contentType = HttpSyncContentType.Mokuro,
+                    shelfName = "Remote Two",
+                    shelfUpdatedAt = "2025-01-01T00:00:00Z",
+                ),
+                json = json,
+                lastModified = "2027-01-01T00:00:20Z",
+            )
+        }
+        val manager = managerFor(repo, transport)
+
+        val result = manager.syncOnce(configured)
+
+        assertEquals(emptyList<String>(), result.errors)
+        val shelves = repo.loadShelves()
+        assertEquals(listOf(firstId), shelves.single { it.name == "Remote One" }.bookIds)
+        assertEquals(listOf(secondId), shelves.single { it.name == "Remote Two" }.bookIds)
+    }
+
+    @Test
+    fun syncOnceAppliesRemoteShelfForOneBookWhenAnotherBookMovedLocally() = runBlocking {
+        val repo = newBookRepository()
+        val (firstRoot, _) = importMokuroBook(repo, "Remote Shelf Beats Unrelated Local")
+        val (secondRoot, _) = importMokuroBook(repo, "Locally Moved Other Book")
+        val firstId = repo.loadMetadata(firstRoot)!!.id
+        val secondId = repo.loadMetadata(secondRoot)!!.id
+        repo.saveShelves(
+            listOf(
+                BookShelf("Old First Shelf", listOf(firstId)),
+                BookShelf("Local Second Shelf", listOf(secondId)),
+            ),
+        )
+        HttpSyncShelfStateStore(json).save(
+            repo.booksDirectory,
+            mapOf(
+                "remote_shelf_beats_unrelated_local" to HttpSyncShelfPlacementRecord(
+                    shelfName = "Old First Shelf",
+                    updatedAt = "2024-01-01T00:00:00Z",
+                ),
+                "locally_moved_other_book" to HttpSyncShelfPlacementRecord(
+                    shelfName = "Old Second Shelf",
+                    updatedAt = "2024-01-01T00:00:00Z",
+                ),
+            ),
+        )
+        val transport = FakeKvTransport().apply {
+            putJson(
+                key = metadataKey("remote_shelf_beats_unrelated_local"),
+                serializer = HttpSyncMetadataBlob.serializer(),
+                value = HttpSyncMetadataBlob(
+                    title = "Remote Shelf Beats Unrelated Local",
+                    contentType = HttpSyncContentType.Mokuro,
+                    shelfName = "Remote First Shelf",
+                    shelfUpdatedAt = "2025-01-01T00:00:00Z",
+                ),
+                json = json,
+                lastModified = "2027-01-01T00:00:20Z",
+            )
+        }
+        val manager = managerFor(repo, transport)
+
+        val result = manager.syncOnce(configured)
+
+        assertEquals(emptyList<String>(), result.errors)
+        val shelves = repo.loadShelves()
+        assertEquals(listOf(firstId), shelves.single { it.name == "Remote First Shelf" }.bookIds)
+        assertEquals(listOf(secondId), shelves.single { it.name == "Local Second Shelf" }.bookIds)
+        val firstMetadata = json.decodeFromString(
+            HttpSyncMetadataBlob.serializer(),
+            transport.kv[metadataKey("remote_shelf_beats_unrelated_local")]!!.body.toString(Charsets.UTF_8),
+        )
+        assertEquals("Remote First Shelf", firstMetadata.shelfName)
+        assertEquals("2025-01-01T00:00:00Z", firstMetadata.shelfUpdatedAt)
+    }
+
+    @Test
     fun summaryRendersHumanReadableCountsOrNothingToSync() {
         val empty = HttpSyncResult(
             uploadedBookmarks = 0,
@@ -1244,10 +1739,57 @@ class HttpSyncTest {
         assertTrue(progress.any { it.fraction != null })
     }
 
+    @Test
+    fun syncOnceProgressCountsFilteredPayloadAndMissingChatWork() = runBlocking {
+        val repo = newBookRepository()
+        val (mangaRoot, _) = importMokuroBook(repo, "Progress Manga")
+        importEpubBook(repo, "Progress Epub")
+        val existingChat = AiChatEntry("already remote", "p", "m", "r1", 1.0)
+        val missingChat = AiChatEntry("needs upload", "p", "m", "r2", 2.0)
+        val historyStore = AiChatHistoryStore()
+        historyStore.append(mangaRoot, existingChat)
+        historyStore.append(mangaRoot, missingChat)
+        val transport = FakeKvTransport().apply {
+            putJson(
+                key = chatKey(
+                    "progress_manga",
+                    chatEntryKeySuffix(
+                        existingChat.timestampSeconds,
+                        existingChat.bubbleText,
+                        existingChat.response,
+                    ),
+                ),
+                serializer = HttpSyncChatEntryBlob.serializer(),
+                value = existingChat.toBlob(),
+                json = json,
+                lastModified = "2027-01-01T00:00:01Z",
+            )
+        }
+        val progress = mutableListOf<HttpSyncProgress>()
+        val reconciler = HttpSyncReconciler(
+            bookRepository = repo,
+            aiHistoryStore = historyStore,
+            transportFactory = { transport },
+            ioDispatcher = kotlinx.coroutines.Dispatchers.Unconfined,
+        )
+
+        reconciler.syncOnce(configured) { progress += it }
+
+        val payloadProgress = progress.single { it.message == "Checking manga payload upload" }
+        assertEquals("Book 1 of 1: Progress Manga", payloadProgress.detail)
+        assertEquals(0, payloadProgress.completed)
+        assertEquals(1, payloadProgress.total)
+
+        val chatProgress = progress.single { it.message == "Uploading manga chat history" }
+        assertEquals("Progress Manga: chat 1 of 1", chatProgress.detail)
+        assertEquals(0, chatProgress.completed)
+        assertEquals(1, chatProgress.total)
+    }
+
     // ===== helpers ============================================================================
 
     private fun newBookRepository(): BookRepository =
-        BookRepository(tempFolder.newFolder("files"))
+        BookRepository(tempFolder.newFolder())
 
     private suspend fun importMokuroBook(repo: BookRepository, title: String): Pair<File, String> {
         val root = repo.createBookDirectoryForImportedTitle(title)

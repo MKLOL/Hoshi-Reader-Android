@@ -21,10 +21,11 @@ import java.util.UUID
  * configured `dragos.games` KV server, and only runs when both `HOSHI_KV_BASE_URL` and
  * `HOSHI_KV_TOKEN` are present in the environment, so it never executes in CI.
  *
- * Run locally with:
+ * Prefer local credentials in gitignored `<repo>/.hoshi-sync-secret.env`, with keys
+ * `HOSHI_KV_BASE_URL` and `HOSHI_KV_TOKEN`.
  *
- *     HOSHI_KV_BASE_URL=https://dragos.games/api/book_sync \
- *     HOSHI_KV_TOKEN=... \
+ * Then run:
+ *
  *     ./gradlew :app:testDebugUnitTest \
  *         --tests moe.antimony.hoshi.features.sync.http.HttpSyncLiveServerSmokeTest
  *
@@ -179,6 +180,38 @@ class HttpSyncLiveServerSmokeTest {
             // Clean up server-side keys regardless of test outcome.
             runCatching { client.delete(payloadZipKey(syncId)) }
             runCatching { client.delete(payloadManifestKey(syncId)) }
+        }
+    }
+
+    @Test
+    fun multipartPutFileRoundTripsAgainstLiveServer() = runBlocking {
+        assumeTrue("HOSHI_KV_BASE_URL not set — skipping live-server test", baseUrl != null)
+        assumeTrue("HOSHI_KV_TOKEN not set — skipping live-server test", token != null)
+
+        val client = HttpSyncKvClient(
+            baseUrl = baseUrl!!,
+            bearerToken = token!!,
+            multipartPartSizeBytes = 4,
+            multipartThresholdBytes = 4,
+        )
+        val testId = "__smoke/${UUID.randomUUID()}"
+        val key = "$testId/payload.zip"
+        val file = tempFolder.newFile("multipart-live.zip").apply {
+            writeBytes("abcdefghij".toByteArray())
+        }
+
+        try {
+            val response = client.putFile(key, "application/zip", file)
+            assertEquals(key, response.key)
+            assertEquals(file.length().toInt(), response.size)
+            assertTrue(response.etag.startsWith("sha256:"))
+
+            val fetched = client.get(key)
+            assertNotNull("multipart-uploaded key should exist", fetched)
+            assertEquals("abcdefghij", fetched!!.body.toString(Charsets.UTF_8))
+            assertTrue(fetched.contentType.startsWith("application/zip"))
+        } finally {
+            runCatching { client.delete(key) }
         }
     }
 
