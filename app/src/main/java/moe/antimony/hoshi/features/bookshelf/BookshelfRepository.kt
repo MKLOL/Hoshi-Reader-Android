@@ -244,6 +244,10 @@ internal class AndroidBookshelfRepository(
             cover = bookRepository.metadataCoverPath(root, parsedBook.coverHref),
             folder = root.name,
             lastAccess = bookRepository.currentAppleReferenceDateSeconds(),
+            // Preserve an existing import stamp on re-save (cover-parse fill-in, migrations, etc.).
+            // First-time imports get a fresh RFC 3339 stamp so a server-side tombstone with an
+            // older `deletedAt` can no longer wipe the fresh local copy on the next sync.
+            importedAt = previous?.importedAt ?: Instant.now().toString(),
         )
         bookRepository.saveMetadata(root, metadata)
     }
@@ -275,6 +279,10 @@ internal class AndroidBookshelfRepository(
             cover = bookRepository.metadataCoverPath(root, book.coverImagePath),
             folder = root.name,
             lastAccess = bookRepository.currentAppleReferenceDateSeconds(),
+            // Same rule as the EPUB import path: preserve a prior stamp on re-save, otherwise
+            // record a fresh RFC 3339 import stamp so a stale remote tombstone cannot wipe
+            // this freshly-imported book on the next sync.
+            importedAt = previous?.importedAt ?: Instant.now().toString(),
         )
         bookRepository.saveMetadata(root, metadata)
     }
