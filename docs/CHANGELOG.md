@@ -5,6 +5,19 @@ The format follows a Keep a Changelog style, and release sections use Semantic V
 
 ## [Unreleased]
 
+## [v0.7.19] - 2026-05-17
+
+### Changed
+
+- HTTP Sync now runs on the new v3 engine by default. v3 is the deterministic plan-then-execute redesign documented in `docs/SYNC_REDESIGN.md` / `docs/SYNC_V3_SPEC.md`. The legacy v2 reconciler stays in the binary as a per-device rollback path (`useV3Sync = false` in DataStore).
+
+### Fixed
+
+- Fix nine v3-engine bugs surfaced by an external review: re-import after delete no longer wipes the live book; remote-only books on first import now honor the server's shelf placement; the per-book lock is held across `ApplyRemoteBookmark` so a page turn during sync can't be overwritten by an older remote bookmark; malformed remote blobs are surfaced as errors and never overwritten by local data; cross-content-type `syncId` collisions emit an error instead of corrupting remote metadata; fresh installs now pull existing remote AI chat settings; tombstone state survives concurrent user deletes during sync; `CancellationException` is rethrown so structured concurrency works.
+- Fix the v2 reconciler losing a fresh delete: deleting a synced book and then immediately hitting `Sync now` could resurrect the book on every other device because the inbound pass re-imported the still-live remote payload before the outbound pass pushed the tombstone.
+- Fix bookshelf covers showing blank after an HTTP Sync download. Both engines now resolve `metadata.cover` during the sync import itself, so the cover renders without the user opening the book.
+- Fix re-importing a previously deleted book getting deleted again across devices. Both engines now compare the local `importedAt` against the remote `deletedAt` and keep / push the re-imported book when its import is newer than the tombstone.
+
 ## [v0.7.18] - 2026-05-17
 
 ### Fixed
