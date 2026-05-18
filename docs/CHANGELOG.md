@@ -5,6 +5,8 @@ The format follows a Keep a Changelog style, and release sections use Semantic V
 
 ## [Unreleased]
 
+## [v0.7.20] - 2026-05-18
+
 ### Added
 
 - Save manga screenshot translation crops in ChatGPT history, so past image questions show the exact screenshot sent to ChatGPT.
