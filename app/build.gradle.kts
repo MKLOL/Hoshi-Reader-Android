@@ -54,8 +54,8 @@ android {
         applicationId = "moe.antimony.hoshi"
         minSdk = 28
         targetSdk = 36
-        versionCode = 720
-        versionName = "0.7.20"
+        versionCode = 721
+        versionName = "0.7.21"
         releaseVersionCode?.let { versionCode = it }
         releaseVersionName?.let { versionName = it }
 

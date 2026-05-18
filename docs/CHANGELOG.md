@@ -5,6 +5,8 @@ The format follows a Keep a Changelog style, and release sections use Semantic V
 
 ## [Unreleased]
 
+## [v0.7.21] - 2026-05-18
+
 ### Fixed
 
 - Fix manga screenshot translation after zooming and panning so the image sent to ChatGPT matches the visible page region.
