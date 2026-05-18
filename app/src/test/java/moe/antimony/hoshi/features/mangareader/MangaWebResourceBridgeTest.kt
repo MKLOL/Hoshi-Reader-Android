@@ -46,6 +46,17 @@ class MangaWebResourceBridgeTest {
     }
 
     @Test
+    fun resolvesADeclaredImagePathForNativeCropping() {
+        val root = tempFolder.newFolder("book")
+        val image = writeImage(root, "images/page_000.jpg")
+        val bridge = MangaWebResourceBridge(root, bookWith("images/page_000.jpg"))
+
+        val resolved = bridge.resolveDeclaredImageFile("images/page_000.jpg")
+
+        assertEquals(image.canonicalFile, resolved)
+    }
+
+    @Test
     fun rejectsRequestsForImagesTheBookDoesNotDeclare() {
         val root = tempFolder.newFolder("book")
         writeImage(root, "images/secret.jpg")

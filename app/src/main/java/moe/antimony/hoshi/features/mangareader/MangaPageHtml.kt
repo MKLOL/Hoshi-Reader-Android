@@ -100,7 +100,7 @@ internal object MangaPageHtml {
             </head>
             <body>
             <div class="page">
-              <div class="frame">
+              <div class="frame" data-page-index="${page.index}" data-image-width="$imageWidth" data-image-height="$imageHeight">
                 <img class="page-image" src="${escapeAttribute(encodeImagePath(page.imagePath))}" alt="">
                 <div class="ocr-layer">
             $boxes
@@ -398,6 +398,57 @@ internal object MangaPageHtml {
                 y: (rect.y - offsetTop) * scale,
                 width: rect.width * scale,
                 height: rect.height * scale
+              };
+            },
+            imageCropFromHostRect: function(left, top, right, bottom, hostWidth, hostHeight) {
+              var frame = document.querySelector('.frame');
+              if (!frame) return null;
+              var viewport = window.visualViewport;
+              var scale = this.hostScale();
+              var viewportWidth = viewport && typeof viewport.width === 'number'
+                ? viewport.width
+                : window.innerWidth / scale;
+              var viewportHeight = viewport && typeof viewport.height === 'number'
+                ? viewport.height
+                : window.innerHeight / scale;
+              var offsetLeft = viewport && typeof viewport.offsetLeft === 'number'
+                ? viewport.offsetLeft
+                : 0;
+              var offsetTop = viewport && typeof viewport.offsetTop === 'number'
+                ? viewport.offsetTop
+                : 0;
+              var frameRect = frame.getBoundingClientRect();
+              var pageIndex = parseInt(frame.dataset.pageIndex || '-1', 10);
+              var imageWidth = parseInt(frame.dataset.imageWidth || '0', 10);
+              var imageHeight = parseInt(frame.dataset.imageHeight || '0', 10);
+              if (!isFinite(scale) || scale <= 0 ||
+                  !isFinite(hostWidth) || hostWidth <= 0 ||
+                  !isFinite(hostHeight) || hostHeight <= 0 ||
+                  !isFinite(viewportWidth) || viewportWidth <= 0 ||
+                  !isFinite(viewportHeight) || viewportHeight <= 0 ||
+                  !isFinite(pageIndex) || pageIndex < 0 ||
+                  !isFinite(imageWidth) || imageWidth <= 0 ||
+                  !isFinite(imageHeight) || imageHeight <= 0 ||
+                  frameRect.width <= 0 || frameRect.height <= 0) {
+                return null;
+              }
+              function hostX(x) { return x / hostWidth * viewportWidth + offsetLeft; }
+              function hostY(y) { return y / hostHeight * viewportHeight + offsetTop; }
+              var cropLeft = Math.min(hostX(left), hostX(right));
+              var cropRight = Math.max(hostX(left), hostX(right));
+              var cropTop = Math.min(hostY(top), hostY(bottom));
+              var cropBottom = Math.max(hostY(top), hostY(bottom));
+              cropLeft = Math.max(cropLeft, frameRect.left);
+              cropRight = Math.min(cropRight, frameRect.right);
+              cropTop = Math.max(cropTop, frameRect.top);
+              cropBottom = Math.min(cropBottom, frameRect.bottom);
+              if (cropRight <= cropLeft || cropBottom <= cropTop) return null;
+              return {
+                pageIndex: pageIndex,
+                left: Math.max(0, Math.floor((cropLeft - frameRect.left) / frameRect.width * imageWidth)),
+                top: Math.max(0, Math.floor((cropTop - frameRect.top) / frameRect.height * imageHeight)),
+                right: Math.min(imageWidth, Math.ceil((cropRight - frameRect.left) / frameRect.width * imageWidth)),
+                bottom: Math.min(imageHeight, Math.ceil((cropBottom - frameRect.top) / frameRect.height * imageHeight))
               };
             },
             clearRevealed: function() {

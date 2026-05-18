@@ -41,7 +41,16 @@ internal class MangaWebResourceBridge(
         if (uri.host != HOST) return null
         val path = uri.path.orEmpty()
         if (!path.startsWith(PATH_PREFIX)) return null
-        val relative = path.removePrefix(PATH_PREFIX).trimStart('/')
+        return resolveDeclaredImageFile(path.removePrefix(PATH_PREFIX))
+    }
+
+    /**
+     * Resolves a book-root-relative image path declared by the book. Used by native
+     * screenshot cropping as well as WebView resource loading so both paths enforce the
+     * same allow-list and book-root containment checks.
+     */
+    fun resolveDeclaredImageFile(relativePath: String): File? {
+        val relative = relativePath.trimStart('/')
         if (relative.isEmpty() || relative !in knownImagePaths) return null
 
         val file = canonicalRoot.resolve(relative).canonicalFile

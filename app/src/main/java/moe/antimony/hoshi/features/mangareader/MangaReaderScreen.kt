@@ -1,7 +1,10 @@
 package moe.antimony.hoshi.features.mangareader
 
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.BitmapRegionDecoder
 import android.graphics.Canvas
+import android.graphics.Rect
 import android.util.Base64
 import android.view.KeyEvent
 import android.webkit.WebView
@@ -70,7 +73,12 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import moe.antimony.hoshi.LocalHoshiAppContainer
 import moe.antimony.hoshi.epub.BookRepository
 import moe.antimony.hoshi.features.ai.AiChatEntry
@@ -100,11 +108,15 @@ import moe.antimony.hoshi.features.sync.http.rememberHttpSyncReaderHooks
 import moe.antimony.hoshi.mokuro.MokuroBook
 import java.io.ByteArrayOutputStream
 import java.io.File
+import kotlin.coroutines.resume
 import kotlin.math.roundToInt
+import kotlin.math.sqrt
 
 private const val BOOKMARK_SAVE_DEBOUNCE_MS = 400L
 private const val MANGA_SCREENSHOT_TRANSLATION_LABEL = "Screenshot translation"
 private const val MANGA_SCREENSHOT_IMAGE_MIME_TYPE = "image/png"
+private const val MANGA_SCREENSHOT_OUTPUT_MAX_EDGE_PX = 2048
+private const val MANGA_SCREENSHOT_OUTPUT_MAX_AREA_PX = 4_000_000
 
 /**
  * The mokuro manga reader once the book is loaded: a page WebView, RTL page navigation,
@@ -181,6 +193,7 @@ internal fun MangaReaderScreen(
     // for the every-5 / on-leave / on-chat counter logic — kept out of this file so upstream
     // merges don't have to reason about it.
     val httpSyncHooks = rememberHttpSyncReaderHooks(bookRoot, book.title, persistenceScope)
+    val mangaImageResolver = remember(book, bookRoot) { MangaWebResourceBridge(bookRoot, book) }
 
     fun scheduleBookmarkSave(index: Int) {
         pendingBookmarkPage.value = index
@@ -309,6 +322,70 @@ internal fun MangaReaderScreen(
         }
     }
 
+    fun retryScreenshotTranslation(imageBase64: String, prompt: String) {
+        val retrySettings = aiSettings
+        if (retrySettings == null) {
+            aiChatState = AiChatUiState.Failed(
+                MANGA_SCREENSHOT_TRANSLATION_LABEL,
+                "ChatGPT is still loading — tap again in a moment.",
+            )
+            return
+        }
+        if (!retrySettings.isConfigured) {
+            aiChatState = AiChatUiState.Failed(
+                MANGA_SCREENSHOT_TRANSLATION_LABEL,
+                "Set your OpenAI API key first: open the ⋯ menu → ChatGPT settings.",
+            )
+            return
+        }
+        aiRetryAction = { retryScreenshotTranslation(imageBase64, prompt) }
+        aiRequestJob?.cancel()
+        aiChatState = AiChatUiState.Loading(MANGA_SCREENSHOT_TRANSLATION_LABEL)
+        aiRequestJob = scope.launch {
+            val result = runCatching {
+                OpenAiChatClient.completeImage(
+                    apiKey = retrySettings.apiKey,
+                    model = retrySettings.model,
+                    prompt = prompt,
+                    imageBase64 = imageBase64,
+                    imageMimeType = MANGA_SCREENSHOT_IMAGE_MIME_TYPE,
+                )
+            }
+            if (!isActive) return@launch
+            result.fold(
+                onSuccess = { response ->
+                    val entry = AiChatEntry(
+                        bubbleText = MANGA_SCREENSHOT_TRANSLATION_LABEL,
+                        prompt = prompt,
+                        model = retrySettings.model,
+                        response = response,
+                        timestampSeconds = repository.currentAppleReferenceDateSeconds(),
+                        screenshotImage = AiChatImage(
+                            mimeType = MANGA_SCREENSHOT_IMAGE_MIME_TYPE,
+                            base64Data = imageBase64,
+                        ),
+                    )
+                    aiChatState = AiChatUiState.Loaded(entry)
+                    val appended = runCatching { aiHistoryStore.append(bookRoot, entry).entries }
+                        .getOrElse { error ->
+                            if (error is CancellationException) throw error
+                            null
+                        }
+                    if (appended != null) {
+                        aiHistory = appended
+                        httpSyncHooks.onChatEntryPersisted(entry)
+                    }
+                },
+                onFailure = { error ->
+                    aiChatState = AiChatUiState.Failed(
+                        MANGA_SCREENSHOT_TRANSLATION_LABEL,
+                        error.message ?: "ChatGPT request failed.",
+                    )
+                },
+            )
+        }
+    }
+
     fun translateScreenshotCrop(rect: MangaScreenshotCropRect) {
         aiRetryAction = { translateScreenshotCrop(rect) }
         val settings = aiSettings
@@ -334,20 +411,33 @@ internal fun MangaReaderScreen(
             )
             return
         }
-        val bitmap = captureWebViewBitmap(currentWebView)
-        if (bitmap == null) {
+        if (book.pages.isEmpty()) {
             aiChatState = AiChatUiState.Failed(
                 MANGA_SCREENSHOT_TRANSLATION_LABEL,
-                "Could not capture the selected area.",
+                "The manga page is not ready yet.",
             )
             return
         }
         aiRequestJob?.cancel()
-        aiChatState = AiChatUiState.Loading(MANGA_SCREENSHOT_TRANSLATION_LABEL)
         val prompt = settings.imagePromptText.trim().ifBlank { AiChatSettings.DEFAULT_IMAGE_PROMPT }
+        aiChatState = AiChatUiState.Loading(MANGA_SCREENSHOT_TRANSLATION_LABEL)
         aiRequestJob = scope.launch {
+            val imageCrop = currentWebView.evaluateMangaImageCropRect(rect)
+            if (!isActive) return@launch
+            val imageFile = imageCrop
+                ?.let { crop -> book.pages.firstOrNull { it.index == crop.pageIndex } }
+                ?.let { page -> mangaImageResolver.resolveDeclaredImageFile(page.imagePath) }
             val imageBase64 = withContext(Dispatchers.Default) {
-                cropWebViewBitmapPng(bitmap, rect)?.let { bytes ->
+                if (imageCrop == null || imageFile == null) {
+                    null
+                } else {
+                    cropMangaImageFilePng(
+                        imageFile = imageFile,
+                        crop = imageCrop,
+                        maxOutputWidth = rect.width,
+                        maxOutputHeight = rect.height,
+                    )
+                }?.let { bytes ->
                     Base64.encodeToString(bytes, Base64.NO_WRAP)
                 }
             }
@@ -359,6 +449,8 @@ internal fun MangaReaderScreen(
                 )
                 return@launch
             }
+            aiRetryAction = { retryScreenshotTranslation(imageBase64, prompt) }
+            aiChatState = AiChatUiState.Loading(MANGA_SCREENSHOT_TRANSLATION_LABEL)
             val result = runCatching {
                 OpenAiChatClient.completeImage(
                     apiKey = settings.apiKey,
@@ -646,68 +738,70 @@ internal fun MangaReaderScreen(
             )
         }
 
-        MangaReaderCloseButton(
-            darkInterface = readerSettings.usesDarkInterface(systemDark),
-            onClose = onClose,
-            modifier = Modifier
-                .align(Alignment.TopStart)
-                .statusBarsPadding()
-                .padding(start = 4.dp, top = 4.dp)
-                .zIndex(1f),
-        )
-        MangaReaderOverflowMenu(
-            darkInterface = readerSettings.usesDarkInterface(systemDark),
-            takeScreenshotEnabled = canTakeScreenshot,
-            onTakeScreenshot = {
-                if (canTakeScreenshot) {
-                    clearSelectionAndPopups()
-                    webView?.clearMangaRevealedBubbles()
-                    screenshotCropMode = true
-                }
-            },
-            onShowAiHistory = { showAiHistory = true },
-            onShowAiSettings = { showAiSettings = true },
-            modifier = Modifier
-                .align(Alignment.TopEnd)
-                .statusBarsPadding()
-                .padding(end = 4.dp, top = 4.dp)
-                .zIndex(1f),
-        )
+        if (!screenshotCropMode) {
+            MangaReaderCloseButton(
+                darkInterface = readerSettings.usesDarkInterface(systemDark),
+                onClose = onClose,
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .statusBarsPadding()
+                    .padding(start = 4.dp, top = 4.dp)
+                    .zIndex(1f),
+            )
+            MangaReaderOverflowMenu(
+                darkInterface = readerSettings.usesDarkInterface(systemDark),
+                takeScreenshotEnabled = canTakeScreenshot,
+                onTakeScreenshot = {
+                    if (canTakeScreenshot) {
+                        clearSelectionAndPopups()
+                        webView?.clearMangaRevealedBubbles()
+                        screenshotCropMode = true
+                    }
+                },
+                onShowAiHistory = { showAiHistory = true },
+                onShowAiSettings = { showAiSettings = true },
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .statusBarsPadding()
+                    .padding(end = 4.dp, top = 4.dp)
+                    .zIndex(1f),
+            )
 
-        MangaReaderPageTurnButton(
-            imageVector = Icons.AutoMirrored.Rounded.KeyboardArrowLeft,
-            contentDescription = "Next page",
-            darkInterface = readerSettings.usesDarkInterface(systemDark),
-            enabled = pageIndex < pageCount - 1,
-            onClick = { navigate(ReaderNavigationDirection.Forward) },
-            modifier = Modifier
-                .align(Alignment.BottomStart)
-                .navigationBarsPadding()
-                .padding(start = 8.dp, bottom = 4.dp)
-                .zIndex(1f),
-        )
-        MangaReaderPageIndicator(
-            pageIndex = pageIndex,
-            pageCount = pageCount,
-            darkInterface = readerSettings.usesDarkInterface(systemDark),
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .navigationBarsPadding()
-                .padding(bottom = 22.dp)
-                .zIndex(1f),
-        )
-        MangaReaderPageTurnButton(
-            imageVector = Icons.AutoMirrored.Rounded.KeyboardArrowRight,
-            contentDescription = "Previous page",
-            darkInterface = readerSettings.usesDarkInterface(systemDark),
-            enabled = pageIndex > 0,
-            onClick = { navigate(ReaderNavigationDirection.Backward) },
-            modifier = Modifier
-                .align(Alignment.BottomEnd)
-                .navigationBarsPadding()
-                .padding(end = 8.dp, bottom = 4.dp)
-                .zIndex(1f),
-        )
+            MangaReaderPageTurnButton(
+                imageVector = Icons.AutoMirrored.Rounded.KeyboardArrowLeft,
+                contentDescription = "Next page",
+                darkInterface = readerSettings.usesDarkInterface(systemDark),
+                enabled = pageIndex < pageCount - 1,
+                onClick = { navigate(ReaderNavigationDirection.Forward) },
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .navigationBarsPadding()
+                    .padding(start = 8.dp, bottom = 4.dp)
+                    .zIndex(1f),
+            )
+            MangaReaderPageIndicator(
+                pageIndex = pageIndex,
+                pageCount = pageCount,
+                darkInterface = readerSettings.usesDarkInterface(systemDark),
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .navigationBarsPadding()
+                    .padding(bottom = 22.dp)
+                    .zIndex(1f),
+            )
+            MangaReaderPageTurnButton(
+                imageVector = Icons.AutoMirrored.Rounded.KeyboardArrowRight,
+                contentDescription = "Previous page",
+                darkInterface = readerSettings.usesDarkInterface(systemDark),
+                enabled = pageIndex > 0,
+                onClick = { navigate(ReaderNavigationDirection.Backward) },
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .navigationBarsPadding()
+                    .padding(end = 8.dp, bottom = 4.dp)
+                    .zIndex(1f),
+            )
+        }
 
         if (screenshotCropMode) {
             BoxWithConstraints(
@@ -941,6 +1035,198 @@ internal fun captureWebViewBitmap(view: WebView): Bitmap? {
         view.draw(Canvas(bitmap))
         bitmap
     }.getOrNull()
+}
+
+/**
+ * Source-image crop in intrinsic manga image pixels. The crop overlay is drawn in host
+ * WebView pixels, while pinch zoom and pan live in WebView's visual viewport, so the page
+ * script converts the host rectangle into this source-image rectangle before we decode.
+ */
+internal data class MangaImageCropRect(
+    val left: Int,
+    val top: Int,
+    val right: Int,
+    val bottom: Int,
+    val pageIndex: Int = 0,
+) {
+    val width: Int get() = right - left
+    val height: Int get() = bottom - top
+}
+
+internal suspend fun WebView.evaluateMangaImageCropRect(
+    rect: MangaScreenshotCropRect,
+): MangaImageCropRect? =
+    withContext(Dispatchers.Main.immediate) {
+        val hostWidth = width
+        val hostHeight = height
+        if (hostWidth <= 0 || hostHeight <= 0) return@withContext null
+        val script = """
+            (function() {
+              if (!window.hoshiManga || !window.hoshiManga.imageCropFromHostRect) {
+                return null;
+              }
+              return JSON.stringify(window.hoshiManga.imageCropFromHostRect(
+                ${rect.left},
+                ${rect.top},
+                ${rect.right},
+                ${rect.bottom},
+                $hostWidth,
+                $hostHeight
+              ));
+            })();
+        """.trimIndent()
+        val encoded = suspendCancellableCoroutine<String?> { continuation ->
+            evaluateJavascript(script) { result ->
+                if (continuation.isActive) {
+                    continuation.resume(result)
+                }
+            }
+        }
+        parseMangaImageCropRectResult(encoded)
+    }
+
+internal fun parseMangaImageCropRectResult(encodedResult: String?): MangaImageCropRect? {
+    val encoded = encodedResult ?: return null
+    if (encoded == "null") return null
+    val jsonText = runCatching { Json.decodeFromString<String>(encoded) }
+        .getOrElse { encoded }
+    if (jsonText == "null") return null
+    val obj = runCatching { Json.parseToJsonElement(jsonText).jsonObject }.getOrNull()
+        ?: return null
+    val left = obj["left"]?.jsonPrimitive?.intOrNull ?: return null
+    val top = obj["top"]?.jsonPrimitive?.intOrNull ?: return null
+    val right = obj["right"]?.jsonPrimitive?.intOrNull ?: return null
+    val bottom = obj["bottom"]?.jsonPrimitive?.intOrNull ?: return null
+    val pageIndex = obj["pageIndex"]?.jsonPrimitive?.intOrNull ?: return null
+    val crop = MangaImageCropRect(
+        left = left,
+        top = top,
+        right = right,
+        bottom = bottom,
+        pageIndex = pageIndex,
+    )
+    return crop.takeIf {
+        it.width >= MANGA_SCREENSHOT_CROP_MIN_SIZE_PX &&
+            it.height >= MANGA_SCREENSHOT_CROP_MIN_SIZE_PX
+    }
+}
+
+@Suppress("DEPRECATION")
+internal fun cropMangaImageFilePng(
+    imageFile: File,
+    crop: MangaImageCropRect,
+    maxOutputWidth: Int = crop.width,
+    maxOutputHeight: Int = crop.height,
+): ByteArray? {
+    if (!imageFile.isFile) return null
+    val decoder = runCatching {
+        BitmapRegionDecoder.newInstance(imageFile.absolutePath, false)
+    }.getOrNull()
+    if (decoder == null) {
+        return cropFullDecodedMangaImageFilePng(
+            imageFile = imageFile,
+            crop = crop,
+            maxOutputWidth = maxOutputWidth,
+            maxOutputHeight = maxOutputHeight,
+        )
+    }
+    var decodedBitmap: Bitmap? = null
+    var outputBitmap: Bitmap? = null
+    try {
+        val region = Rect(
+            crop.left.coerceIn(0, decoder.width),
+            crop.top.coerceIn(0, decoder.height),
+            crop.right.coerceIn(0, decoder.width),
+            crop.bottom.coerceIn(0, decoder.height),
+        )
+        if (region.width() < MANGA_SCREENSHOT_CROP_MIN_SIZE_PX ||
+            region.height() < MANGA_SCREENSHOT_CROP_MIN_SIZE_PX
+        ) {
+            return null
+        }
+        val bitmap = decoder.decodeRegion(region, BitmapFactory.Options()) ?: return null
+        decodedBitmap = bitmap
+        outputBitmap = bitmap.scaledMangaScreenshotCrop(maxOutputWidth, maxOutputHeight)
+        val encodedBitmap = outputBitmap ?: bitmap
+        return ByteArrayOutputStream().use { output ->
+            if (!encodedBitmap.compress(Bitmap.CompressFormat.PNG, 100, output)) {
+                null
+            } else {
+                output.toByteArray()
+            }
+        }
+    } finally {
+        if (outputBitmap !== decodedBitmap) {
+            outputBitmap?.recycle()
+        }
+        decodedBitmap?.recycle()
+        decoder.recycle()
+    }
+}
+
+private fun cropFullDecodedMangaImageFilePng(
+    imageFile: File,
+    crop: MangaImageCropRect,
+    maxOutputWidth: Int,
+    maxOutputHeight: Int,
+): ByteArray? {
+    var sourceBitmap: Bitmap? = null
+    var croppedBitmap: Bitmap? = null
+    var outputBitmap: Bitmap? = null
+    try {
+        val source = BitmapFactory.decodeFile(imageFile.absolutePath) ?: return null
+        sourceBitmap = source
+        val region = Rect(
+            crop.left.coerceIn(0, source.width),
+            crop.top.coerceIn(0, source.height),
+            crop.right.coerceIn(0, source.width),
+            crop.bottom.coerceIn(0, source.height),
+        )
+        if (region.width() < MANGA_SCREENSHOT_CROP_MIN_SIZE_PX ||
+            region.height() < MANGA_SCREENSHOT_CROP_MIN_SIZE_PX
+        ) {
+            return null
+        }
+        val cropped = Bitmap.createBitmap(source, region.left, region.top, region.width(), region.height())
+        croppedBitmap = cropped
+        outputBitmap = cropped.scaledMangaScreenshotCrop(maxOutputWidth, maxOutputHeight)
+        val encodedBitmap = outputBitmap ?: cropped
+        return ByteArrayOutputStream().use { output ->
+            if (!encodedBitmap.compress(Bitmap.CompressFormat.PNG, 100, output)) {
+                null
+            } else {
+                output.toByteArray()
+            }
+        }
+    } finally {
+        if (outputBitmap !== croppedBitmap) {
+            outputBitmap?.recycle()
+        }
+        croppedBitmap?.recycle()
+        sourceBitmap?.recycle()
+    }
+}
+
+private fun Bitmap.scaledMangaScreenshotCrop(
+    maxOutputWidth: Int,
+    maxOutputHeight: Int,
+): Bitmap? {
+    if (width <= 0 || height <= 0) return null
+    val widthLimit = maxOutputWidth.takeIf { it > 0 } ?: width
+    val heightLimit = maxOutputHeight.takeIf { it > 0 } ?: height
+    val area = width.toDouble() * height.toDouble()
+    val scale = minOf(
+        1.0,
+        widthLimit.toDouble() / width.toDouble(),
+        heightLimit.toDouble() / height.toDouble(),
+        MANGA_SCREENSHOT_OUTPUT_MAX_EDGE_PX.toDouble() / maxOf(width, height).toDouble(),
+        sqrt(MANGA_SCREENSHOT_OUTPUT_MAX_AREA_PX.toDouble() / area),
+    )
+    if (scale >= 0.999) return this
+    val targetWidth = (width * scale).roundToInt().coerceAtLeast(MANGA_SCREENSHOT_CROP_MIN_SIZE_PX)
+    val targetHeight = (height * scale).roundToInt().coerceAtLeast(MANGA_SCREENSHOT_CROP_MIN_SIZE_PX)
+    if (targetWidth == width && targetHeight == height) return this
+    return Bitmap.createScaledBitmap(this, targetWidth, targetHeight, true)
 }
 
 internal fun cropWebViewBitmapPng(bitmap: Bitmap, rect: MangaScreenshotCropRect): ByteArray? {

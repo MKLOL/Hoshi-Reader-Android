@@ -107,9 +107,9 @@ page images) that reuses the bookshelf, dictionary lookup, and Anki mining.
   self-contained in `features/ai/` (own settings store, own `ai_chat_log.json` per book,
   no shared-file edits) so it stays easy to merge alongside upstream.
 - ChatGPT screenshot translation, emulator-verified end to end: the manga overflow menu can
-  open a crop overlay, send the selected page pixels to OpenAI, save that crop on the
-  history entry, and use a separate customizable/synced image prompt while keeping the API
-  key local-only.
+  open a crop overlay, map the selected zoomed/panned viewport back to source page pixels,
+  send that crop to OpenAI, save it on the history entry, and use a separate
+  customizable/synced image prompt while keeping the API key local-only.
 - Zoom/chrome interactions, emulator-verified: one-finger swipes turn pages only when the
   page is not zoomed or pannable, two-finger pinch zooms and one-finger panning do not turn
   pages, zoomed OCR bubble taps hit the visible bubble position, and the floating controls

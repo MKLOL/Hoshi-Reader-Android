@@ -127,8 +127,6 @@ class MangaPageHtmlTest {
         assertFalse("page must not depend on the layout viewport", html.contains("position: fixed;"))
         // .frame is the baked-in contain-fit box; no JS sizing, no vw/vh, no resize listener.
         assertTrue(html.contains("width: 412px;") && html.contains("height: 618px;"))
-        assertFalse(html.contains("window.innerWidth"))
-        assertFalse(html.contains("Math.min"))
         assertFalse(html.contains("addEventListener('resize'"))
         assertFalse(html.contains("addEventListener('orientationchange'"))
     }
