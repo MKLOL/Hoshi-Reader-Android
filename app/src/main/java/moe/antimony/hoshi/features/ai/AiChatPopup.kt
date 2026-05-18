@@ -1,6 +1,6 @@
 package moe.antimony.hoshi.features.ai
 
-import androidx.compose.foundation.background
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
@@ -34,7 +34,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import java.time.Instant
@@ -60,8 +59,8 @@ sealed interface AiChatUiState {
 }
 
 /**
- * The ChatGPT response popup, shown above the manga page. Tapping the scrim or the close
- * button dismisses it; a failed request offers a retry.
+ * The ChatGPT response popup, shown above the manga page. Tapping outside the card or the
+ * close button dismisses it; a failed request offers a retry.
  *
  * Caller is expected to place this in a full-size [Box] with a high `zIndex` so it sits over
  * the page and the dictionary lookup popups.
@@ -76,7 +75,6 @@ fun AiChatPopupView(
     Box(
         modifier = modifier
             .fillMaxSize()
-            .background(Color.Black.copy(alpha = 0.5f))
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null,
@@ -85,7 +83,7 @@ fun AiChatPopupView(
         contentAlignment = Alignment.Center,
     ) {
         Surface(
-            // Swallow taps on the card so they do not fall through to the scrim's dismiss.
+            // Swallow taps on the card so they do not fall through to the dismiss layer.
             modifier = Modifier
                 .padding(24.dp)
                 .widthIn(max = 480.dp)
@@ -98,6 +96,7 @@ fun AiChatPopupView(
             shape = RoundedCornerShape(20.dp),
             color = MaterialTheme.colorScheme.surface,
             tonalElevation = 3.dp,
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
         ) {
             Column(modifier = Modifier.padding(20.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
