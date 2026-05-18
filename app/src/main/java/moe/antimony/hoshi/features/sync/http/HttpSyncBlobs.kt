@@ -5,6 +5,7 @@ import kotlinx.serialization.Serializable
 import moe.antimony.hoshi.epub.Bookmark
 import moe.antimony.hoshi.epub.ContentType
 import moe.antimony.hoshi.features.ai.AiChatEntry
+import moe.antimony.hoshi.features.ai.AiChatImage
 import moe.antimony.hoshi.features.ai.AiChatSettings
 import java.security.MessageDigest
 import java.time.Instant
@@ -69,6 +70,8 @@ data class HttpSyncChatEntryBlob(
     val response: String,
     /** Apple-reference seconds, the same epoch used by the on-disk `ai_chat_log.json`. */
     val timestampSeconds: Double,
+    /** Optional cropped screenshot attached to screenshot-translation entries. */
+    val screenshotImage: AiChatImage? = null,
 )
 
 /**
@@ -252,6 +255,7 @@ internal fun AiChatEntry.toBlob(): HttpSyncChatEntryBlob = HttpSyncChatEntryBlob
     model = model,
     response = response,
     timestampSeconds = timestampSeconds,
+    screenshotImage = screenshotImage,
 )
 
 /** Same-entry detection for inbound dedup: mirrors the content-addressed chat key shape. */

@@ -75,6 +75,7 @@ import moe.antimony.hoshi.LocalHoshiAppContainer
 import moe.antimony.hoshi.epub.BookRepository
 import moe.antimony.hoshi.features.ai.AiChatEntry
 import moe.antimony.hoshi.features.ai.AiChatHistoryStore
+import moe.antimony.hoshi.features.ai.AiChatImage
 import moe.antimony.hoshi.features.ai.AiChatHistoryView
 import moe.antimony.hoshi.features.ai.AiChatPopupView
 import moe.antimony.hoshi.features.ai.AiChatSettings
@@ -376,6 +377,10 @@ internal fun MangaReaderScreen(
                         model = settings.model,
                         response = response,
                         timestampSeconds = repository.currentAppleReferenceDateSeconds(),
+                        screenshotImage = AiChatImage(
+                            mimeType = MANGA_SCREENSHOT_IMAGE_MIME_TYPE,
+                            base64Data = imageBase64,
+                        ),
                     )
                     aiChatState = AiChatUiState.Loaded(entry)
                     val appended = runCatching { aiHistoryStore.append(bookRoot, entry).entries }
@@ -927,7 +932,7 @@ private data class MangaPageTransition(
  * while the WebView reloads to the next page underneath the slide. Returns null when the
  * WebView is not laid out yet (nothing to capture) or the draw fails.
  */
-private fun captureWebViewBitmap(view: WebView): Bitmap? {
+internal fun captureWebViewBitmap(view: WebView): Bitmap? {
     val width = view.width
     val height = view.height
     if (width <= 0 || height <= 0) return null

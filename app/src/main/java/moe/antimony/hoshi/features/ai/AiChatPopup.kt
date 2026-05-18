@@ -1,5 +1,8 @@
 package moe.antimony.hoshi.features.ai
 
+import android.graphics.BitmapFactory
+import android.util.Base64
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -34,6 +37,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import java.time.Instant
@@ -170,7 +175,7 @@ private fun FailedBody(message: String, onRetry: () -> Unit) {
 
 /**
  * The per-manga ChatGPT history list, reached from the manga reader's overflow (⋯) menu.
- * Newest exchange first; each row shows the bubble text asked about and the model's reply.
+ * Newest exchange first; each row shows the bubble text or screenshot, plus the model's reply.
  */
 @Composable
 fun AiChatHistoryView(
@@ -232,6 +237,10 @@ private fun AiChatHistoryRow(entry: AiChatEntry) {
                 style = MaterialTheme.typography.bodyMedium,
                 fontWeight = FontWeight.SemiBold,
             )
+            entry.screenshotImage?.let { image ->
+                Spacer(Modifier.size(8.dp))
+                AiChatHistoryScreenshot(image)
+            }
             Spacer(Modifier.size(8.dp))
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
             Spacer(Modifier.size(8.dp))
@@ -241,6 +250,32 @@ private fun AiChatHistoryRow(entry: AiChatEntry) {
         }
     }
 }
+
+@Composable
+private fun AiChatHistoryScreenshot(image: AiChatImage) {
+    val bitmap = remember(image.base64Data) {
+        decodeAiChatImage(image.base64Data)
+    } ?: return
+    Surface(
+        shape = RoundedCornerShape(8.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Image(
+            bitmap = bitmap.asImageBitmap(),
+            contentDescription = "Screenshot sent to ChatGPT",
+            contentScale = ContentScale.Fit,
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(max = 220.dp),
+        )
+    }
+}
+
+private fun decodeAiChatImage(base64Data: String) = runCatching {
+    val bytes = Base64.decode(base64Data, Base64.DEFAULT)
+    BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+}.getOrNull()
 
 /**
  * Apple-reference-date seconds (the epoch the app's sidecar files use) to a local date-time

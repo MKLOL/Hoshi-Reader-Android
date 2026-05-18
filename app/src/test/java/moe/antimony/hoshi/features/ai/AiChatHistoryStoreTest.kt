@@ -31,7 +31,13 @@ class AiChatHistoryStoreTest {
             response = "Almost there!",
             timestampSeconds = 100.0,
         )
-        val second = first.copy(bubbleText = "おーっ", response = "Oh!", timestampSeconds = 200.0)
+        val screenshot = AiChatImage(mimeType = "image/png", base64Data = "iVBORw0KGgo=")
+        val second = first.copy(
+            bubbleText = "Screenshot translation",
+            response = "Panel text.",
+            timestampSeconds = 200.0,
+            screenshotImage = screenshot,
+        )
 
         store.append(bookRoot, first)
         val log = store.append(bookRoot, second)
@@ -40,6 +46,7 @@ class AiChatHistoryStoreTest {
         assertEquals(listOf(first, second), log.entries)
         // ...and it survives a reload from disk.
         assertEquals(listOf(first, second), store.load(bookRoot).entries)
+        assertEquals(screenshot, store.load(bookRoot).entries[1].screenshotImage)
     }
 
     @Test
@@ -47,6 +54,28 @@ class AiChatHistoryStoreTest {
         val bookRoot = tempFolder.newFolder("book")
         bookRoot.resolve("ai_chat_log.json").writeText("{ this is not valid json")
         assertTrue(store.load(bookRoot).entries.isEmpty())
+    }
+
+    @Test
+    fun loadOlderLogWithoutScreenshotImageDefaultsToNull() = runBlocking {
+        val bookRoot = tempFolder.newFolder("book")
+        bookRoot.resolve("ai_chat_log.json").writeText(
+            """
+            {
+              "entries": [
+                {
+                  "bubbleText": "もうすぐだぞー",
+                  "prompt": "Translate:",
+                  "model": "gpt-5.5",
+                  "response": "Almost there!",
+                  "timestampSeconds": 100.0
+                }
+              ]
+            }
+            """.trimIndent(),
+        )
+
+        assertEquals(null, store.load(bookRoot).entries.single().screenshotImage)
     }
 
     @Test

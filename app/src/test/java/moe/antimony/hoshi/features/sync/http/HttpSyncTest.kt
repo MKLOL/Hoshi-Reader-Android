@@ -8,6 +8,7 @@ import moe.antimony.hoshi.epub.BookShelf
 import moe.antimony.hoshi.epub.Bookmark
 import moe.antimony.hoshi.features.ai.AiChatEntry
 import moe.antimony.hoshi.features.ai.AiChatHistoryStore
+import moe.antimony.hoshi.features.ai.AiChatImage
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -80,6 +81,26 @@ class HttpSyncTest {
         )
         // Suffix shape: `{rfc3339 with - instead of :}-{8 hex chars}`.
         assertTrue("suffix ends with 8 hex chars", a.matches(Regex(".*-[0-9a-f]{8}$")))
+    }
+
+    @Test
+    fun chatEntryBlobPreservesOptionalScreenshotImage() {
+        val image = AiChatImage(mimeType = "image/png", base64Data = "iVBORw0KGgo=")
+        val entry = AiChatEntry(
+            bubbleText = "Screenshot translation",
+            prompt = "Translate this crop.",
+            model = "gpt-5.5",
+            response = "Panel text.",
+            timestampSeconds = 800_000_000.0,
+            screenshotImage = image,
+        )
+
+        val blob = entry.toBlob()
+        val encoded = json.encodeToString(HttpSyncChatEntryBlob.serializer(), blob)
+        val decoded = json.decodeFromString(HttpSyncChatEntryBlob.serializer(), encoded)
+
+        assertEquals(image, blob.screenshotImage)
+        assertEquals(image, decoded.screenshotImage)
     }
 
     @Test

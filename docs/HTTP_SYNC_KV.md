@@ -197,7 +197,7 @@ The Android client uses this layout under one shared root prefix `books/`:
 |---|---|---|---|---|
 | `books/{syncId}/metadata` | `application/json` | `{title, contentType, shelfName?, shelfUpdatedAt?, importedAt, deletedAt?}` | overwrite | ~250 B |
 | `books/{syncId}/bookmark` | `application/json` | `{chapterIndex, progress, characterCount, lastModified}` | overwrite (every page turn batch) | ~250 B |
-| `books/{syncId}/chat/{ts}-{nonce}` | `application/json` | `{bubbleText, prompt, model, response, timestampSeconds}` | **write-once** | ~500 B – 2 KB |
+| `books/{syncId}/chat/{ts}-{nonce}` | `application/json` | `{bubbleText, prompt, model, response, timestampSeconds, screenshotImage?}` | **write-once** | ~500 B – 2 KB text-only; screenshot entries include the cropped PNG as base64 |
 | `books/{syncId}/payload.zip` | `application/zip` | zip of the original book directory | overwrite (rare; effectively immutable) | 10 MB – 200 MB |
 | `books/{syncId}/payload.manifest` | `application/json` | `{sha256, sizeBytes, originalName, format: "mokuro" \| "epub"}` | overwrite | ~150 B |
 
