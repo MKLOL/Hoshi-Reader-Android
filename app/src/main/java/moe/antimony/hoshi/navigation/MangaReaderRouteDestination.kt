@@ -82,6 +82,7 @@ internal fun MangaReaderRouteDestination(
             initialPageIndex = state.initialPageIndex,
             repository = appContainer.bookRepository,
             readerSettings = readerSettings,
+            onReaderSettingsChange = onReaderSettingsChange,
             dictionarySettings = dictionarySettings,
             onReaderKeyEventHandlerChange = onReaderKeyEventHandlerChange,
             onBookmarkSaved = onBookmarkSaved,

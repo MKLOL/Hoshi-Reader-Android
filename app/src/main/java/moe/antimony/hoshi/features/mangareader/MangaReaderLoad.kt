@@ -14,8 +14,9 @@ import java.io.File
  * `mokuro.json` and reads the saved bookmark — all off the main thread.
  *
  * The manga counterpart of [moe.antimony.hoshi.navigation.ReaderRouteStateHolder] for the
- * EPUB reader, kept deliberately small: the manga reader has no statistics / Sasayaki /
- * auto-sync wiring in v1.
+ * EPUB reader, kept deliberately small: the manga reader still has no Sasayaki wiring, and
+ * statistics load directly in [MangaReaderScreen] so the route can respect current reader
+ * settings.
  */
 internal class MangaReaderLoader(
     private val repository: BookRepository,

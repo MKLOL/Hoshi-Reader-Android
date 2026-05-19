@@ -81,6 +81,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import moe.antimony.hoshi.LocalHoshiAppContainer
 import moe.antimony.hoshi.epub.BookRepository
+import moe.antimony.hoshi.epub.ReadingStatistics
 import moe.antimony.hoshi.features.ai.AiChatEntry
 import moe.antimony.hoshi.features.ai.AiChatHistoryStore
 import moe.antimony.hoshi.features.ai.AiChatImage
@@ -104,7 +105,9 @@ import moe.antimony.hoshi.features.reader.readerShouldUseImmersiveSystemBars
 import moe.antimony.hoshi.features.reader.readerHardwareKeyActionForKeyEvent
 import moe.antimony.hoshi.features.reader.ReaderHardwareKeyAction
 import moe.antimony.hoshi.features.reader.usesDarkInterface
+import moe.antimony.hoshi.features.reader.ReaderStatisticsTracker
 import moe.antimony.hoshi.features.sync.http.rememberHttpSyncReaderHooks
+import moe.antimony.hoshi.features.reader.StatisticsAutostartMode
 import moe.antimony.hoshi.mokuro.MokuroBook
 import java.io.ByteArrayOutputStream
 import java.io.File
@@ -133,6 +136,7 @@ internal fun MangaReaderScreen(
     initialPageIndex: Int,
     repository: BookRepository,
     readerSettings: ReaderSettings,
+    onReaderSettingsChange: (ReaderSettings) -> Unit,
     dictionarySettings: DictionarySettings,
     onReaderKeyEventHandlerChange: (((KeyEvent) -> Boolean)?) -> Unit,
     onBookmarkSaved: () -> Unit,
@@ -150,6 +154,8 @@ internal fun MangaReaderScreen(
     var pageIndex by remember(book) {
         mutableIntStateOf(initialPageIndex.coerceIn(0, book.pages.lastIndex.coerceAtLeast(0)))
     }
+    val statisticsPageCounterState = remember(book) { mutableIntStateOf(0) }
+    var statisticsPageCounter by statisticsPageCounterState
     var webView by remember { mutableStateOf<WebView?>(null) }
     var lookupPopups by remember(book) { mutableStateOf<List<LookupPopupItem>>(emptyList()) }
     // A page turn in flight: the snapshot of the page being left, which slides off while the
@@ -179,6 +185,7 @@ internal fun MangaReaderScreen(
     var aiHistory by remember(book) { mutableStateOf<List<AiChatEntry>>(emptyList()) }
     var showAiHistory by remember(book) { mutableStateOf(false) }
     var showAiSettings by remember(book) { mutableStateOf(false) }
+    var showStatistics by remember(book) { mutableStateOf(false) }
     var screenshotCropMode by remember(book) { mutableStateOf(false) }
 
     val scope = rememberCoroutineScope()
@@ -194,6 +201,90 @@ internal fun MangaReaderScreen(
     // merges don't have to reason about it.
     val httpSyncHooks = rememberHttpSyncReaderHooks(bookRoot, book.title, persistenceScope)
     val mangaImageResolver = remember(book, bookRoot) { MangaWebResourceBridge(bookRoot, book) }
+    val pageRenderCache = remember(book) { MangaPageRenderCache() }
+
+    var persistedStatistics by remember(bookRoot) { mutableStateOf<List<ReadingStatistics>?>(null) }
+    LaunchedEffect(bookRoot, readerSettings.enableStatistics) {
+        persistedStatistics = null
+    }
+    LaunchedEffect(bookRoot, repository, readerSettings.enableStatistics) {
+        persistedStatistics = if (readerSettings.enableStatistics) {
+            repository.loadStatistics(bookRoot)
+        } else {
+            emptyList()
+        }
+    }
+    val statisticsTracker = remember(
+        bookRoot,
+        book.title,
+        readerSettings.enableStatistics,
+        persistedStatistics,
+    ) {
+        if (!readerSettings.enableStatistics) {
+            null
+        } else {
+            persistedStatistics?.let { statistics ->
+                ReaderStatisticsTracker(
+                    title = book.title,
+                    initialStatistics = statistics,
+                    enabled = true,
+                )
+            }
+        }
+    }
+    var statisticsState by remember(statisticsTracker) { mutableStateOf(statisticsTracker?.state) }
+    var resumeStatisticsTrackingOnStart by remember(statisticsTracker) { mutableStateOf(false) }
+
+    fun enableStatisticsFromSheet() {
+        persistedStatistics = null
+        onReaderSettingsChange(readerSettings.withStatisticsEnabled(true))
+    }
+
+    fun syncStatisticsState() {
+        statisticsState = statisticsTracker?.state
+    }
+
+    fun recordStatisticsAtCounter(counter: Int) {
+        statisticsTracker?.update(counter)
+        syncStatisticsState()
+    }
+
+    fun statisticsForSave(counter: Int, syncState: Boolean = true): List<ReadingStatistics>? {
+        statisticsTracker?.update(counter)
+        if (syncState) {
+            syncStatisticsState()
+        }
+        return statisticsTracker?.statisticsForPersistenceOrNull()
+    }
+
+    fun toggleStatisticsTracking() {
+        val tracker = statisticsTracker ?: return
+        val currentPosition = statisticsPageCounter
+        if (tracker.state.isTracking) {
+            tracker.stop(currentPosition)
+            syncStatisticsState()
+            val statistics = tracker.statisticsForPersistenceOrNull()
+            if (statistics != null) {
+                persistenceScope.launch {
+                    repository.saveStatistics(bookRoot, statistics)
+                }
+            }
+        } else {
+            tracker.start(currentPosition)
+            syncStatisticsState()
+        }
+    }
+
+    fun startStatisticsForPageTurnIfNeeded(fromCounter: Int) {
+        if (readerSettings.statisticsAutostartMode == StatisticsAutostartMode.PageTurn) {
+            statisticsTracker?.startForPageTurnIfNeeded(fromCounter)
+            syncStatisticsState()
+        }
+    }
+
+    val currentStatisticsForDispose = rememberUpdatedState<(Boolean) -> List<ReadingStatistics>?> { syncState ->
+        statisticsForSave(counter = statisticsPageCounterState.intValue, syncState = syncState)
+    }
 
     fun scheduleBookmarkSave(index: Int) {
         pendingBookmarkPage.value = index
@@ -204,6 +295,9 @@ internal fun MangaReaderScreen(
                 bookRoot,
                 mangaBookmark(index, repository.currentAppleReferenceDateSeconds()),
             )
+            statisticsForSave(statisticsPageCounter)?.let { statistics ->
+                repository.saveStatistics(bookRoot, statistics)
+            }
             pendingBookmarkPage.value = null
             currentOnBookmarkSaved.value()
             httpSyncHooks.onPageTurnPersisted()
@@ -235,7 +329,16 @@ internal fun MangaReaderScreen(
         val transition = snapshot?.let { MangaPageTransition(it.asImageBitmap(), direction) }
         pageTransition = transition
         readyTransition = null
+        val previousPageIndex = pageIndex
+        val previousStatisticsCounter = statisticsPageCounter
+        startStatisticsForPageTurnIfNeeded(previousStatisticsCounter)
+        statisticsPageCounter = mangaStatisticsCounterAfterPageChange(
+            currentCounter = previousStatisticsCounter,
+            fromPageIndex = previousPageIndex,
+            toPageIndex = clamped,
+        )
         pageIndex = clamped
+        recordStatisticsAtCounter(statisticsPageCounter)
         scheduleBookmarkSave(clamped)
     }
 
@@ -544,6 +647,56 @@ internal fun MangaReaderScreen(
         onReaderKeyEventHandlerChange { event -> currentKeyHandler.value(event) }
         onDispose { onReaderKeyEventHandlerChange(null) }
     }
+    LaunchedEffect(statisticsTracker, readerSettings.statisticsAutostartMode) {
+        if (readerSettings.enableStatistics && readerSettings.statisticsAutostartMode == StatisticsAutostartMode.On) {
+            statisticsTracker?.start(statisticsPageCounterState.intValue)
+            syncStatisticsState()
+        }
+    }
+    LaunchedEffect(statisticsTracker, statisticsState?.isTracking) {
+        val tracker = statisticsTracker ?: return@LaunchedEffect
+        if (tracker.state.isTracking) {
+            while (tracker.state.isTracking) {
+                delay(1_000)
+                tracker.update(statisticsPageCounterState.intValue)
+                syncStatisticsState()
+            }
+        }
+    }
+    DisposableEffect(lifecycle, statisticsTracker, bookRoot) {
+        val tracker = statisticsTracker
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_STOP -> {
+                    if (tracker != null) {
+                        val paused = tracker.pause(statisticsPageCounterState.intValue)
+                        if (paused) {
+                            resumeStatisticsTrackingOnStart = true
+                            syncStatisticsState()
+                        }
+                        val statistics = tracker.statisticsForPersistenceOrNull()
+                        if (statistics != null) {
+                            persistenceScope.launch {
+                                repository.saveStatistics(bookRoot, statistics)
+                            }
+                        }
+                    }
+                }
+                Lifecycle.Event.ON_START -> {
+                    if (resumeStatisticsTrackingOnStart && tracker != null) {
+                        resumeStatisticsTrackingOnStart = false
+                        tracker.start(statisticsPageCounterState.intValue)
+                        syncStatisticsState()
+                    }
+                }
+                else -> Unit
+            }
+        }
+        lifecycle?.addObserver(observer)
+        onDispose {
+            lifecycle?.removeObserver(observer)
+        }
+    }
     DisposableEffect(context, view, lifecycle) {
         val activity = context.findHoshiActivity()
         val window = activity?.window
@@ -583,6 +736,7 @@ internal fun MangaReaderScreen(
         onDispose {
             bookmarkSaveJob?.cancel()
             val unsaved = pendingBookmarkPage.value
+            val statistics = currentStatisticsForDispose.value(false)
             if (unsaved != null) {
                 pendingBookmarkPage.value = null
                 persistenceScope.launch {
@@ -590,11 +744,19 @@ internal fun MangaReaderScreen(
                         bookRoot,
                         mangaBookmark(unsaved, repository.currentAppleReferenceDateSeconds()),
                     )
+                    if (statistics != null) {
+                        repository.saveStatistics(bookRoot, statistics)
+                    }
                     // FORK ADDITION: force-push the bookmark to the v2 KV sync server after
                     // the local save, so leaving the reader doesn't lose accumulated turns.
                     httpSyncHooks.onLeave()
                 }
             } else {
+                if (statistics != null) {
+                    persistenceScope.launch {
+                        repository.saveStatistics(bookRoot, statistics)
+                    }
+                }
                 // No pending debounced save, but we may still have unpushed turns from
                 // earlier saves that fired before the threshold was reached.
                 httpSyncHooks.onLeave()
@@ -630,6 +792,7 @@ internal fun MangaReaderScreen(
         // SettingsDetailScaffold); this handles the ChatGPT popup and lookup popups.
         when {
             screenshotCropMode -> screenshotCropMode = false
+            showStatistics -> showStatistics = false
             aiChatState != null -> dismissAiChat()
             lookupPopups.isNotEmpty() -> clearSelectionAndPopups()
             else -> onClose()
@@ -662,6 +825,29 @@ internal fun MangaReaderScreen(
             // empty and manga uses the full screen.
             val viewportCssWidth = maxWidth.value.roundToInt()
             val viewportCssHeight = maxHeight.value.roundToInt()
+            val renderConfig = remember(
+                backgroundCssColor,
+                dictionarySettings.scanNonJapaneseText,
+                readerSettings.eInkMode,
+                viewportCssWidth,
+                viewportCssHeight,
+            ) {
+                MangaPageRenderConfig(
+                    backgroundCssColor = backgroundCssColor,
+                    scanNonJapaneseText = dictionarySettings.scanNonJapaneseText,
+                    eInkMode = readerSettings.eInkMode,
+                    viewportCssWidth = viewportCssWidth,
+                    viewportCssHeight = viewportCssHeight,
+                )
+            }
+            LaunchedEffect(book, pageIndex, renderConfig, mangaImageResolver) {
+                pageRenderCache.preloadAdjacentPages(
+                    book = book,
+                    pageIndexes = mangaAdjacentPreloadIndexes(pageIndex, pageCount),
+                    config = renderConfig,
+                    imageResolver = mangaImageResolver,
+                )
+            }
             // Slide direction for a right-to-left manga, modelled as a filmstrip with page 1 at
             // the right: a forward turn slides the outgoing page off to the *right* and pulls the
             // incoming page in from the left; a backward turn does the reverse. The incoming page
@@ -675,11 +861,8 @@ internal fun MangaReaderScreen(
                 book = book,
                 bookRoot = bookRoot,
                 pageIndex = pageIndex,
-                backgroundCssColor = backgroundCssColor,
-                scanNonJapaneseText = dictionarySettings.scanNonJapaneseText,
-                eInkMode = readerSettings.eInkMode,
-                viewportCssWidth = viewportCssWidth,
-                viewportCssHeight = viewportCssHeight,
+                renderConfig = renderConfig,
+                pageRenderCache = pageRenderCache,
                 onNavigate = { direction -> navigate(direction) },
                 onTextSelected = handleTextSelected,
                 onSelectionCleared = { lookupPopups = emptyList() },
@@ -760,6 +943,7 @@ internal fun MangaReaderScreen(
                 },
                 onShowAiHistory = { showAiHistory = true },
                 onShowAiSettings = { showAiSettings = true },
+                onShowStatistics = { showStatistics = true },
                 modifier = Modifier
                     .align(Alignment.TopEnd)
                     .statusBarsPadding()
@@ -856,6 +1040,17 @@ internal fun MangaReaderScreen(
                     .zIndex(4f),
             )
         }
+        if (showStatistics) {
+            MangaStatisticsSheet(
+                state = statisticsState,
+                statisticsEnabled = readerSettings.enableStatistics,
+                pageIndex = pageIndex,
+                pageCount = pageCount,
+                onEnableStatistics = ::enableStatisticsFromSheet,
+                onToggleTracking = ::toggleStatisticsTracking,
+                onDismiss = { showStatistics = false },
+            )
+        }
     }
 }
 
@@ -893,6 +1088,7 @@ private fun MangaReaderOverflowMenu(
     onTakeScreenshot: () -> Unit,
     onShowAiHistory: () -> Unit,
     onShowAiSettings: () -> Unit,
+    onShowStatistics: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val contentColor = if (darkInterface) Color.White else Color.Black
@@ -918,6 +1114,13 @@ private fun MangaReaderOverflowMenu(
                 onClick = {
                     menuExpanded = false
                     onTakeScreenshot()
+                },
+            )
+            DropdownMenuItem(
+                text = { Text("Statistics") },
+                onClick = {
+                    menuExpanded = false
+                    onShowStatistics()
                 },
             )
             DropdownMenuItem(

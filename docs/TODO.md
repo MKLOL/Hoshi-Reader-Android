@@ -114,12 +114,14 @@ page images) that reuses the bookshelf, dictionary lookup, and Anki mining.
   page is not zoomed or pannable, two-finger pinch zooms and one-finger panning do not turn
   pages, zoomed OCR bubble taps hit the visible bubble position, and the floating controls
   / page chip have subtle independent backgrounds without full-width input bars.
+- Manga statistics are wired to the shared `statistics.json` sidecar while presenting
+  manga-specific page units in the reader overflow Statistics sheet; adjacent manga pages
+  are also preloaded through a small generated-HTML cache and bounded image-file warmup.
 - Boox/Onyx fullscreen reader bars still need real-device validation with a tall manga
   page after emulator validation: the top status strip should hide while reading, and if
   a device keeps a system bar visible then page artwork must be inset below it.
-- Not yet done: reader appearance/settings sheet for manga, two-page spreads, manga
-  reading statistics. Manual validation should cover import of both source layouts and RTL
-  paging boundaries.
+- Not yet done: reader appearance/settings sheet for manga and two-page spreads. Manual
+  validation should cover import of both source layouts and RTL paging boundaries.
 
 ## Required Validation
 

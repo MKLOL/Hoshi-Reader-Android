@@ -5,6 +5,14 @@ The format follows a Keep a Changelog style, and release sections use Semantic V
 
 ## [Unreleased]
 
+### Added
+
+- Add manga reading statistics from the manga reader overflow menu, with a page-based statistics sheet for session, today, and all-time progress plus optional tracking.
+
+### Changed
+
+- Smooth manga page turns by caching generated page HTML and preloading adjacent page images before navigation.
+
 ## [v0.7.21] - 2026-05-18
 
 ### Fixed

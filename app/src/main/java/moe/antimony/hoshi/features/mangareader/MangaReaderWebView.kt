@@ -55,11 +55,8 @@ internal fun MangaReaderWebView(
     book: MokuroBook,
     bookRoot: File,
     pageIndex: Int,
-    backgroundCssColor: String,
-    scanNonJapaneseText: Boolean,
-    eInkMode: Boolean,
-    viewportCssWidth: Int,
-    viewportCssHeight: Int,
+    renderConfig: MangaPageRenderConfig,
+    pageRenderCache: MangaPageRenderCache,
     onNavigate: (ReaderNavigationDirection) -> Unit,
     onTextSelected: (ReaderSelectionData) -> Int?,
     onSelectionCleared: () -> Unit,
@@ -81,21 +78,10 @@ internal fun MangaReaderWebView(
     // with fresh dimensions baked in — see MangaPageHtml's frame-sizing script.
     val html = remember(
         page,
-        backgroundCssColor,
-        scanNonJapaneseText,
-        eInkMode,
-        viewportCssWidth,
-        viewportCssHeight,
+        renderConfig,
+        pageRenderCache,
     ) {
-        MangaPageHtml.build(
-            page = page,
-            backgroundCssColor = backgroundCssColor,
-            selectionScript = ReaderSelectionScripts.source(),
-            scanNonJapaneseText = scanNonJapaneseText,
-            eInkMode = eInkMode,
-            viewportCssWidth = viewportCssWidth,
-            viewportCssHeight = viewportCssHeight,
-        )
+        pageRenderCache.htmlFor(page, renderConfig)
     }
 
     AndroidView(
