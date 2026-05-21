@@ -5,6 +5,8 @@ The format follows a Keep a Changelog style, and release sections use Semantic V
 
 ## [Unreleased]
 
+## [v0.8.0] - 2026-05-21
+
 ### Added
 
 - Add manga reading statistics from the manga reader overflow menu, with a page-based statistics sheet for session, today, and all-time progress plus optional tracking.
