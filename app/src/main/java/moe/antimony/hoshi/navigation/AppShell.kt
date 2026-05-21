@@ -29,6 +29,7 @@ import androidx.navigation3.ui.NavDisplay
 import moe.antimony.hoshi.LocalHoshiAppContainer
 import moe.antimony.hoshi.epub.ContentType
 import moe.antimony.hoshi.epub.bookContentType
+import moe.antimony.hoshi.features.ai.AiChatSettingsScreen
 import moe.antimony.hoshi.features.audio.AdvancedSettingsView
 import moe.antimony.hoshi.features.anki.AnkiView
 import moe.antimony.hoshi.features.bookshelf.BookshelfView
@@ -360,6 +361,10 @@ private fun SettingsDetailDestination(
             onClose = onClose,
             modifier = Modifier.fillMaxSize(),
         )
+        SettingsDetailSection.ChatGpt -> AiChatSettingsScreen(
+            onClose = onClose,
+            modifier = Modifier.fillMaxSize(),
+        )
         SettingsDetailSection.Appearance -> ReaderAppearanceScreen(
             settings = readerSettings,
             onSettingsChange = onReaderSettingsChange,
@@ -402,6 +407,7 @@ private fun MainTab.toRoute(): AppRoute = when (this) {
 private fun SettingsDestination.toSection(): SettingsDetailSection = when (this) {
     SettingsDestination.Dictionaries -> SettingsDetailSection.Dictionaries
     SettingsDestination.Anki -> SettingsDetailSection.Anki
+    SettingsDestination.ChatGpt -> SettingsDetailSection.ChatGpt
     SettingsDestination.Appearance -> SettingsDetailSection.Appearance
     SettingsDestination.Behavior -> SettingsDetailSection.Behavior
     SettingsDestination.Advanced -> SettingsDetailSection.Advanced

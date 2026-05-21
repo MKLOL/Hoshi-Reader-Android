@@ -34,6 +34,7 @@ class MainShellUiTest {
             listOf(
                 R.string.settings_dictionaries,
                 R.string.settings_anki,
+                R.string.settings_chatgpt,
                 R.string.settings_appearance,
                 R.string.settings_behavior,
                 R.string.settings_advanced,

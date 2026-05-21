@@ -13,8 +13,10 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.navigationBarsPadding
@@ -31,6 +33,7 @@ import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.rounded.MoreVert
+import androidx.compose.material.icons.rounded.Screenshot
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
@@ -88,7 +91,6 @@ import moe.antimony.hoshi.features.ai.AiChatImage
 import moe.antimony.hoshi.features.ai.AiChatHistoryView
 import moe.antimony.hoshi.features.ai.AiChatPopupView
 import moe.antimony.hoshi.features.ai.AiChatSettings
-import moe.antimony.hoshi.features.ai.AiChatSettingsScreen
 import moe.antimony.hoshi.features.ai.AiChatUiState
 import moe.antimony.hoshi.features.ai.OpenAiChatClient
 import moe.antimony.hoshi.features.ai.aiChatSettingsRepository
@@ -184,7 +186,6 @@ internal fun MangaReaderScreen(
     var aiRetryAction by remember(book) { mutableStateOf<(() -> Unit)?>(null) }
     var aiHistory by remember(book) { mutableStateOf<List<AiChatEntry>>(emptyList()) }
     var showAiHistory by remember(book) { mutableStateOf(false) }
-    var showAiSettings by remember(book) { mutableStateOf(false) }
     var showStatistics by remember(book) { mutableStateOf(false) }
     var screenshotCropMode by remember(book) { mutableStateOf(false) }
 
@@ -374,7 +375,7 @@ internal fun MangaReaderScreen(
         if (!settings.isConfigured) {
             aiChatState = AiChatUiState.Failed(
                 bubbleText,
-                "Set your OpenAI API key first: open the ⋯ menu → ChatGPT settings.",
+                "Set your OpenAI API key first in Settings → ChatGPT.",
             )
             return
         }
@@ -437,7 +438,7 @@ internal fun MangaReaderScreen(
         if (!retrySettings.isConfigured) {
             aiChatState = AiChatUiState.Failed(
                 MANGA_SCREENSHOT_TRANSLATION_LABEL,
-                "Set your OpenAI API key first: open the ⋯ menu → ChatGPT settings.",
+                "Set your OpenAI API key first in Settings → ChatGPT.",
             )
             return
         }
@@ -502,7 +503,7 @@ internal fun MangaReaderScreen(
         if (!settings.isConfigured) {
             aiChatState = AiChatUiState.Failed(
                 MANGA_SCREENSHOT_TRANSLATION_LABEL,
-                "Set your OpenAI API key first: open the ⋯ menu → ChatGPT settings.",
+                "Set your OpenAI API key first in Settings → ChatGPT.",
             )
             return
         }
@@ -931,25 +932,42 @@ internal fun MangaReaderScreen(
                     .padding(start = 4.dp, top = 4.dp)
                     .zIndex(1f),
             )
-            MangaReaderOverflowMenu(
-                darkInterface = readerSettings.usesDarkInterface(systemDark),
-                takeScreenshotEnabled = canTakeScreenshot,
-                onTakeScreenshot = {
-                    if (canTakeScreenshot) {
-                        clearSelectionAndPopups()
-                        webView?.clearMangaRevealedBubbles()
-                        screenshotCropMode = true
-                    }
-                },
-                onShowAiHistory = { showAiHistory = true },
-                onShowAiSettings = { showAiSettings = true },
-                onShowStatistics = { showStatistics = true },
+            // Screenshot translation is the most-used ChatGPT action, so once a key is
+            // configured it gets its own button next to the ⋯ menu instead of being buried
+            // in it. Without a key the feature is unusable, so it stays inside the menu.
+            val startScreenshotCrop = {
+                if (canTakeScreenshot) {
+                    clearSelectionAndPopups()
+                    webView?.clearMangaRevealedBubbles()
+                    screenshotCropMode = true
+                }
+            }
+            val aiConfigured = aiSettings?.isConfigured == true
+            Row(
                 modifier = Modifier
                     .align(Alignment.TopEnd)
                     .statusBarsPadding()
                     .padding(end = 4.dp, top = 4.dp)
                     .zIndex(1f),
-            )
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                if (aiConfigured) {
+                    MangaReaderScreenshotButton(
+                        darkInterface = readerSettings.usesDarkInterface(systemDark),
+                        enabled = canTakeScreenshot,
+                        onClick = startScreenshotCrop,
+                    )
+                }
+                MangaReaderOverflowMenu(
+                    darkInterface = readerSettings.usesDarkInterface(systemDark),
+                    showTakeScreenshot = !aiConfigured,
+                    takeScreenshotEnabled = canTakeScreenshot,
+                    onTakeScreenshot = startScreenshotCrop,
+                    onShowAiHistory = { showAiHistory = true },
+                    onShowStatistics = { showStatistics = true },
+                )
+            }
 
             MangaReaderPageTurnButton(
                 imageVector = Icons.AutoMirrored.Rounded.KeyboardArrowLeft,
@@ -1013,7 +1031,8 @@ internal fun MangaReaderScreen(
         }
 
         // ChatGPT overlays. The response popup sits above the page and the lookup popups;
-        // the history / settings screens are full-screen and sit above everything.
+        // the history screen is full-screen and sits above everything. ChatGPT settings now
+        // live in the main Settings tab (Settings → ChatGPT), not in this reader.
         val activeAiChat = aiChatState
         if (activeAiChat != null) {
             AiChatPopupView(
@@ -1027,14 +1046,6 @@ internal fun MangaReaderScreen(
             AiChatHistoryView(
                 entries = aiHistory,
                 onClose = { showAiHistory = false },
-                modifier = Modifier
-                    .fillMaxSize()
-                    .zIndex(4f),
-            )
-        }
-        if (showAiSettings) {
-            AiChatSettingsScreen(
-                onClose = { showAiSettings = false },
                 modifier = Modifier
                     .fillMaxSize()
                     .zIndex(4f),
@@ -1078,16 +1089,20 @@ private fun MangaReaderCloseButton(
 }
 
 /**
- * Floating top-right overflow menu for ChatGPT history / settings. Its layout bounds are
- * just the menu anchor and popup, not a transparent full-width toolbar.
+ * Floating top-right ⋯ overflow menu for manga statistics and ChatGPT history. Its layout
+ * bounds are just the menu anchor and popup, not a transparent full-width toolbar.
+ *
+ * "Take screenshot" only appears here when [showTakeScreenshot] is true — i.e. no ChatGPT key
+ * is configured yet. Once a key exists the screenshot action is promoted to its own button
+ * (see [MangaReaderScreenshotButton]). ChatGPT settings live in the main Settings tab.
  */
 @Composable
 private fun MangaReaderOverflowMenu(
     darkInterface: Boolean,
+    showTakeScreenshot: Boolean,
     takeScreenshotEnabled: Boolean,
     onTakeScreenshot: () -> Unit,
     onShowAiHistory: () -> Unit,
-    onShowAiSettings: () -> Unit,
     onShowStatistics: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -1108,14 +1123,16 @@ private fun MangaReaderOverflowMenu(
             expanded = menuExpanded,
             onDismissRequest = { menuExpanded = false },
         ) {
-            DropdownMenuItem(
-                text = { Text("Take screenshot") },
-                enabled = takeScreenshotEnabled,
-                onClick = {
-                    menuExpanded = false
-                    onTakeScreenshot()
-                },
-            )
+            if (showTakeScreenshot) {
+                DropdownMenuItem(
+                    text = { Text("Take screenshot") },
+                    enabled = takeScreenshotEnabled,
+                    onClick = {
+                        menuExpanded = false
+                        onTakeScreenshot()
+                    },
+                )
+            }
             DropdownMenuItem(
                 text = { Text("Statistics") },
                 onClick = {
@@ -1130,14 +1147,32 @@ private fun MangaReaderOverflowMenu(
                     onShowAiHistory()
                 },
             )
-            DropdownMenuItem(
-                text = { Text("ChatGPT settings") },
-                onClick = {
-                    menuExpanded = false
-                    onShowAiSettings()
-                },
-            )
         }
+    }
+}
+
+/**
+ * Floating top-right screenshot-translation button, shown next to the ⋯ menu once a ChatGPT
+ * API key is configured. Mirrors the other floating manga controls' circular background.
+ */
+@Composable
+private fun MangaReaderScreenshotButton(
+    darkInterface: Boolean,
+    enabled: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val contentColor = if (darkInterface) Color.White else Color.Black
+    IconButton(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = modifier.background(mangaFloatingControlBackground(darkInterface), CircleShape),
+    ) {
+        Icon(
+            imageVector = Icons.Rounded.Screenshot,
+            contentDescription = "Take screenshot",
+            tint = contentColor.copy(alpha = if (enabled) 1f else 0.38f),
+        )
     }
 }
 

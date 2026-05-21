@@ -35,9 +35,9 @@ import moe.antimony.hoshi.features.settings.SettingsDetailScaffold
  * Settings for the manga ChatGPT features: OpenAI API key, model, speech-bubble prompt, and
  * screenshot prompt.
  *
- * This is a fork addition, so it is deliberately reachable from the manga reader's overflow
- * (⋯) menu rather than wired into the shared Settings navigation — that keeps the feature
- * from touching upstream files. The values persist app-wide through [AiChatSettingsRepository].
+ * This is a fork addition. It is reachable from the main Settings tab (the ChatGPT row, see
+ * [moe.antimony.hoshi.navigation.SettingsDetailSection.ChatGpt]) so the key and prompts can be
+ * edited without opening a manga. The values persist app-wide through [AiChatSettingsRepository].
  */
 @Composable
 fun AiChatSettingsScreen(

@@ -13,6 +13,8 @@ The format follows a Keep a Changelog style, and release sections use Semantic V
 ### Changed
 
 - Smooth manga page turns by caching generated page HTML and preloading adjacent page images before navigation.
+- Move ChatGPT settings (OpenAI API key, model, and prompts) into the main Settings tab so the key and prompts can be edited without opening a manga.
+- Promote manga screenshot translation to its own button next to the manga reader ⋯ menu once a ChatGPT API key is configured, instead of keeping it inside the overflow menu.
 - Merge upstream Hoshi Reader through v1.0.1: rewrite lookup popup presentation around a shared native Android overlay, and allow Sasayaki audiobook playback speed up to 2x.
 
 ### Fixed

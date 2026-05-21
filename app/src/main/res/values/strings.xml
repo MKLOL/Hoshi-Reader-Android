@@ -46,6 +46,7 @@
     <string name="main_tab_settings" comment="Main navigation tab label, intentionally matching settings page titles.">Settings</string>
     <string name="settings_dictionaries" comment="Settings row label, intentionally matching the backup Dictionaries section.">Dictionaries</string>
     <string name="settings_anki">Anki</string>
+    <string name="settings_chatgpt">ChatGPT</string>
     <string name="settings_appearance">Appearance</string>
     <string name="settings_behavior">Behavior</string>
     <string name="settings_advanced">Advanced</string>
