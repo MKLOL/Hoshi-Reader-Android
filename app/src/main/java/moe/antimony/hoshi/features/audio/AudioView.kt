@@ -3,8 +3,10 @@ package moe.antimony.hoshi.features.audio
 import android.text.format.Formatter
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.annotation.StringRes
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -28,6 +30,7 @@ import androidx.compose.material.icons.rounded.ArrowUpward
 import androidx.compose.material.icons.rounded.Cloud
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.GraphicEq
+import androidx.compose.material.icons.rounded.Link
 import androidx.compose.material.icons.rounded.Storage
 import androidx.compose.material3.Button
 import androidx.compose.material3.CenterAlignedTopAppBar
@@ -58,12 +61,15 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import moe.antimony.hoshi.LocalHoshiAppContainer
+import moe.antimony.hoshi.R
+import moe.antimony.hoshi.features.anki.AnkiConnectView
 import moe.antimony.hoshi.features.backup.BackupSettingsView
 import moe.antimony.hoshi.features.reader.ReaderSettings
 import moe.antimony.hoshi.features.reader.ReaderStatisticsSettingsView
@@ -72,6 +78,10 @@ import moe.antimony.hoshi.features.settings.collectAsLoadedSettings
 import moe.antimony.hoshi.features.sasayaki.SasayakiSettingsView
 import moe.antimony.hoshi.importing.FileImportContent
 import moe.antimony.hoshi.importing.ImportFileType
+import moe.antimony.hoshi.importing.localizedImportMessage
+import moe.antimony.hoshi.ui.hoshiSingleLineTextFieldLineLimits
+import moe.antimony.hoshi.ui.hoshiTextFieldCursorBrush
+import moe.antimony.hoshi.ui.rememberSyncedTextFieldState
 import moe.antimony.hoshi.features.sync.SyncSettingsView
 import moe.antimony.hoshi.ui.HoshiBlockingProgressOverlay
 
@@ -130,10 +140,17 @@ fun AdvancedSettingsView(
         )
         return
     }
+    if (destination == AdvancedDestination.AnkiConnect) {
+        AnkiConnectView(
+            onClose = { destination = null },
+            modifier = modifier,
+        )
+        return
+    }
 
     val colorScheme = MaterialTheme.colorScheme
     SettingsDetailScaffold(
-        title = "Advanced",
+        title = stringResource(R.string.settings_advanced),
         onClose = onClose,
         modifier = modifier.fillMaxSize(),
         containerColor = colorScheme.background,
@@ -152,8 +169,8 @@ fun AdvancedSettingsView(
                             ListItem(
                                 colors = ListItemDefaults.colors(containerColor = Color.Transparent),
                                 leadingContent = { Icon(row.icon.imageVector(), contentDescription = null) },
-                                headlineContent = { Text(row.title) },
-                                supportingContent = row.subtitle?.let { subtitle -> { Text(subtitle) } },
+                                headlineContent = { Text(stringResource(row.titleRes)) },
+                                supportingContent = row.subtitleRes?.let { subtitleRes -> { Text(stringResource(subtitleRes)) } },
                                 modifier = Modifier.clickable { destination = row.destination },
                             )
                             if (index != section.rows.lastIndex) {
@@ -186,6 +203,7 @@ fun AudioSettingsView(
     var importError by remember { mutableStateOf<String?>(null) }
     var isImporting by remember { mutableStateOf(false) }
     val hasImportedDatabase = importedSize != null
+    val importFailedMessage = stringResource(R.string.audio_import_android_db_failed)
 
     fun save(next: AudioSettings) {
         scope.launch {
@@ -223,7 +241,7 @@ fun AudioSettingsView(
             }.onSuccess { size ->
                 importedSize = size
             }.onFailure { error ->
-                importError = error.message ?: "Unable to import android.db."
+                importError = error.localizedImportMessage(context, importFailedMessage)
             }
             importProgress = null
             isImporting = false
@@ -245,7 +263,7 @@ fun AudioSettingsView(
                     containerColor = colorScheme.background,
                     scrolledContainerColor = colorScheme.background,
                 ),
-                title = { Text("Audio", fontWeight = FontWeight.SemiBold) },
+                title = { Text(stringResource(R.string.advanced_audio), fontWeight = FontWeight.SemiBold) },
                 navigationIcon = {
                     BackIconButton {
                         if (!isImporting) {
@@ -269,12 +287,12 @@ fun AudioSettingsView(
             ) {
                 item {
                     val loadedSettings = settings ?: return@item
-                    SectionTitle("Sources")
+                    SectionTitle(stringResource(R.string.audio_sources))
                     GroupCard {
                         loadedSettings.audioSources.forEachIndexed { index, source ->
                             AudioSourceRow(
                                 source = source,
-                                canDelete = !source.isDefault && source.url != AudioSettings.LocalAudioSource.url,
+                                canDelete = !source.isDefault && source != AudioSettings.LocalAudioSource,
                                 canMoveUp = index > 0,
                                 canMoveDown = index < loadedSettings.audioSources.lastIndex,
                                 onEnabledChange = { enabled ->
@@ -298,9 +316,9 @@ fun AudioSettingsView(
                 }
                 item {
                     val loadedSettings = settings ?: return@item
-                    SectionTitle("Add Source")
+                    SectionTitle(stringResource(R.string.audio_add_source))
                     GroupCard {
-                        TextInputRow(label = "Name", value = nameInput, onValueChange = { nameInput = it })
+                        TextInputRow(label = stringResource(R.string.audio_name), value = nameInput, onValueChange = { nameInput = it })
                         GroupDivider()
                         Row(
                             modifier = Modifier
@@ -310,7 +328,7 @@ fun AudioSettingsView(
                         ) {
                             Box(modifier = Modifier.weight(1f)) {
                                 TextInputRowContent(
-                                    label = "URL",
+                                    label = stringResource(R.string.audio_url),
                                     value = urlInput,
                                     onValueChange = { urlInput = it },
                                 )
@@ -323,12 +341,12 @@ fun AudioSettingsView(
                                 },
                                 enabled = nameInput.isNotBlank() && urlInput.isNotBlank(),
                             ) {
-                                Icon(Icons.Rounded.Add, contentDescription = "Add Source")
+                                Icon(Icons.Rounded.Add, contentDescription = stringResource(R.string.audio_add_source))
                             }
                         }
                     }
                     Text(
-                        text = "Yomitan JSON audio sources are supported",
+                        text = stringResource(R.string.audio_yomitan_json_supported),
                         color = colorScheme.onSurfaceVariant,
                         style = MaterialTheme.typography.bodyMedium,
                         modifier = Modifier.padding(start = 16.dp, top = 8.dp),
@@ -339,7 +357,7 @@ fun AudioSettingsView(
                     GroupCard {
                         ListItem(
                             colors = ListItemDefaults.colors(containerColor = Color.Transparent),
-                            headlineContent = { Text("Auto-play on Lookup") },
+                            headlineContent = { Text(stringResource(R.string.audio_auto_play_on_lookup)) },
                             trailingContent = {
                                 Switch(
                                     checked = loadedSettings.enableAutoplay,
@@ -350,7 +368,7 @@ fun AudioSettingsView(
                         GroupDivider()
                         ListItem(
                             colors = ListItemDefaults.colors(containerColor = Color.Transparent),
-                            headlineContent = { Text("Background Audio") },
+                            headlineContent = { Text(stringResource(R.string.audio_background_audio)) },
                             supportingContent = {
                                 SingleChoiceSegmentedButtonRow(
                                     modifier = Modifier
@@ -365,8 +383,9 @@ fun AudioSettingsView(
                                             selected = loadedSettings.playbackMode == mode,
                                             onClick = { save(loadedSettings.copy(playbackMode = mode)) },
                                             shape = SegmentedButtonDefaults.itemShape(index, AudioPlaybackMode.entries.size),
+                                            icon = {},
                                         ) {
-                                            Text(mode.displayName)
+                                            Text(stringResource(mode.labelRes))
                                         }
                                     }
                                 }
@@ -376,11 +395,11 @@ fun AudioSettingsView(
                 }
                 item {
                     val loadedSettings = settings ?: return@item
-                    SectionTitle("Local Audio")
+                    SectionTitle(stringResource(R.string.audio_local_audio))
                     GroupCard {
                         ListItem(
                             colors = ListItemDefaults.colors(containerColor = Color.Transparent),
-                            headlineContent = { Text("Enable") },
+                            headlineContent = { Text(stringResource(R.string.action_enable)) },
                             trailingContent = {
                                 Switch(
                                     checked = loadedSettings.enableLocalAudio,
@@ -393,16 +412,22 @@ fun AudioSettingsView(
                             if (!hasImportedDatabase) {
                                 ListItem(
                                     colors = ListItemDefaults.colors(containerColor = Color.Transparent),
-                                    headlineContent = { Text("Import android.db") },
+                                    headlineContent = { Text(stringResource(R.string.audio_import_android_db)) },
                                     supportingContent = {
-                                        Text("Copies the selected database in the background")
+                                        Text(stringResource(R.string.audio_import_android_db_hint))
                                     },
                                     trailingContent = {
                                         Button(
                                             enabled = !isImporting,
                                             onClick = { importer.launch(ImportFileType.LocalAudioDatabase.mimeTypes) },
                                         ) {
-                                            Text(if (isImporting) "Importing" else "Import")
+                                            Text(
+                                                if (isImporting) {
+                                                    stringResource(R.string.reader_appearance_importing)
+                                                } else {
+                                                    stringResource(R.string.action_import)
+                                                },
+                                            )
                                         }
                                     },
                                 )
@@ -410,7 +435,7 @@ fun AudioSettingsView(
                                     GroupDivider()
                                     ListItem(
                                         colors = ListItemDefaults.colors(containerColor = Color.Transparent),
-                                        headlineContent = { Text("Import failed") },
+                                        headlineContent = { Text(stringResource(R.string.audio_import_failed)) },
                                         supportingContent = { Text(message) },
                                     )
                                 }
@@ -420,7 +445,7 @@ fun AudioSettingsView(
                                 ListItem(
                                     colors = ListItemDefaults.colors(containerColor = Color.Transparent),
                                     headlineContent = {
-                                        Text("android.db (${Formatter.formatFileSize(context, size)})")
+                                        Text(stringResource(R.string.audio_android_db_size_format, Formatter.formatFileSize(context, size)))
                                     },
                                     trailingContent = {
                                         OutlinedButton(
@@ -432,7 +457,7 @@ fun AudioSettingsView(
                                                 importProgress = null
                                             },
                                         ) {
-                                            Text("Delete")
+                                            Text(stringResource(R.string.action_delete))
                                         }
                                     },
                                 )
@@ -440,8 +465,7 @@ fun AudioSettingsView(
                         }
                     }
                     Text(
-                        text = "1. Import copies android.db into Hoshi's private storage, so keep enough free space for one extra copy before importing.\n" +
-                            "2. After import completes, you can safely delete the original external file to free space.",
+                        text = stringResource(R.string.audio_local_audio_hint),
                         color = colorScheme.onSurfaceVariant,
                         style = MaterialTheme.typography.bodyMedium,
                         modifier = Modifier.padding(start = 16.dp, top = 8.dp, bottom = 24.dp),
@@ -450,7 +474,7 @@ fun AudioSettingsView(
             }
             if (isImporting) {
                 HoshiBlockingProgressOverlay(
-                    message = "Copying android.db",
+                    message = stringResource(R.string.audio_copying_android_db),
                     progress = importProgress?.takeIf { it.totalBytes != null }?.fraction,
                     supportingText = importProgress?.label(context),
                     modifier = Modifier.fillMaxSize(),
@@ -475,21 +499,21 @@ private fun AudioSourceRow(
         colors = ListItemDefaults.colors(containerColor = Color.Transparent),
         headlineContent = { Text(source.name, maxLines = 1) },
         supportingContent = {
-            if (!source.isDefault && source.url != AudioSettings.LocalAudioSource.url) {
+            if (!source.isDefault && source != AudioSettings.LocalAudioSource) {
                 Text(source.url, maxLines = 1, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         },
         trailingContent = {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 IconButton(onClick = onMoveUp, enabled = canMoveUp) {
-                    Icon(Icons.Rounded.ArrowUpward, contentDescription = "Move Up")
+                    Icon(Icons.Rounded.ArrowUpward, contentDescription = stringResource(R.string.audio_move_source_up))
                 }
                 IconButton(onClick = onMoveDown, enabled = canMoveDown) {
-                    Icon(Icons.Rounded.ArrowDownward, contentDescription = "Move Down")
+                    Icon(Icons.Rounded.ArrowDownward, contentDescription = stringResource(R.string.audio_move_source_down))
                 }
                 if (canDelete) {
                     IconButton(onClick = onDelete) {
-                        Icon(Icons.Rounded.Delete, contentDescription = "Delete Source")
+                        Icon(Icons.Rounded.Delete, contentDescription = stringResource(R.string.audio_delete_source))
                     }
                 }
                 Switch(checked = source.isEnabled, onCheckedChange = onEnabledChange)
@@ -513,11 +537,18 @@ private fun TextInputRow(label: String, value: String, onValueChange: (String) -
 private fun TextInputRowContent(label: String, value: String, onValueChange: (String) -> Unit) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         Text(label, modifier = Modifier.width(72.dp))
-        BasicTextField(
+        val fieldScrollState = rememberScrollState()
+        val fieldState = rememberSyncedTextFieldState(
             value = value,
             onValueChange = onValueChange,
-            singleLine = true,
+            scrollState = fieldScrollState,
+        )
+        BasicTextField(
+            state = fieldState,
+            lineLimits = hoshiSingleLineTextFieldLineLimits(),
+            scrollState = fieldScrollState,
             textStyle = MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurface),
+            cursorBrush = hoshiTextFieldCursorBrush(),
             modifier = Modifier.weight(1f),
         )
     }
@@ -558,7 +589,7 @@ private fun GroupDivider() {
 @Composable
 private fun BackIconButton(onClick: () -> Unit) {
     IconButton(onClick = onClick) {
-        Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Back")
+        Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = stringResource(R.string.action_back))
     }
 }
 
@@ -569,6 +600,7 @@ internal enum class AdvancedDestination {
     Backup,
     Syncing,
     HttpSync,
+    AnkiConnect,
 }
 
 internal enum class AdvancedSettingsIcon {
@@ -576,14 +608,15 @@ internal enum class AdvancedSettingsIcon {
     Chart,
     Waveform,
     Cloud,
+    AnkiConnect,
     ExternalDrive,
 }
 
 internal data class AdvancedSettingsRow(
-    val title: String,
+    @StringRes val titleRes: Int,
     val destination: AdvancedDestination,
     val icon: AdvancedSettingsIcon,
-    val subtitle: String? = null,
+    @StringRes val subtitleRes: Int? = null,
 )
 
 internal data class AdvancedSettingsSection(
@@ -595,43 +628,48 @@ internal fun advancedSettingsSections(): List<AdvancedSettingsSection> =
         AdvancedSettingsSection(
             rows = listOf(
                 AdvancedSettingsRow(
-                    title = "Audio",
+                    titleRes = R.string.advanced_audio,
                     destination = AdvancedDestination.Audio,
                     icon = AdvancedSettingsIcon.Speaker,
                 ),
                 AdvancedSettingsRow(
-                    title = "Statistics",
+                    titleRes = R.string.advanced_statistics,
                     destination = AdvancedDestination.Statistics,
                     icon = AdvancedSettingsIcon.Chart,
-                    subtitle = "Track per-book reading time, speed, and characters read",
+                    subtitleRes = R.string.advanced_statistics_subtitle,
                 ),
                 AdvancedSettingsRow(
-                    title = "Sasayaki (Audiobooks)",
+                    titleRes = R.string.advanced_sasayaki_audiobooks,
                     destination = AdvancedDestination.Sasayaki,
                     icon = AdvancedSettingsIcon.Waveform,
-                    subtitle = "Read along with matched audiobook subtitles",
+                    subtitleRes = R.string.advanced_sasayaki_subtitle,
                 ),
             ),
         ),
         AdvancedSettingsSection(
             rows = listOf(
                 AdvancedSettingsRow(
-                    title = "ッツ Sync",
+                    titleRes = R.string.sync_ttu_sync,
                     destination = AdvancedDestination.Syncing,
                     icon = AdvancedSettingsIcon.Cloud,
                 ),
                 AdvancedSettingsRow(
-                    title = "HTTP Sync",
+                    titleRes = R.string.advanced_http_sync,
                     destination = AdvancedDestination.HttpSync,
                     icon = AdvancedSettingsIcon.Cloud,
-                    subtitle = "Sync bookmarks and ChatGPT history to your own server (manga + EPUB)",
+                    subtitleRes = R.string.advanced_http_sync_subtitle,
+                ),
+                AdvancedSettingsRow(
+                    titleRes = R.string.anki_connect_use,
+                    destination = AdvancedDestination.AnkiConnect,
+                    icon = AdvancedSettingsIcon.AnkiConnect,
                 ),
             ),
         ),
         AdvancedSettingsSection(
             rows = listOf(
                 AdvancedSettingsRow(
-                    title = "Backup",
+                    titleRes = R.string.settings_backup,
                     destination = AdvancedDestination.Backup,
                     icon = AdvancedSettingsIcon.ExternalDrive,
                 ),
@@ -645,10 +683,19 @@ private fun AdvancedSettingsIcon.imageVector(): ImageVector =
         AdvancedSettingsIcon.Chart -> Icons.AutoMirrored.Rounded.ShowChart
         AdvancedSettingsIcon.Waveform -> Icons.Rounded.GraphicEq
         AdvancedSettingsIcon.Cloud -> Icons.Rounded.Cloud
+        AdvancedSettingsIcon.AnkiConnect -> Icons.Rounded.Link
         AdvancedSettingsIcon.ExternalDrive -> Icons.Rounded.Storage
     }
 
 private const val ProgressUpdateBytes = 64L * 1024L * 1024L
+
+@get:StringRes
+private val AudioPlaybackMode.labelRes: Int
+    get() = when (this) {
+        AudioPlaybackMode.Interrupt -> R.string.audio_playback_interrupt
+        AudioPlaybackMode.Duck -> R.string.audio_playback_duck
+        AudioPlaybackMode.Mix -> R.string.audio_playback_mix
+    }
 
 private val LocalAudioImportProgress.fraction: Float
     get() = totalBytes?.takeIf { it > 0 }?.let { (copiedBytes.toFloat() / it.toFloat()).coerceIn(0f, 1f) } ?: 0f
@@ -656,5 +703,5 @@ private val LocalAudioImportProgress.fraction: Float
 private fun LocalAudioImportProgress.label(context: android.content.Context): String {
     val copied = Formatter.formatFileSize(context, copiedBytes)
     val total = totalBytes?.let { Formatter.formatFileSize(context, it) }
-    return if (total == null) copied else "$copied of $total"
+    return if (total == null) copied else context.getString(R.string.audio_copied_size_format, copied, total)
 }

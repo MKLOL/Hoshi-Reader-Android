@@ -22,6 +22,9 @@ internal class ReaderWebViewStateHolder(
     var showSasayaki by mutableStateOf(false)
         private set
 
+    var showHighlights by mutableStateOf(false)
+        private set
+
     var showStatistics by mutableStateOf(false)
         private set
 
@@ -36,6 +39,12 @@ internal class ReaderWebViewStateHolder(
 
     var readerPosition by mutableStateOf(ReaderPositionState(initialPosition))
         private set
+
+    private var backHistory by mutableStateOf<List<ReaderChapterPosition>>(emptyList())
+    private var forwardHistory by mutableStateOf<List<ReaderChapterPosition>>(emptyList())
+
+    val backTargetPosition: ReaderChapterPosition? get() = backHistory.lastOrNull()
+    val forwardTargetPosition: ReaderChapterPosition? get() = forwardHistory.lastOrNull()
 
     var webViewViewportSize by mutableStateOf(IntSize.Zero)
         private set
@@ -107,6 +116,15 @@ internal class ReaderWebViewStateHolder(
         showSasayaki = false
     }
 
+    fun openHighlightsFromMenu() {
+        showReaderMenu = false
+        showHighlights = true
+    }
+
+    fun dismissHighlights() {
+        showHighlights = false
+    }
+
     fun openStatisticsFromMenu() {
         showReaderMenu = false
         showStatistics = true
@@ -171,6 +189,31 @@ internal class ReaderWebViewStateHolder(
         return readerPosition.displayedPosition
     }
 
+    fun jumpToWithHistory(position: ReaderChapterPosition, fragment: String? = null): ReaderChapterPosition {
+        recordJumpOrigin()
+        return jumpTo(position, fragment)
+    }
+
+    fun navigateBackInJumpHistory(): ReaderChapterPosition? {
+        val target = backHistory.lastOrNull() ?: return null
+        backHistory = backHistory.dropLast(1)
+        forwardHistory = forwardHistory + readerPosition.displayedPosition
+        return jumpTo(target)
+    }
+
+    fun navigateForwardInJumpHistory(): ReaderChapterPosition? {
+        val target = forwardHistory.lastOrNull() ?: return null
+        forwardHistory = forwardHistory.dropLast(1)
+        backHistory = backHistory + readerPosition.displayedPosition
+        return jumpTo(target)
+    }
+
+    fun clearForwardHistoryAfterManualMovement() {
+        if (backHistory.isEmpty()) {
+            forwardHistory = emptyList()
+        }
+    }
+
     fun markWebViewRestoring() {
         webViewRestoreEpoch += 1
         isWebViewRestoring = true
@@ -196,6 +239,11 @@ internal class ReaderWebViewStateHolder(
             prepareReloadAtDisplayedPosition()
         }
         webViewViewportSize = size
+    }
+
+    private fun recordJumpOrigin() {
+        backHistory = backHistory + readerPosition.displayedPosition
+        forwardHistory = emptyList()
     }
 }
 

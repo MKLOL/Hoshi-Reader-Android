@@ -3,6 +3,7 @@ package moe.antimony.hoshi.features.dictionary
 import de.manhhao.hoshi.LookupResult
 import moe.antimony.hoshi.features.audio.AudioSettings
 import moe.antimony.hoshi.features.anki.AnkiPopupSettings
+import moe.antimony.hoshi.ui.UiText
 
 internal data class DictionarySearchUiState(
     val query: String = "",
@@ -11,7 +12,7 @@ internal data class DictionarySearchUiState(
     val results: List<LookupResult> = emptyList(),
     val hasSearched: Boolean = false,
     val isSearching: Boolean = false,
-    val errorMessage: String? = null,
+    val errorMessage: UiText? = null,
     val dictionaryStyles: Map<String, String> = emptyMap(),
     val dictionarySettings: DictionarySettings = DictionarySettings(),
     val audioSettings: AudioSettings = AudioSettings(),
@@ -44,6 +45,8 @@ internal object DictionarySearchContent {
         eInkMode: Boolean = false,
         audioSettings: AudioSettings = AudioSettings(),
         ankiSettings: AnkiPopupSettings = AnkiPopupSettings(),
+        fontFaceCss: String = "",
+        popupScale: Double = 1.0,
     ): DictionarySearchRenderState {
         val trimmed = query.trim()
         if (trimmed.isEmpty()) {
@@ -75,6 +78,8 @@ internal object DictionarySearchContent {
             eInkMode = eInkMode,
             audioSettings = audioSettings,
             ankiSettings = ankiSettings,
+            fontFaceCss = fontFaceCss,
+            popupScale = popupScale,
         )
     }
 
@@ -88,6 +93,8 @@ internal object DictionarySearchContent {
         eInkMode: Boolean = false,
         audioSettings: AudioSettings = AudioSettings(),
         ankiSettings: AnkiPopupSettings = AnkiPopupSettings(),
+        fontFaceCss: String = "",
+        popupScale: Double = 1.0,
     ): DictionarySearchRenderState {
         if (results.isEmpty()) {
             return DictionarySearchRenderState(
@@ -110,6 +117,8 @@ internal object DictionarySearchContent {
                 eInkMode = eInkMode,
                 audioSettings = audioSettings,
                 ankiSettings = ankiSettings,
+                fontFaceCss = fontFaceCss,
+                popupScale = popupScale,
             ),
             results = results,
             hasResults = true,

@@ -1,6 +1,7 @@
 package moe.antimony.hoshi.features.reader
 
 import android.content.Context
+import androidx.annotation.StringRes
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.MutablePreferences
 import androidx.datastore.preferences.core.Preferences
@@ -13,6 +14,7 @@ import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onStart
+import moe.antimony.hoshi.R
 import moe.antimony.hoshi.features.sync.StatisticsSyncMode
 import java.util.Locale
 
@@ -39,6 +41,7 @@ data class ReaderSettings(
     val verticalPadding: Int = 0,
     val avoidPageBreak: Boolean = false,
     val justifyText: Boolean = false,
+    val blurImages: Boolean = false,
     val layoutAdvanced: Boolean = false,
     val lineHeight: Double = 1.65,
     val characterSpacing: Double = 0.0,
@@ -48,6 +51,7 @@ data class ReaderSettings(
     val showProgressTop: Boolean = true,
     val popupWidth: Int = 320,
     val popupHeight: Int = 250,
+    val popupScale: Double = 1.0,
     val popupActionBar: Boolean = false,
     val popupFullWidth: Boolean = false,
     val popupSwipeToDismiss: Boolean = true,
@@ -157,10 +161,10 @@ enum class ReaderTheme(val label: String) {
     Sepia("Sepia"),
 }
 
-enum class StatisticsAutostartMode(val rawValue: String) {
-    Off("Off"),
-    PageTurn("Page Turn"),
-    On("On");
+enum class StatisticsAutostartMode(val rawValue: String, @get:StringRes val labelRes: Int) {
+    Off("Off", R.string.reader_statistics_autostart_off),
+    PageTurn("Page Turn", R.string.reader_statistics_autostart_page_turn),
+    On("On", R.string.reader_statistics_autostart_on);
 
     companion object {
         fun fromRawValue(rawValue: String?): StatisticsAutostartMode =
@@ -217,6 +221,7 @@ class ReaderSettingsStore(context: Context) : ReaderSettingsLegacySource {
         verticalPadding = preferences.getInt("layoutVerticalPadding", 0),
         avoidPageBreak = preferences.getBoolean("avoidPageBreak", false),
         justifyText = preferences.getBoolean("justifyText", false),
+        blurImages = preferences.getBoolean("blurImages", false),
         layoutAdvanced = preferences.getBoolean("layoutAdvanced", false),
         lineHeight = preferences.getFloat("lineHeight", 1.65f).toDouble(),
         characterSpacing = preferences.getFloat("characterSpacing", 0f).toDouble(),
@@ -226,6 +231,7 @@ class ReaderSettingsStore(context: Context) : ReaderSettingsLegacySource {
         showProgressTop = preferences.getBoolean("readerShowProgressTop", true),
         popupWidth = preferences.getInt("popupWidth", 320),
         popupHeight = preferences.getInt("popupHeight", 250),
+        popupScale = preferences.getFloat("popupScale", 1.0f).toDouble().coerceIn(0.8, 1.5),
         popupActionBar = preferences.getBoolean("popupActionBar", false),
         popupFullWidth = preferences.getBoolean("popupFullWidth", false),
         popupSwipeToDismiss = preferences.getBoolean("popupSwipeToDismiss", true),
@@ -263,6 +269,7 @@ class ReaderSettingsStore(context: Context) : ReaderSettingsLegacySource {
             .putInt("layoutVerticalPadding", settings.verticalPadding)
             .putBoolean("avoidPageBreak", settings.avoidPageBreak)
             .putBoolean("justifyText", settings.justifyText)
+            .putBoolean("blurImages", settings.blurImages)
             .putBoolean("layoutAdvanced", settings.layoutAdvanced)
             .putFloat("lineHeight", settings.lineHeight.toFloat())
             .putFloat("characterSpacing", settings.characterSpacing.toFloat())
@@ -272,6 +279,7 @@ class ReaderSettingsStore(context: Context) : ReaderSettingsLegacySource {
             .putBoolean("readerShowProgressTop", settings.showProgressTop)
             .putInt("popupWidth", settings.popupWidth)
             .putInt("popupHeight", settings.popupHeight)
+            .putFloat("popupScale", settings.popupScale.coerceIn(0.8, 1.5).toFloat())
             .putBoolean("popupActionBar", settings.popupActionBar)
             .putBoolean("popupFullWidth", settings.popupFullWidth)
             .putBoolean("popupSwipeToDismiss", settings.popupSwipeToDismiss)
@@ -348,6 +356,7 @@ class ReaderSettingsRepository(
             verticalPadding = this[KEY_VERTICAL_PADDING] ?: 0,
             avoidPageBreak = this[KEY_AVOID_PAGE_BREAK] ?: false,
             justifyText = this[KEY_JUSTIFY_TEXT] ?: false,
+            blurImages = this[KEY_BLUR_IMAGES] ?: false,
             layoutAdvanced = this[KEY_LAYOUT_ADVANCED] ?: false,
             lineHeight = (this[KEY_LINE_HEIGHT] ?: 1.65f).toDouble(),
             characterSpacing = (this[KEY_CHARACTER_SPACING] ?: 0f).toDouble(),
@@ -357,6 +366,7 @@ class ReaderSettingsRepository(
             showProgressTop = this[KEY_SHOW_PROGRESS_TOP] ?: true,
             popupWidth = this[KEY_POPUP_WIDTH] ?: 320,
             popupHeight = this[KEY_POPUP_HEIGHT] ?: 250,
+            popupScale = (this[KEY_POPUP_SCALE] ?: 1.0f).toDouble().coerceIn(0.8, 1.5),
             popupActionBar = this[KEY_POPUP_ACTION_BAR] ?: false,
             popupFullWidth = this[KEY_POPUP_FULL_WIDTH] ?: false,
             popupSwipeToDismiss = this[KEY_POPUP_SWIPE_TO_DISMISS] ?: true,
@@ -393,6 +403,7 @@ class ReaderSettingsRepository(
         this[KEY_VERTICAL_PADDING] = settings.verticalPadding
         this[KEY_AVOID_PAGE_BREAK] = settings.avoidPageBreak
         this[KEY_JUSTIFY_TEXT] = settings.justifyText
+        this[KEY_BLUR_IMAGES] = settings.blurImages
         this[KEY_LAYOUT_ADVANCED] = settings.layoutAdvanced
         this[KEY_LINE_HEIGHT] = settings.lineHeight.toFloat()
         this[KEY_CHARACTER_SPACING] = settings.characterSpacing.toFloat()
@@ -402,6 +413,7 @@ class ReaderSettingsRepository(
         this[KEY_SHOW_PROGRESS_TOP] = settings.showProgressTop
         this[KEY_POPUP_WIDTH] = settings.popupWidth
         this[KEY_POPUP_HEIGHT] = settings.popupHeight
+        this[KEY_POPUP_SCALE] = settings.popupScale.coerceIn(0.8, 1.5).toFloat()
         this[KEY_POPUP_ACTION_BAR] = settings.popupActionBar
         this[KEY_POPUP_FULL_WIDTH] = settings.popupFullWidth
         this[KEY_POPUP_SWIPE_TO_DISMISS] = settings.popupSwipeToDismiss
@@ -443,6 +455,7 @@ class ReaderSettingsRepository(
         private val KEY_VERTICAL_PADDING = intPreferencesKey("layoutVerticalPadding")
         private val KEY_AVOID_PAGE_BREAK = booleanPreferencesKey("avoidPageBreak")
         private val KEY_JUSTIFY_TEXT = booleanPreferencesKey("justifyText")
+        private val KEY_BLUR_IMAGES = booleanPreferencesKey("blurImages")
         private val KEY_LAYOUT_ADVANCED = booleanPreferencesKey("layoutAdvanced")
         private val KEY_LINE_HEIGHT = floatPreferencesKey("lineHeight")
         private val KEY_CHARACTER_SPACING = floatPreferencesKey("characterSpacing")
@@ -452,6 +465,7 @@ class ReaderSettingsRepository(
         private val KEY_SHOW_PROGRESS_TOP = booleanPreferencesKey("readerShowProgressTop")
         private val KEY_POPUP_WIDTH = intPreferencesKey("popupWidth")
         private val KEY_POPUP_HEIGHT = intPreferencesKey("popupHeight")
+        private val KEY_POPUP_SCALE = floatPreferencesKey("popupScale")
         private val KEY_POPUP_ACTION_BAR = booleanPreferencesKey("popupActionBar")
         private val KEY_POPUP_FULL_WIDTH = booleanPreferencesKey("popupFullWidth")
         private val KEY_POPUP_SWIPE_TO_DISMISS = booleanPreferencesKey("popupSwipeToDismiss")

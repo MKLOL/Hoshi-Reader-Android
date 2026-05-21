@@ -41,6 +41,7 @@ class SyncManager(
     ): SyncResult {
         val title = entry.metadata.title ?: return SyncResult.Skipped
         entry.metadata.folder ?: return SyncResult.Skipped
+        val displayTitle = entry.displayTitle
 
         val rootFolderId = drive.findRootFolder()
         val driveFolderId = drive.ensureBookFolder(
@@ -57,7 +58,7 @@ class SyncManager(
         val syncDirection = direction ?: TtuSyncRules.determineDirection(localBookmark, syncFiles.progress)
 
         if (syncDirection == SyncDirection.Synced) {
-            return SyncResult.Synced(title)
+            return SyncResult.Synced(displayTitle)
         }
         if (importOnly && syncDirection != SyncDirection.ImportFromTtu) {
             return SyncResult.Skipped
@@ -69,7 +70,7 @@ class SyncManager(
 
         return when (syncDirection) {
             SyncDirection.ImportFromTtu -> importFromTtu(
-                title = title,
+                title = displayTitle,
                 entry = entry,
                 progressFileId = progressFileId,
                 statsFileId = statsFileId,
@@ -79,7 +80,7 @@ class SyncManager(
                 syncAudioBook = syncAudioBook,
             )
             SyncDirection.ExportToTtu -> exportToTtu(
-                title = title,
+                title = displayTitle,
                 entry = entry,
                 driveFolderId = driveFolderId,
                 progressFileId = progressFileId,
@@ -90,7 +91,7 @@ class SyncManager(
                 statsSyncMode = statsSyncMode,
                 syncAudioBook = syncAudioBook,
             )
-            SyncDirection.Synced -> SyncResult.Synced(title)
+            SyncDirection.Synced -> SyncResult.Synced(displayTitle)
         }
     }
 

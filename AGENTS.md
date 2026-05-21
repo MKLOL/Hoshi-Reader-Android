@@ -12,16 +12,21 @@
 - 涉及 Android 系统能力、平台限制、权限、Intent、DocumentsUI、WebView、Media3、WorkManager、Google/Jetpack API、打包安装或后台任务时，优先查询 Android/Google/Jetpack 官方文档确认当前推荐实现和限制；iOS 只作为用户交互和行为逻辑参考，具体实现方式以 Android 官方文档和本仓库 Android 架构为准。
 - 推进顺序：model/storage -> bookshelf import -> reader -> dictionary popup -> Anki -> sync -> settings。
 - 主路径：bookshelf -> import EPUB -> open reader -> select text -> lookup。
+- 所有用户可见 UI 字符串必须使用 Android 本地化资源，禁止在 Compose/ViewModel/Repository 中新增硬编码显示文案；Compose 使用 `stringResource()` / `pluralStringResource()`，非 UI 层发出的可见消息使用 `UiText` 或等价资源引用，避免持有 `Context`。
+- 新增或修改任何用户可见文案时，必须同时更新默认英文 `app/src/main/res/values/strings.xml` 和简体中文 `app/src/main/res/values-zh-rCN/strings.xml`；保留格式占位符、plural quantity、CDATA/转义和 `translatable="false"` 语义一致。
 - 完成需求时先更新 `docs/TODO.md`，再把代码和 TODO 放进同一个 commit；用户明确要求不 commit 时不要提交。
 - `docs/TODO.md` 只记录当前状态、下一步、阻塞项和长期有效的验证入口；不要把它当流水账。不要粘贴长 emulator/adb 验证记录、截图观察、发布历史或每次提交的详细复现过程。
 - 用户可见变更写入 `docs/CHANGELOG.md`；架构重构方向保留在 `docs/ARCHITECTURE_REFACTORING.md`，具体执行流程和切片状态不要写入 tracked 文档，优先使用仓库本地 `.codex/skills/hoshi-refactoring-workflow`；详细调查和验证证据优先放在 issue、PR、commit message 或专门文档中。
 - 完成新功能或修复问题时，同步更新 `docs/CHANGELOG.md` 的 `[Unreleased]` section；CHANGELOG 面向普通用户，只记录用户可感知的 App 功能、体验和问题修复，不记录 CI、agent workflow、私有 skill、构建脚本、依赖管理或仅开发者可见的内部改动。
+- `[Unreleased]` 里的未发布功能不要再追加修补说明：如果一个功能还没发布，后续对它的 UI、行为、稳定性或内部实现调整应合并进该功能原本的 Added/Changed 条目，或直接不写；只有已发布版本中用户可遇到的问题被修复时，才写入 Fixed。
 - 如果 commit 修复或实现了某个 GitHub Issue，`docs/CHANGELOG.md` 对应用户可见条目末尾加上 `#123` 形式的 issue 引用，便于 GitHub Release 页面自动生成可跳转链接。
 - 修复问题时，如果用户要求建立 GitHub Issue，先调查问题现象和复现方式，再创建关联 issue；之后再进行实际修复，并在修复完成后的 commit message 中使用 closing keyword（如 `Closes #123`）关联该 issue，便于后续追踪 bug 记录。
 - Commit message 使用 Conventional Commits。
 - 修复 GitHub Issue 时，在 commit message 中使用 closing keyword（如 `Closes #123`）。
 - 小型 GitHub Issue 修复（如文案、链接、配置等低风险单点修改）直接在 `main` 分支完成并提交；较大功能、跨模块重构或高风险改动再开 `codex/` 前缀分支。
 - 禁止新增读取 `src/main` 源文件后用 `contains`、`substringAfter`、`indexOf` 等字符串方式断言实现细节的源码文本测试；这类断言浪费 token 和上下文，不能替代行为测试。需要回归覆盖时，优先写行为/API/状态流测试；只有 Manifest、资源 XML、Gradle 依赖、权限/Provider 声明等结构化配置，才可用解析结构后的断言。
+- 禁止对已连接设备或模拟器运行会清除、重装或卸载 app 数据的测试命令，例如 `connectedDebugAndroidTest`、`connectedAndroidTest`、`installDebugAndroidTest` 或其他 Android instrumentation Gradle 任务；除非用户明确指定一次性设备并允许清数据。需要此类覆盖时，先使用专用空模拟器或让用户确认。
+- 禁止使用手绘、自造或临时拼接的图标；新增或替换图标时使用 Material 3 / Material Icons 已有图标（Compose `Icons.*` 或官方 Material vector asset），只有明确的品牌资产需求才例外。
 
 ## 参考源码
 

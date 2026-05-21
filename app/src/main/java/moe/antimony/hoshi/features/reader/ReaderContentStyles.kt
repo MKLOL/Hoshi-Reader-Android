@@ -1,5 +1,7 @@
 package moe.antimony.hoshi.features.reader
 
+import moe.antimony.hoshi.epub.HighlightColor
+
 internal object ReaderLayoutDefaults {
     // Mirrors the first-run iOS ReaderWebView defaults:
     // verticalWriting=true, fontSize=22, horizontalPadding=5, verticalPadding=0.
@@ -169,6 +171,11 @@ internal object ReaderContentStyles {
             -webkit-column-break-inside: avoid !important;
             object-fit: contain !important;
         }
+        img.block-img.blurred,
+        svg.blurred {
+            filter: blur(24px) !important;
+            clip-path: inset(0);
+        }
         svg {
             max-width: var(--hoshi-image-max-width, ${settings.imageMaxWidthFallbackCss}) !important;
             max-height: var(--hoshi-image-max-height, ${settings.imageMaxHeightFallbackCss}) !important;
@@ -192,6 +199,7 @@ internal object ReaderContentStyles {
             color: var(--hoshi-sasayaki-text-color) !important;
             background-color: var(--hoshi-sasayaki-background-color) !important;
         }
+        ${HighlightColor.entries.joinToString("\n") { ".hoshi-highlight-${it.rawValue} { background-color: ${it.cssBackground} !important; }" }}
         a {
             color: rgba(66, 108, 245, 1) !important;
         }

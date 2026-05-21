@@ -1,11 +1,11 @@
 package moe.antimony.hoshi.features.dictionary
 
 import android.annotation.SuppressLint
-import android.webkit.WebView
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -18,7 +18,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Cancel
@@ -38,8 +37,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.input.key.Key
@@ -51,6 +50,7 @@ import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.intl.Locale
 import androidx.compose.ui.text.intl.LocaleList
@@ -61,20 +61,25 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewmodel.compose.viewModel
 import de.manhhao.hoshi.LookupResult
 import moe.antimony.hoshi.LocalHoshiAppContainer
+import moe.antimony.hoshi.R
 import moe.antimony.hoshi.features.audio.AudioRequestHandler
 import moe.antimony.hoshi.features.audio.AudioSettings
 import moe.antimony.hoshi.features.audio.LocalAudioRepository
 import moe.antimony.hoshi.features.audio.WordAudioPlayer
 import moe.antimony.hoshi.features.anki.AnkiMiningContext
 import moe.antimony.hoshi.features.anki.AnkiViewModel
+import moe.antimony.hoshi.features.reader.ReaderFontManager
 import moe.antimony.hoshi.features.reader.ReaderSettings
+import moe.antimony.hoshi.features.reader.ReaderSelectionRect
+import moe.antimony.hoshi.ui.asString
+import moe.antimony.hoshi.ui.hoshiSingleLineTextFieldLineLimits
+import moe.antimony.hoshi.ui.hoshiTextFieldCursorBrush
+import moe.antimony.hoshi.ui.rememberSyncedTextFieldState
 import moe.antimony.hoshi.webview.applyHoshiWebViewSecurityDefaults
 import kotlin.math.abs
 
 private const val DictionaryPopupTopInset = 118.0
-private const val DictionaryPopupBottomInset = 150.0
-
-internal fun dictionarySearchCursorColor(foregroundColor: Color): Color = foregroundColor
+private const val DictionaryPopupBottomInset = 0.0
 
 internal fun dictionarySearchKeyboardOptions(): KeyboardOptions = KeyboardOptions(
     imeAction = ImeAction.Search,
@@ -97,6 +102,7 @@ internal fun dictionarySearchPopupOptions(
     reducedMotionScrolling = readerSettings.popupReducedMotionScrolling,
     reducedMotionScrollPercent = readerSettings.popupReducedMotionScrollPercent,
     reducedMotionSwipeThreshold = readerSettings.popupReducedMotionSwipeThreshold,
+    popupScale = readerSettings.popupScale,
     popupActionBar = false,
     topInset = DictionaryPopupTopInset,
     bottomInset = DictionaryPopupBottomInset,
@@ -134,8 +140,17 @@ fun DictionarySearchView(
     )
     val uiState by searchViewModel.uiState.collectAsState()
     val ankiUiState by ankiViewModel.uiState.collectAsState()
+    var rootHighlightRects by remember { mutableStateOf<List<ReaderSelectionRect>>(emptyList()) }
     val localAudioRepository = appContainer.localAudioRepository
+    val fontManager = appContainer.readerFontManager
+    val fontFaceCss = fontManager.popupFontFaceCss()
     val popupDarkMode = MaterialTheme.colorScheme.background.luminance() < 0.5f
+    val actionButtonTintColor = when {
+        readerSettings.eInkMode && popupDarkMode -> Color.White
+        readerSettings.eInkMode -> Color.Black
+        popupDarkMode -> Color(0xFFEBEBF5)
+        else -> Color(0x993C3C43)
+    }
     val popupOptions = dictionarySearchPopupOptions(
         readerSettings = readerSettings,
         dictionarySettings = uiState.dictionarySettings,
@@ -152,6 +167,7 @@ fun DictionarySearchView(
         uiState.audioSettings,
         ankiUiState.popupSettings,
         assets,
+        fontFaceCss,
     ) {
         DictionarySearchContent.renderExistingResults(
             lastQuery = uiState.lastQuery,
@@ -163,21 +179,33 @@ fun DictionarySearchView(
             eInkMode = readerSettings.eInkMode,
             audioSettings = uiState.audioSettings,
             ankiSettings = ankiUiState.popupSettings,
+            fontFaceCss = fontFaceCss,
+            popupScale = readerSettings.popupScale,
         ).html
     }
-    val themedPopups = remember(uiState.popups, popupDarkMode, readerSettings.eInkMode, uiState.audioSettings) {
+    val themedPopups = remember(
+        uiState.popups,
+        popupDarkMode,
+        readerSettings.eInkMode,
+        uiState.audioSettings,
+        readerSettings.popupScale,
+    ) {
         uiState.popups.withLookupPopupVisualOptions(
             darkMode = popupDarkMode,
             eInkMode = readerSettings.eInkMode,
             audioSettings = uiState.audioSettings,
+            popupScale = readerSettings.popupScale,
         )
     }
     val runLookup = {
+        rootHighlightRects = emptyList()
         searchViewModel.runLookup(
             assets = assets,
             darkMode = popupDarkMode,
             eInkMode = readerSettings.eInkMode,
             ankiSettings = ankiUiState.popupSettings,
+            fontFaceCss = fontFaceCss,
+            popupScale = readerSettings.popupScale,
         )
     }
     val lookupPopup = { selection: moe.antimony.hoshi.features.reader.ReaderSelectionData ->
@@ -197,17 +225,29 @@ fun DictionarySearchView(
                 html = resultHtml,
                 results = uiState.results,
                 assets = assets,
+                fontManager = fontManager,
                 audioSettings = uiState.audioSettings,
+                popupScale = readerSettings.popupScale,
+                actionButtonTintColor = actionButtonTintColor,
                 localAudioRepository = localAudioRepository,
                 clearSelectionSignal = uiState.resultClearSelectionSignal,
                 backSignal = uiState.backSignal,
                 forwardSignal = uiState.forwardSignal,
                 callbacks = PopupWebViewCallbacks(
-                    onTapOutside = searchViewModel::closePopups,
-                    onSwipeDismiss = searchViewModel::closePopups,
+                    onTapOutside = {
+                        rootHighlightRects = emptyList()
+                        searchViewModel.closePopups()
+                    },
+                    onSwipeDismiss = {
+                        rootHighlightRects = emptyList()
+                        searchViewModel.closePopups()
+                    },
                     onOpenLink = context::openPopupExternalLink,
                     onTextSelected = { selection ->
                         searchViewModel.openRootPopup(selection, popupOptions)
+                    },
+                    onSelectionRectsLoaded = { rects ->
+                        rootHighlightRects = rects
                     },
                     onLookupRedirect = searchViewModel::lookupRedirect,
                     onLookupRedirected = searchViewModel::recordLookupRedirected,
@@ -234,7 +274,7 @@ fun DictionarySearchView(
                     ),
             )
             uiState.errorMessage != null -> DictionarySearchMessage(
-                text = requireNotNull(uiState.errorMessage),
+                text = requireNotNull(uiState.errorMessage).asString(),
                 modifier = Modifier.fillMaxSize(),
             )
             uiState.hasSearched && !uiState.isSearching -> DictionarySearchMessage(
@@ -252,14 +292,21 @@ fun DictionarySearchView(
                 .statusBarsPadding()
                 .padding(horizontal = 20.dp, vertical = 10.dp),
         )
-        LookupPopupStackView(
+        LookupPopupAndroidStack(
             popups = themedPopups,
-            onPopupsChange = searchViewModel::setPopups,
+            onPopupsChange = { next ->
+                if (next.isEmpty()) rootHighlightRects = emptyList()
+                searchViewModel.setPopups(next)
+            },
             lookupChildPopup = lookupPopup,
             onRootPopupDismissed = {
+                rootHighlightRects = emptyList()
                 searchViewModel.dismissRootPopup()
                 true
             },
+            rootHighlightRects = rootHighlightRects,
+            rootHighlightDarkMode = popupDarkMode,
+            rootHighlightEInkMode = readerSettings.eInkMode,
             modifier = Modifier.fillMaxSize(),
         )
     }
@@ -333,16 +380,21 @@ private fun DictionarySearchBar(
             SearchGlyph(modifier = Modifier.size(20.dp))
             Box(modifier = Modifier.weight(1f)) {
                 val fieldForegroundColor = MaterialTheme.colorScheme.onSurface
+                val fieldScrollState = rememberScrollState()
+                val fieldState = rememberSyncedTextFieldState(
+                    value = query,
+                    onValueChange = onQueryChange,
+                    scrollState = fieldScrollState,
+                )
                 if (query.isEmpty()) {
                     Text(
-                        text = "Search",
+                        text = stringResource(R.string.dictionary_search_placeholder),
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         style = MaterialTheme.typography.titleLarge,
                     )
                 }
                 BasicTextField(
-                    value = query,
-                    onValueChange = onQueryChange,
+                    state = fieldState,
                     modifier = Modifier
                         .fillMaxWidth()
                         .focusRequester(focusRequester)
@@ -355,11 +407,12 @@ private fun DictionarySearchBar(
                             }
                         },
                     enabled = !isSearching,
-                    singleLine = true,
+                    lineLimits = hoshiSingleLineTextFieldLineLimits(),
+                    scrollState = fieldScrollState,
                     textStyle = MaterialTheme.typography.titleLarge.copy(color = fieldForegroundColor),
-                    cursorBrush = SolidColor(dictionarySearchCursorColor(fieldForegroundColor)),
+                    cursorBrush = hoshiTextFieldCursorBrush(fieldForegroundColor),
                     keyboardOptions = dictionarySearchKeyboardOptions(),
-                    keyboardActions = KeyboardActions(onSearch = { onSubmit() }),
+                    onKeyboardAction = { onSubmit() },
                 )
             }
             if (query.isNotEmpty()) {
@@ -388,7 +441,7 @@ private fun SearchGlyph(modifier: Modifier = Modifier) {
 private fun ClearGlyph(modifier: Modifier = Modifier) {
     Icon(
         imageVector = Icons.Rounded.Cancel,
-        contentDescription = "Clear",
+        contentDescription = stringResource(R.string.action_clear),
         tint = MaterialTheme.colorScheme.onSurfaceVariant,
         modifier = modifier,
     )
@@ -410,7 +463,10 @@ private fun DictionaryResultWebView(
     html: String,
     results: List<LookupResult>,
     assets: LookupPopupAssets,
+    fontManager: ReaderFontManager,
     audioSettings: AudioSettings,
+    popupScale: Double,
+    actionButtonTintColor: Color,
     localAudioRepository: LocalAudioRepository,
     clearSelectionSignal: Int,
     backSignal: Int,
@@ -425,15 +481,17 @@ private fun DictionaryResultWebView(
     var appliedClearSelectionSignal by remember { mutableStateOf(clearSelectionSignal) }
     var appliedBackSignal by remember { mutableStateOf(backSignal) }
     var appliedForwardSignal by remember { mutableStateOf(forwardSignal) }
+    var appliedPopupScale by remember { mutableStateOf(popupScale) }
     AndroidView(
         modifier = modifier.fillMaxSize(),
         factory = { context ->
             val audioRequestHandler = AudioRequestHandler(
                 localAudioRepository,
             )
-            WebView(context).apply {
+            PopupActionButtonWebView(context).apply {
                 applyHoshiWebViewSecurityDefaults()
                 isVerticalScrollBarEnabled = false
+                isHorizontalScrollBarEnabled = false
                 setBackgroundColor(android.graphics.Color.TRANSPARENT)
                 addJavascriptInterface(
                     PopupWebViewBridge(
@@ -443,7 +501,12 @@ private fun DictionaryResultWebView(
                     ),
                     "HoshiPopup",
                 )
-                webViewClient = PopupMessageWebViewClient(callbackHolder, audioRequestHandler, assets)
+                webViewClient = PopupMessageWebViewClient(
+                    callbackHolder = callbackHolder,
+                    audioRequestHandler = audioRequestHandler,
+                    assets = assets,
+                    fontManager = fontManager,
+                )
             }
         },
         update = { webView ->
@@ -454,15 +517,25 @@ private fun DictionaryResultWebView(
                     localAudioRepository,
                 ),
                 assets,
+                fontManager,
             )
             if (loadedHtml != html) {
                 lookupResultsHolder.results = results
                 loadedHtml = html
+                (webView as? PopupActionButtonWebView)?.clearActionButtons()
                 webView.loadDataWithBaseURL(
                     "https://hoshi.local/dictionary/",
                     html,
                     "text/html",
                     "UTF-8",
+                    null,
+                )
+            }
+            (webView as? PopupActionButtonWebView)?.setActionButtonTint(actionButtonTintColor.toArgb())
+            if (appliedPopupScale != popupScale) {
+                appliedPopupScale = popupScale
+                webView.evaluateJavascript(
+                    "document.documentElement.style.zoom = '${popupScale.coerceIn(0.8, 1.5)}'; if (typeof syncButtonFrames === 'function') requestAnimationFrame(syncButtonFrames)",
                     null,
                 )
             }
@@ -472,11 +545,11 @@ private fun DictionaryResultWebView(
             }
             if (appliedBackSignal != backSignal) {
                 appliedBackSignal = backSignal
-                webView.evaluateJavascript("window.navigateBack()", null)
+                webView.evaluateJavascript("window.navigateBack(); if (typeof syncButtonFrames === 'function') requestAnimationFrame(syncButtonFrames)", null)
             }
             if (appliedForwardSignal != forwardSignal) {
                 appliedForwardSignal = forwardSignal
-                webView.evaluateJavascript("window.navigateForward()", null)
+                webView.evaluateJavascript("window.navigateForward(); if (typeof syncButtonFrames === 'function') requestAnimationFrame(syncButtonFrames)", null)
             }
         },
     )

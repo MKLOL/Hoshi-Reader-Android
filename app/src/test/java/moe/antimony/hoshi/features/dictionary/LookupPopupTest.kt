@@ -3,7 +3,9 @@ package moe.antimony.hoshi.features.dictionary
 import moe.antimony.hoshi.features.reader.ReaderSelectionData
 import moe.antimony.hoshi.features.reader.ReaderSelectionRect
 import moe.antimony.hoshi.features.audio.AudioSettings
+import android.view.MotionEvent
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
@@ -26,6 +28,23 @@ class LookupPopupTest {
         assertEquals(250.0, result.height, 0.0)
         assertEquals(259.0, result.centerX, 0.0)
         assertEquals(325.0, result.centerY, 0.0)
+    }
+
+    @Test
+    fun verticalLayoutPrefersRightSideWhenItCanFitPopupLikeIosPopupLayout() {
+        val layout = LookupPopupLayout(
+            selectionRect = ReaderSelectionRect(x = 450.0, y = 200.0, width = 20.0, height = 30.0),
+            screenWidth = 800.0,
+            screenHeight = 800.0,
+            maxWidth = 320.0,
+            maxHeight = 250.0,
+            isVertical = true,
+        )
+
+        val result = layout.calculate()
+
+        assertEquals(320.0, result.width, 0.0)
+        assertEquals(634.0, result.centerX, 0.0)
     }
 
     @Test
@@ -159,6 +178,49 @@ class LookupPopupTest {
     }
 
     @Test
+    fun scrollingRootOnlyPopupDoesNotRewritePopupState() {
+        val popups = listOf("root").map { id ->
+            LookupPopupItem(
+                id = id,
+                state = LookupPopupState(
+                    selection = ReaderSelectionData(
+                        text = id,
+                        sentence = id,
+                        rect = ReaderSelectionRect(x = 0.0, y = 0.0, width = 1.0, height = 1.0),
+                        normalizedOffset = null,
+                    ),
+                    results = emptyList(),
+                ),
+            )
+        }
+
+        assertTrue(closeChildPopupsForScrolledParent(popups, 0) === popups)
+    }
+
+    @Test
+    fun scrollingParentPopupClosesChildrenAndClearsSelection() {
+        val popups = listOf("root", "child").map { id ->
+            LookupPopupItem(
+                id = id,
+                state = LookupPopupState(
+                    selection = ReaderSelectionData(
+                        text = id,
+                        sentence = id,
+                        rect = ReaderSelectionRect(x = 0.0, y = 0.0, width = 1.0, height = 1.0),
+                        normalizedOffset = null,
+                    ),
+                    results = emptyList(),
+                ),
+            )
+        }
+
+        val scrolled = closeChildPopupsForScrolledParent(popups, 0)
+
+        assertEquals(listOf("root"), scrolled.map { it.id })
+        assertEquals(1, scrolled.single().clearSelectionSignal)
+    }
+
+    @Test
     fun existingPopupsRetainSelectionAndHistorySignalsWhenThemeChanges() {
         val popups = listOf(
             LookupPopupItem(
@@ -191,6 +253,44 @@ class LookupPopupTest {
         assertTrue(themed.single().state.darkMode)
         assertTrue(themed.single().state.eInkMode)
         assertTrue(themed.single().state.audioSettings.enableAutoplay)
+    }
+
+    @Test
+    fun popupSelectionOffsetTracksHistoryControls() {
+        assertEquals(
+            50.0,
+            popupSelectionOffsetY(
+                frameTopDp = 50.0,
+                popupActionBar = false,
+                backCount = 0,
+                forwardCount = 0,
+                hasSasayakiCue = false,
+            ),
+            0.0,
+        )
+        assertEquals(
+            87.0,
+            popupSelectionOffsetY(
+                frameTopDp = 50.0,
+                popupActionBar = false,
+                backCount = 1,
+                forwardCount = 0,
+                hasSasayakiCue = false,
+            ),
+            0.0,
+        )
+    }
+
+    @Test
+    fun popupTouchStreamContinuesAfterMovingOutsideInitialHost() {
+        val tracker = PopupTouchStreamTracker()
+
+        assertTrue(tracker.shouldDispatch(MotionEvent.ACTION_DOWN, hitPopup = true))
+        tracker.onDispatchResult(MotionEvent.ACTION_DOWN, handled = true)
+        assertTrue(tracker.shouldDispatch(MotionEvent.ACTION_MOVE, hitPopup = false))
+        assertTrue(tracker.shouldDispatch(MotionEvent.ACTION_UP, hitPopup = false))
+        tracker.onDispatchResult(MotionEvent.ACTION_UP, handled = true)
+        assertFalse(tracker.shouldDispatch(MotionEvent.ACTION_MOVE, hitPopup = false))
     }
 
 }

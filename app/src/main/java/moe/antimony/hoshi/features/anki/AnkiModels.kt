@@ -21,6 +21,12 @@ data class AnkiNoteType(
 )
 
 @Serializable
+enum class AnkiBackendKind {
+    AnkiDroid,
+    AnkiConnect,
+}
+
+@Serializable
 enum class AnkiDuplicateScope {
     Collection,
     Deck,
@@ -29,6 +35,7 @@ enum class AnkiDuplicateScope {
 
 @Serializable
 data class AnkiSettings(
+    val backendKind: AnkiBackendKind = AnkiBackendKind.AnkiDroid,
     val selectedDeckId: Long? = null,
     val selectedDeckName: String? = null,
     val selectedNoteTypeId: Long? = null,
@@ -42,10 +49,13 @@ data class AnkiSettings(
     val duplicateScope: AnkiDuplicateScope = AnkiDuplicateScope.Collection,
     val compactGlossaries: Boolean = false,
     val embedMedia: Boolean = true,
+    val ankiConnectUrl: String = "",
+    val ankiConnectForceSync: Boolean = false,
 )
 
 data class AnkiPopupSettings(
     val isConfigured: Boolean = false,
+    val useAnkiConnect: Boolean = false,
     val needsAudio: Boolean = false,
     val allowDupes: Boolean = false,
     val compactGlossaries: Boolean = false,

@@ -4,6 +4,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import moe.antimony.hoshi.R
 
 class AdvancedSettingsRowsTest {
     @Test
@@ -12,17 +13,19 @@ class AdvancedSettingsRowsTest {
 
         assertEquals(
             listOf(
-                listOf("Audio", "Statistics", "Sasayaki (Audiobooks)"),
-                listOf("ッツ Sync", "HTTP Sync"),
-                listOf("Backup"),
+                listOf(R.string.advanced_audio, R.string.advanced_statistics, R.string.advanced_sasayaki_audiobooks),
+                listOf(R.string.sync_ttu_sync, R.string.advanced_http_sync, R.string.anki_connect_use),
+                listOf(R.string.settings_backup),
             ),
-            sections.map { section -> section.rows.map { it.title } },
+            sections.map { section -> section.rows.map { it.titleRes } },
         )
 
         val syncRow = sections.flatMap { it.rows }.single { it.destination == AdvancedDestination.Syncing }
+        val ankiConnectRow = sections.flatMap { it.rows }.single { it.destination == AdvancedDestination.AnkiConnect }
         val backupRow = sections.flatMap { it.rows }.single { it.destination == AdvancedDestination.Backup }
 
         assertEquals(AdvancedSettingsIcon.Cloud, syncRow.icon)
+        assertEquals(AdvancedSettingsIcon.AnkiConnect, ankiConnectRow.icon)
         assertEquals(AdvancedSettingsIcon.ExternalDrive, backupRow.icon)
         assertFalse(backupRow.icon == AdvancedSettingsIcon.Cloud)
         assertTrue(sections.indexOfFirst { it.rows.any { row -> row.destination == AdvancedDestination.Syncing } } !=

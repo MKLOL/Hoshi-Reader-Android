@@ -48,4 +48,37 @@ class AudioSettingsTest {
         assertEquals(listOf(AudioSettings.DefaultAudioSource), settings.audioSources)
     }
 
+    @Test
+    fun addSourceWithAnkiconnectAndroidLocalAudioUrlKeepsExternalSource() {
+        val settings = AudioSettings().addSource(
+            AudioSource(
+                name = "Ankiconnect Android",
+                url = AudioSettings.LocalAudioUrl,
+            ),
+        )
+
+        assertFalse(settings.enableLocalAudio)
+        assertEquals(
+            AudioSource(
+                name = "Ankiconnect Android",
+                url = AudioSettings.LocalAudioUrl,
+            ),
+            settings.audioSources.last(),
+        )
+    }
+
+    @Test
+    fun disablingBuiltInLocalAudioKeepsExternalAnkiconnectAndroidSource() {
+        val external = AudioSource(
+            name = "Ankiconnect Android",
+            url = AudioSettings.LocalAudioUrl,
+        )
+        val settings = AudioSettings(audioSources = listOf(AudioSettings.LocalAudioSource, AudioSettings.DefaultAudioSource, external))
+            .copy(enableLocalAudio = true)
+            .withLocalAudioEnabled(false)
+
+        assertFalse(settings.enableLocalAudio)
+        assertEquals(listOf(AudioSettings.DefaultAudioSource, external), settings.audioSources)
+    }
+
 }

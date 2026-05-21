@@ -23,21 +23,24 @@ internal class ReaderRouteStateHolder(
             val entry = repository.loadBookEntry(bookId)
                 ?: error("Book not found.")
             val parsedBook = parser.parse(entry.root)
+            val metadata = entry.metadata.copy(
+                title = parsedBook.title,
+                cover = repository.metadataCoverPath(entry.root, parsedBook.coverHref),
+                folder = entry.root.name,
+                lastAccess = repository.currentAppleReferenceDateSeconds(),
+            )
             repository.saveMetadata(
                 entry.root,
-                entry.metadata.copy(
-                    title = parsedBook.title,
-                    cover = repository.metadataCoverPath(entry.root, parsedBook.coverHref),
-                    folder = entry.root.name,
-                    lastAccess = repository.currentAppleReferenceDateSeconds(),
-                ),
+                metadata,
             )
-            repository.saveBookInfo(entry.root, parsedBook.bookInfo)
-            beforeBookmarkLoad(entry)
+            val displayEntry = entry.copy(metadata = metadata)
+            val displayBook = parsedBook.copy(title = displayEntry.displayTitle)
+            repository.saveBookInfo(entry.root, displayBook.bookInfo)
+            beforeBookmarkLoad(displayEntry)
             ReaderRouteLoadState.Ready(
-                entry = entry,
+                entry = displayEntry,
                 bookRoot = entry.root,
-                book = parsedBook,
+                book = displayBook,
                 bookmark = repository.loadBookmark(entry.root),
             )
         }.getOrElse { error ->

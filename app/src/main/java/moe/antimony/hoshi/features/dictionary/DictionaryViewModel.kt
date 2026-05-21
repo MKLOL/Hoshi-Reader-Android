@@ -9,12 +9,14 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import moe.antimony.hoshi.R
 import moe.antimony.hoshi.dictionary.DictionaryInfo
 import moe.antimony.hoshi.dictionary.DictionaryRename
 import moe.antimony.hoshi.dictionary.DictionaryRepository
@@ -26,13 +28,13 @@ import moe.antimony.hoshi.dictionary.DictionaryUpdateSummary
 import moe.antimony.hoshi.dictionary.RecommendedDictionary
 import moe.antimony.hoshi.features.anki.AnkiSettings
 import moe.antimony.hoshi.features.anki.AnkiSettingsRepository
+import moe.antimony.hoshi.ui.UiText
 
 internal interface DictionaryViewModelRepository {
     suspend fun loadDictionaries(): Map<DictionaryType, List<DictionaryInfo>>
     suspend fun updatableDictionaries(): List<DictionaryUpdateCandidate>
     suspend fun importDictionaries(
         items: List<DictionaryImportItem>,
-        type: DictionaryType,
         onProgress: (DictionaryImportItem) -> Unit,
     )
     suspend fun importRecommendedDictionaries(
@@ -69,12 +71,16 @@ internal class AndroidDictionaryViewModelRepository(
 
     override suspend fun importDictionaries(
         items: List<DictionaryImportItem>,
-        type: DictionaryType,
         onProgress: (DictionaryImportItem) -> Unit,
     ) {
+        val lowRamImport = settingsRepository.settings.first().lowRamDictionaryImport
         items.forEach { item ->
             onProgress(item)
-            dictionaryRepository.importDictionary(contentResolver, requireNotNull(item.uri), type)
+            dictionaryRepository.importDictionary(
+                contentResolver = contentResolver,
+                uri = requireNotNull(item.uri),
+                lowRamImport = lowRamImport,
+            )
         }
     }
 
@@ -85,13 +91,20 @@ internal class AndroidDictionaryViewModelRepository(
         dictionaries: List<RecommendedDictionary>,
         onProgress: (DictionaryUpdateProgress) -> Unit,
     ) {
-        dictionaryRepository.importRecommendedDictionaries(dictionaries, onProgress)
+        dictionaryRepository.importRecommendedDictionaries(
+            dictionaries = dictionaries,
+            onProgress = onProgress,
+            lowRamImport = settingsRepository.settings.first().lowRamDictionaryImport,
+        )
     }
 
     override suspend fun updateDictionaries(
         onProgress: (DictionaryUpdateProgress) -> Unit,
     ): DictionaryUpdateSummary =
-        dictionaryRepository.updateDictionaries(onProgress)
+        dictionaryRepository.updateDictionaries(
+            onProgress = onProgress,
+            lowRamImport = settingsRepository.settings.first().lowRamDictionaryImport,
+        )
 
     override suspend fun setDictionaryEnabled(type: DictionaryType, fileName: String, enabled: Boolean) {
         dictionaryRepository.setDictionaryEnabled(type, fileName, enabled)
@@ -151,12 +164,11 @@ internal class DictionaryViewModel(
         _uiState.update { it.copy(selectedType = type) }
     }
 
-    fun importDictionaries(items: List<DictionaryImportItem>, type: DictionaryType) {
+    fun importDictionaries(items: List<DictionaryImportItem>) {
         importDictionaries(
             importItems = items,
-            type = type,
             importOperation = { onProgress ->
-                repository.importDictionaries(items, type, onProgress)
+                repository.importDictionaries(items, onProgress)
             },
         )
     }
@@ -191,7 +203,8 @@ internal class DictionaryViewModel(
             }.onFailure { error ->
                 _uiState.update {
                     it.copy(
-                        errorMessage = error.localizedMessage ?: "Failed to download dictionaries.",
+                        errorMessage = error.localizedMessage?.let(UiText::Literal)
+                            ?: UiText.Resource(R.string.dictionary_download_failed),
                     )
                 }
             }
@@ -218,7 +231,8 @@ internal class DictionaryViewModel(
             }.onFailure { error ->
                 _uiState.update {
                     it.copy(
-                        errorMessage = error.localizedMessage ?: "Failed to update dictionaries.",
+                        errorMessage = error.localizedMessage?.let(UiText::Literal)
+                            ?: UiText.Resource(R.string.dictionary_update_failed),
                     )
                 }
             }
@@ -228,7 +242,6 @@ internal class DictionaryViewModel(
 
     internal fun importDictionaries(
         importItems: List<DictionaryImportItem>,
-        type: DictionaryType,
         importOperation: suspend ((DictionaryImportItem) -> Unit) -> Unit,
     ) {
         if (importItems.isEmpty()) return
@@ -238,7 +251,12 @@ internal class DictionaryViewModel(
                 withContext(ioDispatcher) {
                     importOperation { item ->
                         _uiState.update { state ->
-                            state.copy(currentImportMessage = "Importing ${item.displayName.ifBlank { "dictionary" }}")
+                            state.copy(
+                                currentImportMessage = UiText.Resource(
+                                    R.string.dictionary_importing_named_format,
+                                    item.displayName.ifBlank { "dictionary" },
+                                ),
+                            )
                         }
                     }
                 }
@@ -247,7 +265,8 @@ internal class DictionaryViewModel(
             }.onFailure { error ->
                 _uiState.update {
                     it.copy(
-                        errorMessage = error.localizedMessage ?: "Failed to import dictionary.",
+                        errorMessage = error.localizedMessage?.let(UiText::Literal)
+                            ?: UiText.Resource(R.string.dictionary_import_failed),
                     )
                 }
             }
@@ -270,6 +289,9 @@ internal class DictionaryViewModel(
         scope.launch {
             withContext(ioDispatcher) {
                 repository.deleteDictionary(type, dictionary.path.name)
+            }
+            repository.updateSettings { current ->
+                current.copy(collapsedDictionaries = current.collapsedDictionaries - dictionary.index.title)
             }
             reloadDictionaries(clearError = false)
         }
@@ -302,7 +324,7 @@ internal class DictionaryViewModel(
         }
     }
 
-    fun showError(message: String) {
+    fun showError(message: UiText) {
         _uiState.update { it.copy(errorMessage = message) }
     }
 
@@ -352,10 +374,10 @@ internal class DictionaryViewModel(
     }
 }
 
-private fun DictionaryUpdateProgress.message(): String =
+private fun DictionaryUpdateProgress.message(): UiText =
     when (stage) {
-        DictionaryUpdateStage.Fetching -> "Fetching $title"
-        DictionaryUpdateStage.Checking -> "Checking $title"
-        DictionaryUpdateStage.Downloading -> "Downloading $title"
-        DictionaryUpdateStage.Importing -> "Importing $title"
+        DictionaryUpdateStage.Fetching -> UiText.Resource(R.string.dictionary_fetching_named_format, title)
+        DictionaryUpdateStage.Checking -> UiText.Resource(R.string.dictionary_checking_named_format, title)
+        DictionaryUpdateStage.Downloading -> UiText.Resource(R.string.dictionary_downloading_named_format, title)
+        DictionaryUpdateStage.Importing -> UiText.Resource(R.string.dictionary_importing_named_format, title)
     }

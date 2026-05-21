@@ -34,6 +34,7 @@ class ReaderSettingsRepositoryTest {
             assertEquals(22, settings.fontSize)
             assertFalse(settings.hideFurigana)
             assertFalse(settings.continuousMode)
+            assertFalse(settings.blurImages)
             assertFalse(settings.enableStatistics)
             assertEquals(StatisticsAutostartMode.Off, settings.statisticsAutostartMode)
             assertFalse(settings.showStatisticsToggle)
@@ -53,6 +54,7 @@ class ReaderSettingsRepositoryTest {
             assertTrue(settings.showProgressTop)
             assertEquals(320, settings.popupWidth)
             assertEquals(250, settings.popupHeight)
+            assertEquals(1.0, settings.popupScale, 0.000001)
             assertFalse(settings.popupActionBar)
             assertFalse(settings.popupFullWidth)
             assertTrue(settings.popupSwipeToDismiss)
@@ -119,6 +121,7 @@ class ReaderSettingsRepositoryTest {
                     fontSize = 24,
                     hideFurigana = true,
                     continuousMode = true,
+                    blurImages = true,
                     enableStatistics = true,
                     statisticsAutostartMode = StatisticsAutostartMode.PageTurn,
                     showStatisticsToggle = true,
@@ -138,6 +141,7 @@ class ReaderSettingsRepositoryTest {
                     showProgressTop = false,
                     popupWidth = 420,
                     popupHeight = 300,
+                    popupScale = 1.25,
                     popupActionBar = true,
                     popupFullWidth = true,
                     popupSwipeToDismiss = false,
@@ -160,6 +164,7 @@ class ReaderSettingsRepositoryTest {
             assertEquals(24, saved.fontSize)
             assertTrue(saved.hideFurigana)
             assertTrue(saved.continuousMode)
+            assertTrue(saved.blurImages)
             assertTrue(saved.enableStatistics)
             assertEquals(StatisticsAutostartMode.PageTurn, saved.statisticsAutostartMode)
             assertTrue(saved.showStatisticsToggle)
@@ -179,6 +184,7 @@ class ReaderSettingsRepositoryTest {
             assertFalse(saved.showProgressTop)
             assertEquals(420, saved.popupWidth)
             assertEquals(300, saved.popupHeight)
+            assertEquals(1.25, saved.popupScale, 0.000001)
             assertTrue(saved.popupActionBar)
             assertTrue(saved.popupFullWidth)
             assertFalse(saved.popupSwipeToDismiss)

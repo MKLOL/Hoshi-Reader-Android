@@ -6,6 +6,7 @@ import de.manhhao.hoshi.GlossaryEntry
 import de.manhhao.hoshi.LookupResult
 import de.manhhao.hoshi.PitchEntry
 import de.manhhao.hoshi.TermResult
+import de.manhhao.hoshi.TransformGroup
 import moe.antimony.hoshi.features.audio.AudioPlaybackMode
 import moe.antimony.hoshi.features.audio.AudioSettings
 import moe.antimony.hoshi.features.audio.AudioSource
@@ -59,16 +60,161 @@ class LookupPopupHtmlTest {
         assertTrue(html.contains("window.entryCount = 1;"))
     }
 
+    @Test
+    fun popupHtmlInjectsFontFacesAndInitialScaleLikeIosPopupWebView() {
+        val html = LookupPopupHtml.render(
+            listOf(lookupResult(expression = "食べる", reading = "たべる", glossary = "to eat")),
+            assets = LookupPopupAssets(
+                popupJs = "window.renderPopup = function() {};",
+                popupCss = ".entry-header {}",
+                selectionJs = "window.hoshiSelection = { selectText: function() {} };",
+            ),
+            fontFaceCss = """
+                @font-face {
+                    font-family: "Klee One";
+                    src: url("https://hoshi.local/fonts/Klee%20One.ttf");
+                }
+            """.trimIndent(),
+            popupScale = 1.25,
+        )
+
+        assertTrue(html.contains("""font-family: "Klee One";"""))
+        assertTrue(html.contains("""src: url("https://hoshi.local/fonts/Klee%20One.ttf");"""))
+        assertTrue(html.contains("html { zoom: 1.25; }"))
+    }
+
+    @Test
+    fun popupHtmlExposesActiveAnkiConnectBackendToPopupJavascript() {
+        val html = LookupPopupHtml.render(
+            listOf(lookupResult(expression = "食べる", reading = "たべる", glossary = "to eat")),
+            assets = LookupPopupAssets(
+                popupJs = "window.renderPopup = function() {};",
+                popupCss = ".entry-header {}",
+                selectionJs = "window.hoshiSelection = { selectText: function() {} };",
+            ),
+            ankiSettings = AnkiPopupSettings(
+                isConfigured = true,
+                useAnkiConnect = true,
+            ),
+        )
+
+        assertTrue(html.contains("window.useAnkiConnect = true;"))
+    }
+
+    @Test
+    fun popupHtmlRewritesOnlyBuiltInLocalAudioSourceToInternalEndpoint() {
+        val ankiconnectAndroidSource = AudioSource(
+            name = "Ankiconnect Android",
+            url = AudioSettings.LocalAudioUrl,
+        )
+        val html = LookupPopupHtml.render(
+            listOf(lookupResult(expression = "食べる", reading = "たべる", glossary = "to eat")),
+            assets = LookupPopupAssets(
+                popupJs = "window.renderPopup = function() {};",
+                popupCss = ".entry-header {}",
+                selectionJs = "window.hoshiSelection = { selectText: function() {} };",
+            ),
+            audioSettings = AudioSettings(
+                audioSources = listOf(AudioSettings.LocalAudioSource, ankiconnectAndroidSource),
+                enableLocalAudio = true,
+            ),
+        )
+
+        assertTrue(html.contains("hoshi-local-audio-source://get/?term={term}&reading={reading}"))
+        assertTrue(html.contains(AudioSettings.LocalAudioUrl))
+    }
+
+    @Test
+    fun popupHtmlKeepsAnkiconnectAndroidLocalAudioSourceExternalWhenBuiltInLocalAudioIsOff() {
+        val html = LookupPopupHtml.render(
+            listOf(lookupResult(expression = "食べる", reading = "たべる", glossary = "to eat")),
+            assets = LookupPopupAssets(
+                popupJs = "window.renderPopup = function() {};",
+                popupCss = ".entry-header {}",
+                selectionJs = "window.hoshiSelection = { selectText: function() {} };",
+            ),
+            audioSettings = AudioSettings().addSource(
+                AudioSource(
+                    name = "Ankiconnect Android",
+                    url = AudioSettings.LocalAudioUrl,
+                ),
+            ),
+        )
+
+        assertTrue(html.contains(AudioSettings.LocalAudioUrl))
+        assertFalse(html.contains("hoshi-local-audio-source://get/?term={term}&reading={reading}"))
+    }
+
+    @Test
+    fun popupHtmlExposesNativeButtonFrameBridge() {
+        val html = LookupPopupHtml.render(
+            listOf(lookupResult(expression = "食べる", reading = "たべる", glossary = "to eat")),
+            assets = LookupPopupAssets(
+                popupJs = "window.renderPopup = function() {};",
+                popupCss = ".button-slot {}",
+                selectionJs = "window.hoshiSelection = { selectText: function() {} };",
+            ),
+        )
+
+        assertTrue(html.contains("buttonFrames: { postMessage: function(frames) { window.HoshiAndroidPopup.postMessage('buttonFrames', frames); } }"))
+    }
+
+    @Test
+    fun eInkPopupCssTargetsNativeButtonSlots() {
+        val html = LookupPopupHtml.render(
+            listOf(lookupResult(expression = "食べる", reading = "たべる", glossary = "to eat")),
+            assets = LookupPopupAssets(
+                popupJs = "window.renderPopup = function() {};",
+                popupCss = ".button-slot {}",
+                selectionJs = "window.hoshiSelection = { selectText: function() {} };",
+            ),
+            eInkMode = true,
+        )
+
+        assertTrue(html.contains("""html[data-hoshi-eink-mode="true"] .button-slot"""))
+        assertFalse(html.contains("""html[data-hoshi-eink-mode="true"] .audio-button"""))
+        assertFalse(html.contains("""html[data-hoshi-eink-mode="true"] .mine-button"""))
+    }
+
+    @Test
+    fun deinflectionTraceIncludesBridgeDescriptionsForPopupOverlay() {
+        val html = LookupPopupHtml.render(
+            listOf(
+                lookupResult(
+                    expression = "食べる",
+                    reading = "たべる",
+                    glossary = "to eat",
+                    process = arrayOf(
+                        TransformGroup(
+                            name = "polite",
+                            description = "Polite conjugation of verbs and adjectives.\nUsage: example text.",
+                        ),
+                    ),
+                ),
+            ),
+            assets = LookupPopupAssets(
+                popupJs = "window.renderPopup = function() {};",
+                popupCss = ".entry-header {}",
+                selectionJs = "window.hoshiSelection = { selectText: function() {} };",
+            ),
+        )
+
+        assertTrue(html.contains(""""name":"polite""""))
+        assertTrue(html.contains(""""description":"Polite conjugation of verbs and adjectives.\nUsage: example text.""""))
+        assertTrue(html.contains("""<div class="overlay-close" onclick="closeOverlay()">×</div>"""))
+    }
+
     private fun lookupResult(
         expression: String,
         reading: String,
         glossary: String,
+        process: Array<TransformGroup> = emptyArray(),
         frequencies: Array<FrequencyEntry> = emptyArray(),
         pitches: Array<PitchEntry> = emptyArray(),
     ): LookupResult = LookupResult(
         expression,
         expression,
-        emptyArray(),
+        process,
         TermResult(
             expression = expression,
             reading = reading,

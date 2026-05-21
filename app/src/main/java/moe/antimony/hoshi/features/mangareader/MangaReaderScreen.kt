@@ -95,7 +95,7 @@ import moe.antimony.hoshi.features.ai.aiChatSettingsRepository
 import moe.antimony.hoshi.features.dictionary.DictionarySettings
 import moe.antimony.hoshi.features.dictionary.LookupPopupItem
 import moe.antimony.hoshi.features.dictionary.LookupPopupOptions
-import moe.antimony.hoshi.features.dictionary.LookupPopupStackView
+import moe.antimony.hoshi.features.dictionary.LookupPopupAndroidStack
 import moe.antimony.hoshi.features.dictionary.createLookupPopupItem
 import moe.antimony.hoshi.features.reader.ReaderNavigationDirection
 import moe.antimony.hoshi.features.reader.ReaderSelectionData
@@ -906,7 +906,7 @@ internal fun MangaReaderScreen(
                 )
             }
 
-            LookupPopupStackView(
+            LookupPopupAndroidStack(
                 popups = lookupPopups,
                 onPopupsChange = { lookupPopups = it },
                 lookupChildPopup = ::lookupPopupFor,

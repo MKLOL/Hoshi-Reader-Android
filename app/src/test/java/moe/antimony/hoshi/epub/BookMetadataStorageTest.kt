@@ -23,6 +23,7 @@ class BookMetadataStorageTest {
         val metadata = BookMetadata(
             id = bookId,
             title = "屍人荘の殺人",
+            renamedTitle = "Custom Shelf Title",
             cover = "Books/book-a/cover.jpg",
             folder = "book-a",
             lastAccess = 798720000.0,
@@ -34,9 +35,33 @@ class BookMetadataStorageTest {
         assertEquals(bookId, saved.getValue("id").jsonPrimitive.content)
         UUID.fromString(saved.getValue("id").jsonPrimitive.content)
         assertEquals("屍人荘の殺人", saved.getValue("title").jsonPrimitive.content)
+        assertEquals("Custom Shelf Title", saved.getValue("renamedTitle").jsonPrimitive.content)
         assertEquals("Books/book-a/cover.jpg", saved.getValue("cover").jsonPrimitive.content)
         assertEquals("book-a", saved.getValue("folder").jsonPrimitive.content)
         assertEquals(798720000.0, saved.getValue("lastAccess").jsonPrimitive.double, 0.0)
+    }
+
+    @Test
+    fun metadataWithoutRenamedTitleStillLoadsFromOldSidecar() = runBlocking {
+        val storage = BookStorage(Files.createTempDirectory("hoshi-metadata-old-title").toFile())
+        val bookRoot = storage.createBookDirectory("book")
+        bookRoot.resolve("metadata.json").writeText(
+            """
+            {
+                "id": "00000000-0000-0000-0000-000000000001",
+                "title": "Original Title",
+                "cover": null,
+                "folder": "book",
+                "lastAccess": 42.0
+            }
+            """.trimIndent(),
+        )
+
+        val metadata = requireNotNull(storage.loadMetadata(bookRoot))
+
+        assertEquals("Original Title", metadata.title)
+        assertEquals(null, metadata.renamedTitle)
+        assertEquals("Original Title", metadata.displayTitle)
     }
 
     @Test
@@ -264,6 +289,34 @@ class BookMetadataStorageTest {
         storage.saveSasayakiPlayback(root, copiedPlayback)
 
         assertEquals(copiedPlayback, storage.loadSasayakiPlayback(root))
+    }
+
+    @Test
+    fun savesAndLoadsIosCompatibleHighlightSidecar() = runBlocking {
+        val storage = BookStorage(Files.createTempDirectory("hoshi-highlight-sidecars").toFile())
+        val root = storage.createBookDirectory("book")
+        val highlightId = UUID.randomUUID().toString()
+        val highlights = listOf(
+            ReaderHighlight(
+                id = highlightId,
+                character = 42,
+                offset = 7,
+                text = "食べる",
+                color = HighlightColor.Green,
+                createdAt = 801187200.5,
+            ),
+        )
+
+        storage.saveHighlights(root, highlights)
+
+        val saved = Json.parseToJsonElement(root.resolve("highlights.json").readText()).jsonArray.single().jsonObject
+        assertEquals(highlightId, saved.getValue("id").jsonPrimitive.content)
+        assertEquals(42, saved.getValue("character").jsonPrimitive.content.toInt())
+        assertEquals(7, saved.getValue("offset").jsonPrimitive.content.toInt())
+        assertEquals("食べる", saved.getValue("text").jsonPrimitive.content)
+        assertEquals("green", saved.getValue("color").jsonPrimitive.content)
+        assertEquals(801187200.5, saved.getValue("createdAt").jsonPrimitive.double, 0.0)
+        assertEquals(highlights, storage.loadHighlights(root))
     }
 
     @Test

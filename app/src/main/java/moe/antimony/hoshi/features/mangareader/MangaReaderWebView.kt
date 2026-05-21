@@ -216,7 +216,7 @@ private fun WebView.attachMangaTouchListener(
                 when (event.actionMasked) {
                     MotionEvent.ACTION_DOWN -> tracker.onDown(event.x, event.y, event.eventTime)
                     MotionEvent.ACTION_MOVE -> dispatch(tracker.onMove(event.x, event.y, event.eventTime))
-                    MotionEvent.ACTION_UP -> dispatch(tracker.onUp(event.x, event.y))
+                    MotionEvent.ACTION_UP -> dispatch(tracker.onUp(event.x, event.y, event.eventTime))
                     MotionEvent.ACTION_CANCEL -> tracker.onCancel()
                 }
                 return false

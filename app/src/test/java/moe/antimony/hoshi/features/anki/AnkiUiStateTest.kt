@@ -38,7 +38,10 @@ class AnkiUiStateTest {
         val settings = Json { ignoreUnknownKeys = true }
             .decodeFromString<AnkiSettings>("""{"allowDupes":false,"compactGlossaries":true}""")
 
+        assertEquals(AnkiBackendKind.AnkiDroid, settings.backendKind)
         assertEquals(AnkiDuplicateScope.Collection, settings.duplicateScope)
         assertFalse(settings.checkDuplicatesAcrossAllModels)
+        assertEquals("", settings.ankiConnectUrl)
+        assertFalse(settings.ankiConnectForceSync)
     }
 }

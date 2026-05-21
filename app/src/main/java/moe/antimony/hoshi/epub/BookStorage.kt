@@ -48,7 +48,11 @@ data class BookMetadata(
      * overwrite the tombstone instead of deleting the freshly-imported local copy.
      */
     val importedAt: String? = null,
-)
+    val renamedTitle: String? = null,
+) {
+    val displayTitle: String
+        get() = renamedTitle?.takeIf { it.isNotBlank() } ?: title.orEmpty()
+}
 
 @Serializable
 data class BookShelf(
@@ -59,7 +63,10 @@ data class BookShelf(
 data class BookEntry(
     val root: File,
     val metadata: BookMetadata,
-)
+) {
+    val displayTitle: String
+        get() = metadata.displayTitle.ifBlank { root.name }
+}
 
 enum class BookSortOption {
     Recent,
@@ -116,6 +123,13 @@ class BookStorage(filesDir: File) {
 
     suspend fun saveStatistics(bookRoot: File, statistics: List<ReadingStatistics>) {
         repository.saveStatistics(bookRoot, statistics)
+    }
+
+    suspend fun loadHighlights(bookRoot: File): List<ReaderHighlight> =
+        repository.loadHighlights(bookRoot)
+
+    suspend fun saveHighlights(bookRoot: File, highlights: List<ReaderHighlight>) {
+        repository.saveHighlights(bookRoot, highlights)
     }
 
     suspend fun loadBookInfo(bookRoot: File): BookInfo? = repository.loadBookInfo(bookRoot)

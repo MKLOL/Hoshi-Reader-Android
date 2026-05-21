@@ -107,6 +107,16 @@ class EpubBookParserTest {
         assertEquals("item/image/cover.jpg", book.coverHref)
     }
 
+    @Test
+    fun missingEpubTitleUsesProvidedImportFileNameFallback() {
+        val root = tempFolder.newFolder("missing-title-book")
+        writeExtractedEpub(root, title = " ")
+
+        val book = EpubBookParser().parse(root, fallbackTitle = "Source File")
+
+        assertEquals("Source File", book.title)
+    }
+
     private fun writeExtractedEpub(
         root: File,
         title: String = "Sample Book",

@@ -4,9 +4,11 @@ import android.content.Context
 import android.util.Log
 import androidx.core.content.FileProvider
 import de.manhhao.hoshi.HoshiDicts
+import moe.antimony.hoshi.R
 import moe.antimony.hoshi.features.audio.LocalAudioFile
 import moe.antimony.hoshi.features.audio.LocalAudioRepository
 import moe.antimony.hoshi.features.audio.LocalAudioResolver
+import moe.antimony.hoshi.ui.UiText
 import java.io.File
 import java.net.URL
 import kotlinx.coroutines.Dispatchers
@@ -19,6 +21,7 @@ class AnkiRepository(
     private val backend: AnkiBackend,
     private val settingsRepository: AnkiSettingsRepository,
     private val localAudioRepository: LocalAudioRepository = LocalAudioRepository.fromContext(context),
+    private val ankiConnectBackendFactory: (String) -> AnkiBackend = { endpoint -> AnkiConnectBackend(endpoint) },
 ) {
     val settings: Flow<AnkiSettings> = settingsRepository.settings
 
@@ -29,25 +32,68 @@ class AnkiRepository(
     fun isAnkiDroidAvailable(): Boolean = backend.isAvailable()
 
     suspend fun fetchConfiguration(): AnkiFetchResult = withContext(Dispatchers.IO) {
+        val currentSettings = settings.first()
+        val activeBackend = activeBackendOrError(currentSettings).getOrElse { error ->
+            return@withContext AnkiFetchResult.Error(
+                error.message?.let(UiText::Literal) ?: UiText.Resource(R.string.anki_fetch_configure_failed),
+            )
+        }
         val fetched = runCatching {
-            if (!backend.isAvailable()) return@withContext AnkiFetchResult.Error(AnkiFetchFailure.ApiUnavailable.userMessage)
-            backend.fetchDecks() to backend.fetchNoteTypes()
+            if (!activeBackend.isAvailable()) {
+                return@withContext AnkiFetchResult.Error(
+                    message = if (currentSettings.backendKind == AnkiBackendKind.AnkiDroid) {
+                        UiText.Resource(AnkiFetchFailure.ApiUnavailable.userMessageRes)
+                    } else {
+                        UiText.Resource(R.string.anki_fetch_connect_ankiconnect_failed)
+                    },
+                    failure = if (currentSettings.backendKind == AnkiBackendKind.AnkiDroid) {
+                        AnkiFetchFailure.ApiUnavailable
+                    } else {
+                        null
+                    },
+                )
+            }
+            activeBackend.fetchDecks() to activeBackend.fetchNoteTypes()
         }.getOrElse { error ->
             if (error is AnkiFetchException) {
-                logAnkiFetchFailure("Unable to fetch AnkiDroid configuration: ${error.failure}", error)
-                return@withContext AnkiFetchResult.Error(error.message ?: error.failure.userMessage)
+                logAnkiFetchFailure("Unable to fetch Anki configuration: ${error.failure}", error)
+                return@withContext AnkiFetchResult.Error(
+                    message = if (error.message != error.failure.userMessage) {
+                        UiText.Literal(error.message ?: error.failure.userMessage)
+                    } else {
+                        UiText.Resource(error.failure.userMessageRes)
+                    },
+                    failure = error.failure,
+                )
             }
-            logAnkiFetchFailure("Unable to fetch AnkiDroid configuration.", error)
+            logAnkiFetchFailure("Unable to fetch Anki configuration.", error)
             return@withContext AnkiFetchResult.Error(
-                "AnkiDroid did not respond while fetching decks and note types. Open AnkiDroid and try again.",
+                if (currentSettings.backendKind == AnkiBackendKind.AnkiDroid) {
+                    UiText.Resource(AnkiFetchFailure.ProviderFailure.userMessageRes)
+                } else {
+                    error.message?.let(UiText::Literal)
+                        ?: UiText.Resource(R.string.anki_fetch_ankiconnect_provider_failure)
+                },
             )
         }
         val (decks, noteTypes) = fetched
         if (decks.isEmpty()) {
-            return@withContext AnkiFetchResult.Error("No AnkiDroid decks were found.")
+            return@withContext AnkiFetchResult.Error(
+                if (currentSettings.backendKind == AnkiBackendKind.AnkiDroid) {
+                    UiText.Resource(R.string.anki_fetch_no_ankidroid_decks)
+                } else {
+                    UiText.Resource(R.string.anki_fetch_no_ankiconnect_decks)
+                },
+            )
         }
         if (noteTypes.isEmpty()) {
-            return@withContext AnkiFetchResult.Error("No AnkiDroid note types were found.")
+            return@withContext AnkiFetchResult.Error(
+                if (currentSettings.backendKind == AnkiBackendKind.AnkiDroid) {
+                    UiText.Resource(R.string.anki_fetch_no_ankidroid_note_types)
+                } else {
+                    UiText.Resource(R.string.anki_fetch_no_ankiconnect_note_types)
+                },
+            )
         }
         settingsRepository.update { current ->
             val selectedDeck = selectDeckAfterFetch(decks, current)
@@ -65,6 +111,22 @@ class AnkiRepository(
         AnkiFetchResult.Success(decks, noteTypes)
     }
 
+    suspend fun pingAnkiConnect(): AnkiConnectConnectionResult = withContext(Dispatchers.IO) {
+        val currentSettings = settings.first()
+        val endpoint = runCatching {
+            AnkiConnectUrlValidator.requireValidEndpoint(currentSettings.ankiConnectUrl).toString()
+        }.getOrElse { error ->
+            return@withContext AnkiConnectConnectionResult.Error(
+                error.message?.let(UiText::Literal) ?: UiText.Resource(R.string.anki_connect_invalid_url),
+            )
+        }
+        if (ankiConnectBackendFactory(endpoint).isAvailable()) {
+            AnkiConnectConnectionResult.Connected
+        } else {
+            AnkiConnectConnectionResult.Error(UiText.Resource(R.string.anki_fetch_connect_ankiconnect_failed))
+        }
+    }
+
     suspend fun mineEntry(
         rawPayload: String,
         context: AnkiMiningContext,
@@ -72,8 +134,9 @@ class AnkiRepository(
         noteTypes: List<AnkiNoteType>,
     ): Boolean = withContext(Dispatchers.IO) {
         val settings = settings.first()
-        val availableDecks = decks.ifEmpty { backend.fetchDecks() }
-        val availableNoteTypes = noteTypes.ifEmpty { backend.fetchNoteTypes() }
+        val activeBackend = activeBackendOrError(settings).getOrElse { return@withContext false }
+        val availableDecks = decks.ifEmpty { activeBackend.fetchDecks() }
+        val availableNoteTypes = noteTypes.ifEmpty { activeBackend.fetchNoteTypes() }
         val deck = availableDecks.firstOrNull { it.id == settings.selectedDeckId }
             ?: settings.selectedDeckName?.let { name -> availableDecks.firstOrNull { it.name == name } }
             ?: return@withContext false
@@ -86,15 +149,21 @@ class AnkiRepository(
         val mediaContext = AnkiMiningContext(
             sentence = context.sentence,
             documentTitle = context.documentTitle,
-            coverPath = context.coverPath?.let { addMediaFile(it, "hoshi_cover_${File(it).name}", mimeTypeForPath(it)) },
-            sasayakiAudioPath = context.sasayakiAudioPath?.let { addMediaFile(it, File(it).name, mimeTypeForPath(it)) },
+            coverPath = context.coverPath?.let {
+                addMediaFile(it, "hoshi_cover_${File(it).name}", mimeTypeForPath(it), activeBackend, settings.backendKind)
+            },
+            sasayakiAudioPath = context.sasayakiAudioPath?.let {
+                addMediaFile(it, File(it).name, mimeTypeForPath(it), activeBackend, settings.backendKind)
+            },
             sentenceOffset = context.sentenceOffset,
         )
         val mediaPayload = payload.copy(
-            audio = payload.audio.takeIf { it.isNotBlank() }?.let(::addRemoteAudio).orEmpty(),
+            audio = payload.audio.takeIf { it.isNotBlank() }
+                ?.let { addRemoteAudio(it, activeBackend, settings.backendKind) }
+                .orEmpty(),
         )
         val dictionaryMediaTags = payload.dictionaryMedia.associate { media ->
-            media.filename to addDictionaryMedia(media).orEmpty()
+            media.filename to addDictionaryMedia(media, activeBackend, settings.backendKind).orEmpty()
         }.filterValues { it.isNotBlank() }
         val fields = fieldMappings.mapValues { (_, template) ->
             dictionaryMediaTags.entries.fold(
@@ -103,7 +172,7 @@ class AnkiRepository(
                 .let(::normalizeAnkiDictionaryHtml)
         }.filterValues { it.isNotBlank() }
 
-        val added = backend.addNote(
+        val added = activeBackend.addNote(
             deck = deck,
             noteType = noteType,
             fieldsByName = fields,
@@ -112,6 +181,9 @@ class AnkiRepository(
             duplicateScope = settings.duplicateScope,
             checkDuplicatesAcrossAllModels = settings.checkDuplicatesAcrossAllModels,
         )
+        if (added && settings.backendKind == AnkiBackendKind.AnkiConnect && settings.ankiConnectForceSync) {
+            activeBackend.sync()
+        }
         added
     }
 
@@ -121,8 +193,9 @@ class AnkiRepository(
         noteTypes: List<AnkiNoteType>,
     ): Boolean = withContext(Dispatchers.IO) {
         val settings = settings.first()
-        val availableNoteTypes = noteTypes.ifEmpty { backend.fetchNoteTypes() }
-        val availableDecks = decks.ifEmpty { backend.fetchDecks() }
+        val activeBackend = activeBackendOrError(settings).getOrElse { return@withContext false }
+        val availableNoteTypes = noteTypes.ifEmpty { activeBackend.fetchNoteTypes() }
+        val availableDecks = decks.ifEmpty { activeBackend.fetchDecks() }
         val deck = availableDecks.firstOrNull { it.id == settings.selectedDeckId }
             ?: settings.selectedDeckName?.let { name -> availableDecks.firstOrNull { it.name == name } }
             ?: return@withContext false
@@ -130,7 +203,7 @@ class AnkiRepository(
             ?: settings.selectedNoteTypeName?.let { name -> availableNoteTypes.firstOrNull { it.name == name }?.id }
             ?: return@withContext false
         val noteType = availableNoteTypes.firstOrNull { it.id == noteTypeId } ?: return@withContext false
-        backend.isDuplicate(
+        activeBackend.isDuplicate(
             deck = deck,
             noteType = noteType,
             key = expression,
@@ -139,7 +212,7 @@ class AnkiRepository(
         )
     }
 
-    private fun addRemoteAudio(url: String): String? =
+    private fun addRemoteAudio(url: String, activeBackend: AnkiBackend, backendKind: AnkiBackendKind): String? =
         runCatching {
             val data = readAnkiAudioBytes(
                 url = url,
@@ -149,25 +222,35 @@ class AnkiRepository(
                 ?: return null
             val file = mediaCacheFile("hoshi_audio_${data.contentHashCode()}.mp3")
             file.writeBytes(data)
-            addMediaFile(file.absolutePath, file.name, "audio/mpeg")
+            addMediaFile(file.absolutePath, file.name, "audio/mpeg", activeBackend, backendKind)
         }.getOrNull()
 
-    private fun addDictionaryMedia(media: DictionaryMedia): String? =
+    private fun addDictionaryMedia(media: DictionaryMedia, activeBackend: AnkiBackend, backendKind: AnkiBackendKind): String? =
         runCatching {
             val data = HoshiDicts.getMediaFile(HoshiDicts.lookupObject, media.dictionary, media.path)
                 ?: return null
             val file = mediaCacheFile("hoshi_dict_${data.contentHashCode()}.${media.path.substringAfterLast('.', "bin")}")
             file.writeBytes(data)
-            addMediaFile(file.absolutePath, file.name, mimeTypeForPath(media.path))?.let(::ankiInlineMediaReference)
+            addMediaFile(file.absolutePath, file.name, mimeTypeForPath(media.path), activeBackend, backendKind)
+                ?.let(::ankiInlineMediaReference)
         }.onFailure { Log.w(TAG, "Failed to add dictionary media ${media.path}", it) }
             .getOrNull()
 
-    private fun addMediaFile(path: String, preferredName: String, mimeType: String): String? {
+    private fun addMediaFile(
+        path: String,
+        preferredName: String,
+        mimeType: String,
+        activeBackend: AnkiBackend,
+        backendKind: AnkiBackendKind,
+    ): String? {
         val file = File(path).takeIf { it.isFile } ?: return null
         return runCatching {
+            if (backendKind == AnkiBackendKind.AnkiConnect) {
+                return@runCatching activeBackend.addMediaFromBytes(file.readBytes(), preferredName, mimeType)
+            }
             val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
             context.grantUriPermission("com.ichi2.anki", uri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            backend.addMediaFromUri(uri.toString(), preferredName, mimeType)
+            activeBackend.addMediaFromUri(uri.toString(), preferredName, mimeType)
         }
             .onFailure { Log.w(TAG, "Failed to add Anki media $preferredName", it) }
             .getOrNull()
@@ -177,6 +260,15 @@ class AnkiRepository(
         val dir = File(context.cacheDir, "anki-media").also { it.mkdirs() }
         return File(dir, name)
     }
+
+    private fun activeBackendOrError(settings: AnkiSettings): Result<AnkiBackend> =
+        when (settings.backendKind) {
+            AnkiBackendKind.AnkiDroid -> Result.success(backend)
+            AnkiBackendKind.AnkiConnect -> runCatching {
+                val endpoint = AnkiConnectUrlValidator.requireValidEndpoint(settings.ankiConnectUrl).toString()
+                ankiConnectBackendFactory(endpoint)
+            }
+        }
 }
 
 internal fun readAnkiAudioBytes(
@@ -240,7 +332,15 @@ sealed interface AnkiFetchResult {
         val noteTypes: List<AnkiNoteType>,
     ) : AnkiFetchResult
 
-    data class Error(val message: String) : AnkiFetchResult
+    data class Error(
+        val message: UiText,
+        val failure: AnkiFetchFailure? = null,
+    ) : AnkiFetchResult
+}
+
+sealed interface AnkiConnectConnectionResult {
+    data object Connected : AnkiConnectConnectionResult
+    data class Error(val message: UiText) : AnkiConnectConnectionResult
 }
 
 fun mimeTypeForPath(path: String): String =

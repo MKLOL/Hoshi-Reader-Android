@@ -20,6 +20,8 @@ import moe.antimony.hoshi.features.audio.AudioSettings
 import moe.antimony.hoshi.features.audio.AudioSettingsRepository
 import moe.antimony.hoshi.features.anki.AnkiPopupSettings
 import moe.antimony.hoshi.features.reader.ReaderSelectionData
+import moe.antimony.hoshi.R
+import moe.antimony.hoshi.ui.UiText
 
 internal interface DictionarySearchRepository {
     val dictionarySettings: Flow<DictionarySettings>
@@ -90,6 +92,8 @@ internal class DictionarySearchViewModel(
         darkMode: Boolean = false,
         eInkMode: Boolean = false,
         ankiSettings: AnkiPopupSettings = AnkiPopupSettings(),
+        fontFaceCss: String = "",
+        popupScale: Double = 1.0,
     ) {
         val query = _uiState.value.query
         val dictionarySettings = _uiState.value.dictionarySettings.normalized()
@@ -109,6 +113,8 @@ internal class DictionarySearchViewModel(
                             eInkMode = eInkMode,
                             audioSettings = audioSettings,
                             ankiSettings = ankiSettings,
+                            fontFaceCss = fontFaceCss,
+                            popupScale = popupScale,
                         )
                     } else {
                         repository.rebuildLookupQuery()
@@ -123,6 +129,8 @@ internal class DictionarySearchViewModel(
                             eInkMode = eInkMode,
                             audioSettings = audioSettings,
                             ankiSettings = ankiSettings,
+                            fontFaceCss = fontFaceCss,
+                            popupScale = popupScale,
                         )
                     }
                 }
@@ -152,7 +160,8 @@ internal class DictionarySearchViewModel(
                         results = emptyList(),
                         hasSearched = true,
                         isSearching = false,
-                        errorMessage = error.localizedMessage ?: "Lookup failed.",
+                        errorMessage = error.localizedMessage?.let(UiText::Literal)
+                            ?: UiText.Resource(R.string.dictionary_lookup_failed),
                         dictionaryStyles = emptyMap(),
                         popups = emptyList(),
                         resultClearSelectionSignal = 0,

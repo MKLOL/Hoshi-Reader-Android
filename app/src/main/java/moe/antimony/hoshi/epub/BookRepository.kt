@@ -49,7 +49,7 @@ class BookRepository(
         }
         return when (sortOption) {
             BookSortOption.Recent -> entries.sortedByDescending { it.metadata.lastAccess }
-            BookSortOption.Title -> entries.sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.metadata.title.orEmpty() })
+            BookSortOption.Title -> entries.sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.displayTitle })
         }
     }
 
@@ -129,6 +129,13 @@ class BookRepository(
 
     override suspend fun saveStatistics(bookRoot: File, statistics: List<ReadingStatistics>) {
         sidecarDataSource.saveStatistics(bookRoot, statistics)
+    }
+
+    suspend fun loadHighlights(bookRoot: File): List<ReaderHighlight> =
+        sidecarDataSource.loadHighlights(bookRoot).orEmpty()
+
+    suspend fun saveHighlights(bookRoot: File, highlights: List<ReaderHighlight>) {
+        sidecarDataSource.saveHighlights(bookRoot, highlights)
     }
 
     suspend fun loadBookInfo(bookRoot: File): BookInfo? =
@@ -369,7 +376,10 @@ class BookImportDataSource(
     }
 
     private suspend fun importEpub(contentResolver: ContentResolver, uri: Uri): File {
-        contentResolver.validateImportFile(uri, ImportFileType.Epub)
+        val displayName = contentResolver.validateImportFile(uri, ImportFileType.Epub)
+        val fallbackTitle = displayName
+            .substringBeforeLast('.', missingDelimiterValue = displayName)
+            .takeIf { it.isNotBlank() }
         val tempRoot = File(filesDir, "ImportTemp/${UUID.randomUUID()}").canonicalFile
         contentResolver.openInputStream(uri).use { input ->
             requireNotNull(input) { "Unable to open selected EPUB" }
@@ -398,7 +408,7 @@ class BookImportDataSource(
                 throw it
             }
         }
-        val parsedBook = runCatching { parser.parse(tempRoot) }
+        val parsedBook = runCatching { parser.parse(tempRoot, fallbackTitle = fallbackTitle) }
             .onFailure { tempRoot.deleteRecursively() }
             .getOrThrow()
         val targetRoot = fileDataSource.createBookDirectoryForImportedTitle(parsedBook.title)
@@ -449,6 +459,13 @@ class BookSidecarDataSource(
             ListSerializer(ReadingStatistics.serializer()),
             statistics.deduplicateReadingStatistics(),
         )
+    }
+
+    suspend fun loadHighlights(bookRoot: File): List<ReaderHighlight>? =
+        loadJson(ListSerializer(ReaderHighlight.serializer()), bookRoot.resolve(HIGHLIGHTS_FILE_NAME))
+
+    suspend fun saveHighlights(bookRoot: File, highlights: List<ReaderHighlight>) {
+        saveJson(bookRoot, HIGHLIGHTS_FILE_NAME, ListSerializer(ReaderHighlight.serializer()), highlights)
     }
 
     suspend fun loadBookInfo(bookRoot: File): BookInfo? =
@@ -508,6 +525,7 @@ object SystemBookClock : BookClock {
 private const val METADATA_FILE_NAME = "metadata.json"
 private const val BOOKMARK_FILE_NAME = "bookmark.json"
 private const val STATISTICS_FILE_NAME = "statistics.json"
+private const val HIGHLIGHTS_FILE_NAME = "highlights.json"
 private const val BOOKINFO_FILE_NAME = "bookinfo.json"
 private const val SHELVES_FILE_NAME = "shelves.json"
 private const val SASAYAKI_MATCH_FILE_NAME = "sasayaki_match.json"

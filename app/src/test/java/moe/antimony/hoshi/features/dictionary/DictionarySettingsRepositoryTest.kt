@@ -22,7 +22,9 @@ class DictionarySettingsRepositoryTest {
     @Test
     fun emitsDefaultSettingsWhenThereIsNoLegacyStore() = runBlocking {
         repository().use { repository ->
-            assertEquals(DictionarySettings(), repository.settings.first())
+            val settings = repository.settings.first()
+            assertEquals(DictionarySettings(), settings)
+            assertFalse(settings.lowRamDictionaryImport)
         }
     }
 
@@ -42,6 +44,7 @@ class DictionarySettingsRepositoryTest {
                 harmonicFrequency = true,
                 deduplicatePitchAccents = true,
                 compactPitchAccents = false,
+                lowRamDictionaryImport = true,
                 customCSS = ".term { color: red; }",
             ),
         )
@@ -61,6 +64,7 @@ class DictionarySettingsRepositoryTest {
             assertTrue(migrated.harmonicFrequency)
             assertTrue(migrated.deduplicatePitchAccents)
             assertFalse(migrated.compactPitchAccents)
+            assertTrue(migrated.lowRamDictionaryImport)
             assertEquals(".term { color: red; }", migrated.customCSS)
 
             repository.update { it.copy(maxResults = 12) }
@@ -86,6 +90,7 @@ class DictionarySettingsRepositoryTest {
                     harmonicFrequency = true,
                     deduplicatePitchAccents = true,
                     compactPitchAccents = false,
+                    lowRamDictionaryImport = true,
                     customCSS = ".tag { display: none; }",
                 )
             }
@@ -104,6 +109,7 @@ class DictionarySettingsRepositoryTest {
             assertTrue(saved.harmonicFrequency)
             assertTrue(saved.deduplicatePitchAccents)
             assertFalse(saved.compactPitchAccents)
+            assertTrue(saved.lowRamDictionaryImport)
             assertEquals(".tag { display: none; }", saved.customCSS)
         }
     }

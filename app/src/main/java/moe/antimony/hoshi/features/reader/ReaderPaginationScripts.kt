@@ -11,6 +11,9 @@ internal object ReaderPaginationScripts {
     fun paginateInvocation(direction: ReaderNavigationDirection): String =
         "window.hoshiReader.paginate('${direction.jsValue}')"
 
+    fun nativeSelectionActiveInvocation(active: Boolean): String =
+        "if (window.hoshiReader && typeof window.hoshiReader.setNativeSelectionActive === 'function') { window.hoshiReader.setNativeSelectionActive($active); }"
+
     fun progressInvocation(): String =
         "window.hoshiReader.calculateProgress()"
 
@@ -33,6 +36,7 @@ internal object ReaderPaginationScripts {
         initialProgress: Double = 0.0,
         settings: ReaderSettings = ReaderSettings(),
         sasayakiCuesJson: String? = null,
+        highlightsJson: String? = null,
         initialFragment: String? = null,
     ): String {
         if (settings.continuousMode) {
@@ -40,6 +44,7 @@ internal object ReaderPaginationScripts {
                 initialProgress = initialProgress,
                 settings = settings,
                 sasayakiCuesJson = sasayakiCuesJson,
+                highlightsJson = highlightsJson,
                 initialFragment = initialFragment,
             )
         }
@@ -51,11 +56,14 @@ internal object ReaderPaginationScripts {
         window.hoshiReader = {
           pageHeight: 0,
           pageWidth: 0,
+          nativeSelectionActive: false,
+          nativeSelectionScrollPosition: null,
           cueWrappers: new Map(),
           activeCueId: null,
           ttuRegexNegated: /[^0-9A-Za-z○◯々-〇〻ぁ-ゖゝ-ゞァ-ヺー０-９Ａ-Ｚａ-ｚｦ-ﾝ\p{Radical}\p{Unified_Ideograph}]+/gimu,
           ttuRegex: /[0-9A-Za-z○◯々-〇〻ぁ-ゖゝ-ゞァ-ヺー０-９Ａ-Ｚａ-ｚｦ-ﾝ\p{Radical}\p{Unified_Ideograph}]/iu,
           nodeStartOffsets: new WeakMap(),
+          nodeStartRawOffsets: new WeakMap(),
           paginationMetrics: null,
           isVertical: function() {
             return window.getComputedStyle(document.body).writingMode === "vertical-rl";
@@ -69,6 +77,9 @@ internal object ReaderPaginationScripts {
           },
           countChars: function(text) {
             return Array.from(this.normalizeText(text)).length;
+          },
+          countRawChars: function(text) {
+            return Array.from(text || '').length;
           },
           isMatchableChar: function(char) {
             return this.ttuRegex.test(char || '');
@@ -106,14 +117,19 @@ internal object ReaderPaginationScripts {
           },
           buildNodeOffsets: function() {
             var offsets = new WeakMap();
+            var rawOffsets = new WeakMap();
             var walker = this.createWalker();
             var count = 0;
+            var rawCount = 0;
             var node;
             while (node = walker.nextNode()) {
               offsets.set(node, count);
+              rawOffsets.set(node, rawCount);
               count += this.countChars(node.textContent);
+              rawCount += this.countRawChars(node.textContent);
             }
             this.nodeStartOffsets = offsets;
+            this.nodeStartRawOffsets = rawOffsets;
             this.paginationMetrics = null;
           },
           countCharsBeforeViewport: function(node, context) {
@@ -351,6 +367,47 @@ internal object ReaderPaginationScripts {
             this.assignPagePosition(context, clamped);
             return clamped;
           },
+          setNativeSelectionActive: function(active) {
+            var context = this.getScrollContext();
+            if (active) {
+              this.nativeSelectionActive = true;
+              this.nativeSelectionScrollPosition = this.getPagePosition(context);
+              window.lastPageScroll = this.nativeSelectionScrollPosition;
+              return;
+            }
+            if (this.nativeSelectionActive && this.nativeSelectionScrollPosition !== null && this.nativeSelectionScrollPosition !== undefined) {
+              var lockedScroll = Math.min(Math.max(0, this.nativeSelectionScrollPosition), context.maxScroll);
+              this.assignPagePosition(context, lockedScroll);
+              window.lastPageScroll = lockedScroll;
+            }
+            this.nativeSelectionActive = false;
+            this.nativeSelectionScrollPosition = null;
+          },
+          handlePagedBodyScroll: function() {
+            this.lockRootViewport();
+            var context = this.getScrollContext();
+            if (context.pageSize <= 0) return;
+            var currentScroll = this.getPagePosition(context);
+            if (this.nativeSelectionActive) {
+              var lockedScroll = this.nativeSelectionScrollPosition;
+              if (lockedScroll === null || lockedScroll === undefined) {
+                lockedScroll = window.lastPageScroll || 0;
+              }
+              lockedScroll = Math.min(Math.max(0, lockedScroll), context.maxScroll);
+              if (Math.abs(currentScroll - lockedScroll) > 0.5) {
+                this.assignPagePosition(context, lockedScroll);
+              }
+              window.lastPageScroll = lockedScroll;
+              return;
+            }
+            var snappedScroll = Math.round(currentScroll / context.pageSize) * context.pageSize;
+            snappedScroll = Math.min(Math.max(0, snappedScroll), context.maxScroll);
+            if (Math.abs(currentScroll - snappedScroll) > 1) {
+              this.assignPagePosition(context, window.lastPageScroll || 0);
+            } else {
+              window.lastPageScroll = snappedScroll;
+            }
+          },
           registerSnapScroll: function(initialScroll) {
             if (window.snapScrollRegistered) return;
             window.snapScrollRegistered = true;
@@ -362,17 +419,7 @@ internal object ReaderPaginationScripts {
               }
             }, { passive: true });
             document.body.addEventListener('scroll', () => {
-              this.lockRootViewport();
-              var context = this.getScrollContext();
-              if (context.pageSize <= 0) return;
-              var currentScroll = this.getPagePosition(context);
-              var snappedScroll = Math.round(currentScroll / context.pageSize) * context.pageSize;
-              snappedScroll = Math.min(Math.max(0, snappedScroll), context.maxScroll);
-              if (Math.abs(currentScroll - snappedScroll) > 1) {
-                this.assignPagePosition(context, window.lastPageScroll || 0);
-              } else {
-                window.lastPageScroll = snappedScroll;
-              }
+              this.handlePagedBodyScroll();
             }, { passive: true });
           },
           alignToPage: function(context, offset) {
@@ -574,6 +621,7 @@ internal object ReaderPaginationScripts {
             return true;
           },
           paginate: function(direction) {
+            if (this.nativeSelectionActive) return "limit";
             var context = this.getScrollContext();
             if (context.pageSize <= 0) return "limit";
             var currentScroll = this.getPagePosition(context);
@@ -598,6 +646,7 @@ internal object ReaderPaginationScripts {
             }
           }
         };
+        ${readerHighlightsScript()}
         window.hoshiReader.initialize = function() {
           if (window.hoshiReader.didInitialize) return;
           window.hoshiReader.didInitialize = true;
@@ -617,6 +666,7 @@ internal object ReaderPaginationScripts {
           document.documentElement.style.setProperty('--hoshi-image-max-height', Math.max(1, pageHeight - ${settings.bottomOverlapPx}) + 'px');
           window.hoshiReader.pageHeight = pageHeight;
           window.hoshiReader.pageWidth = pageWidth;
+          ${readerImageBlurScript(settings)}
           Array.from(document.querySelectorAll('svg')).forEach(function(svg) {
             if (svg.querySelector('image') && svg.getAttribute('preserveAspectRatio') === 'none') {
               svg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
@@ -628,6 +678,9 @@ internal object ReaderPaginationScripts {
               var mark = function() {
                 if (!isGaiji && (img.naturalWidth > 256 || img.naturalHeight > 256)) {
                   img.classList.add('block-img');
+                  if (${settings.blurImages}) {
+                    blurImage(img);
+                  }
                 }
                 resolve();
               };
@@ -650,6 +703,7 @@ internal object ReaderPaginationScripts {
           }).then(function() {
             window.hoshiReader.buildNodeOffsets();
             ${sasayakiCuesJson?.let { "window.hoshiReader.applySasayakiCues($it);" }.orEmpty()}
+            ${highlightsJson?.let { "window.hoshiHighlights.applyHighlights($it);" }.orEmpty()}
             $initialRestoreScript
           });
         };
@@ -667,6 +721,7 @@ internal object ReaderPaginationScripts {
         initialProgress: Double,
         settings: ReaderSettings,
         sasayakiCuesJson: String?,
+        highlightsJson: String?,
         initialFragment: String?,
     ): String {
         val initialRestoreScript = initialFragment?.let { fragment ->
@@ -680,6 +735,7 @@ internal object ReaderPaginationScripts {
           ttuRegexNegated: /[^0-9A-Za-z○◯々-〇〻ぁ-ゖゝ-ゞァ-ヺー０-９Ａ-Ｚａ-ｚｦ-ﾝ\p{Radical}\p{Unified_Ideograph}]+/gimu,
           ttuRegex: /[0-9A-Za-z○◯々-〇〻ぁ-ゖゝ-ゞァ-ヺー０-９Ａ-Ｚａ-ｚｦ-ﾝ\p{Radical}\p{Unified_Ideograph}]/iu,
           nodeStartOffsets: new WeakMap(),
+          nodeStartRawOffsets: new WeakMap(),
           isVertical: function() {
             return window.getComputedStyle(document.body).writingMode === "vertical-rl";
           },
@@ -692,6 +748,9 @@ internal object ReaderPaginationScripts {
           },
           countChars: function(text) {
             return Array.from(this.normalizeText(text)).length;
+          },
+          countRawChars: function(text) {
+            return Array.from(text || '').length;
           },
           isMatchableChar: function(char) {
             return this.ttuRegex.test(char || '');
@@ -739,14 +798,19 @@ internal object ReaderPaginationScripts {
           },
           buildNodeOffsets: function() {
             var offsets = new WeakMap();
+            var rawOffsets = new WeakMap();
             var walker = this.createWalker();
             var count = 0;
+            var rawCount = 0;
             var node;
             while (node = walker.nextNode()) {
               offsets.set(node, count);
+              rawOffsets.set(node, rawCount);
               count += this.countChars(node.textContent);
+              rawCount += this.countRawChars(node.textContent);
             }
             this.nodeStartOffsets = offsets;
+            this.nodeStartRawOffsets = rawOffsets;
           },
           countCharsBeforeViewport: function(node, vertical) {
             var text = node.textContent || '';
@@ -989,9 +1053,11 @@ internal object ReaderPaginationScripts {
             var runningSum = 0;
             var targetNode = null;
             var targetOffset = 0;
+            var lastTargetNode = null;
             walker = this.createWalker();
             while (node = walker.nextNode()) {
               var nodeLen = this.countChars(node.textContent);
+              if (nodeLen > 0) lastTargetNode = node;
               if ((runningSum + nodeLen) > targetCharCount) {
                 targetNode = node;
                 targetOffset = this.textOffsetForCharCount(node, Math.max(0, targetCharCount - runningSum));
@@ -999,7 +1065,15 @@ internal object ReaderPaginationScripts {
               }
               runningSum += nodeLen;
             }
+            if (!targetNode) targetNode = lastTargetNode;
             if (targetNode) {
+              if (progress >= 0.999999 && targetNode.parentElement) {
+                targetNode.parentElement.scrollIntoView({
+                  block: 'end',
+                  inline: 'nearest',
+                  behavior: 'instant'
+                });
+              } else {
               var range = document.createRange();
               var targetText = targetNode.textContent || '';
               var targetChar = String.fromCodePoint(targetText.codePointAt(targetOffset));
@@ -1018,6 +1092,7 @@ internal object ReaderPaginationScripts {
               var parent = marker.parentNode;
               marker.remove();
               if (parent) parent.normalize();
+              }
             }
             requestAnimationFrame(() => {
               requestAnimationFrame(() => this.notifyRestoreComplete());
@@ -1050,6 +1125,7 @@ internal object ReaderPaginationScripts {
             return Math.abs(after - before) > 1 ? "scrolled" : "limit";
           }
         };
+        ${readerHighlightsScript()}
         window.hoshiReader.initialize = function() {
           if (window.hoshiReader.didInitialize) return;
           window.hoshiReader.didInitialize = true;
@@ -1064,6 +1140,7 @@ internal object ReaderPaginationScripts {
           document.documentElement.style.setProperty('--hoshi-continuous-height', window.innerHeight + 'px');
           document.documentElement.style.setProperty('--hoshi-image-max-width', Math.max(1, Math.floor(window.innerWidth * ${settings.imageWidthViewportRatio})) + 'px');
           document.documentElement.style.setProperty('--hoshi-image-max-height', Math.max(1, window.innerHeight - ${settings.bottomOverlapPx}) + 'px');
+          ${readerImageBlurScript(settings)}
           Array.from(document.querySelectorAll('svg')).forEach(function(svg) {
             if (svg.querySelector('image') && svg.getAttribute('preserveAspectRatio') === 'none') {
               svg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
@@ -1075,6 +1152,9 @@ internal object ReaderPaginationScripts {
               var mark = function() {
                 if (!isGaiji && (img.naturalWidth > 256 || img.naturalHeight > 256)) {
                   img.classList.add('block-img');
+                  if (${settings.blurImages}) {
+                    blurImage(img);
+                  }
                 }
                 resolve();
               };
@@ -1091,6 +1171,7 @@ internal object ReaderPaginationScripts {
           }).then(function() {
             window.hoshiReader.buildNodeOffsets();
             ${sasayakiCuesJson?.let { "window.hoshiReader.applySasayakiCues($it);" }.orEmpty()}
+            ${highlightsJson?.let { "window.hoshiHighlights.applyHighlights($it);" }.orEmpty()}
             $initialRestoreScript
           });
         };
@@ -1104,6 +1185,139 @@ internal object ReaderPaginationScripts {
         """.trimIndent()
     }
 }
+
+private fun readerImageBlurScript(settings: ReaderSettings): String = """
+    function blurImage(element) {
+      element.classList.add('blurred');
+      element.addEventListener('click', function(event) {
+        event.preventDefault();
+        event.stopPropagation();
+        element.classList.remove('blurred');
+      }, { once: true });
+    }
+    if (${settings.blurImages}) {
+      Array.from(document.querySelectorAll('svg')).forEach(function(svg) {
+        if (svg.querySelector('image')) {
+          blurImage(svg);
+        }
+      });
+    }
+""".trimIndent()
+
+private fun readerHighlightsScript(): String = """
+    window.hoshiHighlights = {
+      wrappers: new Map(),
+      pendingRange: null,
+      prepareHighlightSelection: function() {
+        var selection = window.getSelection();
+        if (!selection || selection.rangeCount === 0) return false;
+        var range = selection.getRangeAt(0);
+        if (range.collapsed) return false;
+        this.pendingRange = range.cloneRange();
+        return true;
+      },
+      createHighlight: function(color, id) {
+        var selection = window.getSelection();
+        var range = selection && selection.rangeCount > 0 ? selection.getRangeAt(0) : null;
+        if ((!range || range.collapsed) && this.pendingRange) {
+          range = this.pendingRange;
+        }
+        if (!range || range.collapsed) {
+          this.pendingRange = null;
+          return null;
+        }
+        var startPrefix = range.startContainer.textContent.substring(0, range.startOffset);
+        var endPrefix = range.endContainer.textContent.substring(0, range.endOffset);
+        var start = (window.hoshiReader.nodeStartOffsets.get(range.startContainer) || 0) + window.hoshiReader.countChars(startPrefix);
+        var rawStart = (window.hoshiReader.nodeStartRawOffsets.get(range.startContainer) || 0) + window.hoshiReader.countRawChars(startPrefix);
+        var rawEnd = (window.hoshiReader.nodeStartRawOffsets.get(range.endContainer) || 0) + window.hoshiReader.countRawChars(endPrefix);
+        if (rawEnd <= rawStart) {
+          this.pendingRange = null;
+          return null;
+        }
+        var fragment = range.cloneContents();
+        fragment.querySelectorAll('rt, rp').forEach(function(el) { el.remove(); });
+        var text = fragment.textContent || '';
+        if (selection) selection.removeAllRanges();
+        this.pendingRange = null;
+        this.wrapHighlight({ id: id, color: color, offset: rawStart, text: text });
+        window.hoshiReader.buildNodeOffsets();
+        requestAnimationFrame(function() {
+          document.body.style.transform = 'translateZ(0)';
+          requestAnimationFrame(function() { document.body.style.transform = ''; });
+        });
+        return { start: start, offset: rawStart, text: text };
+      },
+      collectSegments: function(offset, length) {
+        var end = offset + length;
+        var segments = [];
+        var cursor = 0;
+        var segment = null;
+        var flushSegment = function() {
+          if (!segment) return;
+          segments.push(segment);
+          segment = null;
+        };
+        var walker = window.hoshiReader.createWalker();
+        var node;
+        while (cursor < end && (node = walker.nextNode())) {
+          var text = node.textContent || '';
+          var i = 0;
+          while (i < text.length && cursor < end) {
+            var char = String.fromCodePoint(text.codePointAt(i));
+            var next = i + char.length;
+            if (cursor >= offset) {
+              if (!segment || segment.node !== node) {
+                flushSegment();
+                segment = { node: node, start: i, end: next };
+              } else {
+                segment.end = next;
+              }
+            }
+            cursor += 1;
+            i = next;
+          }
+          flushSegment();
+        }
+        return segments;
+      },
+      wrapHighlight: function(highlight) {
+        var segments = this.collectSegments(highlight.offset, Array.from(highlight.text || '').length);
+        if (!segments.length) return;
+        var range = document.createRange();
+        var wrappers = [];
+        for (var i = segments.length - 1; i >= 0; i--) {
+          var segment = segments[i];
+          range.setStart(segment.node, segment.start);
+          range.setEnd(segment.node, segment.end);
+          var wrapper = document.createElement('span');
+          wrapper.className = 'hoshi-highlight hoshi-highlight-' + highlight.color;
+          wrapper.appendChild(range.extractContents());
+          range.insertNode(wrapper);
+          wrappers.push(wrapper);
+        }
+        wrappers.reverse();
+        this.wrappers.set(highlight.id, wrappers);
+      },
+      applyHighlights: function(highlights) {
+        for (var i = 0; i < highlights.length; i++) {
+          this.wrapHighlight(highlights[i]);
+        }
+        window.hoshiReader.buildNodeOffsets();
+      },
+      removeHighlight: function(id) {
+        var wrappers = this.wrappers.get(id);
+        if (!wrappers) return;
+        window.hoshiReader.unwrap(wrappers);
+        this.wrappers.delete(id);
+        window.hoshiReader.buildNodeOffsets();
+        requestAnimationFrame(function() {
+          document.body.style.transform = 'translateZ(0)';
+          requestAnimationFrame(function() { document.body.style.transform = ''; });
+        });
+      }
+    };
+""".trimIndent()
 
 private fun String.javaScriptStringLiteral(): String =
     buildString(length + 2) {

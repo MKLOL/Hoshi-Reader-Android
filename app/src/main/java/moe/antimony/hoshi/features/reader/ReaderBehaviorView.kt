@@ -18,9 +18,11 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 import moe.antimony.hoshi.LocalHoshiAppContainer
+import moe.antimony.hoshi.R
 import moe.antimony.hoshi.features.settings.SettingsDetailScaffold
 import moe.antimony.hoshi.features.settings.collectAsLoadedSettings
 import moe.antimony.hoshi.features.update.UpdateConfig
@@ -43,7 +45,7 @@ fun ReaderBehaviorScreen(
     }
     val scope = rememberCoroutineScope()
     SettingsDetailScaffold(
-        title = "Behavior",
+        title = stringResource(R.string.settings_behavior),
         onClose = onClose,
         modifier = modifier,
     ) { innerPadding ->
@@ -56,25 +58,25 @@ fun ReaderBehaviorScreen(
             item {
                 BehaviorSettingsCard {
                     BehaviorSwitchRow(
-                        label = ReaderBehaviorRow.DisablePageTurnAnimation.label,
+                        label = stringResource(ReaderBehaviorRow.DisablePageTurnAnimation.labelRes),
                         checked = settings.disablePageTurnAnimation,
                         onCheckedChange = {
                             onSettingsChange(settings.copy(disablePageTurnAnimation = it))
                         },
-                        description = "Skips the manga page-turn slide and swaps pages instantly.",
+                        description = stringResource(R.string.reader_behavior_disable_page_turn_animation_desc),
                     )
                     BehaviorDivider()
                     BehaviorSwitchRow(
-                        label = ReaderBehaviorRow.VolumeKeysTurnPages.label,
+                        label = stringResource(ReaderBehaviorRow.VolumeKeysTurnPages.labelRes),
                         checked = settings.volumeKeysTurnPages,
                         onCheckedChange = {
                             onSettingsChange(settings.copy(volumeKeysTurnPages = it))
                         },
                     )
-                    readerBehaviorSasayakiRows().forEach { label ->
+                    readerBehaviorSasayakiRows().forEach { labelRes ->
                         BehaviorDivider()
                         BehaviorSwitchRow(
-                            label = label,
+                            label = stringResource(labelRes),
                             checked = settings.volumeKeysSeekSasayaki,
                             onCheckedChange = {
                                 onSettingsChange(settings.copy(volumeKeysSeekSasayaki = it))
@@ -83,7 +85,7 @@ fun ReaderBehaviorScreen(
                     }
                     BehaviorDivider()
                     BehaviorSwitchRow(
-                        label = ReaderBehaviorRow.ReverseVolumeKeyDirection.label,
+                        label = stringResource(ReaderBehaviorRow.ReverseVolumeKeyDirection.labelRes),
                         checked = settings.reverseVolumeKeyDirection,
                         onCheckedChange = {
                             onSettingsChange(settings.copy(reverseVolumeKeyDirection = it))
@@ -91,7 +93,7 @@ fun ReaderBehaviorScreen(
                     )
                     BehaviorDivider()
                     BehaviorSwitchRow(
-                        label = ReaderBehaviorRow.KeepScreenOn.label,
+                        label = stringResource(ReaderBehaviorRow.KeepScreenOn.labelRes),
                         checked = settings.keepScreenOnWhileReading,
                         onCheckedChange = {
                             onSettingsChange(settings.copy(keepScreenOnWhileReading = it))
@@ -104,7 +106,7 @@ fun ReaderBehaviorScreen(
                     if (UpdateConfig.AUTO_UPDATE_ENABLED && loadedUpdateSettings != null) {
                         BehaviorDivider()
                         BehaviorSwitchRow(
-                            label = ReaderBehaviorRow.AutomaticallyCheckForUpdates.label,
+                            label = stringResource(ReaderBehaviorRow.AutomaticallyCheckForUpdates.labelRes),
                             checked = loadedUpdateSettings.autoCheckUpdates,
                             onCheckedChange = { enabled ->
                                 scope.launch {
@@ -121,18 +123,18 @@ fun ReaderBehaviorScreen(
     }
 }
 
-internal fun readerBehaviorSasayakiRows(): List<String> =
-    listOf(ReaderBehaviorRow.VolumeKeysSeekSasayaki.label)
+internal fun readerBehaviorSasayakiRows(): List<Int> =
+    listOf(ReaderBehaviorRow.VolumeKeysSeekSasayaki.labelRes)
 
-internal fun readerBehaviorRows(): List<String> = ReaderBehaviorRow.entries.map { it.label }
+internal fun readerBehaviorRows(): List<Int> = ReaderBehaviorRow.entries.map { it.labelRes }
 
-private enum class ReaderBehaviorRow(val label: String) {
-    DisablePageTurnAnimation("Disable Page-Turn Animation"),
-    VolumeKeysTurnPages("Volume Keys Turn Pages"),
-    VolumeKeysSeekSasayaki("Volume Keys Seek Sasayaki"),
-    ReverseVolumeKeyDirection("Reverse Volume Key Direction"),
-    KeepScreenOn("Keep Screen On"),
-    AutomaticallyCheckForUpdates("Automatically Check for Updates"),
+private enum class ReaderBehaviorRow(val labelRes: Int) {
+    DisablePageTurnAnimation(R.string.reader_behavior_disable_page_turn_animation),
+    VolumeKeysTurnPages(R.string.reader_behavior_volume_keys_turn_pages),
+    VolumeKeysSeekSasayaki(R.string.reader_behavior_volume_keys_seek_sasayaki),
+    ReverseVolumeKeyDirection(R.string.reader_behavior_reverse_volume_key_direction),
+    KeepScreenOn(R.string.reader_behavior_keep_screen_on),
+    AutomaticallyCheckForUpdates(R.string.reader_behavior_auto_check_updates),
 }
 
 @Composable

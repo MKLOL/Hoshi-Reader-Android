@@ -10,11 +10,13 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import moe.antimony.hoshi.R
 import moe.antimony.hoshi.epub.BookEntry
 import moe.antimony.hoshi.epub.BookSortOption
 import moe.antimony.hoshi.features.sync.StatisticsSyncMode
 import moe.antimony.hoshi.features.sync.SyncDirection
 import moe.antimony.hoshi.features.sync.SyncResult
+import moe.antimony.hoshi.ui.UiText
 
 internal data class BookImportItem(
     val uri: Uri,
@@ -67,7 +69,8 @@ internal class BookshelfViewModel(
             } catch (error: Throwable) {
                 _uiState.update {
                     it.copy(
-                        errorMessage = error.localizedMessage ?: "Failed to open EPUB.",
+                        errorMessage = error.localizedMessage?.let(UiText::Literal)
+                            ?: UiText.Resource(R.string.bookshelf_open_failed),
                     )
                 }
             } finally {
@@ -87,9 +90,9 @@ internal class BookshelfViewModel(
             return
         }
         runLoading(
-            errorPrefix = "Failed to import manga.",
+            errorPrefix = UiText.Resource(R.string.bookshelf_import_manga_failed),
             onComplete = { importGate.finish(treeUri.toString()) },
-            blockingProgressMessage = "Importing manga...",
+            blockingProgressMessage = UiText.Resource(R.string.bookshelf_importing_manga),
             block = {
                 repository.importMokuroFolder(treeUri)
                 reloadBookEntriesSync()
@@ -118,9 +121,12 @@ internal class BookshelfViewModel(
             return
         }
         runLoading(
-            errorPrefix = "Failed to import EPUB.",
+            errorPrefix = UiText.Resource(R.string.bookshelf_import_failed),
             onComplete = { importGate.finish(importKey) },
-            blockingProgressMessage = "Importing ${displayName?.takeIf { it.isNotBlank() } ?: "EPUB"}...",
+            blockingProgressMessage = displayName
+                ?.takeIf { it.isNotBlank() }
+                ?.let { UiText.Resource(R.string.bookshelf_importing_named_format, it) }
+                ?: UiText.Resource(R.string.bookshelf_importing_epub),
             block = {
                 importOperation()
                 reloadBookEntriesSync()
@@ -148,14 +154,20 @@ internal class BookshelfViewModel(
             _uiState.update {
                 it.copy(
                     isLoading = true,
-                    blockingProgressMessage = "Importing 1 / ${imports.size}...",
+                    blockingProgressMessage = UiText.Resource(R.string.bookshelf_importing_progress_format, 1, imports.size),
                     errorMessage = null,
                 )
             }
             try {
                 imports.forEachIndexed { index, import ->
                     _uiState.update {
-                        it.copy(blockingProgressMessage = "Importing ${index + 1} / ${imports.size}...")
+                        it.copy(
+                            blockingProgressMessage = UiText.Resource(
+                                R.string.bookshelf_importing_progress_format,
+                                index + 1,
+                                imports.size,
+                            ),
+                        )
                     }
                     try {
                         import.importOperation()
@@ -166,13 +178,19 @@ internal class BookshelfViewModel(
                 reloadBookEntriesSync()
                 if (failed.isNotEmpty()) {
                     _uiState.update {
-                        it.copy(errorMessage = "Failed to import:\n${failed.joinToString(separator = "\n")}")
+                        it.copy(
+                            errorMessage = UiText.Resource(
+                                R.string.bookshelf_import_failed_list_format,
+                                failed.joinToString(separator = "\n"),
+                            ),
+                        )
                     }
                 }
             } catch (error: Throwable) {
                 _uiState.update {
                     it.copy(
-                        errorMessage = error.localizedMessage ?: "Failed to import EPUB.",
+                        errorMessage = error.localizedMessage?.let(UiText::Literal)
+                            ?: UiText.Resource(R.string.bookshelf_import_failed),
                     )
                 }
             } finally {
@@ -244,6 +262,13 @@ internal class BookshelfViewModel(
         }
     }
 
+    fun renameBook(entry: BookEntry, title: String) {
+        workScope.launch {
+            repository.renameBook(entry, title.trim().takeIf { it.isNotEmpty() })
+            reloadBookEntriesSync()
+        }
+    }
+
     fun changeShowReading(showReading: Boolean) {
         workScope.launch {
             repository.changeShowReading(showReading)
@@ -306,8 +331,8 @@ internal class BookshelfViewModel(
         syncAudioBook: Boolean,
     ) {
         runLoading(
-            errorPrefix = "Sync failed.",
-            blockingProgressMessage = "Syncing...",
+            errorPrefix = UiText.Resource(R.string.bookshelf_sync_failed),
+            blockingProgressMessage = UiText.Resource(R.string.bookshelf_syncing),
             block = {
                 val result = repository.syncBook(
                     entry = entry,
@@ -373,9 +398,9 @@ internal class BookshelfViewModel(
         repository.loadBooks(sortOption)
 
     private fun runLoading(
-        errorPrefix: String,
+        errorPrefix: UiText,
         onComplete: () -> Unit = {},
-        blockingProgressMessage: String? = null,
+        blockingProgressMessage: UiText? = null,
         block: suspend () -> Unit,
     ) {
         workScope.launch {
@@ -392,7 +417,7 @@ internal class BookshelfViewModel(
             } catch (error: Throwable) {
                 _uiState.update {
                     it.copy(
-                        errorMessage = error.localizedMessage ?: errorPrefix,
+                        errorMessage = error.localizedMessage?.let(UiText::Literal) ?: errorPrefix,
                     )
                 }
             } finally {
@@ -412,10 +437,10 @@ private fun PendingBookImport.failureDisplayName(): String =
         ?: importKey.substringAfterLast('/').takeIf { it.isNotBlank() }
         ?: "EPUB"
 
-private fun SyncResult.bookshelfMessage(): String? =
+private fun SyncResult.bookshelfMessage(): UiText? =
     when (this) {
-        is SyncResult.Exported -> "Synced $title to ッツ\n$characterCount characters"
-        is SyncResult.Imported -> "Synced $title from ッツ\n$characterCount characters"
-        is SyncResult.Synced -> "$title is already synced"
+        is SyncResult.Exported -> UiText.Resource(R.string.bookshelf_synced_to_ttu_format, title, characterCount)
+        is SyncResult.Imported -> UiText.Resource(R.string.bookshelf_synced_from_ttu_format, title, characterCount)
+        is SyncResult.Synced -> UiText.Resource(R.string.bookshelf_already_synced_format, title)
         SyncResult.Skipped -> null
     }

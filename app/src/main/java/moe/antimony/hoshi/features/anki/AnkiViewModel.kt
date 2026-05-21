@@ -8,13 +8,18 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import moe.antimony.hoshi.R
+import moe.antimony.hoshi.ui.UiText
 
 data class AnkiUiState(
     val settings: AnkiSettings = AnkiSettings(),
     val decks: List<AnkiDeck> = emptyList(),
     val noteTypes: List<AnkiNoteType> = emptyList(),
     val isFetching: Boolean = false,
-    val errorMessage: String? = null,
+    val isConnectingAnkiConnect: Boolean = false,
+    val isAnkiConnectReachable: Boolean = false,
+    val ankiConnectMessage: UiText? = null,
+    val errorMessage: UiText? = null,
     val errorAction: AnkiErrorAction? = null,
 ) {
     val availableDecks: List<AnkiDeck>
@@ -33,6 +38,7 @@ data class AnkiUiState(
     val popupSettings: AnkiPopupSettings
         get() = AnkiPopupSettings(
             isConfigured = isConfigured,
+            useAnkiConnect = settings.backendKind == AnkiBackendKind.AnkiConnect,
             needsAudio = settings.fieldMappings.values.contains("{audio}"),
             allowDupes = settings.allowDupes,
             compactGlossaries = settings.compactGlossaries,
@@ -49,6 +55,7 @@ class AnkiViewModel(
     private val _uiState = MutableStateFlow(AnkiUiState())
     val uiState: StateFlow<AnkiUiState> = _uiState.asStateFlow()
     private var attemptedRestoreFetch = false
+    private var attemptedAnkiConnectPing = false
 
     init {
         viewModelScope.launch {
@@ -63,6 +70,14 @@ class AnkiViewModel(
                     attemptedRestoreFetch = true
                     fetchConfiguration()
                 }
+                if (
+                    !attemptedAnkiConnectPing &&
+                    settings.backendKind == AnkiBackendKind.AnkiConnect &&
+                    settings.ankiConnectUrl.isNotBlank()
+                ) {
+                    attemptedAnkiConnectPing = true
+                    pingAnkiConnect()
+                }
             }
         }
     }
@@ -75,12 +90,14 @@ class AnkiViewModel(
                     decks = result.decks,
                     noteTypes = result.noteTypes,
                     isFetching = false,
+                    isAnkiConnectReachable = _uiState.value.settings.backendKind == AnkiBackendKind.AnkiConnect ||
+                        _uiState.value.isAnkiConnectReachable,
                     errorAction = null,
                 )
                 is AnkiFetchResult.Error -> _uiState.value = _uiState.value.copy(
                     isFetching = false,
                     errorMessage = result.message,
-                    errorAction = if (result.message == AnkiFetchFailure.PermissionDenied.userMessage) {
+                    errorAction = if (result.failure == AnkiFetchFailure.PermissionDenied) {
                         AnkiErrorAction.OpenPermissionSettings
                     } else {
                         null
@@ -95,7 +112,7 @@ class AnkiViewModel(
     fun showFetchApiUnavailable() {
         _uiState.value = _uiState.value.copy(
             isFetching = false,
-            errorMessage = AnkiFetchFailure.ApiUnavailable.userMessage,
+            errorMessage = UiText.Resource(AnkiFetchFailure.ApiUnavailable.userMessageRes),
             errorAction = null,
         )
     }
@@ -103,7 +120,7 @@ class AnkiViewModel(
     fun showFetchPermissionDenied() {
         _uiState.value = _uiState.value.copy(
             isFetching = false,
-            errorMessage = AnkiFetchFailure.PermissionDenied.userMessage,
+            errorMessage = UiText.Resource(AnkiFetchFailure.PermissionDenied.userMessageRes),
             errorAction = AnkiErrorAction.OpenPermissionSettings,
         )
     }
@@ -159,6 +176,45 @@ class AnkiViewModel(
         }
     }
 
+    fun updateBackendKind(value: AnkiBackendKind) {
+        viewModelScope.launch {
+            repository.updateSettings { it.copy(backendKind = value) }
+        }
+    }
+
+    fun updateAnkiConnectUrl(value: String) {
+        viewModelScope.launch {
+            repository.updateSettings {
+                it.copy(
+                    ankiConnectUrl = value,
+                    backendKind = AnkiBackendKind.AnkiConnect,
+                )
+            }
+            _uiState.value = _uiState.value.copy(isAnkiConnectReachable = false, ankiConnectMessage = null)
+        }
+    }
+
+    fun pingAnkiConnect() {
+        viewModelScope.launch {
+            _uiState.value = _uiState.value.copy(
+                isConnectingAnkiConnect = true,
+                ankiConnectMessage = null,
+            )
+            when (val result = repository.pingAnkiConnect()) {
+                AnkiConnectConnectionResult.Connected -> _uiState.value = _uiState.value.copy(
+                    isConnectingAnkiConnect = false,
+                    isAnkiConnectReachable = true,
+                    ankiConnectMessage = UiText.Resource(R.string.anki_connect_connected),
+                )
+                is AnkiConnectConnectionResult.Error -> _uiState.value = _uiState.value.copy(
+                    isConnectingAnkiConnect = false,
+                    isAnkiConnectReachable = false,
+                    ankiConnectMessage = result.message,
+                )
+            }
+        }
+    }
+
     fun updateCheckDuplicatesAcrossAllModels(value: Boolean) {
         viewModelScope.launch {
             repository.updateSettings { it.copy(checkDuplicatesAcrossAllModels = value) }
@@ -168,6 +224,12 @@ class AnkiViewModel(
     fun updateDuplicateScope(value: AnkiDuplicateScope) {
         viewModelScope.launch {
             repository.updateSettings { it.copy(duplicateScope = value) }
+        }
+    }
+
+    fun updateAnkiConnectForceSync(value: Boolean) {
+        viewModelScope.launch {
+            repository.updateSettings { it.copy(ankiConnectForceSync = value) }
         }
     }
 

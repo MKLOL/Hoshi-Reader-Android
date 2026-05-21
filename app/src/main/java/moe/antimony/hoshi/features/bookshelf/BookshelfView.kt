@@ -15,6 +15,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -39,6 +40,7 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.input.rememberTextFieldState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.MenuBook
 import androidx.compose.material.icons.automirrored.rounded.Sort
@@ -101,8 +103,10 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.res.pluralStringResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -112,6 +116,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import moe.antimony.hoshi.LocalHoshiAppContainer
+import moe.antimony.hoshi.R
 import moe.antimony.hoshi.epub.BookEntry
 import moe.antimony.hoshi.epub.BookRepository
 import moe.antimony.hoshi.epub.BookShelf
@@ -126,6 +131,12 @@ import moe.antimony.hoshi.importing.ImportFileType
 import moe.antimony.hoshi.importing.MultipleFileImportContent
 import moe.antimony.hoshi.importing.importDisplayName
 import moe.antimony.hoshi.ui.HoshiBlockingProgressOverlay
+import moe.antimony.hoshi.ui.UiText
+import moe.antimony.hoshi.ui.asString
+import moe.antimony.hoshi.ui.hoshiOutlinedTextFieldColors
+import moe.antimony.hoshi.ui.hoshiSingleLineTextFieldLineLimits
+import moe.antimony.hoshi.ui.rememberSyncedTextFieldState
+import moe.antimony.hoshi.ui.replaceTextAndSelectStart
 import moe.antimony.hoshi.ui.theme.LocalHoshiDarkTheme
 import moe.antimony.hoshi.ui.theme.LocalHoshiEInkMode
 import java.io.File
@@ -171,6 +182,9 @@ fun BookshelfView(
     var contextMenuTarget by remember { mutableStateOf<BookContextMenuTarget?>(null) }
     var deleteCandidate by remember { mutableStateOf<BookEntry?>(null) }
     var markReadCandidate by remember { mutableStateOf<BookEntry?>(null) }
+    var renameCandidate by remember { mutableStateOf<BookEntry?>(null) }
+    val renameTextState = rememberTextFieldState()
+    val renameScrollState = rememberScrollState()
     var showBulkDeleteConfirmation by remember { mutableStateOf(false) }
     var showShelfManagement by remember { mutableStateOf(false) }
 
@@ -273,6 +287,10 @@ fun BookshelfView(
         onContextMenuTargetChange = { contextMenuTarget = it },
         onDeleteCandidate = { deleteCandidate = it },
         onMarkReadCandidate = { markReadCandidate = it },
+        onRenameCandidate = {
+            renameCandidate = it
+            renameTextState.replaceTextAndSelectStart(it.displayTitle)
+        },
         onMoveBook = booksViewModel::moveBook,
         sasayakiEnabled = uiState.sasayakiEnabled,
         onMatchSasayaki = { entry ->
@@ -293,10 +311,10 @@ fun BookshelfView(
     uiState.statusMessage?.let { message ->
         AlertDialog(
             onDismissRequest = booksViewModel::consumeStatusMessage,
-            text = { Text(message) },
+            text = { Text(message.asString()) },
             confirmButton = {
                 TextButton(onClick = booksViewModel::consumeStatusMessage) {
-                    Text("OK")
+                    Text(stringResource(R.string.action_ok))
                 }
             },
         )
@@ -305,11 +323,11 @@ fun BookshelfView(
     uiState.errorMessage?.let { message ->
         AlertDialog(
             onDismissRequest = booksViewModel::consumeErrorMessage,
-            title = { Text("Error") },
-            text = { Text(message) },
+            title = { Text(stringResource(R.string.dialog_error_title)) },
+            text = { Text(message.asString()) },
             confirmButton = {
                 TextButton(onClick = booksViewModel::consumeErrorMessage) {
-                    Text("OK")
+                    Text(stringResource(R.string.action_ok))
                 }
             },
         )
@@ -318,7 +336,7 @@ fun BookshelfView(
     deleteCandidate?.let { candidate ->
         AlertDialog(
             onDismissRequest = { deleteCandidate = null },
-            title = { Text("Delete \"${candidate.metadata.title ?: ""}\"?") },
+            title = { Text(stringResource(R.string.bookshelf_delete_book_title_format, candidate.displayTitle)) },
             confirmButton = {
                 TextButton(
                     onClick = {
@@ -326,12 +344,12 @@ fun BookshelfView(
                         deleteCandidate = null
                     },
                 ) {
-                    Text("Delete")
+                    Text(stringResource(R.string.action_delete))
                 }
             },
             dismissButton = {
                 TextButton(onClick = { deleteCandidate = null }) {
-                    Text("Cancel")
+                    Text(stringResource(R.string.action_cancel))
                 }
             },
         )
@@ -340,7 +358,7 @@ fun BookshelfView(
     markReadCandidate?.let { candidate ->
         AlertDialog(
             onDismissRequest = { markReadCandidate = null },
-            title = { Text("Mark \"${candidate.metadata.title ?: ""}\" as read?") },
+            title = { Text(stringResource(R.string.bookshelf_mark_read_title_format, candidate.displayTitle)) },
             confirmButton = {
                 TextButton(
                     onClick = {
@@ -348,12 +366,48 @@ fun BookshelfView(
                         markReadCandidate = null
                     },
                 ) {
-                    Text("Confirm")
+                    Text(stringResource(R.string.action_confirm))
                 }
             },
             dismissButton = {
                 TextButton(onClick = { markReadCandidate = null }) {
-                    Text("Cancel")
+                    Text(stringResource(R.string.action_cancel))
+                }
+            },
+        )
+    }
+
+    renameCandidate?.let { candidate ->
+        LaunchedEffect(candidate.metadata.id) {
+            renameScrollState.scrollTo(0)
+        }
+
+        AlertDialog(
+            onDismissRequest = { renameCandidate = null },
+            title = { Text(stringResource(R.string.action_rename)) },
+            text = {
+                OutlinedTextField(
+                    state = renameTextState,
+                    label = { Text(stringResource(R.string.bookshelf_title_label)) },
+                    lineLimits = hoshiSingleLineTextFieldLineLimits(),
+                    scrollState = renameScrollState,
+                    colors = hoshiOutlinedTextFieldColors(),
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        booksViewModel.renameBook(candidate, renameTextState.text.toString())
+                        renameCandidate = null
+                    },
+                ) {
+                    Text(stringResource(R.string.action_ok))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { renameCandidate = null }) {
+                    Text(stringResource(R.string.action_cancel))
                 }
             },
         )
@@ -362,7 +416,15 @@ fun BookshelfView(
     if (showBulkDeleteConfirmation) {
         AlertDialog(
             onDismissRequest = { showBulkDeleteConfirmation = false },
-            title = { Text("Delete ${uiState.selectedBookIds.size} book(s)?") },
+            title = {
+                Text(
+                    pluralStringResource(
+                        R.plurals.bookshelf_bulk_delete_title,
+                        uiState.selectedBookIds.size,
+                        uiState.selectedBookIds.size,
+                    ),
+                )
+            },
             confirmButton = {
                 TextButton(
                     onClick = {
@@ -370,12 +432,12 @@ fun BookshelfView(
                         showBulkDeleteConfirmation = false
                     },
                 ) {
-                    Text("Delete")
+                    Text(stringResource(R.string.action_delete))
                 }
             },
             dismissButton = {
                 TextButton(onClick = { showBulkDeleteConfirmation = false }) {
-                    Text("Cancel")
+                    Text(stringResource(R.string.action_cancel))
                 }
             },
         )
@@ -442,7 +504,7 @@ internal fun HoshiMainShell(
                             selected = tab == selectedTab,
                             onClick = { onSelectedTabChange(tab) },
                             icon = { BottomTabGlyph(tab, Modifier.size(24.dp)) },
-                            label = { Text(tab.label) },
+                            label = { Text(stringResource(tab.labelRes)) },
                         )
                     }
                 },
@@ -492,7 +554,7 @@ private fun HoshiCompactBottomNavigation(
                         icon = { BottomTabGlyph(tab, Modifier.size(24.dp)) },
                         label = {
                             Text(
-                                text = tab.label,
+                                text = stringResource(tab.labelRes),
                                 style = MaterialTheme.typography.labelMedium,
                             )
                         },
@@ -565,7 +627,7 @@ private fun BooksTab(
     bookRepository: BookRepository,
     hasLoadedBooks: Boolean,
     isLoading: Boolean,
-    blockingProgressMessage: String?,
+    blockingProgressMessage: UiText?,
     shelves: List<BookShelf>,
     isSelecting: Boolean,
     selectedBookIds: Set<String>,
@@ -587,6 +649,7 @@ private fun BooksTab(
     onContextMenuTargetChange: (BookContextMenuTarget?) -> Unit,
     onDeleteCandidate: (BookEntry) -> Unit,
     onMarkReadCandidate: (BookEntry) -> Unit,
+    onRenameCandidate: (BookEntry) -> Unit,
     onMoveBook: (BookEntry, String?) -> Unit,
     sasayakiEnabled: Boolean,
     onMatchSasayaki: (BookEntry) -> Unit,
@@ -677,7 +740,7 @@ private fun BooksTab(
                                 span = { androidx.compose.foundation.lazy.grid.GridItemSpan(maxLineSpan) },
                             ) {
                                 BookshelfSectionHeader(
-                                    title = section.title,
+                                    title = section.titleRes?.let { stringResource(it) } ?: section.title,
                                     count = section.books.size,
                                     layoutSpec = layoutSpec,
                                     isCollapsible = section.isCollapsible,
@@ -722,6 +785,7 @@ private fun BooksTab(
                                             onMoveBook = onMoveBook,
                                             onMatchSasayaki = onMatchSasayaki,
                                             onMarkReadCandidate = onMarkReadCandidate,
+                                            onRenameCandidate = onRenameCandidate,
                                             onDeleteCandidate = onDeleteCandidate,
                                             syncSettings = syncSettings,
                                             onSyncBook = onSyncBook,
@@ -761,7 +825,7 @@ private fun BooksTab(
             }
             blockingProgressMessage?.let { message ->
                 HoshiBlockingProgressOverlay(
-                    message = message,
+                    message = message.asString(),
                     modifier = Modifier.fillMaxSize(),
                 )
             }
@@ -794,7 +858,11 @@ private fun BooksTopAppBar(
     CenterAlignedTopAppBar(
         title = {
             Text(
-                text = if (isSelecting) "$selectedCount Selected" else "Books",
+                text = if (isSelecting) {
+                    stringResource(R.string.bookshelf_selected_count_format, selectedCount)
+                } else {
+                    stringResource(R.string.main_tab_books)
+                },
                 style = MaterialTheme.typography.titleLarge,
                 fontWeight = FontWeight.SemiBold,
             )
@@ -802,7 +870,7 @@ private fun BooksTopAppBar(
         navigationIcon = {
             if (isSelecting) {
                 TextButton(onClick = onClearSelection, enabled = enabled) {
-                    Text("Done", fontWeight = FontWeight.SemiBold)
+                    Text(stringResource(R.string.action_done), fontWeight = FontWeight.SemiBold)
                 }
             } else {
                 Row {
@@ -813,22 +881,22 @@ private fun BooksTopAppBar(
                         ) {
                             Icon(
                                 imageVector = Icons.AutoMirrored.Rounded.Sort,
-                                contentDescription = "Sort books",
+                                contentDescription = stringResource(R.string.bookshelf_sort_books),
                             )
                         }
                         DropdownMenu(
                             expanded = sortMenuExpanded,
                             onDismissRequest = { onSortMenuExpandedChange(false) },
                         ) {
-                            SortMenuHeader(text = "Sorting by...")
+                            SortMenuHeader(text = stringResource(R.string.bookshelf_sorting_by))
                             HorizontalDivider()
                             DropdownMenuItem(
-                                text = { Text("Recent") },
+                                text = { Text(stringResource(R.string.bookshelf_sort_recent)) },
                                 trailingIcon = selectedSortIcon(BookSortOption.Recent, sortOption),
                                 onClick = { onSortChange(BookSortOption.Recent) },
                             )
                             DropdownMenuItem(
-                                text = { Text("Title") },
+                                text = { Text(stringResource(R.string.bookshelf_sort_title)) },
                                 trailingIcon = selectedSortIcon(BookSortOption.Title, sortOption),
                                 onClick = { onSortChange(BookSortOption.Title) },
                             )
@@ -837,7 +905,7 @@ private fun BooksTopAppBar(
                     IconButton(onClick = onStartSelecting, enabled = enabled) {
                         Icon(
                             imageVector = Icons.Rounded.Done,
-                            contentDescription = "Select books",
+                            contentDescription = stringResource(R.string.bookshelf_select_books),
                         )
                     }
                 }
@@ -852,7 +920,7 @@ private fun BooksTopAppBar(
                     ) {
                         Icon(
                             imageVector = Icons.Rounded.FolderOpen,
-                            contentDescription = "Move selected books",
+                            contentDescription = stringResource(R.string.bookshelf_move_selected_books),
                         )
                     }
                     DropdownMenu(
@@ -860,7 +928,7 @@ private fun BooksTopAppBar(
                         onDismissRequest = { moveMenuExpanded = false },
                     ) {
                         DropdownMenuItem(
-                            text = { Text("None") },
+                            text = { Text(stringResource(R.string.bookshelf_no_shelf)) },
                             onClick = {
                                 moveMenuExpanded = false
                                 onMoveSelectedBooks(null)
@@ -883,21 +951,21 @@ private fun BooksTopAppBar(
                 ) {
                     Icon(
                         imageVector = Icons.Rounded.Delete,
-                        contentDescription = "Delete selected books",
+                        contentDescription = stringResource(R.string.bookshelf_delete_selected_books),
                     )
                 }
             } else {
                 IconButton(onClick = onManageShelves, enabled = enabled) {
                     Icon(
                         imageVector = Icons.Rounded.FolderOpen,
-                        contentDescription = "Manage Shelves",
+                        contentDescription = stringResource(R.string.bookshelf_manage_shelves),
                     )
                 }
                 Box {
                     IconButton(onClick = { importMenuExpanded = true }, enabled = enabled) {
                         Icon(
                             imageVector = Icons.Rounded.Add,
-                            contentDescription = "Import book",
+                            contentDescription = stringResource(R.string.bookshelf_import_epub),
                         )
                     }
                     DropdownMenu(
@@ -1030,7 +1098,11 @@ private fun BookGridCell(
             if (isSelecting) {
                 Icon(
                     imageVector = Icons.Rounded.CheckCircle,
-                    contentDescription = if (isSelected) "Selected" else "Not selected",
+                    contentDescription = if (isSelected) {
+                        stringResource(R.string.bookshelf_selected)
+                    } else {
+                        stringResource(R.string.bookshelf_not_selected)
+                    },
                     tint = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
                     modifier = Modifier
                         .align(Alignment.TopEnd)
@@ -1041,7 +1113,7 @@ private fun BookGridCell(
             } else if (isBookCompleted(progress)) {
                 Icon(
                     imageVector = Icons.Rounded.CheckCircle,
-                    contentDescription = "Read",
+                    contentDescription = stringResource(R.string.bookshelf_read),
                     tint = Color(0xFF8C8C92),
                     modifier = Modifier
                         .align(Alignment.BottomEnd)
@@ -1057,7 +1129,7 @@ private fun BookGridCell(
         )
         Spacer(Modifier.height(6.dp))
         Text(
-            text = entry.metadata.title ?: entry.root.name,
+            text = entry.displayTitle,
             style = layoutSpec.bookTitleTextStyle.toTextStyle(),
             fontWeight = layoutSpec.bookTitleFontWeight.toFontWeight(),
             color = MaterialTheme.colorScheme.onBackground,
@@ -1208,6 +1280,7 @@ private fun BookContextMenu(
     onMoveBook: (BookEntry, String?) -> Unit,
     onMatchSasayaki: (BookEntry) -> Unit,
     onMarkReadCandidate: (BookEntry) -> Unit,
+    onRenameCandidate: (BookEntry) -> Unit,
     onDeleteCandidate: (BookEntry) -> Unit,
     syncSettings: SyncSettings,
     onSyncBook: (BookEntry, SyncDirection?) -> Unit,
@@ -1233,7 +1306,7 @@ private fun BookContextMenu(
         if (syncSettings.enabled && !isManga) {
             if (syncSettings.mode == SyncMode.Manual) {
                 DropdownMenuItem(
-                    text = { Text("Sync") },
+                    text = { Text(stringResource(R.string.bookshelf_sync)) },
                     trailingIcon = {
                         Icon(
                             imageVector = Icons.Rounded.ChevronRight,
@@ -1244,7 +1317,7 @@ private fun BookContextMenu(
                 )
             } else {
                 DropdownMenuItem(
-                    text = { Text("Sync") },
+                    text = { Text(stringResource(R.string.bookshelf_sync)) },
                     onClick = {
                         onSyncBook(entry, null)
                         onDismiss()
@@ -1255,7 +1328,7 @@ private fun BookContextMenu(
         }
         if (!hideMove) {
             DropdownMenuItem(
-                text = { Text("Move") },
+                text = { Text(stringResource(R.string.bookshelf_move)) },
                 trailingIcon = {
                     Icon(
                         imageVector = Icons.Rounded.ChevronRight,
@@ -1268,7 +1341,7 @@ private fun BookContextMenu(
         }
         if (sasayakiEnabled && !isManga) {
             DropdownMenuItem(
-                text = { Text("Match Sasayaki") },
+                text = { Text(stringResource(R.string.bookshelf_match_sasayaki)) },
                 onClick = {
                     onMatchSasayaki(entry)
                     onDismiss()
@@ -1276,14 +1349,21 @@ private fun BookContextMenu(
             )
         }
         DropdownMenuItem(
-            text = { Text("Mark Read") },
+            text = { Text(stringResource(R.string.action_rename)) },
+            onClick = {
+                onRenameCandidate(entry)
+                onDismiss()
+            },
+        )
+        DropdownMenuItem(
+            text = { Text(stringResource(R.string.bookshelf_mark_read)) },
             onClick = {
                 onMarkReadCandidate(entry)
                 onDismiss()
             },
         )
         DropdownMenuItem(
-            text = { Text("Delete") },
+            text = { Text(stringResource(R.string.action_delete)) },
             onClick = {
                 onDeleteCandidate(entry)
                 onDismiss()
@@ -1317,17 +1397,17 @@ private fun SyncDirectionMenu(
         expanded = expanded,
         onDismissRequest = onDismiss,
     ) {
-        SortMenuHeader(text = "Sync")
+        SortMenuHeader(text = stringResource(R.string.bookshelf_sync))
         HorizontalDivider()
         DropdownMenuItem(
-            text = { Text("Import") },
+            text = { Text(stringResource(R.string.action_import)) },
             onClick = {
                 onSyncBook(entry, SyncDirection.ImportFromTtu)
                 onDismiss()
             },
         )
         DropdownMenuItem(
-            text = { Text("Export") },
+            text = { Text(stringResource(R.string.action_export)) },
             onClick = {
                 onSyncBook(entry, SyncDirection.ExportToTtu)
                 onDismiss()
@@ -1349,10 +1429,10 @@ private fun MoveDestinationMenu(
         expanded = expanded,
         onDismissRequest = onDismiss,
     ) {
-        SortMenuHeader(text = "Move")
+        SortMenuHeader(text = stringResource(R.string.bookshelf_move))
         HorizontalDivider()
         DropdownMenuItem(
-            text = { Text("None") },
+            text = { Text(stringResource(R.string.bookshelf_no_shelf)) },
             enabled = currentShelfName != null,
             onClick = {
                 onMoveBook(entry, null)
@@ -1383,10 +1463,16 @@ private fun ShelfManagementDialog(
     onDismiss: () -> Unit,
 ) {
     var newShelfName by remember { mutableStateOf("") }
+    val newShelfNameScrollState = rememberScrollState()
+    val newShelfNameState = rememberSyncedTextFieldState(
+        value = newShelfName,
+        onValueChange = { newShelfName = it },
+        scrollState = newShelfNameScrollState,
+    )
     val trimmedName = newShelfName.trim()
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Manage Shelves") },
+        title = { Text(stringResource(R.string.bookshelf_manage_shelves)) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Row(
@@ -1394,9 +1480,9 @@ private fun ShelfManagementDialog(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Column(Modifier.weight(1f)) {
-                        Text("Reading Shelf", style = MaterialTheme.typography.bodyLarge)
+                        Text(stringResource(R.string.bookshelf_reading_shelf), style = MaterialTheme.typography.bodyLarge)
                         Text(
-                            "Shows books you've started but not finished.",
+                            stringResource(R.string.bookshelf_reading_shelf_description),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -1407,10 +1493,10 @@ private fun ShelfManagementDialog(
                     )
                 }
                 HorizontalDivider()
-                Text("Shelves", style = MaterialTheme.typography.titleMedium)
+                Text(stringResource(R.string.bookshelf_shelves), style = MaterialTheme.typography.titleMedium)
                 if (shelves.isEmpty()) {
                     Text(
-                        "No shelves",
+                        stringResource(R.string.bookshelf_no_shelves),
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 } else {
@@ -1429,16 +1515,16 @@ private fun ShelfManagementDialog(
                                 onClick = { onMoveShelf(index, index - 1) },
                                 enabled = index > 0,
                             ) {
-                                Icon(Icons.Rounded.ArrowUpward, contentDescription = "Move shelf up")
+                                Icon(Icons.Rounded.ArrowUpward, contentDescription = stringResource(R.string.bookshelf_move_shelf_up))
                             }
                             IconButton(
                                 onClick = { onMoveShelf(index, index + 1) },
                                 enabled = index < shelves.lastIndex,
                             ) {
-                                Icon(Icons.Rounded.ArrowDownward, contentDescription = "Move shelf down")
+                                Icon(Icons.Rounded.ArrowDownward, contentDescription = stringResource(R.string.bookshelf_move_shelf_down))
                             }
                             IconButton(onClick = { onDeleteShelf(shelf.name) }) {
-                                Icon(Icons.Rounded.Delete, contentDescription = "Delete shelf")
+                                Icon(Icons.Rounded.Delete, contentDescription = stringResource(R.string.bookshelf_delete_shelf))
                             }
                         }
                     }
@@ -1448,10 +1534,11 @@ private fun ShelfManagementDialog(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     OutlinedTextField(
-                        value = newShelfName,
-                        onValueChange = { newShelfName = it },
-                        label = { Text("Shelf name") },
-                        singleLine = true,
+                        state = newShelfNameState,
+                        label = { Text(stringResource(R.string.bookshelf_shelf_name)) },
+                        lineLimits = hoshiSingleLineTextFieldLineLimits(),
+                        scrollState = newShelfNameScrollState,
+                        colors = hoshiOutlinedTextFieldColors(),
                         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
                         modifier = Modifier.weight(1f),
                     )
@@ -1462,14 +1549,14 @@ private fun ShelfManagementDialog(
                         },
                         enabled = trimmedName.isNotEmpty(),
                     ) {
-                        Icon(Icons.Rounded.Add, contentDescription = "Add shelf")
+                        Icon(Icons.Rounded.Add, contentDescription = stringResource(R.string.bookshelf_add_shelf))
                     }
                 }
             }
         },
         confirmButton = {
             TextButton(onClick = onDismiss) {
-                Text("Done")
+                Text(stringResource(R.string.action_done))
             }
         },
     )
@@ -1491,7 +1578,7 @@ internal fun SettingsTab(
             CenterAlignedTopAppBar(
                 title = {
                     Text(
-                        text = "Settings",
+                        text = stringResource(R.string.main_tab_settings),
                         style = MaterialTheme.typography.titleLarge,
                         fontWeight = FontWeight.SemiBold,
                     )
@@ -1573,7 +1660,7 @@ private fun SettingsRow(row: SettingsRowModel, onClick: () -> Unit) {
         },
         headlineContent = {
             Text(
-                text = row.label,
+                text = stringResource(row.labelRes),
                 style = MaterialTheme.typography.bodyLarge,
                 color = tint,
             )
@@ -1599,7 +1686,7 @@ private fun EmptyBooksView(
         verticalArrangement = Arrangement.Center,
     ) {
         Text(
-            text = "No Books",
+            text = stringResource(R.string.bookshelf_empty_title),
             style = MaterialTheme.typography.headlineMedium,
             fontWeight = FontWeight.SemiBold,
         )

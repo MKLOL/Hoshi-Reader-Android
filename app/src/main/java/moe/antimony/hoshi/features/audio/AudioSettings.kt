@@ -44,7 +44,7 @@ data class AudioSettings(
         get() = audioSources.filter { it.isEnabled }.map { it.url }
 
     fun withLocalAudioEnabled(enabled: Boolean): AudioSettings {
-        val withoutLocal = audioSources.filterNot { it.url == LocalAudioSource.url }
+        val withoutLocal = audioSources.filterNot { it == LocalAudioSource }
         return copy(
             enableLocalAudio = enabled,
             audioSources = if (enabled) listOf(LocalAudioSource) + withoutLocal else withoutLocal,
@@ -60,6 +60,7 @@ data class AudioSettings(
     companion object {
         const val LocalAudioPath = "Audio/android.db"
         const val LocalAudioUrl = "http://localhost:8765/localaudio/get/?term={term}&reading={reading}"
+        const val InternalLocalAudioUrl = "hoshi-local-audio-source://get/?term={term}&reading={reading}"
 
         val LocalAudioSource = AudioSource(
             name = "Local",
@@ -77,7 +78,7 @@ data class AudioSettings(
 }
 
 private fun AudioSettings.normalizedAudioSettings(): AudioSettings {
-    val withoutLocal = audioSources.filterNot { it.url == AudioSettings.LocalAudioSource.url }
+    val withoutLocal = audioSources.filterNot { it == AudioSettings.LocalAudioSource }
     return copy(
         audioSources = if (enableLocalAudio) {
             listOf(AudioSettings.LocalAudioSource) + withoutLocal
@@ -109,9 +110,9 @@ class AudioSettingsStore(context: Context) : AudioSettingsLegacySource {
             enableAutoplay = preferences.getBoolean(KEY_AUDIO_ENABLE_AUTOPLAY, false),
             playbackMode = AudioPlaybackMode.fromRawValue(preferences.getString(KEY_AUDIO_PLAYBACK_MODE, null)),
         ).let { settings ->
-            if (settings.enableLocalAudio && settings.audioSources.none { it.url == AudioSettings.LocalAudioSource.url }) {
+            if (settings.enableLocalAudio && settings.audioSources.none { it == AudioSettings.LocalAudioSource }) {
                 settings.withLocalAudioEnabled(true)
-            } else if (!settings.enableLocalAudio && settings.audioSources.any { it.url == AudioSettings.LocalAudioSource.url }) {
+            } else if (!settings.enableLocalAudio && settings.audioSources.any { it == AudioSettings.LocalAudioSource }) {
                 settings.withLocalAudioEnabled(false)
             } else {
                 settings

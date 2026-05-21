@@ -168,7 +168,7 @@ private fun ProcessTextLookupOverlay(
             }
         }
         if (error == null) {
-            LookupPopupStackView(
+            LookupPopupAndroidStack(
                 popups = displayedPopups,
                 onPopupsChange = { next ->
                     if (next.isEmpty()) onClose() else popups = next
@@ -186,6 +186,7 @@ private fun ProcessTextLookupOverlay(
                             reducedMotionScrolling = readerSettings.popupReducedMotionScrolling,
                             reducedMotionScrollPercent = readerSettings.popupReducedMotionScrollPercent,
                             reducedMotionSwipeThreshold = readerSettings.popupReducedMotionSwipeThreshold,
+                            popupScale = readerSettings.popupScale,
                             dictionarySettings = displayedPopups.firstOrNull()?.state?.dictionarySettings
                                 ?: DictionarySettings(),
                             topInset = topInset.toDouble(),
@@ -232,6 +233,7 @@ private fun lookupPopupItem(
             reducedMotionScrolling = readerSettings.popupReducedMotionScrolling,
             reducedMotionScrollPercent = readerSettings.popupReducedMotionScrollPercent,
             reducedMotionSwipeThreshold = readerSettings.popupReducedMotionSwipeThreshold,
+            popupScale = readerSettings.popupScale,
             topInset = 0.0,
             darkMode = darkMode,
             eInkMode = readerSettings.eInkMode,

@@ -67,18 +67,18 @@ data class EpubResource(
 }
 
 class EpubBookParser {
-    fun parse(root: File): EpubBook {
+    fun parse(root: File, fallbackTitle: String? = null): EpubBook {
         require(root.isDirectory) { "Extracted EPUB directory does not exist: ${root.absolutePath}" }
 
         val nativeBook = parseExtractedEpub(root.absolutePath)
         return try {
-            nativeBook.toReaderBook(root)
+            nativeBook.toReaderBook(root, fallbackTitle)
         } finally {
             nativeBook.destroy()
         }
     }
 
-    private fun NativeEpubBook.toReaderBook(root: File): EpubBook {
+    private fun NativeEpubBook.toReaderBook(root: File, fallbackTitle: String?): EpubBook {
         val manifest = manifest().associateBy { it.id }
         val contentDirectory = File(contentDir())
         val guideTocHrefs = root.readGuideTocHrefs()
@@ -111,7 +111,7 @@ class EpubBookParser {
         }.toMap()
 
         return EpubBook(
-            title = title()?.ifBlank { null } ?: root.nameWithoutExtension,
+            title = title()?.ifBlank { null } ?: fallbackTitle?.takeIf { it.isNotBlank() } ?: root.nameWithoutExtension,
             coverHref = coverHref()
                 ?.let { contentDirectory.resolve(it).relativeHref(root) }
                 ?: resources.entries.firstOrNull { (_, resource) -> resource.mediaType.startsWith("image/") }?.key,

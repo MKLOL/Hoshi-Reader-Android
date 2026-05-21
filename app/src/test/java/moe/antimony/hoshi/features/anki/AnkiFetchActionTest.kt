@@ -8,7 +8,11 @@ class AnkiFetchActionTest {
     fun unavailableAnkiDroidShowsUnavailableBeforeRequestingPermission() {
         assertEquals(
             AnkiFetchAction.ShowApiUnavailable,
-            ankiFetchAction(isAnkiDroidAvailable = false, permissionGranted = false),
+            ankiFetchAction(
+                backendKind = AnkiBackendKind.AnkiDroid,
+                isAnkiDroidAvailable = false,
+                permissionGranted = false,
+            ),
         )
     }
 
@@ -16,7 +20,11 @@ class AnkiFetchActionTest {
     fun availableAnkiDroidRequestsPermissionWhenMissing() {
         assertEquals(
             AnkiFetchAction.RequestPermission,
-            ankiFetchAction(isAnkiDroidAvailable = true, permissionGranted = false),
+            ankiFetchAction(
+                backendKind = AnkiBackendKind.AnkiDroid,
+                isAnkiDroidAvailable = true,
+                permissionGranted = false,
+            ),
         )
     }
 
@@ -24,7 +32,23 @@ class AnkiFetchActionTest {
     fun grantedPermissionFetchesConfiguration() {
         assertEquals(
             AnkiFetchAction.FetchConfiguration,
-            ankiFetchAction(isAnkiDroidAvailable = true, permissionGranted = true),
+            ankiFetchAction(
+                backendKind = AnkiBackendKind.AnkiDroid,
+                isAnkiDroidAvailable = true,
+                permissionGranted = true,
+            ),
+        )
+    }
+
+    @Test
+    fun ankiConnectFetchesConfigurationWithoutAnkiDroidPermission() {
+        assertEquals(
+            AnkiFetchAction.FetchConfiguration,
+            ankiFetchAction(
+                backendKind = AnkiBackendKind.AnkiConnect,
+                isAnkiDroidAvailable = false,
+                permissionGranted = false,
+            ),
         )
     }
 

@@ -90,6 +90,27 @@ class ReaderPaginationScriptsTest {
     }
 
     @Test
+    fun blurImagesScriptRunsForPagedAndContinuousReadersLikeIos() {
+        val scripts = listOf(
+            ReaderPaginationScripts.shellScript(settings = ReaderSettings(blurImages = true)),
+            ReaderPaginationScripts.shellScript(settings = ReaderSettings(continuousMode = true, blurImages = true)),
+        )
+
+        scripts.forEach { script ->
+            assertTrue(script.contains("function blurImage(element)"))
+            assertTrue(script.contains("element.classList.add('blurred');"))
+            assertTrue(script.contains("event.preventDefault();"))
+            assertTrue(script.contains("event.stopPropagation();"))
+            assertTrue(script.contains("element.classList.remove('blurred');"))
+            assertTrue(script.contains("if (true) {"))
+            assertTrue(script.contains("if (svg.querySelector('image'))"))
+            assertTrue(script.contains("blurImage(svg);"))
+            assertTrue(script.contains("img.classList.add('block-img');"))
+            assertTrue(script.contains("blurImage(img);"))
+        }
+    }
+
+    @Test
     fun verticalPageHeightIncludesIosBottomOverlap() {
         val script = ReaderPaginationScripts.shellScript()
 
@@ -151,6 +172,22 @@ class ReaderPaginationScriptsTest {
         assertTrue(restoreProgress.contains("this.scrollToChapterStart()"))
         assertTrue(restoreProgress.contains("requestAnimationFrame(() => {"))
         assertTrue(restoreProgress.contains("this.notifyRestoreComplete()"))
+    }
+
+    @Test
+    fun continuousRestoreProgressOneKeepsLastTextTargetLikeIos() {
+        val script = ReaderPaginationScripts.shellScript(
+            settings = ReaderSettings(continuousMode = true),
+        )
+        val restoreProgress = script.substringAfter("restoreProgress: async function(progress)")
+            .substringBefore("jumpToFragment: async function(fragment)")
+
+        assertTrue(restoreProgress.contains("var lastTargetNode = null"))
+        assertTrue(restoreProgress.contains("lastTargetNode = node"))
+        assertTrue(restoreProgress.contains("if (!targetNode) targetNode = lastTargetNode"))
+        assertTrue(restoreProgress.contains("if (progress >= 0.999999 && targetNode.parentElement)"))
+        assertTrue(restoreProgress.contains("targetNode.parentElement.scrollIntoView({"))
+        assertTrue(restoreProgress.contains("block: 'end'"))
     }
 
     @Test

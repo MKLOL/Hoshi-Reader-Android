@@ -49,6 +49,7 @@ internal interface BookshelfRepository {
     suspend fun deleteShelf(name: String)
     suspend fun moveShelf(fromIndex: Int, toIndex: Int)
     suspend fun markRead(entry: BookEntry)
+    suspend fun renameBook(entry: BookEntry, title: String?)
     suspend fun changeSort(sortOption: BookSortOption)
     suspend fun changeShowReading(showReading: Boolean)
     suspend fun rebuildLookupQuery()
@@ -209,6 +210,11 @@ internal class AndroidBookshelfRepository(
         }
     }
 
+    override suspend fun renameBook(entry: BookEntry, title: String?) = withContext(ioDispatcher) {
+        val metadata = bookRepository.loadMetadata(entry.root) ?: entry.metadata
+        bookRepository.saveMetadata(entry.root, metadata.copy(renamedTitle = title))
+    }
+
     override suspend fun changeSort(sortOption: BookSortOption) {
         settingsRepository.update { it.copy(sortOption = sortOption) }
     }
@@ -248,6 +254,7 @@ internal class AndroidBookshelfRepository(
             // First-time imports get a fresh RFC 3339 stamp so a server-side tombstone with an
             // older `deletedAt` can no longer wipe the fresh local copy on the next sync.
             importedAt = previous?.importedAt ?: Instant.now().toString(),
+            renamedTitle = previous?.renamedTitle,
         )
         bookRepository.saveMetadata(root, metadata)
     }

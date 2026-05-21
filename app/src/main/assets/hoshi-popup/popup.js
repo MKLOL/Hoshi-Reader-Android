@@ -1164,6 +1164,7 @@ function createTags(entry) {
                 const swap = harmonicRow.style.display !== 'none';
                 harmonicRow.style.display = swap ? 'none' : '';
                 normalRow.style.display = swap ? '' : 'none';
+                scheduleButtonFrameSyncAtVisualState();
             };
 
             normalRow.addEventListener('click', toggle);
@@ -1236,37 +1237,123 @@ function playWordAudio(audioUrl) {
     }
 }
 
-function showAudioError(button) {
-    button.textContent = '✕';
-    setTimeout(() => {
-        button.textContent = '♪';
-    }, 1500);
+let buttonFrameSyncScheduled = false;
+let visualStateButtonFrameSyncScheduled = false;
+
+function collectButtonFrames() {
+    return [...document.querySelectorAll('.button-slot')].map(slot => {
+        const rect = slot.getBoundingClientRect();
+        return {
+            kind: slot.dataset.kind,
+            entryIndex: Number(slot.dataset.entryIndex),
+            x: rect.left + window.scrollX,
+            y: rect.top + window.scrollY,
+            width: rect.width,
+            height: rect.height,
+            state: slot.dataset.state || 'default',
+            enabled: slot.dataset.enabled !== 'false'
+        };
+    });
 }
 
-function createAudioButton(expression, reading, entryIndex) {
-    const button = el('button', {
-        className: 'audio-button',
-        textContent: '♪',
-        onclick: async () => {
-            button.classList.add('pressed');
-            setTimeout(() => button.classList.remove('pressed'), 180);
-            if (!audioUrls[entryIndex]) {
-                audioUrls[entryIndex] = await fetchAudioUrl(expression, reading);
-            }
-            if (!audioUrls[entryIndex]) {
-                showAudioError(button);
-                return;
-            }
-            if (!playWordAudio(audioUrls[entryIndex])) {
-                showAudioError(button);
-            }
-        }
+function postButtonFrames(frames, visualState = false) {
+    const handler = visualState
+        ? window.webkit?.messageHandlers?.visualStateButtonFrames
+        : window.webkit?.messageHandlers?.buttonFrames;
+    if (!handler) { return; }
+    handler.postMessage(frames);
+}
+
+function syncButtonFrames() {
+    postButtonFrames(collectButtonFrames());
+}
+
+function syncButtonFramesAtVisualState() {
+    postButtonFrames(collectButtonFrames(), true);
+}
+
+function scheduleButtonFrameSync() {
+    if (buttonFrameSyncScheduled) { return; }
+    buttonFrameSyncScheduled = true;
+    requestAnimationFrame(() => {
+        buttonFrameSyncScheduled = false;
+        syncButtonFrames();
     });
-    return button;
+}
+
+function scheduleButtonFrameSyncAtVisualState() {
+    if (visualStateButtonFrameSyncScheduled) { return; }
+    visualStateButtonFrameSyncScheduled = true;
+    requestAnimationFrame(() => {
+        visualStateButtonFrameSyncScheduled = false;
+        syncButtonFramesAtVisualState();
+    });
+}
+
+window.addEventListener('resize', scheduleButtonFrameSync);
+document.addEventListener('toggle', scheduleButtonFrameSyncAtVisualState, true);
+
+function createButtonSlot(kind, entryIndex, enabled = true) {
+    return el('span', {
+        className: 'button-slot',
+        'data-kind': kind,
+        'data-entry-index': entryIndex,
+        'data-enabled': String(enabled)
+    });
+}
+
+function getButtonSlot(kind, entryIndex) {
+    return document.querySelector(`.button-slot[data-kind="${kind}"][data-entry-index="${entryIndex}"]`);
+}
+
+function updateButtonSlot(slot, changes) {
+    if (!slot || !slot.isConnected) { return; }
+    if ('state' in changes) { slot.dataset.state = changes.state; }
+    if ('enabled' in changes) { slot.dataset.enabled = String(changes.enabled); }
+    scheduleButtonFrameSync();
+}
+
+async function playEntryAudio(entryIndex) {
+    const entry = window.lookupEntries?.[entryIndex];
+    if (!entry) { return; }
+    const audioSlot = getButtonSlot('audio', entryIndex);
+
+    if (!audioUrls[entryIndex]) {
+        audioUrls[entryIndex] = await fetchAudioUrl(entry.expression, entry.reading);
+    }
+    if (!audioUrls[entryIndex] || !playWordAudio(audioUrls[entryIndex])) {
+        updateButtonSlot(audioSlot, { state: 'error' });
+        setTimeout(() => updateButtonSlot(audioSlot, { state: 'default' }), 1500);
+    }
+}
+
+async function mineEntryAtIndex(entryIndex) {
+    const entry = window.lookupEntries?.[entryIndex];
+    if (!entry) { return; }
+    const { expression, reading, frequencies, pitches, rules, matched } = entry;
+    const mineSlot = getButtonSlot('mine', entryIndex);
+
+    lastSelection = getPopupSelectionText();
+    updateButtonSlot(mineSlot, { enabled: false });
+
+    const isAnkiConnect = await mineEntry(expression, reading, frequencies, pitches, rules, matched, entryIndex, lastSelection);
+    const checkDuplicate = async () => {
+        const wasAdded = await webkit.messageHandlers.duplicateCheck.postMessage(expression);
+        updateButtonSlot(mineSlot, {
+            state: wasAdded ? 'duplicate' : 'default',
+            enabled: !(wasAdded && !window.allowDupes)
+        });
+    };
+
+    if (isAnkiConnect) {
+        await checkDuplicate();
+    } else {
+        setTimeout(checkDuplicate, 1000);
+    }
 }
 
 function createEntryHeader(entry, idx) {
-    const { expression, reading, matched, frequencies, pitches, rules } = entry;
+    const { expression, reading } = entry;
     const header = el('div', { className: 'entry-header' });
 
     const expressionSpan = el('span', { className: 'expression' });
@@ -1287,45 +1374,20 @@ function createEntryHeader(entry, idx) {
     const buttonsContainer = el('div', { className: 'header-buttons' });
 
     if (window.audioSources?.length) {
-        buttonsContainer.appendChild(createAudioButton(expression, reading, idx));
+        buttonsContainer.appendChild(createButtonSlot('audio', idx));
     }
 
-    const mineButton = el('button', {
-        className: 'mine-button',
-        textContent: '+',
-        disabled: true,
-        ontouchstart: () => {
-            lastSelection = getPopupSelectionText();
-        },
-        onclick: async () => {
-            mineButton.disabled = true;
-            const isAnkiConnect = await mineEntry(expression, reading, frequencies, pitches, rules, matched, idx, lastSelection);
-            const checkDuplicate = async () => {
-                const wasAdded = await webkit.messageHandlers.duplicateCheck.postMessage(expression);
-                mineButton.textContent = wasAdded ? '✓' : '+';
-                if (wasAdded) {
-                    mineButton.classList.add('duplicate');
-                }
-                mineButton.disabled = wasAdded && !window.allowDupes;
-            };
-
-            if (isAnkiConnect) {
-                await checkDuplicate();
-            } else {
-                setTimeout(checkDuplicate, 1000);
-            }
-        }
-    });
-    buttonsContainer.appendChild(mineButton);
+    const mineSlot = createButtonSlot('mine', idx, false);
+    buttonsContainer.appendChild(mineSlot);
     webkit.messageHandlers.duplicateCheck.postMessage(expression).then(isDuplicate => {
-        if (isDuplicate) {
-            mineButton.textContent = '✓';
-            mineButton.classList.add('duplicate');
-        }
-        mineButton.disabled = isDuplicate && !window.allowDupes;
+        updateButtonSlot(mineSlot, {
+            state: isDuplicate ? 'duplicate' : 'default',
+            enabled: !(isDuplicate && !window.allowDupes)
+        });
     });
 
     header.appendChild(buttonsContainer);
+    scheduleButtonFrameSync();
 
     return header;
 }
@@ -1357,7 +1419,15 @@ function createGlossarySection(dictName, contents, isFirst, entryIdx) {
     const cancel = () => { clearTimeout(timer); };
     summary.addEventListener('pointerup', cancel);
     summary.addEventListener('pointercancel', cancel);
-    summary.addEventListener('click', (e) => { if (longPressed) e.preventDefault(); });
+    summary.addEventListener('click', (e) => {
+        e.preventDefault();
+        if (longPressed) {
+            return;
+        }
+        details.open = !details.open;
+        syncButtonFramesAtVisualState();
+        scheduleButtonFrameSyncAtVisualState();
+    });
     details.appendChild(summary);
 
     const dictWrapper = document.createElement('div');
@@ -1438,6 +1508,7 @@ function appendPendingHistoryRestore(flush = false) {
     const chunk = pending.nodes.splice(0, count);
     if (chunk.length) {
         pending.container.append(...chunk);
+        scheduleButtonFrameSync();
     }
     if (!pending.nodes.length) {
         pendingHistoryRestore = null;
@@ -1461,6 +1532,7 @@ function redirect(count) {
     audioUrls = {};
     selectedDictionaries = {};
     document.getElementById('entries-container').innerHTML = '';
+    syncButtonFrames();
     window.renderPopup();
     requestAnimationFrame(() => {
         document.scrollingElement.scrollTop = 0;
@@ -1471,6 +1543,7 @@ function redirect(count) {
 }
 
 window.replacePopupResults = function(count) {
+    closeOverlay();
     flushPendingHistoryRestore();
     backStack.length = 0;
     forwardStack.length = 0;
@@ -1482,6 +1555,7 @@ window.replacePopupResults = function(count) {
     if (container) {
         container.innerHTML = '';
     }
+    syncButtonFrames();
     window.hoshiPopupObserveContentReady?.();
     window.renderPopup();
     requestAnimationFrame(() => {
@@ -1516,6 +1590,7 @@ function restore(snapshot) {
     window.entryCount = snapshot.entryCount;
     audioUrls = {};
     selectedDictionaries = {};
+    scheduleButtonFrameSync();
     requestAnimationFrame(() => {
         document.scrollingElement.scrollTop = snapshot.scrollTop;
     });
@@ -1555,10 +1630,7 @@ window.renderPopup = function() {
 
             if (window.audioEnableAutoplay && window.audioSources?.length && idx === 0) {
                 setTimeout(() => {
-                    const audioButton = entryDiv.querySelector('.audio-button');
-                    if (audioButton) {
-                        audioButton.click();
-                    }
+                    playEntryAudio(idx);
                 }, 70);
             }
 

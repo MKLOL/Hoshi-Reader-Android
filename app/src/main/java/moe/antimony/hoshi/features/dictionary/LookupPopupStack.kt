@@ -1,12 +1,7 @@
 package moe.antimony.hoshi.features.dictionary
 
+import de.manhhao.hoshi.LookupResult
 import moe.antimony.hoshi.epub.SasayakiMatch
-
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.key
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.zIndex
 import moe.antimony.hoshi.dictionary.LookupEngine
 import moe.antimony.hoshi.features.audio.AudioSettings
 import moe.antimony.hoshi.features.anki.AnkiMiningContext
@@ -23,6 +18,7 @@ internal data class LookupPopupOptions(
     val reducedMotionScrolling: Boolean = false,
     val reducedMotionScrollPercent: Int = 100,
     val reducedMotionSwipeThreshold: Int = 40,
+    val popupScale: Double = 1.0,
     val topInset: Double = 0.0,
     val bottomInset: Double = 0.0,
     val dictionarySettings: DictionarySettings = DictionarySettings(),
@@ -39,6 +35,30 @@ internal data class LookupPopupItem(
     val state: LookupPopupState,
     val clearSelectionSignal: Int = 0,
     val sasayakiCue: SasayakiMatch? = null,
+)
+
+internal data class LookupPopupState(
+    val selection: ReaderSelectionData,
+    val results: List<LookupResult>,
+    val dictionaryStyles: Map<String, String> = emptyMap(),
+    val dictionarySettings: DictionarySettings = DictionarySettings(),
+    val isVertical: Boolean = true,
+    val isFullWidth: Boolean = false,
+    val width: Int = 320,
+    val height: Int = 250,
+    val swipeToDismiss: Boolean = false,
+    val swipeThreshold: Int = 40,
+    val reducedMotionScrolling: Boolean = false,
+    val reducedMotionScrollPercent: Int = 100,
+    val reducedMotionSwipeThreshold: Int = 40,
+    val popupScale: Double = 1.0,
+    val topInset: Double = 0.0,
+    val bottomInset: Double = 0.0,
+    val darkMode: Boolean = false,
+    val eInkMode: Boolean = false,
+    val audioSettings: AudioSettings = AudioSettings(),
+    val popupActionBar: Boolean = false,
+    val ankiContext: AnkiMiningContext = AnkiMiningContext(sentence = selection.sentence),
 )
 
 internal fun clearPopupSelectionHighlights(popups: List<LookupPopupItem>): List<LookupPopupItem> =
@@ -71,6 +91,7 @@ internal fun createLookupPopupItem(
             reducedMotionScrolling = options.reducedMotionScrolling,
             reducedMotionScrollPercent = options.reducedMotionScrollPercent,
             reducedMotionSwipeThreshold = options.reducedMotionSwipeThreshold,
+            popupScale = options.popupScale,
             topInset = options.topInset,
             bottomInset = options.bottomInset,
             darkMode = options.darkMode,
@@ -117,6 +138,7 @@ internal fun List<LookupPopupItem>.withLookupPopupVisualOptions(
     darkMode: Boolean,
     eInkMode: Boolean,
     audioSettings: AudioSettings,
+    popupScale: Double = 1.0,
 ): List<LookupPopupItem> =
     map { popup ->
         popup.copy(
@@ -124,6 +146,7 @@ internal fun List<LookupPopupItem>.withLookupPopupVisualOptions(
                 darkMode = darkMode,
                 eInkMode = eInkMode,
                 audioSettings = audioSettings,
+                popupScale = popupScale,
             ),
         )
     }
@@ -167,70 +190,3 @@ internal fun closeChildPopupsForScrolledParent(
             }
         }
     }
-
-@Composable
-internal fun LookupPopupStackView(
-    popups: List<LookupPopupItem>,
-    onPopupsChange: (List<LookupPopupItem>) -> Unit,
-    lookupChildPopup: (ReaderSelectionData) -> Pair<LookupPopupItem, Int>?,
-    modifier: Modifier = Modifier,
-    onRootPopupDismissed: () -> Boolean = { false },
-    isPopupVisible: (LookupPopupItem, Int) -> Boolean = { _, _ -> true },
-    isPopupActive: (LookupPopupItem, Int) -> Boolean = { _, _ -> true },
-    onPopupContentReady: (String) -> Unit = {},
-    warmRootShell: Boolean = false,
-    sasayakiWasPaused: Boolean = false,
-    sasayakiIsPlaying: Boolean = false,
-    onSasayakiReplayCue: (SasayakiMatch) -> Unit = {},
-    onSasayakiTogglePlayback: () -> Unit = {},
-    onSasayakiPauseStateCleared: () -> Unit = {},
-    onSasayakiPlayForward: (SasayakiMatch) -> Unit = {},
-    onPrepareSasayakiAudio: (SasayakiMatch, String) -> String? = { _, _ -> null },
-    rootSelectionOffsetX: Double = 0.0,
-    rootSelectionOffsetY: Double = 0.0,
-) {
-    val displayPopups = popups.withRootSelectionOffset(rootSelectionOffsetX, rootSelectionOffsetY)
-    displayPopups.forEachIndexed { index, popup ->
-        key(if (warmRootShell && index == 0) "warm-root-popup" else popup.id) {
-            LookupPopupView(
-                state = popup.state,
-                sasayakiCue = popup.sasayakiCue,
-                sasayakiWasPaused = sasayakiWasPaused,
-                sasayakiIsPlaying = sasayakiIsPlaying,
-                clearSelectionSignal = popup.clearSelectionSignal,
-                onTapOutside = {
-                    onPopupsChange(closeChildPopups(popups, index))
-                },
-                onSwipeDismiss = {
-                    val rootDismissHandled = index == 0 && onRootPopupDismissed()
-                    if (!rootDismissHandled) {
-                        onPopupsChange(dismissPopupAt(popups, index))
-                    }
-                },
-                onTextSelected = { selection ->
-                    val nextPopups = closeChildPopups(popups, index)
-                    lookupChildPopup(selection)?.let { (childPopup, highlightCount) ->
-                        onPopupsChange(nextPopups + childPopup)
-                        highlightCount
-                    }
-                },
-                onPopupScrolled = {
-                    onPopupsChange(closeChildPopupsForScrolledParent(popups, index))
-                },
-                onSasayakiReplayCue = onSasayakiReplayCue,
-                onSasayakiTogglePlayback = onSasayakiTogglePlayback,
-                onSasayakiPauseStateCleared = onSasayakiPauseStateCleared,
-                onSasayakiPlayForward = onSasayakiPlayForward,
-                onPrepareSasayakiAudio = onPrepareSasayakiAudio,
-                isContentVisible = isPopupVisible(popup, index),
-                isPopupActive = isPopupActive(popup, index),
-                onContentReady = { onPopupContentReady(popup.id) },
-                warmShell = warmRootShell && index == 0,
-                contentResetKey = if (warmRootShell && index == 0) popup.id else null,
-                modifier = modifier
-                    .fillMaxSize()
-                    .zIndex(2f + index),
-            )
-        }
-    }
-}

@@ -8,10 +8,16 @@ The format follows a Keep a Changelog style, and release sections use Semantic V
 ### Added
 
 - Add manga reading statistics from the manga reader overflow menu, with a page-based statistics sheet for session, today, and all-time progress plus optional tracking.
+- Merge upstream Hoshi Reader through v1.0.1: Simplified Chinese localization, a Reader Appearance option to blur large reader images until tapped, a Dictionaries Low Memory Usage Mode import setting, Advanced AnkiConnect settings and mining support, iOS-style reader highlights with a Highlights sheet, jump-return controls, lookup popup font CSS and scale, book title renaming from the Books long-press menu, JMnedict in recommended downloads, deinflection explanation popups, dictionary archive type detection on import, and a Sasayaki setting to reverse the reader bottom skip buttons in vertical writing mode.
 
 ### Changed
 
 - Smooth manga page turns by caching generated page HTML and preloading adjacent page images before navigation.
+- Merge upstream Hoshi Reader through v1.0.1: rewrite lookup popup presentation around a shared native Android overlay, and allow Sasayaki audiobook playback speed up to 2x.
+
+### Fixed
+
+- Merge upstream Hoshi Reader through v1.0.1: use the selected EPUB file name as the book title when metadata has none, keep editable text-field cursors visible in dark and E-ink themes, keep continuous reader backward chapter turns landing at the previous chapter end, allow AnkiconnectAndroid's Local Audio URL as an external audio source, harden Google Drive Device Code authorization, and assorted lookup popup rendering and alignment fixes.
 
 ## [v0.7.21] - 2026-05-18
 

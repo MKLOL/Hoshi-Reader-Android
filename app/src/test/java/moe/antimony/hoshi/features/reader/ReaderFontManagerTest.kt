@@ -43,6 +43,19 @@ class ReaderFontManagerTest {
     }
 
     @Test
+    fun popupFontFaceCssExposesImportedFontsThroughLocalWebViewBridge() {
+        val root = createTempDirectory().toFile()
+        val manager = ReaderFontManager(root)
+        manager.importFont(File(root, "Klee One.ttf").apply { writeBytes(byteArrayOf(1)) })
+
+        val css = manager.popupFontFaceCss()
+
+        assertTrue(css.contains("@font-face"))
+        assertTrue(css.contains("""font-family: "Klee One";"""))
+        assertTrue(css.contains("""src: url("https://hoshi.local/fonts/Klee%20One.ttf");"""))
+    }
+
+    @Test
     fun importFontRejectsNonFontExtensions() {
         val root = createTempDirectory().toFile()
         val source = File(root, "not-a-font.zip").apply { writeBytes(byteArrayOf(1)) }

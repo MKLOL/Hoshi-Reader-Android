@@ -3,6 +3,7 @@ package moe.antimony.hoshi.dictionary
 import android.content.ContentResolver
 import android.net.Uri
 import java.io.File
+import java.io.InputStream
 
 internal class DictionaryRepository(
     filesDir: File,
@@ -17,14 +18,30 @@ internal class DictionaryRepository(
     fun updatableDictionaries(): List<DictionaryUpdateCandidate> =
         storage.updatableDictionaries()
 
-    fun importDictionary(contentResolver: ContentResolver, uri: Uri, type: DictionaryType) {
-        val imported = importDataSource.importDictionary(
+    fun importDictionary(contentResolver: ContentResolver, uri: Uri, lowRamImport: Boolean = false) {
+        val imported = importDataSource.importDictionaryByDetectedTypes(
             contentResolver = contentResolver,
             uri = uri,
-            typeDirectory = storage.typeDirectory(type),
-            shouldSkip = { index -> storage.hasDictionaryWithIndex(type, index) },
-        )
-        if (imported) {
+            importRootDirectory = storage.importRootDirectory(),
+            typeDirectories = typeDirectories(),
+            lowRamImport = lowRamImport,
+            shouldSkip = { type, index -> storage.hasDictionaryWithIndex(type, index) },
+        ).values.sumOf { it.size }
+        if (imported > 0) {
+            storage.saveConfigFromStorage()
+            rebuildLookupQuery()
+        }
+    }
+
+    fun importDictionary(input: InputStream, lowRamImport: Boolean = false) {
+        val imported = importDataSource.importDictionaryByDetectedTypes(
+            input = input,
+            importRootDirectory = storage.importRootDirectory(),
+            typeDirectories = typeDirectories(),
+            lowRamImport = lowRamImport,
+            shouldSkip = { type, index -> storage.hasDictionaryWithIndex(type, index) },
+        ).values.sumOf { it.size }
+        if (imported > 0) {
             storage.saveConfigFromStorage()
             rebuildLookupQuery()
         }
@@ -49,6 +66,7 @@ internal class DictionaryRepository(
     }
 
     fun updateDictionaries(
+        lowRamImport: Boolean = false,
         onProgress: (DictionaryUpdateProgress) -> Unit = {},
     ): DictionaryUpdateSummary {
         val candidates = updatableDictionaries()
@@ -67,6 +85,7 @@ internal class DictionaryRepository(
                 importDataSource.importDictionaryWithResult(
                     input = input,
                     typeDirectory = storage.typeDirectory(candidate.type),
+                    lowRamImport = lowRamImport,
                 )
             }
             val replacement = imported.firstOrNull() ?: return@forEach
@@ -101,6 +120,7 @@ internal class DictionaryRepository(
 
     fun importRecommendedDictionaries(
         dictionaries: List<RecommendedDictionary>,
+        lowRamImport: Boolean = false,
         onProgress: (DictionaryUpdateProgress) -> Unit = {},
     ) {
         var importedCount = 0
@@ -113,6 +133,7 @@ internal class DictionaryRepository(
                 importDataSource.importDictionaryWithResult(
                     input = input,
                     typeDirectory = storage.typeDirectory(dictionary.type),
+                    lowRamImport = lowRamImport,
                     shouldSkip = { index -> storage.hasDictionaryWithIndex(dictionary.type, index) },
                 )
             }
@@ -133,4 +154,7 @@ internal class DictionaryRepository(
             pitchDictionaries = storage.enabledDictionaryPaths(DictionaryType.Pitch),
         )
     }
+
+    private fun typeDirectories(): Map<DictionaryType, File> =
+        DictionaryType.entries.associateWith { type -> storage.typeDirectory(type) }
 }

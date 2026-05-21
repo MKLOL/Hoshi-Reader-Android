@@ -1,7 +1,6 @@
 package moe.antimony.hoshi.features.audio
 
 import android.webkit.WebResourceResponse
-import android.net.Uri
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.ByteArrayInputStream
@@ -11,34 +10,28 @@ import java.net.URL
 
 class AudioRequestHandler(
     private val localAudioRepository: LocalAudioRepository,
+    private val fetchRemoteAudioList: (String) -> ByteArray = ::fetchRemoteAudioList,
 ) {
     fun handleAudioRequest(url: String): WebResourceResponse? {
-        val requestUri = Uri.parse(url)
-        val isIosAudioScheme = requestUri.scheme == "audio"
-        val isAndroidAudioEndpoint = requestUri.scheme == "https" &&
-            requestUri.host == "hoshi.local" &&
-            requestUri.path == "/audio"
-        if (!isIosAudioScheme && !isAndroidAudioEndpoint) return null
-        val target = requestUri.getQueryParameter("url")
-            ?: return jsonResponse(emptyAudioResponse())
+        val body = handleAudioRequestBody(url) ?: return null
+        return jsonResponse(body)
+    }
 
-        return if (target.startsWith(AudioSettings.LocalAudioUrl.substringBefore("?"))) {
-            jsonResponse(localAudioResponse(target))
+    internal fun handleAudioRequestBody(url: String): ByteArray? {
+        val uri = audioRequestUri(url) ?: return null
+        val target = queryParameters(uri.rawQuery.orEmpty())["url"]
+            ?: return emptyAudioResponse()
+
+        return if (target.startsWith(AudioSettings.InternalLocalAudioUrl.substringBefore("?"))) {
+            localAudioResponse(target)
         } else {
-            jsonResponse(fetchRemoteAudioList(target))
+            fetchRemoteAudioList(target)
         }
     }
 
     private fun localAudioResponse(targetUrl: String): ByteArray {
         val uri = URI(targetUrl)
-        val query = uri.rawQuery.orEmpty()
-            .split('&')
-            .filter { it.contains('=') }
-            .associate { part ->
-                val name = part.substringBefore('=')
-                val value = java.net.URLDecoder.decode(part.substringAfter('='), Charsets.UTF_8.name())
-                name to value
-            }
+        val query = queryParameters(uri.rawQuery.orEmpty())
         val term = query["term"].orEmpty()
         val reading = query["reading"].orEmpty()
         val entry = localAudioRepository.findAudio(term, reading) ?: return emptyAudioResponse()
@@ -55,18 +48,6 @@ class AudioRequestHandler(
         return response.toString().toByteArray()
     }
 
-    private fun fetchRemoteAudioList(targetUrl: String): ByteArray =
-        runCatching {
-            val connection = (URL(targetUrl).openConnection() as HttpURLConnection).apply {
-                connectTimeout = 4000
-                readTimeout = 4000
-                requestMethod = "GET"
-            }
-            connection.inputStream.use { it.readBytes() }
-        }.getOrElse {
-            emptyAudioResponse()
-        }
-
     private fun jsonResponse(body: ByteArray): WebResourceResponse =
         WebResourceResponse(
             "application/json",
@@ -78,4 +59,36 @@ class AudioRequestHandler(
 
     private fun emptyAudioResponse(): ByteArray =
         """{"type":"audioSourceList","audioSources":[]}""".toByteArray()
+
+    private fun audioRequestUri(url: String): URI? {
+        val uri = runCatching { URI(url) }.getOrNull() ?: return null
+        val isIosAudioScheme = uri.scheme == "audio"
+        val isAndroidAudioEndpoint = uri.scheme == "https" &&
+            uri.host == "hoshi.local" &&
+            uri.path == "/audio"
+        if (!isIosAudioScheme && !isAndroidAudioEndpoint) return null
+        return uri
+    }
+
+    private fun queryParameters(rawQuery: String): Map<String, String> =
+        rawQuery
+            .split('&')
+            .filter { it.contains('=') }
+            .associate { part ->
+                val name = part.substringBefore('=')
+                val value = java.net.URLDecoder.decode(part.substringAfter('='), Charsets.UTF_8.name())
+                name to value
+            }
 }
+
+private fun fetchRemoteAudioList(targetUrl: String): ByteArray =
+    runCatching {
+        val connection = (URL(targetUrl).openConnection() as HttpURLConnection).apply {
+            connectTimeout = 4000
+            readTimeout = 4000
+            requestMethod = "GET"
+        }
+        connection.inputStream.use { it.readBytes() }
+    }.getOrElse {
+        """{"type":"audioSourceList","audioSources":[]}""".toByteArray()
+    }

@@ -10,6 +10,7 @@ import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import moe.antimony.hoshi.features.audio.AudioSettings
 import moe.antimony.hoshi.features.anki.AnkiPopupSettings
+import java.util.Locale
 
 internal data class LookupPopupAssets(
     val popupJs: String,
@@ -55,6 +56,8 @@ internal object LookupPopupHtml {
         eInkMode: Boolean = false,
         audioSettings: AudioSettings = AudioSettings(),
         ankiSettings: AnkiPopupSettings = AnkiPopupSettings(),
+        fontFaceCss: String = "",
+        popupScale: Double = 1.0,
     ): String {
         val entryCount = results.size
         val entries = if (assets == null) {
@@ -71,6 +74,12 @@ internal object LookupPopupHtml {
         val colorScheme = if (darkMode) "dark" else "light"
         val popupCss = assets?.let { """<style>${it.popupCss}</style>""" }
             ?: """<link rel="stylesheet" href="$PopupAssetBaseUrl/popup.css">"""
+        val popupTypographyCss = """
+            <style>
+                ${fontFaceCss.trim()}
+                html { zoom: ${popupCssNumber(popupScale.coerceIn(0.8, 1.5))}; }
+            </style>
+        """.trimIndent()
         val eInkCss = if (eInkMode) """<style>$eInkPopupCss</style>""" else ""
         val selectionJs = assets?.let { """<script>${it.selectionJs}</script>""" }
             ?: """<script src="$PopupAssetBaseUrl/selection.js"></script>"""
@@ -93,6 +102,7 @@ internal object LookupPopupHtml {
                 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
                 $popupCss
                 <style>$androidColorSchemeCss</style>
+                $popupTypographyCss
                 $eInkCss
                 $selectionJs
                 $popupJs
@@ -138,8 +148,10 @@ internal object LookupPopupHtml {
                             tapOutside: { postMessage: function() { window.HoshiAndroidPopup.postMessage('tapOutside'); } },
                             swipeDismiss: { postMessage: function() { window.HoshiAndroidPopup.postMessage('swipeDismiss'); } },
                             playWordAudio: { postMessage: function(content) { window.HoshiAndroidPopup.postMessage('playWordAudio', content); } },
+                            buttonFrames: { postMessage: function(frames) { window.HoshiAndroidPopup.postMessage('buttonFrames', frames); } },
+                            visualStateButtonFrames: { postMessage: function(frames) { window.HoshiAndroidPopup.postMessage('visualStateButtonFrames', frames); } },
                             shellReady: { postMessage: function() { window.HoshiAndroidPopup.postMessage('shellReady'); } },
-                            contentReady: { postMessage: function() { window.HoshiAndroidPopup.postMessage('contentReady'); } },
+                            contentReady: { postMessage: function(frames) { window.HoshiAndroidPopup.postMessage('contentReady', frames); } },
                             popupScrolled: { postMessage: function() { window.HoshiAndroidPopup.postMessage('popupScrolled'); } },
                             mineEntry: { postMessage: async function(content) { return window.HoshiPopup.mineEntry(JSON.stringify(content)); } },
                             duplicateCheck: { postMessage: function(expression) { return window.HoshiAndroidPopup.requestMessage('duplicateCheck', expression); } },
@@ -175,7 +187,7 @@ internal object LookupPopupHtml {
                     window.audioPlaybackMode = "${audioSettings.playbackMode.rawValue}";
                     window.needsAudio = ${ankiSettings.needsAudio};
                     window.allowDupes = ${ankiSettings.allowDupes};
-                    window.useAnkiConnect = false;
+                    window.useAnkiConnect = ${ankiSettings.useAnkiConnect};
                     window.embedMedia = ${ankiSettings.embedMedia};
                     window.compactGlossariesAnki = ${ankiSettings.compactGlossaries};
                     window.customCSS = ${JsonPrimitive(normalizedSettings.customCSS)};
@@ -253,7 +265,7 @@ internal object LookupPopupHtml {
                 $topSpacer
                 $entriesContainer
                 <div class="overlay">
-                    <div class="overlay-close" onclick="closeOverlay()">x</div>
+                    <div class="overlay-close" onclick="closeOverlay()">×</div>
                     <div class="overlay-content"></div>
                 </div>
                 <script>
@@ -265,7 +277,7 @@ internal object LookupPopupHtml {
                             if (posted) return;
                             posted = true;
                             requestAnimationFrame(function() {
-                                webkit.messageHandlers.contentReady.postMessage(null);
+                                webkit.messageHandlers.contentReady.postMessage(collectButtonFrames());
                             });
                         }
                         function hasRenderableContent() {
@@ -322,19 +334,28 @@ internal object LookupPopupHtml {
 
     private fun audioSourcesJson(settings: AudioSettings): String =
         buildJsonArray {
-            settings.enabledAudioSourceUrls.forEach { add(JsonPrimitive(it)) }
+            settings.audioSources
+                .filter { it.isEnabled }
+                .forEach { source ->
+                    add(JsonPrimitive(if (source == AudioSettings.LocalAudioSource) AudioSettings.InternalLocalAudioUrl else source.url))
+                }
         }.toString()
+
+    private fun popupCssNumber(value: Double): String {
+        val formatted = String.format(Locale.US, "%.2f", value).trimEnd('0')
+        return if (formatted.endsWith('.')) "${formatted}0" else formatted
+    }
 
     private fun LookupResult.toEntryJson(): JsonObject = buildJsonObject {
         put("expression", term.expression)
         put("reading", term.reading)
         put("matched", matched)
         putJsonArray("deinflectionTrace") {
-            process.reversedArray().forEach { name ->
+            process.reversedArray().forEach { transformGroup ->
                 add(
                     buildJsonObject {
-                        put("name", name)
-                        put("description", "")
+                        put("name", transformGroup.name)
+                        put("description", transformGroup.description)
                     },
                 )
             }
@@ -477,17 +498,14 @@ internal object LookupPopupHtml {
             color: #000 !important;
         }
 
-        html[data-hoshi-eink-mode="true"] .audio-button,
-        html[data-hoshi-eink-mode="true"] .mine-button {
+        html[data-hoshi-eink-mode="true"] .button-slot {
             border-radius: 0 !important;
             background-color: transparent !important;
             color: #000 !important;
             opacity: 1 !important;
         }
 
-        html[data-hoshi-eink-mode="true"] .audio-button.pressed,
-        html[data-hoshi-eink-mode="true"] .audio-button:active,
-        html[data-hoshi-eink-mode="true"] .mine-button:active {
+        html[data-hoshi-eink-mode="true"] .button-slot:active {
             background-color: #fff !important;
             outline: 1px solid #000 !important;
             outline-offset: -1px !important;
@@ -537,16 +555,13 @@ internal object LookupPopupHtml {
         }
 
         html[data-hoshi-color-scheme="dark"][data-hoshi-eink-mode="true"] .frequency-values,
-        html[data-hoshi-color-scheme="dark"][data-hoshi-eink-mode="true"] .audio-button,
-        html[data-hoshi-color-scheme="dark"][data-hoshi-eink-mode="true"] .mine-button,
+        html[data-hoshi-color-scheme="dark"][data-hoshi-eink-mode="true"] .button-slot,
         html[data-hoshi-color-scheme="dark"][data-hoshi-eink-mode="true"] .overlay {
             background-color: #000 !important;
             color: #fff !important;
         }
 
-        html[data-hoshi-color-scheme="dark"][data-hoshi-eink-mode="true"] .audio-button.pressed,
-        html[data-hoshi-color-scheme="dark"][data-hoshi-eink-mode="true"] .audio-button:active,
-        html[data-hoshi-color-scheme="dark"][data-hoshi-eink-mode="true"] .mine-button:active {
+        html[data-hoshi-color-scheme="dark"][data-hoshi-eink-mode="true"] .button-slot:active {
             outline: 1px solid #fff !important;
         }
 

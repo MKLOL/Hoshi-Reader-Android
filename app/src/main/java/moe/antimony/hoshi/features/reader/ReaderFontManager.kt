@@ -5,6 +5,7 @@ import android.database.Cursor
 import android.net.Uri
 import android.provider.OpenableColumns
 import java.io.File
+import java.net.URLEncoder
 
 data class ReaderFontInfo(
     val name: String,
@@ -57,7 +58,25 @@ class ReaderFontManager(private val filesDir: File) {
         normalizeDefaultFont(name) in defaultFonts
 
     fun webViewFontUrl(name: String): String? =
-        storedFont(name)?.let { "https://hoshi.local/fonts/${Uri.encode(it.fileName)}" }
+        storedFont(name)?.let { "https://hoshi.local/fonts/${it.fileName.pathSegmentEncoded()}" }
+
+    fun allFontNames(): List<String> =
+        (defaultFonts + storedFonts().map { it.name }).distinct()
+
+    fun cssFontName(name: String): String =
+        normalizeDefaultFont(name)
+
+    fun popupFontFaceCss(): String =
+        storedFonts().joinToString(separator = "\n") { font ->
+            val family = cssFontName(font.name).cssString()
+            val source = requireNotNull(webViewFontUrl(font.name)).cssString()
+            """
+                @font-face {
+                    font-family: $family;
+                    src: url($source);
+                }
+            """.trimIndent()
+        }
 
     fun fontFileForRequest(fileName: String): File? {
         val requested = File(fontsDirectory, fileName)
@@ -103,3 +122,22 @@ private fun ContentResolver.displayName(uri: Uri): String {
 private fun String.isSupportedFontFileName(): Boolean =
     substringAfterLast('.', missingDelimiterValue = "")
         .lowercase() in setOf("ttf", "otf", "woff", "woff2")
+
+private fun String.pathSegmentEncoded(): String =
+    URLEncoder.encode(this, Charsets.UTF_8.name())
+        .replace("+", "%20")
+
+private fun String.cssString(): String =
+    buildString(length + 2) {
+        append('"')
+        this@cssString.forEach { ch ->
+            when (ch) {
+                '\\' -> append("\\\\")
+                '"' -> append("\\\"")
+                '\n' -> append("\\a ")
+                '\r' -> Unit
+                else -> append(ch)
+            }
+        }
+        append('"')
+    }
