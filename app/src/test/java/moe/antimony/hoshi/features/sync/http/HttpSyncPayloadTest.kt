@@ -643,6 +643,7 @@ private class FailingPayloadUploadTransport : HttpSyncKvTransport {
         key: String,
         contentType: String,
         file: File,
+        onByteProgress: ((bytesTransferred: Long, totalBytes: Long) -> Unit)?,
     ): HttpSyncKvWriteResponse {
         payloadPutFileCalls += 1
         throw HttpSyncException("payload upload failed")
@@ -690,6 +691,7 @@ private class PayloadStreamingOnlyTransport : HttpSyncKvTransport {
         key: String,
         contentType: String,
         file: File,
+        onByteProgress: ((bytesTransferred: Long, totalBytes: Long) -> Unit)?,
     ): HttpSyncKvWriteResponse {
         if (isPayloadZipKey(key)) {
             payloadPutFileCalls += 1
@@ -714,7 +716,11 @@ private class PayloadStreamingOnlyTransport : HttpSyncKvTransport {
         )
     }
 
-    override suspend fun downloadToFile(key: String, targetFile: File): HttpSyncKvFileFetched? {
+    override suspend fun downloadToFile(
+        key: String,
+        targetFile: File,
+        onByteProgress: ((bytesTransferred: Long, totalBytes: Long) -> Unit)?,
+    ): HttpSyncKvFileFetched? {
         if (isPayloadZipKey(key)) {
             payloadDownloadToFileCalls += 1
             val stored = kv[key] ?: return null

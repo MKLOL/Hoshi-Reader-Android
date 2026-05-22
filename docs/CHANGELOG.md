@@ -5,6 +5,14 @@ The format follows a Keep a Changelog style, and release sections use Semantic V
 
 ## [Unreleased]
 
+### Added
+
+- Add a per-file transfer progress bar for HTTP sync: payload uploads and downloads now report byte-level progress for the file in flight, not just an overall "book N of M" count.
+
+### Fixed
+
+- Stop manga screen taps forcing a full e-ink refresh: the manga page no longer flashes Chromium's tap-highlight, and a tap that selects nothing no longer mutates the document.
+
 ## [v0.8.1] - 2026-05-22
 
 ### Fixed

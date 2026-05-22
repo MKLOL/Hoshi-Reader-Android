@@ -443,8 +443,13 @@ internal object ReaderSelectionScripts {
             return count;
           },
           clearSelection: function() {
-            window.getSelection().removeAllRanges();
-            if (CSS.highlights && CSS.highlights.get('hoshi-selection')) CSS.highlights.get('hoshi-selection').clear();
+            // Only touch the DOM when there is actually something to clear — a tap that
+            // selects nothing must not mutate the document, or the WebView repaints and an
+            // e-ink screen turns that into a full refresh.
+            var selection = window.getSelection();
+            if (selection && selection.rangeCount > 0) selection.removeAllRanges();
+            var highlight = CSS.highlights && CSS.highlights.get('hoshi-selection');
+            if (highlight && highlight.size > 0) highlight.clear();
             this.selection = null;
           }
         };

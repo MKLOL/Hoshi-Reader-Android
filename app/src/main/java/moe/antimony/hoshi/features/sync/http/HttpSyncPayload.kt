@@ -151,6 +151,7 @@ class HttpSyncPayloadCodec(
         bookRoot: File,
         originalName: String,
         format: HttpSyncContentType,
+        onByteProgress: ((bytesTransferred: Long, totalBytes: Long) -> Unit)? = null,
     ): Boolean = withContext(ioDispatcher) {
         val remoteManifest = fetchManifest(transport, syncId)
         if (remoteManifest != null) {
@@ -176,6 +177,7 @@ class HttpSyncPayloadCodec(
                 key = payloadZipKey(syncId),
                 contentType = "application/zip",
                 file = zipFile,
+                onByteProgress = onByteProgress,
             )
             val manifest = HttpSyncPayloadManifest(
                 sha256 = sha,
@@ -278,13 +280,14 @@ class HttpSyncPayloadCodec(
         transport: HttpSyncKvTransport,
         syncId: String,
         targetDir: File,
+        onByteProgress: ((bytesTransferred: Long, totalBytes: Long) -> Unit)? = null,
     ): HttpSyncPayloadManifest = withContext(ioDispatcher) {
         val manifest = fetchManifest(transport, syncId)
             ?: throw HttpSyncException("No payload manifest for $syncId.")
         val spoolDir = targetDir.parentFile ?: targetDir
         val zipFile = File.createTempFile("hoshi-sync-download-", ".zip", spoolDir)
         try {
-            transport.downloadToFile(payloadZipKey(syncId), zipFile)
+            transport.downloadToFile(payloadZipKey(syncId), zipFile, onByteProgress)
                 ?: throw HttpSyncException("Payload zip missing for $syncId (manifest existed).")
             // Validate sha256 before unpacking — a corrupted zip should fail loud, not produce a
             // half-imported book directory.

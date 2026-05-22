@@ -120,11 +120,16 @@ interface HttpSyncKvTransport {
     /**
      * Uploads [file] without requiring callers to materialize it as a [ByteArray].
      * The default keeps older fakes simple; production transports should stream.
+     *
+     * [onByteProgress] is invoked as bytes leave the wire so callers can drive a
+     * per-file progress bar. It's optional and defaults to `null` — existing callers
+     * and fakes are unaffected.
      */
     suspend fun putFile(
         key: String,
         contentType: String,
         file: File,
+        onByteProgress: ((bytesTransferred: Long, totalBytes: Long) -> Unit)? = null,
     ): HttpSyncKvWriteResponse = put(key, contentType, file.readBytes())
 
     /** Returns `null` on `404` (key not present). All other non-2xx responses throw. */
@@ -133,8 +138,16 @@ interface HttpSyncKvTransport {
     /**
      * Downloads [key] into [targetFile] without requiring callers to keep the body in memory.
      * The default keeps older fakes simple; production transports should stream.
+     *
+     * [onByteProgress] is invoked as bytes arrive so callers can drive a per-file
+     * progress bar. It's optional and defaults to `null` — existing callers and fakes
+     * are unaffected.
      */
-    suspend fun downloadToFile(key: String, targetFile: File): HttpSyncKvFileFetched? {
+    suspend fun downloadToFile(
+        key: String,
+        targetFile: File,
+        onByteProgress: ((bytesTransferred: Long, totalBytes: Long) -> Unit)? = null,
+    ): HttpSyncKvFileFetched? {
         val fetched = get(key) ?: return null
         targetFile.parentFile?.mkdirs()
         targetFile.writeBytes(fetched.body)
@@ -208,25 +221,29 @@ class HttpSyncKvClient(
         key: String,
         contentType: String,
         file: File,
+        onByteProgress: ((bytesTransferred: Long, totalBytes: Long) -> Unit)?,
     ): HttpSyncKvWriteResponse = withContext(ioDispatcher) {
         if (file.length() > multipartThresholdBytes) {
-            return@withContext putFileMultipart(key, contentType, file)
+            return@withContext putFileMultipart(key, contentType, file, onByteProgress)
         }
-        putFileSingleRequest(key, contentType, file)
+        putFileSingleRequest(key, contentType, file, onByteProgress)
     }
 
     private suspend fun putFileSingleRequest(
         key: String,
         contentType: String,
         file: File,
+        onByteProgress: ((bytesTransferred: Long, totalBytes: Long) -> Unit)?,
     ): HttpSyncKvWriteResponse {
         val connection = openConnection("PUT", "/v1/kv/${encodeKey(key)}", contentType)
         connection.doOutput = true
-        connection.setFixedLengthStreamingMode(file.length())
+        val totalBytes = file.length()
+        connection.setFixedLengthStreamingMode(totalBytes)
         return try {
             val context = currentCoroutineContext()
             val buffer = ByteArray(DEFAULT_STREAM_BUFFER_SIZE)
             connection.runCancellable {
+                var transferred = 0L
                 file.inputStream().buffered(DEFAULT_STREAM_BUFFER_SIZE).use { input ->
                     connection.outputStream.buffered(DEFAULT_STREAM_BUFFER_SIZE).use { output ->
                         while (true) {
@@ -234,6 +251,8 @@ class HttpSyncKvClient(
                             val read = input.read(buffer)
                             if (read < 0) break
                             output.write(buffer, 0, read)
+                            transferred += read.toLong()
+                            onByteProgress?.invoke(transferred, totalBytes)
                         }
                     }
                 }
@@ -258,6 +277,7 @@ class HttpSyncKvClient(
         key: String,
         contentType: String,
         file: File,
+        onByteProgress: ((bytesTransferred: Long, totalBytes: Long) -> Unit)?,
     ): HttpSyncKvWriteResponse {
         require(multipartPartSizeBytes in 1..MAX_MULTIPART_PART_SIZE_BYTES) {
             "multipartPartSizeBytes must be between 1 and $MAX_MULTIPART_PART_SIZE_BYTES."
@@ -265,7 +285,7 @@ class HttpSyncKvClient(
         var uploadId: String? = null
         try {
             uploadId = startMultipartUpload(key, contentType)
-            val parts = uploadMultipartParts(uploadId, file)
+            val parts = uploadMultipartParts(uploadId, file, onByteProgress)
             currentCoroutineContext().ensureActive()
             return completeMultipartUpload(uploadId, parts, fallbackContentType = contentType)
         } catch (e: CancellationException) {
@@ -306,19 +326,37 @@ class HttpSyncKvClient(
         }
     }
 
-    private suspend fun uploadMultipartParts(uploadId: String, file: File): List<Int> {
+    private suspend fun uploadMultipartParts(
+        uploadId: String,
+        file: File,
+        onByteProgress: ((bytesTransferred: Long, totalBytes: Long) -> Unit)?,
+    ): List<Int> {
         val parts = mutableListOf<Int>()
         val buffer = ByteArray(DEFAULT_STREAM_BUFFER_SIZE)
         var partNumber = 1
-        var remainingFileBytes = file.length()
+        val totalFileBytes = file.length()
+        var remainingFileBytes = totalFileBytes
+        // Bytes already accounted for by completed parts — the per-part counter is
+        // offset by this so the callback reports whole-file progress, not per-part.
+        var transferredFileBytes = 0L
         file.inputStream().buffered(DEFAULT_STREAM_BUFFER_SIZE).use { input ->
             while (remainingFileBytes > 0L) {
                 currentCoroutineContext().ensureActive()
                 val partLength = minOf(multipartPartSizeBytes, remainingFileBytes)
-                uploadMultipartPart(uploadId, partNumber, input, partLength, buffer)
+                uploadMultipartPart(
+                    uploadId,
+                    partNumber,
+                    input,
+                    partLength,
+                    buffer,
+                    transferredFileBytes,
+                    totalFileBytes,
+                    onByteProgress,
+                )
                 parts += partNumber
                 partNumber += 1
                 remainingFileBytes -= partLength
+                transferredFileBytes += partLength
             }
         }
         return parts
@@ -330,6 +368,9 @@ class HttpSyncKvClient(
         input: InputStream,
         partLength: Long,
         buffer: ByteArray,
+        transferredFileBytesBefore: Long,
+        totalFileBytes: Long,
+        onByteProgress: ((bytesTransferred: Long, totalBytes: Long) -> Unit)?,
     ) {
         val connection = openConnection(
             "PUT",
@@ -350,6 +391,10 @@ class HttpSyncKvClient(
                         if (read < 0) throw HttpSyncException("Multipart upload ended before part $partNumber was complete.")
                         output.write(buffer, 0, read)
                         remaining -= read.toLong()
+                        onByteProgress?.invoke(
+                            transferredFileBytesBefore + (partLength - remaining),
+                            totalFileBytes,
+                        )
                     }
                 }
                 context.ensureActive()
@@ -441,7 +486,11 @@ class HttpSyncKvClient(
         }
     }
 
-    override suspend fun downloadToFile(key: String, targetFile: File): HttpSyncKvFileFetched? =
+    override suspend fun downloadToFile(
+        key: String,
+        targetFile: File,
+        onByteProgress: ((bytesTransferred: Long, totalBytes: Long) -> Unit)?,
+    ): HttpSyncKvFileFetched? =
         withContext(ioDispatcher) {
             val connection = openConnection("GET", "/v1/kv/${encodeKey(key)}", contentType = null)
             try {
@@ -454,9 +503,21 @@ class HttpSyncKvClient(
                     throw HttpSyncException(parseError(code, raw))
                 }
                 targetFile.parentFile?.mkdirs()
+                // `contentLengthLong` is -1 if the server didn't send Content-Length
+                // (chunked transfer). The progress callback tolerates a non-positive
+                // total — the consumer skips fraction math when total <= 0.
+                val totalBytes = connection.contentLengthLong
+                val buffer = ByteArray(DEFAULT_STREAM_BUFFER_SIZE)
                 connection.inputStream.buffered(DEFAULT_STREAM_BUFFER_SIZE).use { input ->
                     targetFile.outputStream().buffered(DEFAULT_STREAM_BUFFER_SIZE).use { output ->
-                        input.copyTo(output, DEFAULT_STREAM_BUFFER_SIZE)
+                        var transferred = 0L
+                        while (true) {
+                            val read = input.read(buffer)
+                            if (read < 0) break
+                            output.write(buffer, 0, read)
+                            transferred += read.toLong()
+                            onByteProgress?.invoke(transferred, totalBytes)
+                        }
                     }
                 }
                 HttpSyncKvFileFetched(

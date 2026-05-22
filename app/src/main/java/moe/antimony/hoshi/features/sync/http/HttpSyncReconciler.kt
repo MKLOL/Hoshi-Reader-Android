@@ -2,6 +2,9 @@ package moe.antimony.hoshi.features.sync.http
 
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
@@ -521,7 +524,7 @@ class HttpSyncReconciler(
                 continue
             }
             runCatching {
-                val imported = importRemoteOnlyBook(transport, parsed.syncId)
+                val imported = importRemoteOnlyBook(transport, parsed.syncId, onProgress)
                 if (imported != null) {
                     rootsBySyncId[parsed.syncId] = imported
                     downloadedPayloads += 1
@@ -1108,13 +1111,21 @@ class HttpSyncReconciler(
                             total = payloadBookCount,
                         ),
                     )
-                    val uploaded = payloadCodec.uploadIfChanged(
-                        transport = transport,
-                        syncId = syncId,
-                        bookRoot = root,
-                        originalName = title,
-                        format = HttpSyncContentType.fromLocal(contentType),
-                    )
+                    val uploaded = withByteProgress(
+                        onProgress = onProgress,
+                        makeProgress = { transferred, total ->
+                            byteProgressOf("Uploading", title, transferred, total)
+                        },
+                    ) { onByteProgress ->
+                        payloadCodec.uploadIfChanged(
+                            transport = transport,
+                            syncId = syncId,
+                            bookRoot = root,
+                            originalName = title,
+                            format = HttpSyncContentType.fromLocal(contentType),
+                            onByteProgress = onByteProgress,
+                        )
+                    }
                     if (uploaded) uploadedPayloads += 1
                 }
 
@@ -1232,6 +1243,70 @@ class HttpSyncReconciler(
         )
     }
 
+    /**
+     * Runs [block] while bridging its non-suspend byte-progress callback to the suspend
+     * [onProgress] channel. A conflated [Channel] decouples the two: the byte callback only
+     * ever does a non-blocking `trySend` (safe to call from the IO upload/download loop),
+     * and a collector coroutine drains the latest value and emits an [HttpSyncProgress] with
+     * byte-level `completed`/`total` so `fraction` reflects the current file's transfer.
+     *
+     * [makeProgress] turns a `(bytesTransferred, totalBytes)` pair into the progress to emit;
+     * callers supply the per-file message/detail. When `totalBytes` is non-positive (e.g. a
+     * chunked download with no Content-Length) the pair is still forwarded — `makeProgress`
+     * decides whether to populate `completed`/`total`.
+     */
+    private suspend fun <T> withByteProgress(
+        onProgress: suspend (HttpSyncProgress) -> Unit,
+        makeProgress: (bytesTransferred: Long, totalBytes: Long) -> HttpSyncProgress,
+        block: suspend (onByteProgress: (Long, Long) -> Unit) -> T,
+    ): T = coroutineScope {
+        // Conflated: a slow UI consumer just sees the most recent byte count, never a
+        // backlog. The transfer loop is never throttled by progress emission.
+        val channel = Channel<Pair<Long, Long>>(Channel.CONFLATED)
+        val collector = launch {
+            for ((transferred, total) in channel) {
+                onProgress(makeProgress(transferred, total))
+            }
+        }
+        try {
+            block { transferred, total -> channel.trySend(transferred to total) }
+        } finally {
+            channel.close()
+            collector.join()
+        }
+    }
+
+    /**
+     * Bytes-to-`HttpSyncProgress` mapper shared by the upload and download paths. Uses byte
+     * counts as `completed`/`total` so [HttpSyncProgress.fraction] tracks the file transfer;
+     * a non-positive `totalBytes` (chunked transfer, unknown length) leaves them null so the
+     * indicator falls back to indeterminate.
+     */
+    private fun byteProgressOf(
+        message: String,
+        title: String,
+        transferred: Long,
+        total: Long,
+    ): HttpSyncProgress {
+        val haveTotal = total > 0L
+        // completed/total are Int; a 100 MB payload (~1e8) fits well within Int.MAX_VALUE,
+        // but coerce defensively so a hypothetical >2 GB payload can't overflow.
+        return HttpSyncProgress(
+            message = "$message $title",
+            detail = if (haveTotal) {
+                "${megabytes(transferred)} MB / ${megabytes(total)} MB"
+            } else {
+                "${megabytes(transferred)} MB"
+            },
+            completed = if (haveTotal) {
+                transferred.coerceAtMost(total).coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+            } else {
+                null
+            },
+            total = if (haveTotal) total.coerceAtMost(Int.MAX_VALUE.toLong()).toInt() else null,
+        )
+    }
+
     // ----- Key parsing --------------------------------------------------------------------
 
     private enum class BookKeyKind { Bookmark, Chat, Metadata, PayloadManifest, PayloadZip }
@@ -1274,10 +1349,18 @@ class HttpSyncReconciler(
     private suspend fun importRemoteOnlyBook(
         transport: HttpSyncKvTransport,
         syncId: String,
+        onProgress: suspend (HttpSyncProgress) -> Unit = {},
     ): File? {
         val targetRoot = bookRepository.createBookDirectoryForImportedTitle(syncId)
         val manifest = try {
-            payloadCodec.downloadAndUnpack(transport, syncId, targetRoot)
+            withByteProgress(
+                onProgress = onProgress,
+                makeProgress = { transferred, total ->
+                    byteProgressOf("Downloading", syncId, transferred, total)
+                },
+            ) { onByteProgress ->
+                payloadCodec.downloadAndUnpack(transport, syncId, targetRoot, onByteProgress)
+            }
         } catch (e: HttpSyncException) {
             // Clean up the half-imported directory so a retry doesn't see stale partial state.
             targetRoot.deleteRecursively()
@@ -1364,3 +1447,7 @@ data class HttpSyncResult(
 }
 
 private fun plural(n: Int): String = if (n == 1) "" else "s"
+
+/** Formats a byte count as a one-decimal MB string for per-file transfer progress. */
+private fun megabytes(bytes: Long): String =
+    "%.1f".format(bytes.coerceAtLeast(0L) / (1024.0 * 1024.0))

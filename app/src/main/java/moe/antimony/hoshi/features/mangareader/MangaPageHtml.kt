@@ -166,7 +166,10 @@ internal object MangaPageHtml {
             "::highlight(hoshi-selection) { background: #ffd400; color: #000; }"
         }
         return """
-        * { margin: 0; padding: 0; box-sizing: border-box; }
+        /* Chromium draws a tap-highlight flash on every press of the page (the page has a
+           document click listener); on an e-ink screen each flash is a full panel refresh,
+           even for a tap that changes nothing. Suppress it. */
+        * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
         html, body {
           width: 100%;
           height: 100%;

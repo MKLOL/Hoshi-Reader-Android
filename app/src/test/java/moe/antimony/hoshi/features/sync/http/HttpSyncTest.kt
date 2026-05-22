@@ -730,7 +730,12 @@ class HttpSyncTest {
                     override suspend fun put(key: String, contentType: String, body: ByteArray) =
                         HttpSyncKvWriteResponse(key, "2030-01-01T00:00:00Z", "etag", body.size, contentType)
 
-                    override suspend fun putFile(key: String, contentType: String, file: File) =
+                    override suspend fun putFile(
+                        key: String,
+                        contentType: String,
+                        file: File,
+                        onByteProgress: ((bytesTransferred: Long, totalBytes: Long) -> Unit)?,
+                    ) =
                         HttpSyncKvWriteResponse(key, "2030-01-01T00:00:00Z", "etag", file.length().toInt(), contentType)
                 }
             },
@@ -894,13 +899,22 @@ class HttpSyncTest {
         override suspend fun put(key: String, contentType: String, body: ByteArray): HttpSyncKvWriteResponse =
             inner.put(key, contentType, body)
 
-        override suspend fun putFile(key: String, contentType: String, file: File): HttpSyncKvWriteResponse =
-            inner.putFile(key, contentType, file)
+        override suspend fun putFile(
+            key: String,
+            contentType: String,
+            file: File,
+            onByteProgress: ((bytesTransferred: Long, totalBytes: Long) -> Unit)?,
+        ): HttpSyncKvWriteResponse =
+            inner.putFile(key, contentType, file, onByteProgress)
 
         override suspend fun get(key: String): HttpSyncKvFetched? = inner.get(key)
 
-        override suspend fun downloadToFile(key: String, targetFile: File): HttpSyncKvFileFetched? =
-            inner.downloadToFile(key, targetFile)
+        override suspend fun downloadToFile(
+            key: String,
+            targetFile: File,
+            onByteProgress: ((bytesTransferred: Long, totalBytes: Long) -> Unit)?,
+        ): HttpSyncKvFileFetched? =
+            inner.downloadToFile(key, targetFile, onByteProgress)
 
         override suspend fun list(
             prefix: String?,

@@ -146,6 +146,7 @@ class V3PushOps(
         syncId: String,
         title: String,
         format: HttpSyncContentType,
+        onByteProgress: ((bytesTransferred: Long, totalBytes: Long) -> Unit)? = null,
     ): Boolean {
         // v3 explicitly accepts both content types.
         require(format == HttpSyncContentType.Mokuro || format == HttpSyncContentType.Epub) {
@@ -157,6 +158,7 @@ class V3PushOps(
             bookRoot = bookRoot,
             originalName = title,
             format = format,
+            onByteProgress = onByteProgress,
         )
     }
 
