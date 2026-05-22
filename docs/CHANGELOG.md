@@ -5,6 +5,13 @@ The format follows a Keep a Changelog style, and release sections use Semantic V
 
 ## [Unreleased]
 
+## [v0.8.1] - 2026-05-22
+
+### Fixed
+
+- Fix Samsung S Pen input being dead inside the reader: the lookup popup overlay (rewritten in v0.7.4) stayed full-screen on top of the reader even with no popup shown, and silently swallowed all S Pen touches bound for the reader WebView. It is now kept out of the input path entirely until a popup is actually shown.
+- Fix tapping outside the lookup popup not dismissing it: the overlay now handles the outside press directly instead of relying on it falling through to the reader, which an S Pen press does not do.
+
 ## [v0.8.0] - 2026-05-21
 
 ### Added
