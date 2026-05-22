@@ -5,6 +5,8 @@ The format follows a Keep a Changelog style, and release sections use Semantic V
 
 ## [Unreleased]
 
+## [v0.8.2] - 2026-05-22
+
 ### Added
 
 - Add a per-file transfer progress bar for HTTP sync: payload uploads and downloads now report byte-level progress for the file in flight, not just an overall "book N of M" count.
