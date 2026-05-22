@@ -98,7 +98,8 @@ page images) that reuses the bookshelf, dictionary lookup, and Anki mining.
   bookshelf entry + cover, page WebView rendering, visible+selectable OCR text wired to
   the shared dictionary lookup, right-to-left navigation, volume-key paging, per-page
   resume. Content type is derived from disk (`mokuro.json` sidecar), never stored in the
-  iOS-shared `metadata.json`; `Bookmark.chapterIndex` carries the page index.
+  iOS-shared `metadata.json`; `Bookmark.chapterIndex` carries the page index. Accepted
+  manga archive layout is documented in `docs/MOKURO_ZIP_FORMAT.md`.
 - Architecture invariants for future work: keep using the shared `ReaderSelectionScripts`
   / `ReaderSelectionBridge` / `LookupPopupStackView` for lookup; the manga page WebView is
   sized from the host-provided viewport dimensions (CSS `vw`/`vh` resolve to 0 in this
