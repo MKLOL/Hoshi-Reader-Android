@@ -53,6 +53,7 @@ import moe.antimony.hoshi.features.update.UpdateDownloadStore
 import moe.antimony.hoshi.features.update.UpdateSettingsRepository
 import moe.antimony.hoshi.features.update.updateDownloadStore
 import moe.antimony.hoshi.features.update.updateSettingsRepository
+import moe.antimony.hoshi.mokuro.MokuroBookParser
 import moe.antimony.hoshi.navigation.ReaderRouteStateHolder
 
 internal class HoshiAppContainer(context: Context) {
@@ -61,6 +62,9 @@ internal class HoshiAppContainer(context: Context) {
 
     val bookRepository: BookRepository = BookRepository(appContext.filesDir)
     val dictionaryRepository: DictionaryRepository = DictionaryRepository(appContext.filesDir)
+    // Shared between the bookshelf's metadata-sidecar write and the manga reader's load
+    // path so opening a book parses mokuro.json once instead of twice. See MokuroBookParser.
+    val mokuroParser: MokuroBookParser = MokuroBookParser()
     val readerSettingsRepository: ReaderSettingsRepository = appContext.readerSettingsRepository()
     val dictionarySettingsRepository: DictionarySettingsRepository = appContext.dictionarySettingsRepository()
     val audioSettingsRepository: AudioSettingsRepository = appContext.audioSettingsRepository()
@@ -135,6 +139,7 @@ internal class HoshiAppContainer(context: Context) {
             dictionaryRepository = dictionaryRepository,
             settingsRepository = bookshelfSettingsRepository,
             syncManager = syncManager,
+            mokuroParser = mokuroParser,
         )
 
     fun dictionaryViewModelRepository(contentResolver: ContentResolver): DictionaryViewModelRepository =

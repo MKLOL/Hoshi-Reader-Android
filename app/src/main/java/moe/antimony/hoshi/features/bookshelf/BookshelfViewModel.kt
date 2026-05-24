@@ -435,7 +435,7 @@ internal class BookshelfViewModel(
 private fun PendingBookImport.failureDisplayName(): String =
     displayName?.takeIf { it.isNotBlank() }
         ?: importKey.substringAfterLast('/').takeIf { it.isNotBlank() }
-        ?: "EPUB"
+        ?: "Manga"
 
 private fun SyncResult.bookshelfMessage(): UiText? =
     when (this) {

@@ -111,7 +111,7 @@ fun AiChatPopupView(
                         fontWeight = FontWeight.SemiBold,
                         modifier = Modifier.weight(1f),
                     )
-                    IconButton(onClick = onDismiss, modifier = Modifier.size(32.dp)) {
+                    IconButton(onClick = onDismiss) {
                         Icon(Icons.Rounded.Close, contentDescription = "Close")
                     }
                 }
@@ -164,18 +164,13 @@ private fun ResponseBody(response: String) {
 
 @Composable
 private fun FailedBody(message: String, onRetry: () -> Unit, onDismiss: () -> Unit) {
-    // The "missing API key" failure (raised in OpenAiChatClient.complete) is shaped as
-    // "Set your OpenAI API key in Settings → AI." — retrying will fail the same way,
-    // so swap the action to a dismiss that guides the user to Settings instead of
-    // banging the same failed request again.
+    // The "missing API key" failure is shaped "Set your OpenAI API key first in Settings →
+    // ChatGPT." — that message already points the user at Settings, so we don't append a
+    // second hint. Retrying would fail the same way, so swap the action button to Dismiss.
     val isMissingKey = message.startsWith("Set your OpenAI API key", ignoreCase = true)
     Column {
         Text(
-            text = if (isMissingKey) {
-                "$message\n\nOpen Settings → ChatGPT to add your API key."
-            } else {
-                message
-            },
+            text = message,
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.error,
         )

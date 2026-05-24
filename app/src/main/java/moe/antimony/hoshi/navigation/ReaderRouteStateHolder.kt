@@ -44,7 +44,7 @@ internal class ReaderRouteStateHolder(
                 bookmark = repository.loadBookmark(entry.root),
             )
         }.getOrElse { error ->
-            ReaderRouteLoadState.Error(error.localizedMessage ?: "Failed to open EPUB.")
+            ReaderRouteLoadState.Error(error.localizedMessage ?: "Failed to open book.")
         }
     }
 

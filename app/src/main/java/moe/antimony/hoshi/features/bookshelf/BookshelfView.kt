@@ -1698,7 +1698,7 @@ private fun EmptyBooksView(
         )
         Spacer(Modifier.height(10.dp))
         Text(
-            text = "Import an EPUB or mokuro manga using the + button to start reading.",
+            text = stringResource(R.string.bookshelf_empty_message),
             style = MaterialTheme.typography.bodyLarge,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )

@@ -52,8 +52,8 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -69,6 +69,11 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.toggleableState
+import androidx.compose.ui.state.ToggleableState
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
@@ -187,7 +192,7 @@ internal fun MangaReaderScreen(
     // ChatGPT speech-bubble feature. Deliberately self-contained — its own settings repo and
     // per-manga history store (see features/ai) — so it never touches shared/upstream files.
     val aiSettingsRepository = remember { context.applicationContext.aiChatSettingsRepository() }
-    val aiSettings by aiSettingsRepository.settings.collectAsState(initial = null)
+    val aiSettings by aiSettingsRepository.settings.collectAsStateWithLifecycle(initialValue = null)
     val aiHistoryStore = remember { AiChatHistoryStore() }
     // The ChatGPT popup state (null = no popup), the in-flight request, this manga's chat
     // history, and whether the history / settings overlays are open.
@@ -1254,6 +1259,10 @@ private fun MangaReaderOverflowMenu(
                         Icon(Icons.Rounded.Check, contentDescription = null, tint = contentColor)
                     }
                 },
+                modifier = Modifier.semantics {
+                    role = Role.Switch
+                    toggleableState = if (singleTapLookup) ToggleableState.On else ToggleableState.Off
+                },
             )
             DropdownMenuItem(
                 text = { Text("Use Noto Sans JP font") },
@@ -1262,6 +1271,10 @@ private fun MangaReaderOverflowMenu(
                     if (useNotoSansJpFont) {
                         Icon(Icons.Rounded.Check, contentDescription = null, tint = contentColor)
                     }
+                },
+                modifier = Modifier.semantics {
+                    role = Role.Switch
+                    toggleableState = if (useNotoSansJpFont) ToggleableState.On else ToggleableState.Off
                 },
             )
         }
@@ -1385,8 +1398,11 @@ internal fun captureWebViewBitmap(view: WebView): Bitmap? {
     val width = view.width
     val height = view.height
     if (width <= 0 || height <= 0) return null
+    // The snapshot is only the frozen "previous page" during a page-turn slide on opaque
+    // manga artwork — RGB_565 (2 bytes/px) halves the per-turn allocation vs the default
+    // ARGB_8888 (4 bytes/px). Saves ~5 MB on a 1080×2400 viewport.
     return runCatching {
-        val bitmap = createBitmap(width, height)
+        val bitmap = createBitmap(width, height, Bitmap.Config.RGB_565)
         view.draw(Canvas(bitmap))
         bitmap
     }.getOrNull()

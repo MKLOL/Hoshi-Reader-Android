@@ -1,5 +1,5 @@
 <resources>
-    <string name="app_name">Hoshi Reader</string>
+    <string name="app_name">Hoshi Manga</string>
     <string name="action_ok">确定</string>
     <string name="action_cancel">取消</string>
     <string name="action_confirm">确认</string>
@@ -55,10 +55,10 @@
     <string name="settings_about">关于</string>
     <string name="settings_backup" comment="Advanced settings row label, intentionally matching the Backup action noun.">备份</string>
     <string name="settings_title" comment="Shared label for settings page titles distinct from the main tab key.">设置</string>
-    <string name="bookshelf_open_failed">无法打开 EPUB。</string>
-    <string name="bookshelf_import_failed">无法导入 EPUB。</string>
+    <string name="bookshelf_open_failed">无法打开漫画。</string>
+    <string name="bookshelf_import_failed">无法导入漫画。</string>
     <string name="bookshelf_import_failed_list_format">导入失败：\n%1$s</string>
-    <string name="bookshelf_importing_epub">正在导入 EPUB...</string>
+    <string name="bookshelf_importing_epub">正在导入漫画...</string>
     <string name="bookshelf_importing_named_format">正在导入 %1$s...</string>
     <string name="bookshelf_importing_progress_format">正在导入 %1$d / %2$d...</string>
     <string name="bookshelf_import_manga_failed">导入漫画失败。</string>
@@ -83,7 +83,7 @@
     <string name="bookshelf_no_shelf" comment="Shelf picker empty value, intentionally matching generic none.">无</string>
     <string name="bookshelf_delete_selected_books">删除所选书籍</string>
     <string name="bookshelf_manage_shelves">管理书架</string>
-    <string name="bookshelf_import_epub">导入 EPUB</string>
+    <string name="bookshelf_import_manga">导入漫画</string>
     <string name="bookshelf_sync">同步</string>
     <string name="bookshelf_move">移动</string>
     <string name="bookshelf_match_sasayaki">匹配有声书</string>
@@ -98,7 +98,7 @@
     <string name="bookshelf_shelf_name">书架名称</string>
     <string name="bookshelf_add_shelf">添加书架</string>
     <string name="bookshelf_empty_title">没有书籍</string>
-    <string name="bookshelf_empty_message">使用 + 按钮导入 EPUB 开始阅读。</string>
+    <string name="bookshelf_empty_message">使用 + 按钮导入 mokuro 漫画开始阅读。</string>
     <string name="bookshelf_selected">已选择</string>
     <string name="bookshelf_not_selected">未选择</string>
     <string name="bookshelf_read">已读</string>
@@ -283,7 +283,7 @@
     <string name="update_downloaded_title">更新已下载</string>
     <string name="update_downloaded_message_format" comment="Downloaded update prompt message, intentionally matching About update status.">更新 %1$s 已下载。</string>
     <string name="update_available_title">有可用更新</string>
-    <string name="update_available_message_format">Hoshi Reader %1$s 已可用。</string>
+    <string name="update_available_message_format">Hoshi Manga %1$s 已可用。</string>
     <string name="backup_books" comment="Backup section label, intentionally matching the Books tab label.">书籍</string>
     <string name="backup_dictionaries" comment="Backup section label, intentionally matching the Dictionaries settings label.">辞典</string>
     <string name="backup_books_saved">书籍备份已保存。</string>
@@ -305,7 +305,7 @@
     <string name="advanced_sasayaki_audiobooks">有声书</string>
     <string name="advanced_sasayaki_subtitle">配合已匹配的有声书字幕阅读</string>
     <string name="advanced_http_sync">HTTP 同步</string>
-    <string name="advanced_http_sync_subtitle">将书签和 ChatGPT 历史同步到你自己的服务器（漫画 + EPUB）</string>
+    <string name="advanced_http_sync_subtitle">将书签和 ChatGPT 历史同步到你自己的服务器</string>
     <string name="audio_sources">来源</string>
     <string name="audio_add_source">添加来源</string>
     <string name="audio_name">名称</string>
@@ -389,7 +389,7 @@
     <string name="about_storage_no_leftovers">未找到可清理的应用存储残留。</string>
     <string name="about_storage_category_format">%1$s：%2$s（%3$s）</string>
     <string name="about_storage_category_anki_media_cache">Anki 媒体缓存</string>
-    <string name="about_storage_category_epub_import_residue">中断的 EPUB 导入</string>
+    <string name="about_storage_category_epub_import_residue">中断的漫画导入</string>
     <string name="about_storage_category_backup_restore_residue">中断的备份恢复</string>
     <string name="about_storage_category_dictionary_import_residue">中断的辞典导入</string>
     <string name="about_storage_category_local_audio_import_residue">中断的本地音频导入</string>
@@ -408,7 +408,7 @@
     <string name="about_update_downloading">正在下载更新。</string>
     <string name="about_update_downloaded_format" comment="About update status, intentionally matching downloaded update prompt message.">更新 %1$s 已下载。</string>
     <string name="about_update_last_download_failed">上次更新下载失败。</string>
-    <string name="about_update_check_github">检查 GitHub Releases 是否有新版 Hoshi Reader APK。</string>
+    <string name="about_update_check_github">检查 GitHub Releases 是否有新版 Hoshi Manga APK。</string>
     <string name="about_update_checking_github">正在检查 GitHub Releases...</string>
     <string name="about_update_latest">当前已是最新版本。</string>
     <string name="about_update_no_matching_apk">发现新版发布，但没有单个匹配的 APK。</string>

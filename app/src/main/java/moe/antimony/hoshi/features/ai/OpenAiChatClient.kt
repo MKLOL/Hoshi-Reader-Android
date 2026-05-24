@@ -46,7 +46,7 @@ object OpenAiChatClient {
         dispatcher: CoroutineDispatcher = Dispatchers.IO,
     ): String = withContext(dispatcher) {
         if (apiKey.isBlank()) {
-            throw OpenAiException("Set your OpenAI API key in Settings → AI.")
+            throw OpenAiException("Set your OpenAI API key in Settings → ChatGPT.")
         }
         val requestBody = buildRequestBody(model, prompt, bubbleText)
         completeRequest(apiKey, requestBody)
@@ -68,7 +68,7 @@ object OpenAiChatClient {
         dispatcher: CoroutineDispatcher = Dispatchers.IO,
     ): String = withContext(dispatcher) {
         if (apiKey.isBlank()) {
-            throw OpenAiException("Set your OpenAI API key in Settings → AI.")
+            throw OpenAiException("Set your OpenAI API key in Settings → ChatGPT.")
         }
         val requestBody = buildImageRequestBody(
             model = model,

@@ -381,7 +381,11 @@ internal object MangaPageHtml {
         // MokuroBookParser.clampMokuroFontSize) guarantees the un-wrapped text already
         // fits at this OCR-box size, so going from `min-*` to fixed doesn't visibly change
         // any normal bubble — it just exposes the overflow signal the fallback needs.
-        return """    <div class="ocr-box$verticalClass" style="left: $leftPct%; top: $topPct%; """ +
+        // role/aria/tabindex expose the bubble to TalkBack as a toggleable button. The text
+        // inside the <p> is announced as the button's accessible name; aria-pressed flips
+        // when the .revealed class is added/removed (see handleTap + clearRevealed below).
+        return """    <div class="ocr-box$verticalClass" role="button" tabindex="0" """ +
+            """aria-pressed="false" style="left: $leftPct%; top: $topPct%; """ +
             """width: $widthPct%; height: $heightPct%; font-size: ${fontCqw}cqw;">""" +
             """<p>$text</p>$ACTION_BUTTONS_HTML</div>"""
     }
@@ -518,6 +522,7 @@ internal object MangaPageHtml {
               var revealed = document.querySelectorAll('.ocr-box.revealed');
               for (var i = 0; i < revealed.length; i++) {
                 revealed[i].classList.remove('revealed');
+                revealed[i].setAttribute('aria-pressed', 'false');
               }
               if (window.hoshiSelection) {
                 window.hoshiSelection.clearSelection();
@@ -611,8 +616,12 @@ internal object MangaPageHtml {
                 setFs(wrapFs);
               } else {
                 box.classList.remove('wrap');
-                if (nowrapFs === initialPx && originalInlineFontSize) {
-                  // Keep the original cqw inline value so pinch-zoom rescaling still works.
+                // initialPx is a float from getComputedStyle (e.g. 24.31); nowrapFs is
+                // Math.floor of the binary-search result, so a strict === almost never
+                // matches. Treat "within 1 px" as "no meaningful change" and keep the
+                // original cqw inline value so the box stays responsive to container
+                // resizes (e.g. orientation change).
+                if (originalInlineFontSize && Math.abs(nowrapFs - initialPx) < 1) {
                   box.style.fontSize = originalInlineFontSize;
                 } else {
                   setFs(nowrapFs);
@@ -661,6 +670,7 @@ internal object MangaPageHtml {
                   // wrap layout that fits a meaningfully larger glyph than nowrap can.
                   window.hoshiManga.tryWrapFallback(box);
                   box.classList.add('revealed');
+                  box.setAttribute('aria-pressed', 'true');
                 }
                 // Default two-tap mode: first tap on an unrevealed bubble just reveals
                 // (so the action buttons surface without the dictionary popup covering

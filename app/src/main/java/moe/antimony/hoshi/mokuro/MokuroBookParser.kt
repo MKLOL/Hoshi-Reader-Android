@@ -1,8 +1,10 @@
 package moe.antimony.hoshi.mokuro
 
+import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.decodeFromStream
 import moe.antimony.hoshi.epub.MOKURO_SIDECAR_FILE
 import java.io.File
 
@@ -16,21 +18,43 @@ import java.io.File
 class MokuroBookParser {
     private val json = Json { ignoreUnknownKeys = true }
 
+    // Single-entry cache keyed by (sidecar path, mtime, size). The book-open path parses
+    // the same mokuro.json twice in quick succession — once in BookshelfRepository to write
+    // metadata sidecars, once in MangaReaderLoader when navigation lands on the reader.
+    // Coalesces those into one parse + decode. Cleared automatically when the file changes.
+    @Volatile private var cached: CachedParse? = null
+
     /** Parses [bookRoot]/`mokuro.json`. Throws if the directory is not a mokuro book. */
+    @OptIn(ExperimentalSerializationApi::class)
     fun parse(bookRoot: File): MokuroBook {
         val sidecar = bookRoot.resolve(MOKURO_SIDECAR_FILE)
         require(sidecar.isFile) { "Not a mokuro book directory: ${bookRoot.absolutePath}" }
-        val raw = json.decodeFromString(RawMokuro.serializer(), sidecar.readText())
+        val path = sidecar.absolutePath
+        val mtime = sidecar.lastModified()
+        val size = sidecar.length()
+        cached?.let { hit ->
+            if (hit.path == path && hit.mtime == mtime && hit.size == size) return hit.book
+        }
+        val raw = sidecar.inputStream().buffered().use { json.decodeFromStream<RawMokuro>(it) }
         val pages = raw.pages.mapIndexed { index, page -> page.toMokuroPage(index) }
         require(pages.isNotEmpty()) { "mokuro.json contains no pages" }
-        return MokuroBook(
+        val book = MokuroBook(
             title = raw.volume?.ifBlank { null }
                 ?: raw.title?.ifBlank { null }
                 ?: bookRoot.nameWithoutExtension,
             pages = pages,
             coverImagePath = pages.firstOrNull()?.imagePath,
         )
+        cached = CachedParse(path = path, mtime = mtime, size = size, book = book)
+        return book
     }
+
+    private data class CachedParse(
+        val path: String,
+        val mtime: Long,
+        val size: Long,
+        val book: MokuroBook,
+    )
 }
 
 private fun RawMokuroPage.toMokuroPage(index: Int): MokuroPage =

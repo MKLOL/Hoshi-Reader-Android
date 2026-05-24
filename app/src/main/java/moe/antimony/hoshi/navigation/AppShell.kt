@@ -50,7 +50,7 @@ import moe.antimony.hoshi.features.sasayaki.SasayakiSettings
 import moe.antimony.hoshi.features.update.AboutScreen
 import kotlinx.coroutines.launch
 
-private const val ReportIssueUrl = "https://github.com/HuangAntimony/Hoshi-Reader-Android/issues"
+private const val ReportIssueUrl = "https://github.com/MKLOL/Hoshi-Reader-Android/issues"
 
 private val NoNavContentTransition: AnimatedContentTransitionScope<Scene<NavKey>>.() -> ContentTransform = {
     EnterTransition.None togetherWith ExitTransition.None

@@ -266,7 +266,7 @@ jobs:
             fi
           else
             gh release create "${tag}" \
-              --title "Hoshi Reader ${tag}" \
+              --title "Hoshi Manga ${tag}" \
               --notes-file release_notes.md \
               "${prerelease_flag[@]}"
           fi

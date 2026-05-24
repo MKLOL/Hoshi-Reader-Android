@@ -126,6 +126,11 @@ android {
     }
     lint {
         disable += "DirectSystemCurrentTimeMillisUsage"
+        // The fork's EPUB strip collapses two distinct import code paths into the same
+        // user-visible message (e.g. "Failed to import manga." for both single-file and
+        // multi-file flows). The AnkiDroid plugin's DuplicateCrowdInStrings check is meant
+        // for translator-confusion prevention; here the duplication is intentional.
+        disable += "DuplicateCrowdInStrings"
     }
     externalNativeBuild {
         cmake {

@@ -50,7 +50,9 @@ internal fun MangaReaderRouteDestination(
         .fillMaxSize()
         .background(Color(readerSettings.backgroundColor(systemDark)))
 
-    val loader = remember(appContainer) { MangaReaderLoader(appContainer.bookRepository) }
+    val loader = remember(appContainer) {
+        MangaReaderLoader(appContainer.bookRepository, appContainer.mokuroParser)
+    }
     val loadState by produceState<MangaReaderLoadState>(MangaReaderLoadState.Loading, bookId, loader) {
         value = MangaReaderLoadState.Loading
         value = loader.load(bookId)

@@ -26,8 +26,11 @@ class MainShellUiTest {
         )
     }
 
+    // Appearance + Behavior were EPUB-text-reader specific and are hidden in the manga-only
+    // fork. Their SettingsDestination dispatch entries are kept so deep-links still resolve;
+    // see comments in settingsGroups().
     @Test
-    fun settingsGroupsIncludeAndroidReaderBehaviorEntry() {
+    fun settingsGroupsExposeMangaTopLevelEntries() {
         val groups = settingsGroups()
 
         assertEquals(
@@ -35,8 +38,6 @@ class MainShellUiTest {
                 R.string.settings_dictionaries,
                 R.string.settings_anki,
                 R.string.settings_chatgpt,
-                R.string.settings_appearance,
-                R.string.settings_behavior,
                 R.string.settings_advanced,
             ),
             groups.first().map { it.labelRes },

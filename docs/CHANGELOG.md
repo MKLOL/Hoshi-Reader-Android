@@ -10,8 +10,7 @@ Semantic Versioning.
 First batch of "**Hoshi Manga**" fork changes. Hoshi Manga is a manga-focused fork of
 HuangAntimony's [Hoshi Reader Android](https://github.com/HuangAntimony/Hoshi-Reader-Android),
 which is itself a recreation of [Manhhao / Hoshi-Reader](https://github.com/Manhhao/Hoshi-Reader).
-Version-bump decision deferred — these changes will ship under whichever release tag is
-cut next (e.g. `v0.9.0`), not a `v1.0.0`.
+Release/tag decision deferred; these changes remain unreleased until a release is cut.
 
 ### Renamed
 - Package display name is now **Hoshi Manga** (kanji: 星漫画). The "Books" bottom-nav
