@@ -70,8 +70,14 @@ internal fun GitHubRelease.availableUpdateOrNull(currentVersionName: String): Av
 
     val normalizedVersion = releaseVersion.toString()
     val apkAssets = assets.filter { it.name.endsWith(".apk", ignoreCase = true) }
-    val expectedName = "Hoshi-Reader-v$normalizedVersion.apk"
-    val selectedAsset = apkAssets.firstOrNull { it.name == expectedName }
+    // Manga-era APK name (v1.0.0+). The legacy "Hoshi-Reader-v…" name is still picked up
+    // by the singleOrNull fallback below for releases predating the rename, so users on
+    // 0.8.x can still auto-update across the boundary as long as the release ships a
+    // single APK asset.
+    val expectedManga = "Hoshi-Manga-v$normalizedVersion.apk"
+    val expectedReaderLegacy = "Hoshi-Reader-v$normalizedVersion.apk"
+    val selectedAsset = apkAssets.firstOrNull { it.name == expectedManga }
+        ?: apkAssets.firstOrNull { it.name == expectedReaderLegacy }
         ?: apkAssets.singleOrNull()
         ?: return null
     return AvailableUpdate(
@@ -106,7 +112,7 @@ internal class GitHubReleaseUpdateRepository(
     override suspend fun latestRelease(): GitHubRelease {
         val headers = mapOf(
             "Accept" to "application/vnd.github+json",
-            "User-Agent" to "Hoshi-Reader-Android",
+            "User-Agent" to "Hoshi-Manga-Android",
         )
         var lastError: Throwable? = null
         latestReleaseCandidates().forEachIndexed { index, url ->

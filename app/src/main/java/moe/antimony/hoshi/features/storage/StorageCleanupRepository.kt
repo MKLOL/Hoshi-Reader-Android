@@ -45,8 +45,8 @@ class StorageCleanupRepository(
             ),
             category(
                 id = StorageCleanupCategoryId.EpubImportResidue,
-                title = "Interrupted EPUB imports",
-                description = "Temporary files left by EPUB imports that did not finish.",
+                title = "Interrupted manga imports",
+                description = "Temporary files left by manga imports that did not finish.",
                 targets = listOf(filesDir.resolve("ImportTemp")).existing(),
             ),
             category(

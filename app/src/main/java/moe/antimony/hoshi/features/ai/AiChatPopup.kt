@@ -126,7 +126,11 @@ fun AiChatPopupView(
                 when (state) {
                     is AiChatUiState.Loading -> LoadingBody()
                     is AiChatUiState.Loaded -> ResponseBody(state.entry.response)
-                    is AiChatUiState.Failed -> FailedBody(message = state.message, onRetry = onRetry)
+                    is AiChatUiState.Failed -> FailedBody(
+                        message = state.message,
+                        onRetry = onRetry,
+                        onDismiss = onDismiss,
+                    )
                 }
             }
         }
@@ -159,16 +163,28 @@ private fun ResponseBody(response: String) {
 }
 
 @Composable
-private fun FailedBody(message: String, onRetry: () -> Unit) {
+private fun FailedBody(message: String, onRetry: () -> Unit, onDismiss: () -> Unit) {
+    // The "missing API key" failure (raised in OpenAiChatClient.complete) is shaped as
+    // "Set your OpenAI API key in Settings → AI." — retrying will fail the same way,
+    // so swap the action to a dismiss that guides the user to Settings instead of
+    // banging the same failed request again.
+    val isMissingKey = message.startsWith("Set your OpenAI API key", ignoreCase = true)
     Column {
         Text(
-            text = message,
+            text = if (isMissingKey) {
+                "$message\n\nOpen Settings → ChatGPT to add your API key."
+            } else {
+                message
+            },
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.error,
         )
         Spacer(Modifier.size(8.dp))
-        TextButton(onClick = onRetry, modifier = Modifier.align(Alignment.End)) {
-            Text("Retry")
+        TextButton(
+            onClick = if (isMissingKey) onDismiss else onRetry,
+            modifier = Modifier.align(Alignment.End),
+        ) {
+            Text(if (isMissingKey) "Dismiss" else "Retry")
         }
     }
 }

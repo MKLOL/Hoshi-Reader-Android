@@ -97,6 +97,14 @@ internal fun MangaReaderWebView(
                 // OCR font sizes are derived from mokuro's image coordinates; Android's
                 // text zoom would resize only the DOM text, not the artwork it must track.
                 settings.textZoom = 100
+                // Android WebView ships with `minimumFontSize=8` by default — any CSS
+                // `font-size` below 8 px gets silently bumped up. That hurts the manga
+                // OCR overlay specifically: the parser clamp and the wrap-fallback both
+                // need to set sub-8-px fonts on tiny bubbles so the text fits the OCR
+                // box, and a silently larger render breaks the fit-to-box invariant the
+                // whole reveal pipeline depends on. Drop the floor.
+                settings.minimumFontSize = 1
+                settings.minimumLogicalFontSize = 1
                 // Deliberately NOT setting useWideViewPort / loadWithOverviewMode: those make
                 // the WebView size its layout viewport from a <meta viewport> tag (for zooming
                 // desktop pages to fit) and leave CSS vh / % heights resolving to 0 for our

@@ -220,9 +220,10 @@ fun BookshelfView(
     }
 
     fun launchBookImporter() {
-        // Both EPUBs and mokuro manga bundles (.zip/.cbz) are picked here; the importer
-        // dispatches on the picked file's name.
-        importer.launch(ImportFileType.Epub.mimeTypes + ImportFileType.Mokuro.mimeTypes)
+        // Manga-only file picker: mokuro bundles (.zip/.cbz). EPUB support is hidden from
+        // the UI for now but the parser/import plumbing in BookRepository still exists,
+        // so adding `ImportFileType.Epub.mimeTypes` here would re-enable it.
+        importer.launch(ImportFileType.Mokuro.mimeTypes)
     }
 
     fun launchMangaFolderImporter() {
@@ -966,9 +967,13 @@ private fun BooksTopAppBar(
                     IconButton(onClick = { importMenuExpanded = true }, enabled = enabled) {
                         Icon(
                             imageVector = Icons.Rounded.Add,
-                            contentDescription = stringResource(R.string.bookshelf_import_epub),
+                            contentDescription = stringResource(R.string.bookshelf_import_manga),
                         )
                     }
+                    // Two import paths: a file picker (mokuro `.zip`/`.cbz` bundle) and a
+                    // directory picker (a pre-extracted mokuro folder). EPUB support has
+                    // been hidden from the UI but its parser/import path still exists in
+                    // BookRepository; re-adding the dropdown item would re-enable it.
                     DropdownMenu(
                         expanded = importMenuExpanded,
                         onDismissRequest = { importMenuExpanded = false },
@@ -976,7 +981,7 @@ private fun BooksTopAppBar(
                         SortMenuHeader(text = "Import")
                         HorizontalDivider()
                         DropdownMenuItem(
-                            text = { Text("EPUB or manga file") },
+                            text = { Text("Manga file") },
                             onClick = {
                                 importMenuExpanded = false
                                 onImport()

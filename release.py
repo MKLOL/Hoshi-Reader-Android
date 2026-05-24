@@ -258,7 +258,11 @@ def main() -> None:
     step("Publishing the GitHub Release")
     notes_file = Path(tempfile.gettempdir()) / f"hoshi-notes-{tag}.md"
     notes_file.write_text((notes or f"Release {new_name}") + "\n")
-    assets = [f"{RELEASE_APK}#app-release-{tag}.apk"]
+    # APK asset name must match what the in-app updater expects in
+    # `GitHubReleaseUpdateRepository.availableUpdateOrNull` so installed users get
+    # automatic in-place upgrades. Keep this string in lockstep with the Kotlin
+    # `expectedManga` constant.
+    assets = [f"{RELEASE_APK}#Hoshi-Manga-{tag}.apk"]
     if (REPO / "LICENSE").exists():
         assets.append("LICENSE")
     try:

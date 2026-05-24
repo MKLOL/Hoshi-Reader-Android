@@ -76,10 +76,8 @@ fun HttpSyncSettingsView(
         ) {
             Text(
                 text = "Sync your reading position and per-manga ChatGPT history to your own server " +
-                    "over HTTPS, against a generic key/value blob API. Independent of the iOS-shared " +
-                    "Google Drive sync; works for both EPUB and mokuro manga. Page turns auto-push " +
-                    "every 5 turns and on leave; new ChatGPT replies push immediately. See " +
-                    "docs/HTTP_SYNC_KV.md for the protocol spec.",
+                    "over HTTPS, against a generic key/value blob API. Page turns auto-push " +
+                    "every 5 turns and on leave; new ChatGPT replies push immediately.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

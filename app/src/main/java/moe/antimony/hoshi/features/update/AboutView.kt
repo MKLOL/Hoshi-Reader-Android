@@ -183,7 +183,7 @@ fun AboutScreen(
                 AboutCard {
                     ListItem(
                         colors = ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.surface),
-                        headlineContent = { Text("Hoshi Reader") },
+                        headlineContent = { Text(stringResource(R.string.app_name)) },
                         supportingContent = {
                             Text(
                                 stringResource(
@@ -223,6 +223,111 @@ fun AboutScreen(
                                 modifier = Modifier.padding(end = 8.dp),
                             )
                             Text("GitHub")
+                        }
+                    }
+                }
+            }
+            // ---- Attribution / credits card ----
+            // Hoshi Manga is a fork of HuangAntimony's Android EPUB reader, which is
+            // itself a recreation of Manhhao's web/iOS Hoshi Reader. Per GPLv3's
+            // conspicuous-notice requirement, surface both upstreams + the license +
+            // a short list of the open-source libraries the manga reading flow leans
+            // on heavily so users know what they're standing on.
+            item {
+                AboutCard {
+                    Column(Modifier.padding(16.dp)) {
+                        Text(
+                            text = "Credits",
+                            style = MaterialTheme.typography.titleMedium,
+                        )
+                        Spacer(Modifier.height(12.dp))
+                        Text(
+                            text = "Hoshi Manga is a manga-focused fork of the original " +
+                                "Hoshi Reader project. Huge thanks to the upstream maintainers " +
+                                "and to the open-source ecosystem this reader builds on:",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Spacer(Modifier.height(12.dp))
+                        CreditRow(
+                            label = "Hoshi Reader Android (upstream fork)",
+                            description = "by HuangAntimony — the EPUB reader codebase " +
+                                "this manga fork is built on.",
+                            url = "https://github.com/HuangAntimony/Hoshi-Reader-Android",
+                            context = context,
+                        )
+                        Spacer(Modifier.height(10.dp))
+                        CreditRow(
+                            label = "Hoshi Reader (original web + iOS)",
+                            description = "by Manhhao — the original Hoshi Reader project " +
+                                "the Android port grew from.",
+                            url = "https://github.com/Manhhao/Hoshi-Reader",
+                            context = context,
+                        )
+                        Spacer(Modifier.height(10.dp))
+                        CreditRow(
+                            label = "mokuro",
+                            description = "by kha-white — the OCR pipeline that produces " +
+                                "the manga sidecar files this reader consumes.",
+                            url = "https://github.com/kha-white/mokuro",
+                            context = context,
+                        )
+                        Spacer(Modifier.height(10.dp))
+                        CreditRow(
+                            label = "mokuro-reader (Gnathonic fork)",
+                            description = "by Gnathonic — the reference web reader whose " +
+                                "OCR shrink-to-fit + word-wrap algorithm this app ports.",
+                            url = "https://github.com/Gnathonic/mokuro-reader",
+                            context = context,
+                        )
+                        Spacer(Modifier.height(10.dp))
+                        CreditRow(
+                            label = "Yomitan / hoshidicts",
+                            description = "Yomitan dictionary format (foosoft) + the " +
+                                "hoshidicts native lookup engine (de.manhhao).",
+                            url = "https://github.com/yomidevs/yomitan",
+                            context = context,
+                        )
+                        Spacer(Modifier.height(10.dp))
+                        CreditRow(
+                            label = "AnkiDroid",
+                            description = "Anki on Android — the host for the card-mining " +
+                                "integration that adds manga lookups to your reviews.",
+                            url = "https://github.com/ankidroid/Anki-Android",
+                            context = context,
+                        )
+                        Spacer(Modifier.height(16.dp))
+                        // License row — GPLv3 requires conspicuous notice in the running
+                        // program, satisfied here.
+                        Text(
+                            text = "License",
+                            style = MaterialTheme.typography.titleSmall,
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            text = "Hoshi Manga is licensed under the GNU General Public " +
+                                "License, version 3. Source code, license terms, and full " +
+                                "third-party attribution are available on GitHub.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Spacer(Modifier.height(12.dp))
+                        OutlinedButton(
+                            onClick = {
+                                context.startActivity(
+                                    Intent(
+                                        Intent.ACTION_VIEW,
+                                        Uri.parse("https://www.gnu.org/licenses/gpl-3.0.html"),
+                                    ),
+                                )
+                            },
+                        ) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Rounded.OpenInNew,
+                                contentDescription = null,
+                                modifier = Modifier.padding(end = 8.dp),
+                            )
+                            Text("View GPLv3")
                         }
                     }
                 }
@@ -421,6 +526,40 @@ fun AboutScreen(
                     }
                 }
             }
+        }
+    }
+}
+
+/**
+ * One row inside the Credits card: project name + one-sentence description + a tappable
+ * link button. Kept compact (no Surface wrapper) so multiple rows stack densely.
+ */
+@Composable
+private fun CreditRow(
+    label: String,
+    description: String,
+    url: String,
+    context: android.content.Context,
+) {
+    Column {
+        Text(text = label, style = MaterialTheme.typography.titleSmall)
+        Text(
+            text = description,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        TextButton(
+            onClick = {
+                context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+            },
+            contentPadding = PaddingValues(horizontal = 0.dp, vertical = 4.dp),
+        ) {
+            Icon(
+                imageVector = Icons.AutoMirrored.Rounded.OpenInNew,
+                contentDescription = null,
+                modifier = Modifier.size(14.dp).padding(end = 4.dp),
+            )
+            Text(text = url, style = MaterialTheme.typography.bodySmall)
         }
     }
 }

@@ -63,6 +63,22 @@ data class ReaderSettings(
     val volumeKeysSeekSasayaki: Boolean = false,
     val reverseVolumeKeyDirection: Boolean = false,
     val keepScreenOnWhileReading: Boolean = false,
+    /**
+     * When `true`, a first tap on a manga OCR bubble both reveals it *and* runs the
+     * dictionary lookup immediately. When `false` (the default), the first tap only
+     * reveals — a second tap on the revealed bubble is required to look the word up.
+     * The two-tap default exists so the lookup popup can't open on top of (and cover)
+     * the bubble's ChatGPT / Copy action buttons; see MangaPageHtml's tap-handler.
+     */
+    val mangaSingleTapLookup: Boolean = false,
+    /**
+     * When `true`, the manga OCR overlay sets `font-family: 'Noto Sans JP', sans-serif`
+     * on every text box, matching the Gnathonic mokuro-reader web app. When `false` (the
+     * default), the WebView falls back to the platform's system sans-serif (which on
+     * Android typically resolves to Noto Sans CJK JP anyway, so the visual change is
+     * usually subtle — the explicit family is mostly a consistency knob).
+     */
+    val mangaUseNotoSansJp: Boolean = false,
 ) {
     val bottomOverlapPx: Int
         get() = if (verticalWriting) fontSize else 0
@@ -243,6 +259,8 @@ class ReaderSettingsStore(context: Context) : ReaderSettingsLegacySource {
         volumeKeysSeekSasayaki = preferences.getBoolean("volumeKeysSeekSasayaki", false),
         reverseVolumeKeyDirection = preferences.getBoolean("reverseVolumeKeyDirection", false),
         keepScreenOnWhileReading = preferences.getBoolean("keepScreenOnWhileReading", false),
+        mangaSingleTapLookup = preferences.getBoolean("mangaSingleTapLookup", false),
+        mangaUseNotoSansJp = preferences.getBoolean("mangaUseNotoSansJp", false),
     )
 
     fun save(settings: ReaderSettings) {
@@ -291,6 +309,8 @@ class ReaderSettingsStore(context: Context) : ReaderSettingsLegacySource {
             .putBoolean("volumeKeysSeekSasayaki", settings.volumeKeysSeekSasayaki)
             .putBoolean("reverseVolumeKeyDirection", settings.reverseVolumeKeyDirection)
             .putBoolean("keepScreenOnWhileReading", settings.keepScreenOnWhileReading)
+            .putBoolean("mangaSingleTapLookup", settings.mangaSingleTapLookup)
+            .putBoolean("mangaUseNotoSansJp", settings.mangaUseNotoSansJp)
             .apply()
     }
 }
@@ -378,6 +398,8 @@ class ReaderSettingsRepository(
             volumeKeysSeekSasayaki = this[KEY_VOLUME_KEYS_SEEK_SASAYAKI] ?: false,
             reverseVolumeKeyDirection = this[KEY_REVERSE_VOLUME_KEY_DIRECTION] ?: false,
             keepScreenOnWhileReading = this[KEY_KEEP_SCREEN_ON_WHILE_READING] ?: false,
+            mangaSingleTapLookup = this[KEY_MANGA_SINGLE_TAP_LOOKUP] ?: false,
+            mangaUseNotoSansJp = this[KEY_MANGA_USE_NOTO_SANS_JP] ?: false,
         )
 
     private fun MutablePreferences.writeReaderSettings(settings: ReaderSettings) {
@@ -425,6 +447,8 @@ class ReaderSettingsRepository(
         this[KEY_VOLUME_KEYS_SEEK_SASAYAKI] = settings.volumeKeysSeekSasayaki
         this[KEY_REVERSE_VOLUME_KEY_DIRECTION] = settings.reverseVolumeKeyDirection
         this[KEY_KEEP_SCREEN_ON_WHILE_READING] = settings.keepScreenOnWhileReading
+        this[KEY_MANGA_SINGLE_TAP_LOOKUP] = settings.mangaSingleTapLookup
+        this[KEY_MANGA_USE_NOTO_SANS_JP] = settings.mangaUseNotoSansJp
     }
 
     companion object {
@@ -477,6 +501,8 @@ class ReaderSettingsRepository(
         private val KEY_VOLUME_KEYS_SEEK_SASAYAKI = booleanPreferencesKey("volumeKeysSeekSasayaki")
         private val KEY_REVERSE_VOLUME_KEY_DIRECTION = booleanPreferencesKey("reverseVolumeKeyDirection")
         private val KEY_KEEP_SCREEN_ON_WHILE_READING = booleanPreferencesKey("keepScreenOnWhileReading")
+        private val KEY_MANGA_SINGLE_TAP_LOOKUP = booleanPreferencesKey("mangaSingleTapLookup")
+        private val KEY_MANGA_USE_NOTO_SANS_JP = booleanPreferencesKey("mangaUseNotoSansJp")
     }
 }
 

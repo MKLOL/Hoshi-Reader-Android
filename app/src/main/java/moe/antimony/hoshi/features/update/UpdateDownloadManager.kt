@@ -70,7 +70,7 @@ internal class AndroidUpdateDownloadManager(
             target.delete()
         }
         val request = DownloadManager.Request(Uri.parse(downloadUrl))
-            .setTitle("Hoshi Reader ${update.versionName}")
+            .setTitle("${appContext.getString(R.string.app_name)} ${update.versionName}")
             .setDescription(appContext.getString(R.string.update_downloading_notification))
             .setMimeType(ApkMimeType)
             .setAllowedOverMetered(true)

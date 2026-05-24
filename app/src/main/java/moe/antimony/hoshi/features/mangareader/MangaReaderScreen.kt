@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
@@ -32,10 +33,19 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
+import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.Screenshot
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.TextButton
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
@@ -187,6 +197,7 @@ internal fun MangaReaderScreen(
     var aiHistory by remember(book) { mutableStateOf<List<AiChatEntry>>(emptyList()) }
     var showAiHistory by remember(book) { mutableStateOf(false) }
     var showStatistics by remember(book) { mutableStateOf(false) }
+    var showGoToPageDialog by remember(book) { mutableStateOf(false) }
     var screenshotCropMode by remember(book) { mutableStateOf(false) }
 
     val scope = rememberCoroutineScope()
@@ -832,6 +843,8 @@ internal fun MangaReaderScreen(
                 readerSettings.eInkMode,
                 viewportCssWidth,
                 viewportCssHeight,
+                readerSettings.mangaSingleTapLookup,
+                readerSettings.mangaUseNotoSansJp,
             ) {
                 MangaPageRenderConfig(
                     backgroundCssColor = backgroundCssColor,
@@ -839,6 +852,8 @@ internal fun MangaReaderScreen(
                     eInkMode = readerSettings.eInkMode,
                     viewportCssWidth = viewportCssWidth,
                     viewportCssHeight = viewportCssHeight,
+                    singleTapLookup = readerSettings.mangaSingleTapLookup,
+                    useNotoSansJpFont = readerSettings.mangaUseNotoSansJp,
                 )
             }
             LaunchedEffect(book, pageIndex, renderConfig, mangaImageResolver) {
@@ -966,6 +981,19 @@ internal fun MangaReaderScreen(
                     onTakeScreenshot = startScreenshotCrop,
                     onShowAiHistory = { showAiHistory = true },
                     onShowStatistics = { showStatistics = true },
+                    onShowGoToPage = { showGoToPageDialog = true },
+                    singleTapLookup = readerSettings.mangaSingleTapLookup,
+                    onToggleSingleTapLookup = {
+                        onReaderSettingsChange(
+                            readerSettings.copy(mangaSingleTapLookup = !readerSettings.mangaSingleTapLookup),
+                        )
+                    },
+                    useNotoSansJpFont = readerSettings.mangaUseNotoSansJp,
+                    onToggleNotoSansJpFont = {
+                        onReaderSettingsChange(
+                            readerSettings.copy(mangaUseNotoSansJp = !readerSettings.mangaUseNotoSansJp),
+                        )
+                    },
                 )
             }
 
@@ -1062,7 +1090,62 @@ internal fun MangaReaderScreen(
                 onDismiss = { showStatistics = false },
             )
         }
+        if (showGoToPageDialog) {
+            MangaGoToPageDialog(
+                currentPage = pageIndex + 1,
+                pageCount = pageCount,
+                onDismiss = { showGoToPageDialog = false },
+                onConfirm = { page ->
+                    showGoToPageDialog = false
+                    goToPage(page - 1)
+                },
+            )
+        }
     }
+}
+
+/**
+ * Number-entry dialog for the "Go to page…" overflow item. 1-based to match the
+ * `X / Y` page indicator at the bottom of the reader. Pre-fills with the current page so
+ * the user can edit instead of retyping. Cancel/Backspace/empty-input is a no-op.
+ */
+@Composable
+private fun MangaGoToPageDialog(
+    currentPage: Int,
+    pageCount: Int,
+    onDismiss: () -> Unit,
+    onConfirm: (Int) -> Unit,
+) {
+    var input by remember { mutableStateOf(currentPage.toString()) }
+    val parsed = input.toIntOrNull()?.takeIf { it in 1..pageCount }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Go to page") },
+        text = {
+            OutlinedTextField(
+                value = input,
+                onValueChange = { new -> input = new.filter { it.isDigit() }.take(6) },
+                singleLine = true,
+                label = { Text("Page (1–$pageCount)") },
+                keyboardOptions = KeyboardOptions(
+                    keyboardType = KeyboardType.Number,
+                    imeAction = ImeAction.Go,
+                ),
+                keyboardActions = KeyboardActions(onGo = { parsed?.let(onConfirm) }),
+                isError = input.isNotEmpty() && parsed == null,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { parsed?.let(onConfirm) },
+                enabled = parsed != null,
+            ) { Text("Go") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel") }
+        },
+    )
 }
 
 /**
@@ -1104,6 +1187,11 @@ private fun MangaReaderOverflowMenu(
     onTakeScreenshot: () -> Unit,
     onShowAiHistory: () -> Unit,
     onShowStatistics: () -> Unit,
+    onShowGoToPage: () -> Unit,
+    singleTapLookup: Boolean,
+    onToggleSingleTapLookup: () -> Unit,
+    useNotoSansJpFont: Boolean,
+    onToggleNotoSansJpFont: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val contentColor = if (darkInterface) Color.White else Color.Black
@@ -1134,6 +1222,13 @@ private fun MangaReaderOverflowMenu(
                 )
             }
             DropdownMenuItem(
+                text = { Text("Go to page…") },
+                onClick = {
+                    menuExpanded = false
+                    onShowGoToPage()
+                },
+            )
+            DropdownMenuItem(
                 text = { Text("Statistics") },
                 onClick = {
                     menuExpanded = false
@@ -1145,6 +1240,28 @@ private fun MangaReaderOverflowMenu(
                 onClick = {
                     menuExpanded = false
                     onShowAiHistory()
+                },
+            )
+            HorizontalDivider()
+            // Toggleable settings — the menu stays open so a user trying both options
+            // doesn't have to re-open it between flips. A leading check mark mirrors
+            // the Material convention for an on/off menu item.
+            DropdownMenuItem(
+                text = { Text("Single-tap to look up") },
+                onClick = { onToggleSingleTapLookup() },
+                leadingIcon = {
+                    if (singleTapLookup) {
+                        Icon(Icons.Rounded.Check, contentDescription = null, tint = contentColor)
+                    }
+                },
+            )
+            DropdownMenuItem(
+                text = { Text("Use Noto Sans JP font") },
+                onClick = { onToggleNotoSansJpFont() },
+                leadingIcon = {
+                    if (useNotoSansJpFont) {
+                        Icon(Icons.Rounded.Check, contentDescription = null, tint = contentColor)
+                    }
                 },
             )
         }

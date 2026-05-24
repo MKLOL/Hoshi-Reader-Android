@@ -134,14 +134,13 @@ fun AppShell(
     }
 
     fun openReader(bookId: String) {
-        scope.launch {
-            val entry = bookRepository.loadBookEntry(bookId)
-            if (entry != null && bookContentType(entry.root) == ContentType.Mokuro) {
-                backStack.openMangaReaderRoute(bookId)
-            } else {
-                backStack.openReaderRoute(bookId)
-            }
-        }
+        // EPUB reader is hidden from the UI for now; route every book open to the manga
+        // reader. The bookshelf filter (BookshelfRepository.loadBooks) already prevents
+        // EPUB books from appearing in the list, so any non-Mokuro book reaching this
+        // path would be a deep link from elsewhere — sending those to the manga reader
+        // just means they fail to render (the manga reader requires mokuro sidecars),
+        // which is the right behaviour while EPUB support is dormant.
+        backStack.openMangaReaderRoute(bookId)
     }
 
     fun openSasayakiMatch(request: SasayakiMatchRequest) {

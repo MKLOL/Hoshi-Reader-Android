@@ -53,16 +53,10 @@
 
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
-            <intent-filter>
-                <action android:name="android.intent.action.VIEW" />
-
-                <category android:name="android.intent.category.DEFAULT" />
-                <category android:name="android.intent.category.BROWSABLE" />
-
-                <data android:mimeType="application/epub+zip" />
-                <data android:scheme="content" />
-                <data android:scheme="file" />
-            </intent-filter>
+            <!-- VIEW intent-filter for application/epub+zip removed: the app is currently
+                 manga-only at the UI layer. The parser/import code still exists in
+                 BookRepository; restoring this filter would re-enable launching the app
+                 from another app's `.epub` Open With… picker. -->
         </activity>
         <activity
             android:name=".features.dictionary.ProcessTextLookupActivity"

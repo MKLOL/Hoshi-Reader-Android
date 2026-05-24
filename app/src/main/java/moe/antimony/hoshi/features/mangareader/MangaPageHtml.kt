@@ -71,6 +71,18 @@ internal object MangaPageHtml {
         eInkMode: Boolean,
         viewportCssWidth: Int,
         viewportCssHeight: Int,
+        /**
+         * When `true`, the tap handler combines reveal + lookup on the first tap. Default
+         * `false` preserves the current two-tap-to-lookup behaviour (first tap reveals so
+         * the action buttons surface without the dictionary popup covering them).
+         */
+        singleTapLookup: Boolean = false,
+        /**
+         * When `true`, emits `font-family: 'Noto Sans JP', sans-serif` on `.ocr-box`,
+         * matching the Gnathonic mokuro-reader web app. Default `false` inherits the
+         * platform's system sans-serif (no inline `font-family` rule).
+         */
+        useNotoSansJpFont: Boolean = false,
     ): String {
         val imageWidth = page.imageWidth.coerceAtLeast(1)
         val imageHeight = page.imageHeight.coerceAtLeast(1)
@@ -95,7 +107,7 @@ internal object MangaPageHtml {
             <meta charset="utf-8">
             <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=5, user-scalable=yes">
             <style>
-            ${pageCss(backgroundCssColor, eInkMode, viewportWidth, viewportHeight, frameWidthCss, frameHeightCss)}
+            ${pageCss(backgroundCssColor, eInkMode, viewportWidth, viewportHeight, frameWidthCss, frameHeightCss, useNotoSansJpFont)}
             </style>
             </head>
             <body>
@@ -142,6 +154,7 @@ internal object MangaPageHtml {
             })();
             $selectionScript
             $MANGA_TAP_HANDLER_SCRIPT
+            window.hoshiManga && window.hoshiManga.setSingleTapLookup($singleTapLookup);
             window.hoshiManga && window.hoshiManga.installTapListener($MANGA_MAX_SELECTION_LENGTH);
             </script>
             </body>
@@ -156,6 +169,7 @@ internal object MangaPageHtml {
         viewportCssHeight: Int,
         frameWidthCss: String,
         frameHeightCss: String,
+        useNotoSansJpFont: Boolean,
     ): String {
         // On a greyscale e-ink display a colour highlight is nearly indistinguishable from
         // the OCR plate, so the matched word is shown inverted (black plate, white text) for
@@ -164,6 +178,15 @@ internal object MangaPageHtml {
             "::highlight(hoshi-selection) { background: #000; color: #fff; }"
         } else {
             "::highlight(hoshi-selection) { background: #ffd400; color: #000; }"
+        }
+        // Optional explicit `font-family` on the OCR text. When the setting is off (the
+        // default), this is an empty string so the rendered CSS is identical to before
+        // the setting existed — Android resolves the system sans-serif to its built-in
+        // Noto Sans CJK JP for Japanese characters anyway.
+        val ocrBoxFontFamilyRule = if (useNotoSansJpFont) {
+            "font-family: 'Noto Sans JP', 'Noto Sans CJK JP', sans-serif;"
+        } else {
+            ""
         }
         return """
         /* Chromium draws a tap-highlight flash on every press of the page (the page has a
@@ -219,23 +242,44 @@ internal object MangaPageHtml {
         .ocr-box {
           position: absolute;
           line-height: 1.1;
-          white-space: pre;
           /* Invisible by default: the OCR text stays in the DOM (so a tap can hit-test a
              word and the box itself is hit-testable) but transparent, so the reader sees
              only the artwork. A tap adds `.revealed`, which paints the text on a solid
              white plate. Selectable so a tap looks the word up in the dictionary.
 
-             The mokuro width/height are applied as *minimums* (see textBoxHtml) rather than
-             fixed sizes, and a little padding is added: the WebView routinely renders the
-             OCR text larger than mokuro's box, and a fixed box left that overflow spilling
-             past the plate — invisible black-on-black over dark artwork. As min sizes, the
-             box (and therefore the revealed plate) instead grows to fully contain the text. */
+             The box has *fixed* width/height in `textBoxHtml` (not `min-*`) so a runtime
+             pass can detect overflow via `scrollWidth > clientWidth`. The parser's
+             adaptive font-size clamp (`MokuroBookParser.clampMokuroFontSize`) is what
+             keeps the text inside the OCR-detected box at the default nowrap layout;
+             without it, mokuro's frequently-overshooting `font_size` would spill past
+             the white plate as invisible black-on-black text over dark artwork.
+
+             `white-space: pre` preserves the literal `\n` we use to separate mokuro
+             lines (see textBoxHtml) without permitting soft wrap, so each line keeps its
+             own row/column at mokuro's intended layout. The MANGA_TAP_HANDLER_SCRIPT's
+             wrap-fallback may add `.wrap` per-box at first reveal — when mokuro mis-
+             detected a tall narrow bubble as horizontal, the un-wrapped text is a tiny
+             single-row strip; switching to wrap mode and scaling up gets a larger,
+             readable compact block that visually reads like vertical Japanese. */
+          white-space: pre;
           color: transparent;
           background: transparent;
           border-radius: 3px;
           padding: 0.08em;
+          $ocrBoxFontFamilyRule
           -webkit-user-select: text;
           user-select: text;
+        }
+        .ocr-box.wrap {
+          /* See the wrap-fallback in MANGA_TAP_HANDLER_SCRIPT: enabled per-box when
+             wrapping permits a meaningfully larger font than nowrap. `pre-wrap` keeps the
+             `\n` row separators meaningful while allowing additional soft-wrap, and
+             `word-break: break-all` is what makes a Japanese string break at every
+             character (the default `normal` won't, because the document has no `lang`
+             hint and CJK soft-wrap opportunities aren't inferred). */
+          white-space: pre-wrap;
+          word-break: break-all;
+          overflow-wrap: anywhere;
         }
         .ocr-box.revealed {
           /* A solid white plate behind the black OCR text, plus a white halo on the glyphs
@@ -324,12 +368,21 @@ internal object MangaPageHtml {
         // with the rendered frame (cqw = 1% of the container's width).
         val fontCqw = percent(box.fontSize, imageWidth)
         val verticalClass = if (box.vertical) " vertical" else ""
-        val text = box.lines.joinToString("\n").let(::escapeHtmlText)
-        // width/height go in as *minimums*: the box grows past them when the WebView
-        // renders the OCR text larger than mokuro's box, so the revealed plate always
-        // fully covers the text (see the .ocr-box comment).
+        // Join with literal `\n` so the existing shared selection scanner
+        // (ReaderSelectionScripts.kt) sees mokuro's line boundaries as sentence
+        // delimiters. The `\n` is preserved by `.ocr-box`'s `white-space: pre` default
+        // (and `pre-wrap` once wrap-fallback promotes the box), so it renders as a real
+        // line break — `<br>` would render the same but produces a separate text node
+        // that the scanner's `TreeWalker(SHOW_TEXT)` skips, which would let it scan
+        // tokens *across* mokuro line boundaries.
+        val text = box.lines.joinToString("\n") { escapeHtmlText(it) }
+        // Fixed width/height (not `min-*`) so the wrap-fallback can detect text overflow
+        // via `scrollWidth > clientWidth`. The parser's font-size clamp (see
+        // MokuroBookParser.clampMokuroFontSize) guarantees the un-wrapped text already
+        // fits at this OCR-box size, so going from `min-*` to fixed doesn't visibly change
+        // any normal bubble — it just exposes the overflow signal the fallback needs.
         return """    <div class="ocr-box$verticalClass" style="left: $leftPct%; top: $topPct%; """ +
-            """min-width: $widthPct%; min-height: $heightPct%; font-size: ${fontCqw}cqw;">""" +
+            """width: $widthPct%; height: $heightPct%; font-size: ${fontCqw}cqw;">""" +
             """<p>$text</p>$ACTION_BUTTONS_HTML</div>"""
     }
 
@@ -378,10 +431,17 @@ internal object MangaPageHtml {
         (function() {
           window.hoshiManga = {
             hostScaleValue: 1,
+            // When true, the first tap on a bubble both reveals and looks up immediately.
+            // Default false preserves the two-tap-to-lookup model (first tap reveals so
+            // the action buttons surface without the dictionary popup covering them).
+            singleTapLookupValue: false,
             setHostScale: function(scale) {
               if (typeof scale === 'number' && isFinite(scale) && scale > 0) {
                 this.hostScaleValue = scale;
               }
+            },
+            setSingleTapLookup: function(enabled) {
+              this.singleTapLookupValue = !!enabled;
             },
             hostScale: function() {
               var scale = this.hostScaleValue;
@@ -463,6 +523,102 @@ internal object MangaPageHtml {
                 window.hoshiSelection.clearSelection();
               }
             },
+            // Promote a single box's layout from nowrap (one row/column per <br>-separated
+            // line) to wrap (text reflows within each line) **iff** wrap permits a font
+            // meaningfully larger than nowrap. Ported from Gnathonic's mokuro-reader 'auto'
+            // mode (calculateOptimalFontSize in TextBoxes.svelte) but trimmed to just the
+            // wrap-fallback: the per-box font_size is already set by the parser's
+            // adaptive clamp (see MokuroBookParser.clampMokuroFontSize), which gives a
+            // sane nowrap fit. The only case the clamp can't help is mokuro mis-tagging a
+            // tall narrow bubble as horizontal — clamp shrinks to a tiny one-row strip,
+            // and *wrapping* into multiple short rows lets a much larger glyph fit.
+            //
+            // Runs on first reveal (cached via the dataset flag so the binary search is
+            // amortised) and only on horizontal boxes — vertical CJK with `text-
+            // orientation: upright` doesn't soft-wrap usefully (one glyph = one column
+            // cell), so wrap mode would give the same or worse size.
+            tryWrapFallback: function(box) {
+              if (box.dataset.wrapTried === '1') return;
+              box.dataset.wrapTried = '1';
+              if (box.classList.contains('vertical')) return;
+              var initialPx = parseFloat(window.getComputedStyle(box).fontSize);
+              if (!isFinite(initialPx) || initialPx <= 0) return;
+              var clientW = box.clientWidth;
+              var clientH = box.clientHeight;
+              if (clientW <= 0 || clientH <= 0) return;
+              var MIN_FS = 1;
+              var MAX_FS = 400;
+              var originalInlineFontSize = box.style.fontSize;
+              function overflowing() {
+                return box.scrollWidth > box.clientWidth ||
+                  box.scrollHeight > box.clientHeight;
+              }
+              function setFs(px) { box.style.fontSize = px + 'px'; }
+              // Find the largest font size in [MIN_FS, MAX_FS] that doesn't overflow.
+              // Two phases: (1) if start fits, double up to find an overflowing upper
+              // bound; (2) binary-search between the largest fitting size and the
+              // smallest overflowing size. Mirrors Gnathonic's mokuro-reader algorithm.
+              function findMaxFitting(start) {
+                if (start < MIN_FS) start = MIN_FS;
+                if (start > MAX_FS) start = MAX_FS;
+                setFs(start);
+                var low, high;
+                if (!overflowing()) {
+                  low = start;
+                  high = Math.min(start * 2, MAX_FS);
+                  setFs(high);
+                  while (!overflowing() && high < MAX_FS) {
+                    low = high;
+                    high = Math.min(high * 2, MAX_FS);
+                    setFs(high);
+                  }
+                  if (!overflowing()) {
+                    return Math.floor(high);
+                  }
+                } else {
+                  // start overflows; search downward from start.
+                  setFs(MIN_FS);
+                  if (overflowing()) return MIN_FS;
+                  low = MIN_FS;
+                  high = start;
+                }
+                while (high - low > 1) {
+                  var mid = Math.floor((low + high) / 2);
+                  setFs(mid);
+                  if (overflowing()) {
+                    high = mid;
+                  } else {
+                    low = mid;
+                  }
+                }
+                return Math.floor(low);
+              }
+              // Largest nowrap font that fits the box. May be < initialPx when mokuro
+              // (or the parser clamp) over-estimated and nowrap actually overflows; may
+              // be > initialPx when the clamp left headroom we can recover.
+              box.classList.remove('wrap');
+              var nowrapFs = findMaxFitting(initialPx);
+              // Largest wrap font that fits the box. CJK breaks at every character via
+              // `.ocr-box.wrap`'s CSS so multi-row layouts are reachable.
+              box.classList.add('wrap');
+              var wrapFs = findMaxFitting(initialPx);
+              // Wrap "wins" only when it permits a meaningfully larger glyph (Gnathonic
+              // uses 1.3x; the cosmetic change of stacking the bubble is only worth it
+              // when the reader sees a clearly bigger character). Otherwise keep nowrap
+              // — which may itself differ from initialPx (above) if it had to be trimmed.
+              var WRAP_WIN_RATIO = 1.3;
+              if (wrapFs >= nowrapFs * WRAP_WIN_RATIO) {
+                setFs(wrapFs);
+              } else {
+                box.classList.remove('wrap');
+                if (nowrapFs === initialPx && originalInlineFontSize) {
+                  // Keep the original cqw inline value so pinch-zoom rescaling still works.
+                  box.style.fontSize = originalInlineFontSize;
+                } else {
+                  setFs(nowrapFs);
+                }
+              }
+            },
             installTapListener: function(maxLength) {
               if (this.tapListenerInstalled) return;
               this.tapListenerInstalled = true;
@@ -497,15 +653,24 @@ internal object MangaPageHtml {
               }
               var box = el && el.closest && el.closest('.ocr-box');
               if (box) {
-                if (!box.classList.contains('revealed')) {
-                  // First tap: just reveal this bubble's text and action buttons. The word
-                  // lookup waits for a second tap so the dictionary popup can't cover the
-                  // ChatGPT / copy buttons.
+                var alreadyRevealed = box.classList.contains('revealed');
+                if (!alreadyRevealed) {
+                  // Run the wrap-fallback before reveal in both tap modes; no-op for
+                  // bubbles where mokuro got the geometry right, promotes the broken
+                  // cases (e.g. mokuro tagging a tall narrow box as horizontal) to a
+                  // wrap layout that fits a meaningfully larger glyph than nowrap can.
+                  window.hoshiManga.tryWrapFallback(box);
                   box.classList.add('revealed');
-                  return '__revealed__';
                 }
-                // Second tap on an already-revealed bubble: look the tapped word up.
-                return window.hoshiSelection.selectText(x, y, maxLength);
+                // Default two-tap mode: first tap on an unrevealed bubble just reveals
+                // (so the action buttons surface without the dictionary popup covering
+                // them); the second tap looks the word up. Single-tap mode collapses
+                // both into the first tap — the popup may overlap the buttons in that
+                // mode, which is the trade-off the user opts in to.
+                if (alreadyRevealed || window.hoshiManga.singleTapLookupValue) {
+                  return window.hoshiSelection.selectText(x, y, maxLength);
+                }
+                return '__revealed__';
               }
               window.hoshiManga.clearRevealed();
               return null;

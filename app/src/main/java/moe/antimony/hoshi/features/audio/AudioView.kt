@@ -638,21 +638,14 @@ internal fun advancedSettingsSections(): List<AdvancedSettingsSection> =
                     icon = AdvancedSettingsIcon.Chart,
                     subtitleRes = R.string.advanced_statistics_subtitle,
                 ),
-                AdvancedSettingsRow(
-                    titleRes = R.string.advanced_sasayaki_audiobooks,
-                    destination = AdvancedDestination.Sasayaki,
-                    icon = AdvancedSettingsIcon.Waveform,
-                    subtitleRes = R.string.advanced_sasayaki_subtitle,
-                ),
+                // Sasayaki (audiobook ↔ EPUB text matching) was an EPUB-only feature.
+                // The Advanced row + destination wiring stays in `AdvancedDestination`
+                // (so deep-links still resolve) but is no longer surfaced in the list,
+                // matching the manga-only UI scope. Same for the ッツ Sync row below.
             ),
         ),
         AdvancedSettingsSection(
             rows = listOf(
-                AdvancedSettingsRow(
-                    titleRes = R.string.sync_ttu_sync,
-                    destination = AdvancedDestination.Syncing,
-                    icon = AdvancedSettingsIcon.Cloud,
-                ),
                 AdvancedSettingsRow(
                     titleRes = R.string.advanced_http_sync,
                     destination = AdvancedDestination.HttpSync,

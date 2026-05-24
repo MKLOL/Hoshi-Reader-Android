@@ -196,7 +196,10 @@ jobs:
           set -euo pipefail
           tag="${{ needs.resolve-release.outputs.tag }}"
           apk_source="app/build/outputs/apk/release/app-release.apk"
-          apk_asset="Hoshi-Reader-${tag}.apk"
+          # Asset name must match the in-app updater's expected pattern in
+          # GitHubReleaseUpdateRepository.availableUpdateOrNull so users on older
+          # installs auto-upgrade in place. Keep this in lockstep with release.py.
+          apk_asset="Hoshi-Manga-${tag}.apk"
 
           if [[ ! -f "${apk_source}" ]]; then
             echo "Expected signed APK was not found at ${apk_source}" >&2

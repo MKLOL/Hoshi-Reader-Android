@@ -17,6 +17,10 @@ internal data class MangaPageRenderConfig(
     val eInkMode: Boolean,
     val viewportCssWidth: Int,
     val viewportCssHeight: Int,
+    /** See ReaderSettings.mangaSingleTapLookup — flips the tap handler's first-tap behavior. */
+    val singleTapLookup: Boolean = false,
+    /** See ReaderSettings.mangaUseNotoSansJp — when true, emits an explicit font-family. */
+    val useNotoSansJpFont: Boolean = false,
     val selectionScript: String = ReaderSelectionScripts.source(),
 )
 
@@ -55,6 +59,8 @@ internal class MangaPageRenderCache(
             eInkMode = config.eInkMode,
             viewportCssWidth = config.viewportCssWidth,
             viewportCssHeight = config.viewportCssHeight,
+            singleTapLookup = config.singleTapLookup,
+            useNotoSansJpFont = config.useNotoSansJpFont,
         )
 
         synchronized(lock) {

@@ -106,6 +106,13 @@ class Media3SasayakiPlaybackEngine private constructor(
                             when (playbackState) {
                                 Player.STATE_READY -> onPrepared(durationMs(player))
                                 Player.STATE_ENDED -> onCompletion()
+                                // IDLE (pre-prepare) and BUFFERING are intentionally
+                                // no-ops: the caller treats READY as the prepared
+                                // signal and ignores transient buffering. Listed so
+                                // lint's SwitchIntDef stops flagging the when block
+                                // as non-exhaustive — and so a future maintainer
+                                // doesn't reintroduce silent fall-through.
+                                Player.STATE_IDLE, Player.STATE_BUFFERING -> Unit
                             }
                         }
 

@@ -21,6 +21,23 @@ internal fun HoshiWebViewSettings.applyHoshiWebViewSecurityDefaults() {
 fun WebView.applyHoshiWebViewSecurityDefaults() {
     AndroidHoshiWebViewSettings(settings).applyHoshiWebViewSecurityDefaults()
     disableNativeOverscrollStretch()
+    enableWebViewDebuggingForDebugBuilds()
+}
+
+/**
+ * Enables `chrome://inspect` device-link debugging for the WebView on debug builds only.
+ * Reads BuildConfig.DEBUG via reflection so this file can stay in the non-app module — a
+ * release build will never trigger the call. Lets `adb forward` + Chrome devtools attach
+ * to a running WebView and inspect the OCR overlay's runtime state (computed font-sizes,
+ * scrollWidth measurements, the wrap-fallback's binary search progression).
+ */
+private fun WebView.enableWebViewDebuggingForDebugBuilds() {
+    val isDebug = runCatching {
+        Class.forName("moe.antimony.hoshi.BuildConfig")
+            .getDeclaredField("DEBUG")
+            .getBoolean(null)
+    }.getOrDefault(false)
+    if (isDebug) WebView.setWebContentsDebuggingEnabled(true)
 }
 
 fun WebView.disableNativeOverscrollStretch() {

@@ -1,9 +1,99 @@
 # Changelog
 
-All notable user-visible changes to Hoshi Reader Android are documented here.
-The format follows a Keep a Changelog style, and release sections use Semantic Versioning.
+All notable user-visible changes to Hoshi Manga (a manga-only fork of
+[HuangAntimony / Hoshi-Reader-Android](https://github.com/HuangAntimony/Hoshi-Reader-Android))
+are documented here. The format follows Keep a Changelog and release sections use
+Semantic Versioning.
 
 ## [Unreleased]
+
+First batch of "**Hoshi Manga**" fork changes. Hoshi Manga is a manga-focused fork of
+HuangAntimony's [Hoshi Reader Android](https://github.com/HuangAntimony/Hoshi-Reader-Android),
+which is itself a recreation of [Manhhao / Hoshi-Reader](https://github.com/Manhhao/Hoshi-Reader).
+Version-bump decision deferred — these changes will ship under whichever release tag is
+cut next (e.g. `v0.9.0`), not a `v1.0.0`.
+
+### Renamed
+- Package display name is now **Hoshi Manga** (kanji: 星漫画). The "Books" bottom-nav
+  tab, the bookshelf top-bar title, the import dropdown, the empty-state copy, the
+  About card, the update notification, and the install-permission prompts all use the
+  new name. The Android applicationId stays `moe.antimony.hoshi.debug` for now so
+  existing installs auto-update in place.
+- Launcher icon replaced with the manga speech-bubble artwork (`星漫画` + furigana on
+  a dark sky background, adaptive icon).
+
+### Removed (UI-only — data plumbing kept)
+- EPUB import is no longer surfaced in the UI: the bookshelf hides any non-mokuro
+  book and the import + button only accepts mokuro `.zip` / `.cbz` bundles. Existing
+  EPUBs in app storage are **not** deleted but can no longer be opened from the
+  bookshelf. (Restore them by reverting to upstream HuangAntimony/Hoshi-Reader-Android.)
+- Settings → Appearance and Settings → Behavior screens (font picker, line height,
+  vertical-text toggle, chapter swipe distance, page-turn animation toggle, etc.)
+  are EPUB-only and have been removed from the Settings menu. Their underlying
+  ReaderSettings fields and DataStore keys remain to keep migration safe.
+- Settings → Advanced → "Sasayaki (Audiobooks)" row hidden. Sasayaki was an
+  audiobook ↔ EPUB text matcher and isn't useful in a manga-only build.
+- Settings → Advanced → "ッツ Sync" (TTU Google Drive sync) row hidden — TTU sync
+  targets the ttu-reader webapp, which is EPUB-only.
+- `application/epub+zip` VIEW intent-filter removed from the Android manifest so the
+  app no longer claims to handle `.epub` files in Open-with menus.
+- Bookshelf book context-menu "Match Sasayaki" item hidden (only ever appeared for
+  EPUB books, which are now filtered out).
+
+### Added
+- **Per-bubble Noto Sans JP font toggle** (overflow menu in the reader).
+- **Single-tap to look up** toggle (overflow menu): on by default the reader uses the
+  upstream two-tap pattern (first tap reveals so the action buttons surface, second
+  tap looks up); flipping the toggle merges both into one tap for users who don't
+  use the bubble action buttons.
+- **Go to page…** dialog in the reader's overflow menu — jump directly to any page
+  by number instead of swiping repeatedly.
+- **Adaptive font-size clamp** for the OCR overlay: mokuro's per-block `font_size` is
+  OCR-derived and frequently overshoots actual glyph height; the parser now caps it
+  at a fit-to-box value so revealed bubbles don't grow into giant white plates over
+  the artwork. The clamp is permissive (1.5× safety) for small fonts and strict (1.0×)
+  for large fonts, preserving the slight-zoom feel on small text.
+- **Runtime wrap-fallback** on first reveal: when mokuro mistagged a tall narrow
+  bubble as horizontal (so the text was a one-line strip overflowing the bubble),
+  the JS now binary-searches the largest fitting nowrap and wrap font sizes and
+  switches to wrap mode if it gets a meaningfully larger glyph. Ports the algorithm
+  from [Gnathonic's mokuro-reader](https://github.com/Gnathonic/mokuro-reader).
+- **`WebSettings.minimumFontSize = 1`** in the manga WebView so sub-8-px clamped
+  fonts actually render at their requested size instead of getting bumped to 8.
+- **WebView debugging** automatically enabled on debug builds (gated by
+  `BuildConfig.DEBUG`) for easier `chrome://inspect` development.
+- **About → Credits card** with attribution to HuangAntimony, Manhhao, mokuro,
+  Gnathonic mokuro-reader, Yomitan, hoshidicts, and AnkiDroid, plus a GPLv3 link.
+
+### Fixed
+- Bookshelf import → file picker no longer offers EPUBs; the dropdown is now just
+  "Manga file" + "Manga folder".
+- Bookshelf displayed strings ("Sort books", "Move selected books", "Delete N book(s)?",
+  "Shows books you've started…", backup section "Books", etc.) renamed to "manga".
+- ChatGPT error popup: when the error is "Set your OpenAI API key", the dialog now
+  shows a "Dismiss" button + a "Settings → ChatGPT" hint instead of an unhelpful
+  "Retry" button.
+- HTTP Sync description text no longer claims to work for EPUBs.
+- `SasayakiPlaybackEngine` `when (playbackState)` block now covers `STATE_IDLE` and
+  `STATE_BUFFERING` explicitly (lint `SwitchIntDef` cleanup).
+- Dictionary panel reveal-swipe no longer recomposes every fling frame: the
+  `requireOffset()` read moved from composition into the `Modifier.offset {}` lambda.
+- New unit test `HoshiDictsNativeApiContractTest` reflection-checks that all 8 host
+  Kotlin classes the native JNI bridge constructs match the C++ `<init>` signatures,
+  so a future submodule rollback that broke the dictionary import crash will fail at
+  test time instead of crashing at runtime.
+
+### Migration notes for users coming from upstream 0.8.x
+- Existing EPUBs on disk are not deleted — they just don't appear in the bookshelf
+  anymore. If you want to keep reading EPUBs, install
+  [HuangAntimony/Hoshi-Reader-Android](https://github.com/HuangAntimony/Hoshi-Reader-Android)
+  instead (the upstream supports both formats).
+- Existing reading progress on mokuro manga is preserved.
+- Reader-settings fields (selected font, line height, chapter swipe distance, etc.)
+  remain in your DataStore but are no longer reachable from the UI; they'll start
+  working again if you switch back to upstream.
+- HTTP sync and Google Drive sync still round-trip mokuro payloads; legacy EPUB
+  sync entries are ignored.
 
 ## [v0.8.2] - 2026-05-22
 

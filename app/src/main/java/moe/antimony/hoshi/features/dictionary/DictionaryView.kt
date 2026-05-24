@@ -769,10 +769,14 @@ private fun DictionaryRow(
             }
         }
 
-        val offsetX = revealState.requireOffset().roundToInt()
+        // Read the drag offset inside the offset lambda (a Modifier.Node deferred read)
+        // instead of in composition: `requireOffset()` is backed by a snapshot state that
+        // changes every frame during a fling, so reading it directly here used to trigger
+        // a recomposition of the entire row each frame. Reading it in the lambda only
+        // re-runs the layout placement, not the composition.
         Surface(
             modifier = Modifier
-                .offset { IntOffset(offsetX, 0) }
+                .offset { IntOffset(revealState.requireOffset().roundToInt(), 0) }
                 .anchoredDraggable(
                     state = revealState,
                     orientation = Orientation.Horizontal,
