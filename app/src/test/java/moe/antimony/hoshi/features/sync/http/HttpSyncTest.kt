@@ -7,6 +7,9 @@ import moe.antimony.hoshi.epub.BookRepository
 import moe.antimony.hoshi.epub.BookShelf
 import moe.antimony.hoshi.epub.Bookmark
 import moe.antimony.hoshi.features.ai.AiChatEntry
+import moe.antimony.hoshi.features.ai.AiChatDictionaryLookup
+import moe.antimony.hoshi.features.ai.AiChatDictionaryLookupResult
+import moe.antimony.hoshi.features.ai.AiChatGlossary
 import moe.antimony.hoshi.features.ai.AiChatHistoryStore
 import moe.antimony.hoshi.features.ai.AiChatImage
 import org.junit.Assert.assertEquals
@@ -84,8 +87,9 @@ class HttpSyncTest {
     }
 
     @Test
-    fun chatEntryBlobPreservesOptionalScreenshotImage() {
+    fun chatEntryBlobPreservesOptionalScreenshotImageAndDictionaryLookup() {
         val image = AiChatImage(mimeType = "image/png", base64Data = "iVBORw0KGgo=")
+        val dictionaryLookup = sampleChatDictionaryLookup()
         val entry = AiChatEntry(
             bubbleText = "Screenshot translation",
             prompt = "Translate this crop.",
@@ -93,6 +97,7 @@ class HttpSyncTest {
             response = "Panel text.",
             timestampSeconds = 800_000_000.0,
             screenshotImage = image,
+            dictionaryLookup = dictionaryLookup,
         )
 
         val blob = entry.toBlob()
@@ -100,7 +105,9 @@ class HttpSyncTest {
         val decoded = json.decodeFromString(HttpSyncChatEntryBlob.serializer(), encoded)
 
         assertEquals(image, blob.screenshotImage)
+        assertEquals(dictionaryLookup, blob.dictionaryLookup)
         assertEquals(image, decoded.screenshotImage)
+        assertEquals(dictionaryLookup, decoded.dictionaryLookup)
     }
 
     @Test
@@ -417,12 +424,19 @@ class HttpSyncTest {
         historyStore.append(root, existing)
 
         val transport = FakeKvTransport()
-        val incoming = AiChatEntry("remote", "p", "m", "r2", 900_000.0)
+        val incoming = AiChatEntry(
+            bubbleText = "remote",
+            prompt = "p",
+            model = "m",
+            response = "r2",
+            timestampSeconds = 900_000.0,
+            dictionaryLookup = sampleChatDictionaryLookup(),
+        )
         val incomingSuffix = chatEntryKeySuffix(incoming.timestampSeconds, incoming.bubbleText, incoming.response)
         transport.putJson(
             chatKey("chat_sync", incomingSuffix),
             HttpSyncChatEntryBlob.serializer(),
-            HttpSyncChatEntryBlob(incoming.bubbleText, incoming.prompt, incoming.model, incoming.response, incoming.timestampSeconds),
+            incoming.toBlob(),
             json,
             lastModified = "2030-01-01T00:00:00Z",
         )
@@ -444,6 +458,10 @@ class HttpSyncTest {
         assertEquals(2, log.entries.size)
         assertTrue(log.entries.any { it.bubbleText == "local" })
         assertTrue(log.entries.any { it.bubbleText == "remote" })
+        assertEquals(
+            sampleChatDictionaryLookup(),
+            log.entries.single { it.bubbleText == "remote" }.dictionaryLookup,
+        )
     }
 
     @Test
@@ -2344,6 +2362,18 @@ class HttpSyncTest {
         ),
     )
 }
+
+private fun sampleChatDictionaryLookup(): AiChatDictionaryLookup = AiChatDictionaryLookup(
+    query = "食べた",
+    results = listOf(
+        AiChatDictionaryLookupResult(
+            expression = "食べる",
+            reading = "たべる",
+            matched = "食べた",
+            glossaries = listOf(AiChatGlossary("JMdict", "to eat", "v1", "common")),
+        ),
+    ),
+)
 
 /**
  * In-memory implementation of [HttpSyncKvTransport]. Stores blobs in a map keyed by KV key,

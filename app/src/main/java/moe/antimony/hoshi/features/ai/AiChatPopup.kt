@@ -2,6 +2,7 @@ package moe.antimony.hoshi.features.ai
 
 import android.graphics.BitmapFactory
 import android.util.Base64
+import androidx.compose.foundation.border
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
@@ -39,8 +40,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import moe.antimony.hoshi.R
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -252,6 +256,10 @@ private fun AiChatHistoryRow(entry: AiChatEntry) {
                 Spacer(Modifier.size(8.dp))
                 AiChatHistoryScreenshot(image)
             }
+            entry.dictionaryLookup?.let { lookup ->
+                Spacer(Modifier.size(10.dp))
+                AiChatYomitanLookup(lookup)
+            }
             Spacer(Modifier.size(8.dp))
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
             Spacer(Modifier.size(8.dp))
@@ -283,10 +291,119 @@ private fun AiChatHistoryScreenshot(image: AiChatImage) {
     }
 }
 
+@Composable
+private fun AiChatYomitanLookup(lookup: AiChatDictionaryLookup) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .border(
+                width = 1.dp,
+                color = MaterialTheme.colorScheme.outlineVariant,
+                shape = RoundedCornerShape(10.dp),
+            )
+            .padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Text(
+            text = stringResource(R.string.ai_chat_history_yomitan_lookup),
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.primary,
+            fontWeight = FontWeight.SemiBold,
+        )
+        lookup.results.forEachIndexed { index, result ->
+            if (index > 0) {
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            }
+            AiChatYomitanLookupResult(result)
+        }
+    }
+}
+
+@Composable
+private fun AiChatYomitanLookupResult(result: AiChatDictionaryLookupResult) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = result.expression,
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.weight(1f),
+            )
+            if (result.reading.isNotBlank() && result.reading != result.expression) {
+                Text(
+                    text = result.reading,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+        if (result.matched.isNotBlank() && result.matched != result.expression) {
+            Text(
+                text = stringResource(R.string.ai_chat_history_yomitan_matched_format, result.matched),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        val deinflection = result.deinflectionTrace.joinToString(" -> ") { it.name }.takeIf { it.isNotBlank() }
+        if (deinflection != null) {
+            Text(
+                text = deinflection,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        result.glossaries.take(3).forEach { glossary ->
+            Text(
+                text = "${glossary.dictionary}: ${glossary.content.compactLookupText()}",
+                style = MaterialTheme.typography.bodySmall,
+                maxLines = 3,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        val metadata = result.lookupMetadataLine()
+        if (metadata.isNotBlank()) {
+            Text(
+                text = metadata,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
+}
+
 private fun decodeAiChatImage(base64Data: String) = runCatching {
     val bytes = Base64.decode(base64Data, Base64.DEFAULT)
     BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
 }.getOrNull()
+
+private fun AiChatDictionaryLookupResult.lookupMetadataLine(): String {
+    val frequencyText = frequencies
+        .flatMap { group ->
+            group.frequencies.map { frequency ->
+                "${group.dictionary} ${frequency.displayValue.ifBlank { frequency.value.toString() }}"
+            }
+        }
+        .take(3)
+    val pitchText = pitches
+        .filter { it.pitchPositions.isNotEmpty() }
+        .map { group -> "${group.dictionary} ${group.pitchPositions.joinToString("/")}" }
+        .take(3)
+    return (frequencyText + pitchText).joinToString("   ")
+}
+
+private fun String.compactLookupText(): String =
+    replace(Regex("<[^>]+>"), "")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace(Regex("\\s+"), " ")
+        .trim()
 
 /**
  * Apple-reference-date seconds (the epoch the app's sidecar files use) to a local date-time

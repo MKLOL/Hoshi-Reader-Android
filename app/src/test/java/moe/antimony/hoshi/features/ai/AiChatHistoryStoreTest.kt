@@ -30,6 +30,7 @@ class AiChatHistoryStoreTest {
             model = "gpt-5.5",
             response = "Almost there!",
             timestampSeconds = 100.0,
+            dictionaryLookup = sampleDictionaryLookup(),
         )
         val screenshot = AiChatImage(mimeType = "image/png", base64Data = "iVBORw0KGgo=")
         val second = first.copy(
@@ -37,6 +38,7 @@ class AiChatHistoryStoreTest {
             response = "Panel text.",
             timestampSeconds = 200.0,
             screenshotImage = screenshot,
+            dictionaryLookup = null,
         )
 
         store.append(bookRoot, first)
@@ -46,6 +48,7 @@ class AiChatHistoryStoreTest {
         assertEquals(listOf(first, second), log.entries)
         // ...and it survives a reload from disk.
         assertEquals(listOf(first, second), store.load(bookRoot).entries)
+        assertEquals(sampleDictionaryLookup(), store.load(bookRoot).entries[0].dictionaryLookup)
         assertEquals(screenshot, store.load(bookRoot).entries[1].screenshotImage)
     }
 
@@ -57,7 +60,7 @@ class AiChatHistoryStoreTest {
     }
 
     @Test
-    fun loadOlderLogWithoutScreenshotImageDefaultsToNull() = runBlocking {
+    fun loadOlderLogWithoutNewOptionalFieldsDefaultsToNull() = runBlocking {
         val bookRoot = tempFolder.newFolder("book")
         bookRoot.resolve("ai_chat_log.json").writeText(
             """
@@ -75,7 +78,9 @@ class AiChatHistoryStoreTest {
             """.trimIndent(),
         )
 
-        assertEquals(null, store.load(bookRoot).entries.single().screenshotImage)
+        val entry = store.load(bookRoot).entries.single()
+        assertEquals(null, entry.screenshotImage)
+        assertEquals(null, entry.dictionaryLookup)
     }
 
     @Test
@@ -109,3 +114,24 @@ class AiChatHistoryStoreTest {
         )
     }
 }
+
+private fun sampleDictionaryLookup(): AiChatDictionaryLookup = AiChatDictionaryLookup(
+    query = "もうすぐ",
+    results = listOf(
+        AiChatDictionaryLookupResult(
+            expression = "もうすぐ",
+            reading = "",
+            matched = "もうすぐ",
+            deinflectionTrace = listOf(AiChatDeinflectionStep("plain", "dictionary form")),
+            glossaries = listOf(AiChatGlossary("JMdict", "soon", "", "")),
+            frequencies = listOf(
+                AiChatFrequencyGroup(
+                    dictionary = "frequency",
+                    frequencies = listOf(AiChatFrequency(50, "rank 50")),
+                ),
+            ),
+            pitches = listOf(AiChatPitchGroup("pitch", listOf(0))),
+            rules = listOf("adv"),
+        ),
+    ),
+)

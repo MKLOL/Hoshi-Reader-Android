@@ -746,6 +746,7 @@ class HttpSyncReconciler(
             response = blob.response,
             timestampSeconds = blob.timestampSeconds,
             screenshotImage = blob.screenshotImage,
+            dictionaryLookup = blob.dictionaryLookup,
         )
         if (existing.any { it.matchesEntry(incoming) }) return false
         aiHistoryStore.append(bookRoot, incoming)

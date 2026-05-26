@@ -5,6 +5,7 @@ import kotlinx.serialization.Serializable
 import moe.antimony.hoshi.epub.Bookmark
 import moe.antimony.hoshi.epub.ContentType
 import moe.antimony.hoshi.features.ai.AiChatEntry
+import moe.antimony.hoshi.features.ai.AiChatDictionaryLookup
 import moe.antimony.hoshi.features.ai.AiChatImage
 import moe.antimony.hoshi.features.ai.AiChatSettings
 import java.security.MessageDigest
@@ -72,6 +73,8 @@ data class HttpSyncChatEntryBlob(
     val timestampSeconds: Double,
     /** Optional cropped screenshot attached to screenshot-translation entries. */
     val screenshotImage: AiChatImage? = null,
+    /** Optional compact Yomitan-style dictionary context captured with the chat entry. */
+    val dictionaryLookup: AiChatDictionaryLookup? = null,
 )
 
 /**
@@ -256,6 +259,7 @@ internal fun AiChatEntry.toBlob(): HttpSyncChatEntryBlob = HttpSyncChatEntryBlob
     response = response,
     timestampSeconds = timestampSeconds,
     screenshotImage = screenshotImage,
+    dictionaryLookup = dictionaryLookup,
 )
 
 /** Same-entry detection for inbound dedup: mirrors the content-addressed chat key shape. */

@@ -1,6 +1,6 @@
 # Hoshi Android Agent TODO
 
-Last updated: 2026-05-21
+Last updated: 2026-05-26
 
 This file is the short operational handoff for future agents.
 
@@ -113,9 +113,10 @@ page images) that reuses the bookshelf, dictionary lookup, and Anki mining.
 - ChatGPT bubble lookup, emulator-verified end to end: a revealed bubble shows a ChatGPT
   button that sends a configurable prompt + the bubble's OCR text to OpenAI and shows the
   Markdown-rendered reply in a closable popup; API key / model / prompt and a per-manga
-  chat history are reached from the manga reader's overflow (⋯) menu. Kept deliberately
-  self-contained in `features/ai/` (own settings store, own `ai_chat_log.json` per book,
-  no shared-file edits) so it stays easy to merge alongside upstream.
+  chat history with compact Yomitan-style dictionary context are reached from the manga
+  reader's overflow (⋯) menu. Kept deliberately self-contained in `features/ai/` (own
+  settings store, own `ai_chat_log.json` per book, no shared-file edits) so it stays easy
+  to merge alongside upstream.
 - ChatGPT screenshot translation, emulator-verified end to end: the manga overflow menu can
   open a crop overlay, map the selected zoomed/panned viewport back to source page pixels,
   send that crop to OpenAI, save it on the history entry, and use a separate
@@ -131,7 +132,8 @@ page images) that reuses the bookshelf, dictionary lookup, and Anki mining.
   page after emulator validation: the top status strip should hide while reading, and if
   a device keeps a system bar visible then page artwork must be inset below it.
 - Not yet done: reader appearance/settings sheet for manga and two-page spreads. Manual
-  validation should cover import of both source layouts and RTL paging boundaries.
+  validation should cover import of both source layouts, RTL paging boundaries, rapid page
+  turns, OCR bubble lookup, and ChatGPT history rendering on slow devices.
 
 ## Required Validation
 

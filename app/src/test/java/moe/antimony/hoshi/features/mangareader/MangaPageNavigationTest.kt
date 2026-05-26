@@ -118,4 +118,48 @@ class MangaPageNavigationTest {
             ),
         )
     }
+
+    @Test
+    fun largeWebViewSkipsPageTurnSnapshotCapture() {
+        assertFalse(
+            shouldCaptureMangaPageTurnSnapshot(
+                settings = ReaderSettings(),
+                width = 1080,
+                height = 2400,
+            ),
+        )
+    }
+
+    @Test
+    fun moderateWebViewCapturesPageTurnSnapshot() {
+        assertTrue(
+            shouldCaptureMangaPageTurnSnapshot(
+                settings = ReaderSettings(),
+                width = 720,
+                height = 1280,
+            ),
+        )
+    }
+
+    @Test
+    fun disabledAnimationSkipsPageTurnSnapshotCapture() {
+        assertFalse(
+            shouldCaptureMangaPageTurnSnapshot(
+                settings = ReaderSettings(disablePageTurnAnimation = true),
+                width = 720,
+                height = 1280,
+            ),
+        )
+    }
+
+    @Test
+    fun invalidWebViewSizeSkipsPageTurnSnapshotCapture() {
+        assertFalse(
+            shouldCaptureMangaPageTurnSnapshot(
+                settings = ReaderSettings(),
+                width = 0,
+                height = 1280,
+            ),
+        )
+    }
 }

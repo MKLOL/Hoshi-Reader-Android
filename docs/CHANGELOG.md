@@ -63,6 +63,9 @@ Release/tag decision deferred; these changes remain unreleased until a release i
   `BuildConfig.DEBUG`) for easier `chrome://inspect` development.
 - **About → Credits card** with attribution to HuangAntimony, Manhhao, mokuro,
   Gnathonic mokuro-reader, Yomitan, hoshidicts, and AnkiDroid, plus a GPLv3 link.
+- **Yomitan-style lookup context in ChatGPT history**: speech-bubble chats now save and
+  display the matching dictionary entries, glossaries, frequency, pitch, and deinflection
+  context captured when the bubble was sent.
 
 ### Fixed
 - Bookshelf import → file picker no longer offers EPUBs; the dropdown is now just
@@ -81,6 +84,9 @@ Release/tag decision deferred; these changes remain unreleased until a release i
   Kotlin classes the native JNI bridge constructs match the C++ `<init>` signatures,
   so a future submodule rollback that broke the dictionary import crash will fail at
   test time instead of crashing at runtime.
+- Manga reader page turns and OCR lookups no longer run the expensive WebView snapshot /
+  dictionary lookup path on the main thread, avoiding ANRs during rapid page turns and
+  bubble lookups on large screens.
 
 ### Migration notes for users coming from upstream 0.8.x
 - Existing EPUBs on disk are not deleted — they just don't appear in the bookshelf

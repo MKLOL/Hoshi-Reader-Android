@@ -50,6 +50,8 @@
     <string name="settings_dictionaries" comment="Settings row label, intentionally matching the backup Dictionaries section.">Dictionaries</string>
     <string name="settings_anki">Anki</string>
     <string name="settings_chatgpt">ChatGPT</string>
+    <string name="ai_chat_history_yomitan_lookup">Yomitan lookup</string>
+    <string name="ai_chat_history_yomitan_matched_format">Matched: %1$s</string>
     <string name="settings_appearance">Appearance</string>
     <string name="settings_behavior">Behavior</string>
     <string name="settings_advanced">Advanced</string>

@@ -58,7 +58,7 @@ internal fun MangaReaderWebView(
     renderConfig: MangaPageRenderConfig,
     pageRenderCache: MangaPageRenderCache,
     onNavigate: (ReaderNavigationDirection) -> Unit,
-    onTextSelected: (ReaderSelectionData) -> Int?,
+    onTextSelected: (ReaderSelectionData, WebView) -> Unit,
     onSelectionCleared: () -> Unit,
     onAskAi: (String) -> Unit,
     onPageReady: (Int) -> Unit,
@@ -117,13 +117,7 @@ internal fun MangaReaderWebView(
                     // Custom Highlight (see MangaPageHtml's `::highlight(hoshi-selection)`),
                     // so it ignores `selectionRects` and applies the highlight here.
                     ReaderSelectionBridge(this) { selection, _ ->
-                        val highlightCount = currentOnTextSelected.value(selection)
-                        if (highlightCount != null) {
-                            evaluateJavascript(
-                                ReaderSelectionCommand.HighlightSelection(highlightCount).source,
-                                null,
-                            )
-                        }
+                        currentOnTextSelected.value(selection, this)
                     },
                     "HoshiTextSelection",
                 )

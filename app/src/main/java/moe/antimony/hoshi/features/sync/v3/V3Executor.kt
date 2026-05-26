@@ -214,6 +214,7 @@ class V3Executor(
                             response = blob.response,
                             timestampSeconds = blob.timestampSeconds,
                             screenshotImage = blob.screenshotImage,
+                            dictionaryLookup = blob.dictionaryLookup,
                         )
                         val existing = runCatching { aiHistoryStore.load(targetRoot).entries }
                             .getOrDefault(emptyList())

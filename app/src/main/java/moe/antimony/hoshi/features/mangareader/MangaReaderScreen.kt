@@ -88,6 +88,7 @@ import androidx.lifecycle.findViewTreeLifecycleOwner
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -109,12 +110,14 @@ import moe.antimony.hoshi.features.ai.AiChatSettings
 import moe.antimony.hoshi.features.ai.AiChatUiState
 import moe.antimony.hoshi.features.ai.OpenAiChatClient
 import moe.antimony.hoshi.features.ai.aiChatSettingsRepository
+import moe.antimony.hoshi.features.ai.buildAiChatDictionaryLookup
 import moe.antimony.hoshi.features.dictionary.DictionarySettings
 import moe.antimony.hoshi.features.dictionary.LookupPopupItem
 import moe.antimony.hoshi.features.dictionary.LookupPopupOptions
 import moe.antimony.hoshi.features.dictionary.LookupPopupAndroidStack
 import moe.antimony.hoshi.features.dictionary.createLookupPopupItem
 import moe.antimony.hoshi.features.reader.ReaderNavigationDirection
+import moe.antimony.hoshi.features.reader.ReaderSelectionCommand
 import moe.antimony.hoshi.features.reader.ReaderSelectionData
 import moe.antimony.hoshi.features.reader.ReaderSettings
 import moe.antimony.hoshi.features.reader.findHoshiActivity
@@ -175,6 +178,8 @@ internal fun MangaReaderScreen(
     var statisticsPageCounter by statisticsPageCounterState
     var webView by remember { mutableStateOf<WebView?>(null) }
     var lookupPopups by remember(book) { mutableStateOf<List<LookupPopupItem>>(emptyList()) }
+    var lookupSelectionJob by remember(book) { mutableStateOf<Job?>(null) }
+    var lookupSelectionRequest by remember(book) { mutableIntStateOf(0) }
     // A page turn in flight: the snapshot of the page being left, which slides off while the
     // WebView (already reloading to the new page) slides in. Null except during the slide.
     var pageTransition by remember(book) { mutableStateOf<MangaPageTransition?>(null) }
@@ -322,6 +327,8 @@ internal fun MangaReaderScreen(
     }
 
     fun clearSelectionAndPopups() {
+        lookupSelectionJob?.cancel()
+        lookupSelectionRequest += 1
         webView?.clearMangaSelection()
         lookupPopups = emptyList()
     }
@@ -338,11 +345,15 @@ internal fun MangaReaderScreen(
         // Snapshot the outgoing page so it can slide off over the incoming page. Skipped on
         // e-ink or when the user has disabled page-turn animation, and when the WebView is
         // not laid out yet — either way `pageTransition` stays null and the page simply swaps.
-        val snapshot = if (!shouldAnimateMangaPageTurns(readerSettings)) {
-            null
-        } else {
-            webView?.let(::captureWebViewBitmap)
-        }
+        val snapshot = webView
+            ?.takeIf { view ->
+                shouldCaptureMangaPageTurnSnapshot(
+                    settings = readerSettings,
+                    width = view.width,
+                    height = view.height,
+                )
+            }
+            ?.let(::captureWebViewBitmap)
         val transition = snapshot?.let { MangaPageTransition(it.asImageBitmap(), direction) }
         pageTransition = transition
         readyTransition = null
@@ -398,6 +409,9 @@ internal fun MangaReaderScreen(
         aiRequestJob?.cancel()
         aiChatState = AiChatUiState.Loading(bubbleText)
         aiRequestJob = scope.launch {
+            val dictionaryLookup = async(Dispatchers.IO) {
+                buildAiChatDictionaryLookup(bubbleText, dictionarySettings)
+            }
             val result = runCatching {
                 OpenAiChatClient.complete(
                     apiKey = settings.apiKey,
@@ -416,6 +430,7 @@ internal fun MangaReaderScreen(
                         model = settings.model,
                         response = response,
                         timestampSeconds = repository.currentAppleReferenceDateSeconds(),
+                        dictionaryLookup = dictionaryLookup.await(),
                     )
                     aiChatState = AiChatUiState.Loaded(entry)
                     // Persist into this manga's history. A disk failure here must not crash
@@ -433,6 +448,7 @@ internal fun MangaReaderScreen(
                     }
                 },
                 onFailure = { error ->
+                    dictionaryLookup.cancel()
                     aiChatState = AiChatUiState.Failed(
                         bubbleText,
                         error.message ?: "ChatGPT request failed.",
@@ -628,15 +644,26 @@ internal fun MangaReaderScreen(
     fun lookupPopupFor(selection: ReaderSelectionData): Pair<LookupPopupItem, Int>? =
         createLookupPopupItem(selection = selection, options = lookupOptions)
 
-    val handleTextSelected: (ReaderSelectionData) -> Int? = { selection ->
-        val lookup = lookupPopupFor(selection)
-        if (lookup != null) {
-            val (popup, highlightCount) = lookup
-            lookupPopups = listOf(popup)
-            highlightCount
-        } else {
-            lookupPopups = emptyList()
-            null
+    val handleTextSelected: (ReaderSelectionData, WebView) -> Unit = { selection, sourceWebView ->
+        lookupSelectionJob?.cancel()
+        lookupSelectionRequest += 1
+        val request = lookupSelectionRequest
+        lookupPopups = emptyList()
+        lookupSelectionJob = scope.launch {
+            val lookup = withContext(Dispatchers.IO) {
+                lookupPopupFor(selection)
+            }
+            if (!isActive || request != lookupSelectionRequest || sourceWebView !== webView) return@launch
+            if (lookup != null) {
+                val (popup, highlightCount) = lookup
+                lookupPopups = listOf(popup)
+                sourceWebView.evaluateJavascript(
+                    ReaderSelectionCommand.HighlightSelection(highlightCount).source,
+                    null,
+                )
+            } else {
+                lookupPopups = emptyList()
+            }
         }
     }
 
@@ -752,6 +779,7 @@ internal fun MangaReaderScreen(
     DisposableEffect(book, bookRoot) {
         onDispose {
             bookmarkSaveJob?.cancel()
+            lookupSelectionJob?.cancel()
             val unsaved = pendingBookmarkPage.value
             val statistics = currentStatisticsForDispose.value(false)
             if (unsaved != null) {
@@ -886,7 +914,11 @@ internal fun MangaReaderScreen(
                 pageRenderCache = pageRenderCache,
                 onNavigate = { direction -> navigate(direction) },
                 onTextSelected = handleTextSelected,
-                onSelectionCleared = { lookupPopups = emptyList() },
+                onSelectionCleared = {
+                    lookupSelectionJob?.cancel()
+                    lookupSelectionRequest += 1
+                    lookupPopups = emptyList()
+                },
                 onAskAi = { bubbleText -> askAi(bubbleText) },
                 onPageReady = { readyPageIndex ->
                     if (pageTransition != null && readyPageIndex == pageIndex) {
@@ -1369,6 +1401,16 @@ private fun mangaFloatingControlBackground(darkInterface: Boolean): Color =
 internal fun shouldAnimateMangaPageTurns(settings: ReaderSettings): Boolean =
     !settings.eInkMode && !settings.disablePageTurnAnimation
 
+internal fun shouldCaptureMangaPageTurnSnapshot(
+    settings: ReaderSettings,
+    width: Int,
+    height: Int,
+): Boolean {
+    if (!shouldAnimateMangaPageTurns(settings)) return false
+    if (width <= 0 || height <= 0) return false
+    return width.toLong() * height.toLong() <= MANGA_PAGE_TURN_SNAPSHOT_MAX_PIXELS
+}
+
 private fun Color.toCssHex(): String {
     val r = (red * 255f).toInt().coerceIn(0, 255)
     val g = (green * 255f).toInt().coerceIn(0, 255)
@@ -1378,6 +1420,7 @@ private fun Color.toCssHex(): String {
 
 /** Duration of the manga page-turn slide. Long enough to read as a page turn, not a jump. */
 private const val MANGA_PAGE_TURN_DURATION_MS = 800
+private const val MANGA_PAGE_TURN_SNAPSHOT_MAX_PIXELS = 1_500_000L
 
 /**
  * A manga page turn in flight: [snapshot] is the page being left — drawn on top of the
