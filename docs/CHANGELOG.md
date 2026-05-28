@@ -7,6 +7,31 @@ Semantic Versioning.
 
 ## [Unreleased]
 
+### Added
+- **Dictionary lookup in the ChatGPT history** (reader's overflow ⋯ menu →
+  "Past ChatGPT messages"). The history is now a tappable WebView; tapping a
+  Japanese word in a response looks it up against your dictionaries, with the
+  same popup, highlight, and nested-lookup behaviour as the reader.
+- **Manga overflow-menu toggles moved to Settings → Behavior.** "Single-tap to
+  look up" and "Use Noto Sans JP font" are durable preferences, not
+  per-session knobs, so they now live alongside the other reader preferences
+  (volume keys, keep screen on, etc.) instead of in the reader's ⋯ menu.
+
+### Fixed
+- **OCR text size no longer depends on character count.** Two speech bubbles
+  whose drawn glyphs are the same size now reveal at the same OCR text size,
+  regardless of how many characters fit beside them. The previous clamp scaled
+  by box width ÷ character count, which made short bubbles look much larger
+  than long ones at the same artwork scale. The new boost is purely a
+  function of mokuro's reported drawn-glyph height: tiny artwork is bumped up
+  toward a comfortably tappable target (~30 px), artwork already at or above
+  the target reveals at mokuro's reported size, and there are no thresholds.
+- **Wrap-fallback no longer fights the parser.** The runtime fallback that
+  switches a tall narrow bubble to multi-row wrap mode used to re-fit nowrap
+  too, which grew short bubbles past their parser size and shrank long ones.
+  It now leaves the parser's size alone and only promotes to wrap when wrap
+  gives a meaningfully larger glyph.
+
 ## [v0.9.0] - 2026-05-26
 
 First batch of "**Hoshi Manga**" fork changes. Hoshi Manga is a manga-focused fork of
