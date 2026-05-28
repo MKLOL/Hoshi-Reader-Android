@@ -7,6 +7,8 @@ Semantic Versioning.
 
 ## [Unreleased]
 
+## [v0.9.1] - 2026-05-28
+
 ### Added
 - **Dictionary lookup in the ChatGPT history** (reader's overflow ⋯ menu →
   "Past ChatGPT messages"). The history is now a tappable WebView; tapping a
