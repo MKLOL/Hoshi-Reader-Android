@@ -1,9 +1,5 @@
 package moe.antimony.hoshi.features.ai
 
-import android.graphics.BitmapFactory
-import android.util.Base64
-import androidx.compose.foundation.border
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -18,8 +14,6 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
@@ -27,7 +21,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -35,20 +28,19 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import moe.antimony.hoshi.R
-import java.time.Instant
-import java.time.ZoneId
-import java.time.format.DateTimeFormatter
-import java.time.format.FormatStyle
+import moe.antimony.hoshi.features.dictionary.LookupPopupAndroidStack
+import moe.antimony.hoshi.features.dictionary.LookupPopupItem
+import moe.antimony.hoshi.features.dictionary.LookupPopupOptions
+import moe.antimony.hoshi.features.dictionary.createLookupPopupItem
+import moe.antimony.hoshi.features.reader.ReaderSelectionData
 
 /** UI state for the manga ChatGPT popup. Null (in the caller) means no popup is shown. */
 sealed interface AiChatUiState {
@@ -189,12 +181,20 @@ private fun FailedBody(message: String, onRetry: () -> Unit, onDismiss: () -> Un
 }
 
 /**
- * The per-manga ChatGPT history list, reached from the manga reader's overflow (⋯) menu.
- * Newest exchange first; each row shows the bubble text or screenshot, plus the model's reply.
+ * The per-manga ChatGPT history, reached from the manga reader's overflow (⋯) menu.
+ *
+ * Renders inside a WebView so tapping a Japanese word looks the word up in the
+ * dictionary — the same selection-script + `HoshiTextSelection` bridge mechanism the
+ * EPUB and manga readers use, then the existing [LookupPopupAndroidStack] shows the
+ * popup overlay on top. [lookupOptions] carries the colour scheme, dictionary
+ * settings, popup geometry, and the book title used as the lookup-popup label, so
+ * the caller can re-use whatever options it already builds for the in-reader popup
+ * stack.
  */
 @Composable
-fun AiChatHistoryView(
+internal fun AiChatHistoryView(
     entries: List<AiChatEntry>,
+    lookupOptions: LookupPopupOptions,
     onClose: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -217,201 +217,71 @@ fun AiChatHistoryView(
                 )
             }
         } else {
-            LazyColumn(
+            AiChatHistoryWebViewWithLookup(
+                entries = entries,
+                lookupOptions = lookupOptions,
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(innerPadding),
-                contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                items(entries.asReversed()) { entry ->
-                    AiChatHistoryRow(entry)
-                }
-            }
+            )
         }
     }
 }
 
 @Composable
-private fun AiChatHistoryRow(entry: AiChatEntry) {
-    Surface(
-        shape = RoundedCornerShape(16.dp),
-        color = MaterialTheme.colorScheme.surface,
-        tonalElevation = 1.dp,
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            Text(
-                text = formatChatTimestamp(entry.timestampSeconds),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Spacer(Modifier.size(6.dp))
-            Text(
-                text = entry.bubbleText,
-                style = MaterialTheme.typography.bodyMedium,
-                fontWeight = FontWeight.SemiBold,
-            )
-            entry.screenshotImage?.let { image ->
-                Spacer(Modifier.size(8.dp))
-                AiChatHistoryScreenshot(image)
-            }
-            entry.dictionaryLookup?.let { lookup ->
-                Spacer(Modifier.size(10.dp))
-                AiChatYomitanLookup(lookup)
-            }
-            Spacer(Modifier.size(8.dp))
-            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-            Spacer(Modifier.size(8.dp))
-            SelectionContainer {
-                MarkdownText(markdown = entry.response)
-            }
-        }
-    }
-}
-
-@Composable
-private fun AiChatHistoryScreenshot(image: AiChatImage) {
-    val bitmap = remember(image.base64Data) {
-        decodeAiChatImage(image.base64Data)
-    } ?: return
-    Surface(
-        shape = RoundedCornerShape(8.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant,
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        Image(
-            bitmap = bitmap.asImageBitmap(),
-            contentDescription = "Screenshot sent to ChatGPT",
-            contentScale = ContentScale.Fit,
-            modifier = Modifier
-                .fillMaxWidth()
-                .heightIn(max = 220.dp),
-        )
-    }
-}
-
-@Composable
-private fun AiChatYomitanLookup(lookup: AiChatDictionaryLookup) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .border(
-                width = 1.dp,
-                color = MaterialTheme.colorScheme.outlineVariant,
-                shape = RoundedCornerShape(10.dp),
-            )
-            .padding(12.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
-        Text(
-            text = stringResource(R.string.ai_chat_history_yomitan_lookup),
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.primary,
-            fontWeight = FontWeight.SemiBold,
-        )
-        lookup.results.forEachIndexed { index, result ->
-            if (index > 0) {
-                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-            }
-            AiChatYomitanLookupResult(result)
-        }
-    }
-}
-
-@Composable
-private fun AiChatYomitanLookupResult(result: AiChatDictionaryLookupResult) {
-    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                text = result.expression,
-                style = MaterialTheme.typography.titleSmall,
-                fontWeight = FontWeight.SemiBold,
-                modifier = Modifier.weight(1f),
-            )
-            if (result.reading.isNotBlank() && result.reading != result.expression) {
-                Text(
-                    text = result.reading,
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
+private fun AiChatHistoryWebViewWithLookup(
+    entries: List<AiChatEntry>,
+    lookupOptions: LookupPopupOptions,
+    modifier: Modifier = Modifier,
+) {
+    var popups by remember { mutableStateOf<List<LookupPopupItem>>(emptyList()) }
+    var historyWebView by remember { mutableStateOf<android.webkit.WebView?>(null) }
+    // Looks the tapped word up in the dictionary using the same engine as the manga
+    // reader. Returns the popup + highlight-count pair the popup stack expects.
+    fun lookupForSelection(selection: ReaderSelectionData): Pair<LookupPopupItem, Int>? =
+        createLookupPopupItem(selection = selection, options = lookupOptions)
+    Box(modifier = modifier) {
+        AiChatHistoryWebView(
+            entries = entries,
+            backgroundColor = MaterialTheme.colorScheme.background,
+            onSurfaceColor = MaterialTheme.colorScheme.onSurface,
+            onSurfaceVariantColor = MaterialTheme.colorScheme.onSurfaceVariant,
+            outlineVariantColor = MaterialTheme.colorScheme.outlineVariant,
+            surfaceVariantColor = MaterialTheme.colorScheme.surfaceVariant,
+            onTextSelected = { selection, webView ->
+                historyWebView = webView
+                val lookup = lookupForSelection(selection) ?: return@AiChatHistoryWebView
+                val (popup, highlightCount) = lookup
+                popups = listOf(popup)
+                // Paint the matched character range yellow via CSS.highlights so the
+                // reader can see which span the dictionary popup is showing — same
+                // mechanism the manga reader uses, same `::highlight(hoshi-selection)`
+                // CSS rule baked into the history HTML.
+                webView.evaluateJavascript(
+                    moe.antimony.hoshi.features.reader.ReaderSelectionCommand
+                        .HighlightSelection(highlightCount).source,
+                    null,
                 )
-            }
-        }
-        if (result.matched.isNotBlank() && result.matched != result.expression) {
-            Text(
-                text = stringResource(R.string.ai_chat_history_yomitan_matched_format, result.matched),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-        val deinflection = result.deinflectionTrace.joinToString(" -> ") { it.name }.takeIf { it.isNotBlank() }
-        if (deinflection != null) {
-            Text(
-                text = deinflection,
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-        result.glossaries.take(3).forEach { glossary ->
-            Text(
-                text = "${glossary.dictionary}: ${glossary.content.compactLookupText()}",
-                style = MaterialTheme.typography.bodySmall,
-                maxLines = 3,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
-        val metadata = result.lookupMetadataLine()
-        if (metadata.isNotBlank()) {
-            Text(
-                text = metadata,
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
+            },
+            modifier = Modifier.fillMaxSize(),
+        )
+        LookupPopupAndroidStack(
+            popups = popups,
+            onPopupsChange = { popups = it },
+            lookupChildPopup = ::lookupForSelection,
+            onRootPopupDismissed = {
+                // The root popup is going away — clear the in-page highlight too so
+                // the user isn't left with a yellow word selected after the popup is
+                // dismissed. Return false so the stack still removes the popup itself.
+                historyWebView?.evaluateJavascript(
+                    moe.antimony.hoshi.features.reader.ReaderSelectionCommand
+                        .ClearSelection.source,
+                    null,
+                )
+                false
+            },
+            modifier = Modifier.fillMaxSize(),
+        )
     }
 }
 
-private fun decodeAiChatImage(base64Data: String) = runCatching {
-    val bytes = Base64.decode(base64Data, Base64.DEFAULT)
-    BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-}.getOrNull()
-
-private fun AiChatDictionaryLookupResult.lookupMetadataLine(): String {
-    val frequencyText = frequencies
-        .flatMap { group ->
-            group.frequencies.map { frequency ->
-                "${group.dictionary} ${frequency.displayValue.ifBlank { frequency.value.toString() }}"
-            }
-        }
-        .take(3)
-    val pitchText = pitches
-        .filter { it.pitchPositions.isNotEmpty() }
-        .map { group -> "${group.dictionary} ${group.pitchPositions.joinToString("/")}" }
-        .take(3)
-    return (frequencyText + pitchText).joinToString("   ")
-}
-
-private fun String.compactLookupText(): String =
-    replace(Regex("<[^>]+>"), "")
-        .replace("&quot;", "\"")
-        .replace("&#39;", "'")
-        .replace("&amp;", "&")
-        .replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace(Regex("\\s+"), " ")
-        .trim()
-
-/**
- * Apple-reference-date seconds (the epoch the app's sidecar files use) to a local date-time
- * string. Apple's reference date is 2001-01-01 UTC, 978307200 s after the Unix epoch.
- */
-private fun formatChatTimestamp(appleReferenceSeconds: Double): String =
-    runCatching {
-        Instant.ofEpochSecond((appleReferenceSeconds + 978_307_200.0).toLong())
-            .atZone(ZoneId.systemDefault())
-            .format(DateTimeFormatter.ofLocalizedDateTime(FormatStyle.MEDIUM, FormatStyle.SHORT))
-    }.getOrDefault("")

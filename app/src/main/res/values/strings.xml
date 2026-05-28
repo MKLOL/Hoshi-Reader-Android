@@ -170,6 +170,10 @@
     <string name="reader_behavior_reverse_volume_key_direction">Reverse Volume Key Direction</string>
     <string name="reader_behavior_keep_screen_on">Keep Screen On</string>
     <string name="reader_behavior_auto_check_updates">Automatically Check for Updates</string>
+    <string name="reader_behavior_manga_single_tap_lookup">Manga: Single-Tap to Look Up</string>
+    <string name="reader_behavior_manga_single_tap_lookup_desc">First tap on a speech bubble reveals AND looks the word up. Default reveals first; the second tap looks up so the dictionary popup doesn\'t cover the bubble\'s action buttons.</string>
+    <string name="reader_behavior_manga_use_noto_sans_jp">Manga: Use Noto Sans JP Font</string>
+    <string name="reader_behavior_manga_use_noto_sans_jp_desc">Renders revealed OCR text with Noto Sans JP. Off uses the platform\'s system Japanese sans-serif.</string>
     <string name="reader_statistics_pause">Pause statistics</string>
     <string name="reader_statistics_start">Start statistics</string>
     <string name="reader_jump_back">Return to previous jump position</string>

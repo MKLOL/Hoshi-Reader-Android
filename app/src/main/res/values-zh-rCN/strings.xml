@@ -167,6 +167,10 @@
     <string name="reader_behavior_reverse_volume_key_direction">反转音量键方向</string>
     <string name="reader_behavior_keep_screen_on">保持屏幕常亮</string>
     <string name="reader_behavior_auto_check_updates">自动检查更新</string>
+    <string name="reader_behavior_manga_single_tap_lookup">漫画：单击查词</string>
+    <string name="reader_behavior_manga_single_tap_lookup_desc">第一次点击对话气泡时同时显示文字并查词。默认行为是先显示文字，第二次点击才查词，这样查词弹窗不会遮挡气泡上的操作按钮。</string>
+    <string name="reader_behavior_manga_use_noto_sans_jp">漫画：使用 Noto Sans JP 字体</string>
+    <string name="reader_behavior_manga_use_noto_sans_jp_desc">使用 Noto Sans JP 渲染显示出的 OCR 文字。关闭时使用平台自带的日文无衬线字体。</string>
     <string name="reader_statistics_pause">暂停统计</string>
     <string name="reader_statistics_start">开始统计</string>
     <string name="reader_jump_back">返回上一个跳转位置</string>

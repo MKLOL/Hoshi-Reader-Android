@@ -99,6 +99,27 @@ fun ReaderBehaviorScreen(
                             onSettingsChange(settings.copy(keepScreenOnWhileReading = it))
                         },
                     )
+                    // Manga-only behavior toggles. These used to live in the manga
+                    // reader's overflow (⋯) menu, but they're stable preferences not
+                    // per-session knobs — so they belong here in Settings.
+                    BehaviorDivider()
+                    BehaviorSwitchRow(
+                        label = stringResource(ReaderBehaviorRow.MangaSingleTapLookup.labelRes),
+                        checked = settings.mangaSingleTapLookup,
+                        onCheckedChange = {
+                            onSettingsChange(settings.copy(mangaSingleTapLookup = it))
+                        },
+                        description = stringResource(R.string.reader_behavior_manga_single_tap_lookup_desc),
+                    )
+                    BehaviorDivider()
+                    BehaviorSwitchRow(
+                        label = stringResource(ReaderBehaviorRow.MangaUseNotoSansJp.labelRes),
+                        checked = settings.mangaUseNotoSansJp,
+                        onCheckedChange = {
+                            onSettingsChange(settings.copy(mangaUseNotoSansJp = it))
+                        },
+                        description = stringResource(R.string.reader_behavior_manga_use_noto_sans_jp_desc),
+                    )
                     // The auto-updater is opt-in at compile time (see UpdateConfig); when
                     // it is off, the toggle and its dependencies are entirely absent from
                     // the screen — no settings flicker while update-settings load.
@@ -134,6 +155,8 @@ private enum class ReaderBehaviorRow(val labelRes: Int) {
     VolumeKeysSeekSasayaki(R.string.reader_behavior_volume_keys_seek_sasayaki),
     ReverseVolumeKeyDirection(R.string.reader_behavior_reverse_volume_key_direction),
     KeepScreenOn(R.string.reader_behavior_keep_screen_on),
+    MangaSingleTapLookup(R.string.reader_behavior_manga_single_tap_lookup),
+    MangaUseNotoSansJp(R.string.reader_behavior_manga_use_noto_sans_jp),
     AutomaticallyCheckForUpdates(R.string.reader_behavior_auto_check_updates),
 }
 

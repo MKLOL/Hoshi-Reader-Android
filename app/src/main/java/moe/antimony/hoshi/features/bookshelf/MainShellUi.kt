@@ -175,11 +175,12 @@ fun settingsGroups(): List<List<SettingsRowModel>> = listOf(
         SettingsRowModel(R.string.settings_dictionaries, SettingsDestination.Dictionaries),
         SettingsRowModel(R.string.settings_anki, SettingsDestination.Anki),
         SettingsRowModel(R.string.settings_chatgpt, SettingsDestination.ChatGpt),
-        // Appearance + Behavior settings are EPUB-text-reader specific (font, line
-        // height, layout padding, paginated/continuous, volume-keys, etc.) and don't
-        // apply to the manga reader. Hidden from the menu while the EPUB plumbing
-        // stays intact under the hood. AppShell's SettingsDetailSection dispatch
-        // entries also keep working so a deep link from elsewhere still opens them.
+        // Behavior hosts the durable reader preferences — page-turn animation,
+        // volume-keys-turn-pages, keep-screen-on, plus the manga-specific
+        // single-tap-to-look-up and Noto-Sans-JP-font toggles that used to live in
+        // the manga reader's overflow (⋯) menu. Appearance stays hidden in the manga
+        // fork because its current settings are EPUB-text-reader specific.
+        SettingsRowModel(R.string.settings_behavior, SettingsDestination.Behavior),
         SettingsRowModel(R.string.settings_advanced, SettingsDestination.Advanced),
     ),
     listOf(

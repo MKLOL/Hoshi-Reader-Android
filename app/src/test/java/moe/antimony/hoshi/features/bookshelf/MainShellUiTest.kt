@@ -26,9 +26,10 @@ class MainShellUiTest {
         )
     }
 
-    // Appearance + Behavior were EPUB-text-reader specific and are hidden in the manga-only
-    // fork. Their SettingsDestination dispatch entries are kept so deep-links still resolve;
-    // see comments in settingsGroups().
+    // Appearance is still hidden in the manga-only fork (the existing entries are
+    // EPUB-text-reader specific). Behavior is surfaced because it now also hosts
+    // the manga-specific single-tap-lookup and Noto-Sans-JP-font toggles that used
+    // to live in the manga reader's overflow (⋯) menu. See settingsGroups().
     @Test
     fun settingsGroupsExposeMangaTopLevelEntries() {
         val groups = settingsGroups()
@@ -38,6 +39,7 @@ class MainShellUiTest {
                 R.string.settings_dictionaries,
                 R.string.settings_anki,
                 R.string.settings_chatgpt,
+                R.string.settings_behavior,
                 R.string.settings_advanced,
             ),
             groups.first().map { it.labelRes },

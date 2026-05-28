@@ -1019,18 +1019,6 @@ internal fun MangaReaderScreen(
                     onShowAiHistory = { showAiHistory = true },
                     onShowStatistics = { showStatistics = true },
                     onShowGoToPage = { showGoToPageDialog = true },
-                    singleTapLookup = readerSettings.mangaSingleTapLookup,
-                    onToggleSingleTapLookup = {
-                        onReaderSettingsChange(
-                            readerSettings.copy(mangaSingleTapLookup = !readerSettings.mangaSingleTapLookup),
-                        )
-                    },
-                    useNotoSansJpFont = readerSettings.mangaUseNotoSansJp,
-                    onToggleNotoSansJpFont = {
-                        onReaderSettingsChange(
-                            readerSettings.copy(mangaUseNotoSansJp = !readerSettings.mangaUseNotoSansJp),
-                        )
-                    },
                 )
             }
 
@@ -1110,6 +1098,7 @@ internal fun MangaReaderScreen(
         if (showAiHistory) {
             AiChatHistoryView(
                 entries = aiHistory,
+                lookupOptions = lookupOptions,
                 onClose = { showAiHistory = false },
                 modifier = Modifier
                     .fillMaxSize()
@@ -1215,6 +1204,8 @@ private fun MangaReaderCloseButton(
  * "Take screenshot" only appears here when [showTakeScreenshot] is true — i.e. no ChatGPT key
  * is configured yet. Once a key exists the screenshot action is promoted to its own button
  * (see [MangaReaderScreenshotButton]). ChatGPT settings live in the main Settings tab.
+ * Single-tap-lookup and Noto-Sans-JP-font are durable preferences and live in
+ * Settings → Behavior, not here — both are stable choices, not per-session knobs.
  */
 @Composable
 private fun MangaReaderOverflowMenu(
@@ -1225,10 +1216,6 @@ private fun MangaReaderOverflowMenu(
     onShowAiHistory: () -> Unit,
     onShowStatistics: () -> Unit,
     onShowGoToPage: () -> Unit,
-    singleTapLookup: Boolean,
-    onToggleSingleTapLookup: () -> Unit,
-    useNotoSansJpFont: Boolean,
-    onToggleNotoSansJpFont: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val contentColor = if (darkInterface) Color.White else Color.Black
@@ -1277,36 +1264,6 @@ private fun MangaReaderOverflowMenu(
                 onClick = {
                     menuExpanded = false
                     onShowAiHistory()
-                },
-            )
-            HorizontalDivider()
-            // Toggleable settings — the menu stays open so a user trying both options
-            // doesn't have to re-open it between flips. A leading check mark mirrors
-            // the Material convention for an on/off menu item.
-            DropdownMenuItem(
-                text = { Text("Single-tap to look up") },
-                onClick = { onToggleSingleTapLookup() },
-                leadingIcon = {
-                    if (singleTapLookup) {
-                        Icon(Icons.Rounded.Check, contentDescription = null, tint = contentColor)
-                    }
-                },
-                modifier = Modifier.semantics {
-                    role = Role.Switch
-                    toggleableState = if (singleTapLookup) ToggleableState.On else ToggleableState.Off
-                },
-            )
-            DropdownMenuItem(
-                text = { Text("Use Noto Sans JP font") },
-                onClick = { onToggleNotoSansJpFont() },
-                leadingIcon = {
-                    if (useNotoSansJpFont) {
-                        Icon(Icons.Rounded.Check, contentDescription = null, tint = contentColor)
-                    }
-                },
-                modifier = Modifier.semantics {
-                    role = Role.Switch
-                    toggleableState = if (useNotoSansJpFont) ToggleableState.On else ToggleableState.Off
                 },
             )
         }
