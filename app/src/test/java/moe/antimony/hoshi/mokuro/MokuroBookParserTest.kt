@@ -78,10 +78,9 @@ class MokuroBookParserTest {
         assertEquals(1315, box.top)
         assertEquals(212, box.width)
         assertEquals(65, box.height)
-        // 13-char horizontal line in a 212×65 box: fit = min(212/13, 65/(1*1.1)) = 16.3 px;
-        // mokuro's 25 px is above the fit ceiling at the small-font safety multiplier
-        // (16.3*1.5 = 24.5), so it is clamped down to 24 — see clampMokuroFontSize.
-        assertEquals(24, box.fontSize)
+        // mokuroFs = 25 → headroom = (30 - 25) = 5; result = 25 + 5×0.5 = 27.5 → 27.
+        // See MokuroBookParser.clampMokuroFontSize.
+        assertEquals(27, box.fontSize)
         assertFalse(box.vertical)
         assertEquals(listOf("ＹＯＴＳＵＢＡ＆！", "ＫＲＹＯＨＩＫＯＡＺＵＭＡ"), box.lines)
     }
@@ -97,11 +96,11 @@ class MokuroBookParserTest {
         // One block has a 2-element box and is dropped; only the valid vertical block survives.
         assertEquals(1, secondPage.textBoxes.size)
         assertTrue(secondPage.textBoxes.single().vertical)
-        // mokuro reported font_size=130 px for "はいはい！！" (6 chars vertical) in a
-        // 240×119 box — overshooting the box height by ~6x. The adaptive clamp at a
-        // big-font safety multiplier of 1.0 caps it to the fit (18 px) so the OCR plate
-        // doesn't grow many times past the artwork bubble.
-        assertEquals(18, secondPage.textBoxes.single().fontSize)
+        // mokuroFs = 130 is far above the big-artwork threshold so the zoom is 1.0
+        // and the OCR text reveals at mokuro's reported size. The parser intentionally
+        // trusts mokuro here — catastrophic overshoot, when it happens, is handled at
+        // reveal time by the wrap-fallback in MangaPageHtml.
+        assertEquals(130, secondPage.textBoxes.single().fontSize)
     }
 
     @Test(expected = IllegalArgumentException::class)
@@ -122,10 +121,9 @@ class MokuroBookParserTest {
     }
 
     @Test
-    fun clampLeavesSmallFontUntouchedWhenBoxComfortablyFits() {
-        // Small font (under the small-font threshold) in a box with plenty of room: the
-        // adaptive cap is permissive (1.5x of fit), so mokuro's value passes through. This
-        // preserves the "small bubble looks zoomed a bit, I like that" feel.
+    fun clampLeavesAtTargetUnchanged() {
+        // mokuroFs = 30 sits at the readable-target; headroom = 0; result = 30. A short
+        // emphasis bubble reveals at the artwork's size — the user-facing contract.
         assertEquals(
             30,
             clampMokuroFontSize(
@@ -139,12 +137,12 @@ class MokuroBookParserTest {
     }
 
     @Test
-    fun clampShrinksOversizedHorizontalTextToFitBox() {
-        // Yotsubato Vol 2 page 193 case: tall narrow box wrongly tagged as horizontal with
-        // a huge font_size. 6 chars at 137 px horizontally need ~822 px of width but the
-        // box is only 85 px wide. The clamp must drop font_size aggressively so the OCR
-        // plate doesn't grow ~10x past the artwork. The runtime wrap-fallback in
-        // MangaPageHtml then promotes this to a multi-row wrap so the text stays readable.
+    fun clampPassesThroughOvershotMokuroAtBigArtworkSize() {
+        // Mokuro overshoots the artwork glyph here (reports 137 for chars actually
+        // ~14 px tall), but the parser intentionally trusts mokuro's reported size.
+        // 137 is past the big-artwork threshold so zoom = 1.0, result = 137. The
+        // runtime wrap-fallback in MangaPageHtml then shrinks-to-fit or word-wraps
+        // when the text would visibly overflow the box.
         val clamped = clampMokuroFontSize(
             mokuroFontSize = 137.0,
             boxWidth = 85,
@@ -152,17 +150,14 @@ class MokuroBookParserTest {
             vertical = false,
             lines = listOf("なんだそりゃ"),
         )
-        assertEquals(14, clamped)
+        assertEquals(137, clamped)
     }
 
     @Test
-    fun clampShrinksOversizedVerticalTextWithLineHeightApplied() {
-        // Yotsubato Vol 2 page 191 "大不評！？": vertical, 5 chars, mokuro font_size=175 in
-        // a 194×552 box. 5 chars * 175 * 1.1 = 962 px tall but the box is 552 — text
-        // overshoots by 1.74x. The cap (safety 1.0 at fs=175) brings it back to ~100 px so
-        // the plate matches the artwork bubble.
+    fun clampPassesThroughBigMokuroVerticalUnchanged() {
+        // mokuro reported 175 — past the big-artwork threshold, no zoom, result = 175.
         assertEquals(
-            100,
+            175,
             clampMokuroFontSize(
                 mokuroFontSize = 175.0,
                 boxWidth = 194,
@@ -174,11 +169,12 @@ class MokuroBookParserTest {
     }
 
     @Test
-    fun clampUsesMaxCharsAcrossMultiLineVerticalBlock() {
-        // Multi-line vertical: each line is one column running top-to-bottom; the height
-        // axis is constrained by the *longest* line's char count (here 8 chars).
+    fun clampScalesBigMokuroByNoZoomRegardlessOfLineCount() {
+        // mokuroFs = 80 is past the big-artwork threshold so zoom = 1.0 regardless of
+        // line count or char count. Result = 80 — the parser intentionally never
+        // depends on box geometry or char count.
         assertEquals(
-            53,
+            80,
             clampMokuroFontSize(
                 mokuroFontSize = 80.0,
                 boxWidth = 200,
@@ -190,9 +186,9 @@ class MokuroBookParserTest {
     }
 
     @Test
-    fun clampFallsBackToMokuroValueOnDegenerateInput() {
-        // Empty lines or zero box dims would otherwise divide by zero. Fall back to the
-        // raw mokuro value (still floor-clamped to 1) so a malformed block still renders.
+    fun clampReturnsMokuroValueUnchangedAtTarget() {
+        // mokuroFs = 42 is past the readable-target so no boost is applied. The
+        // result is mokuro's value unchanged, independent of any other input.
         assertEquals(
             42,
             clampMokuroFontSize(42.0, boxWidth = 0, boxHeight = 100, vertical = true, lines = listOf("a")),
@@ -205,8 +201,9 @@ class MokuroBookParserTest {
             42,
             clampMokuroFontSize(42.0, boxWidth = 100, boxHeight = 100, vertical = true, lines = listOf("", "")),
         )
+        // mokuroFs=0 floors to 1, then the boost lifts that to ~15 px.
         assertEquals(
-            1,
+            15,
             clampMokuroFontSize(0.0, boxWidth = 100, boxHeight = 100, vertical = true, lines = listOf("a")),
         )
     }

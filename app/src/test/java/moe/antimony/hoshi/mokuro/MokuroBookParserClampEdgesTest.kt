@@ -4,126 +4,129 @@ import org.junit.Assert.assertEquals
 import org.junit.Test
 
 /**
- * Extra edge-case coverage for [clampMokuroFontSize] beyond what
- * [MokuroBookParserTest] exercises:
+ * Edge-case coverage for [clampMokuroFontSize] beyond what [MokuroBookParserTest]
+ * exercises.
  *
- *  - the explicit small-font safety multiplier (1.5x) at fs <= 40
- *  - the explicit big-font safety multiplier (1.0x)   at fs >= 100
- *  - the linear interpolation between those two thresholds
- *
- * These three points are the contract the codebase reasons about: changing the multipliers
- * or the threshold band would silently regress OCR-plate sizing across all manga.
+ * The result is `mokuroFs + max(0, READABLE_TARGET_PX - mokuroFs) × BOOST_STRENGTH`.
+ * With the constants currently in [MokuroBookParser] (target 30 px, strength 0.5)
+ * that means: tiny artwork glyphs get a big absolute bump up toward 18 px, glyphs
+ * already at or above 30 px stay at their mokuro-reported size, and everything in
+ * between gets a proportionally smaller bump. Continuous, no thresholds, no
+ * character-count dependency: bubbles with equal mokuroFs reveal at equal OCR size.
  */
 class MokuroBookParserClampEdgesTest {
     @Test
-    fun smallFontUsesPermissiveSafetyOfOnePointFive() {
-        // mokuro fs=20 (well under the small-font threshold of 40). One horizontal line of
-        // 10 chars in a 20px-wide box: pure-fit allows 2 px (20/10), safety multiplier 1.5
-        // raises the cap to 3 px. mokuro's value 20 exceeds that, so the result is the cap,
-        // which proves the 1.5x multiplier was used (a 1.0x would clamp to 2).
+    fun tinyArtworkIsBumpedSubstantially() {
+        // mokuroFs = 5 → 5 + 25 × 0.5 = 17.5 → 17.
         assertEquals(
-            3,
+            17,
             clampMokuroFontSize(
-                mokuroFontSize = 20.0,
-                boxWidth = 20,
-                boxHeight = 10_000,
+                mokuroFontSize = 5.0,
+                boxWidth = 500,
+                boxHeight = 500,
                 vertical = false,
-                lines = listOf("0123456789"),
+                lines = listOf("0"),
             ),
         )
     }
 
     @Test
-    fun bigFontUsesStrictSafetyOfOne() {
-        // mokuro fs=200, horizontal, 10 chars in 20px-wide box: fit=2, cap=2*1.0=2.
-        // The 1.0x multiplier is what keeps overshot OCR boxes from blowing up the plate.
+    fun mediumArtworkGetsProportionalBump() {
+        // mokuroFs = 18 → 18 + 12 × 0.5 = 24.
         assertEquals(
-            2,
+            24,
             clampMokuroFontSize(
-                mokuroFontSize = 200.0,
-                boxWidth = 20,
-                boxHeight = 10_000,
+                mokuroFontSize = 18.0,
+                boxWidth = 200,
+                boxHeight = 200,
                 vertical = false,
-                lines = listOf("0123456789"),
+                lines = listOf("ab"),
             ),
         )
     }
 
     @Test
-    fun thresholdBoundariesPickTheBoundarySafety() {
-        // fs=40 -> at the small threshold inclusive: safety should be 1.5 (cap=3).
+    fun targetArtworkGetsNoBump() {
+        // mokuroFs = 30 → no headroom, no bump. This is the "BIG TEXT keep it the
+        // same" half of the user-facing contract.
         assertEquals(
-            3,
+            30,
             clampMokuroFontSize(
-                mokuroFontSize = 40.0,
-                boxWidth = 20,
-                boxHeight = 10_000,
+                mokuroFontSize = 30.0,
+                boxWidth = 200,
+                boxHeight = 200,
                 vertical = false,
-                lines = listOf("0123456789"),
-            ),
-        )
-        // fs=100 -> at the big threshold inclusive: safety should be 1.0 (cap=2).
-        assertEquals(
-            2,
-            clampMokuroFontSize(
-                mokuroFontSize = 100.0,
-                boxWidth = 20,
-                boxHeight = 10_000,
-                vertical = false,
-                lines = listOf("0123456789"),
+                lines = listOf("0"),
             ),
         )
     }
 
     @Test
-    fun midRangeFontInterpolatesLinearlyBetweenThresholds() {
-        // fs=70 sits halfway between 40 and 100, so safety = 1.5 + 0.5 * (1.0 - 1.5) = 1.25.
-        // Horizontal, 10 chars in a 20px-wide box: fit=2, cap=2*1.25=2.5, floored to 2.
+    fun bigArtworkPassesThroughUnchanged() {
+        // mokuroFs ≥ READABLE_TARGET_PX always reveals at mokuro's native size.
         assertEquals(
-            2,
+            45,
             clampMokuroFontSize(
-                mokuroFontSize = 70.0,
-                boxWidth = 20,
-                boxHeight = 10_000,
+                mokuroFontSize = 45.0,
+                boxWidth = 200,
+                boxHeight = 200,
                 vertical = false,
-                lines = listOf("0123456789"),
+                lines = listOf("失礼ね"),
             ),
         )
     }
 
     @Test
-    fun zeroBoxHeightFallsBackToMokuroValueWithoutDividingByZero() {
-        // Separate from the existing width=0 case in MokuroBookParserTest — guards
-        // the symmetric height=0 branch (and incidentally would catch a flipped
-        // `<=` to `<` in the box-dims guard).
+    fun curveIsContinuousNotStepped() {
+        // Three closely-spaced mokuroFs values should produce closely-spaced results
+        // — no step discontinuity at any threshold (the previous "small ≤ X, big ≥ Y,
+        // lerp between" design had a hidden plateau below X that this curve removes).
+        val a = clampMokuroFontSize(14.0, 200, 200, false, listOf("0"))
+        val b = clampMokuroFontSize(15.0, 200, 200, false, listOf("0"))
+        val c = clampMokuroFontSize(16.0, 200, 200, false, listOf("0"))
+        // Differences between adjacent points stay within 1 px of each other.
+        val ab = b - a
+        val bc = c - b
+        assert(Math.abs(ab - bc) <= 1) {
+            "expected smooth curve but adjacent deltas were $ab and $bc (a=$a b=$b c=$c)"
+        }
+    }
+
+    @Test
+    fun consistencyAcrossBubblesAtSameMokuroFs() {
+        // Two bubbles with the same mokuroFs always reveal at the same OCR size —
+        // regardless of how many characters fit beside them in the bubble or how big
+        // their OCR boxes are. This is the property the user asked for: "the scaling
+        // shouldn't fucking depend on how many characters you have in the box."
+        val a = clampMokuroFontSize(
+            mokuroFontSize = 18.0,
+            boxWidth = 500,
+            boxHeight = 500,
+            vertical = false,
+            lines = listOf("Aa"),
+        )
+        val b = clampMokuroFontSize(
+            mokuroFontSize = 18.0,
+            boxWidth = 50,
+            boxHeight = 200,
+            vertical = true,
+            lines = listOf("こんにちはお父さん"),
+        )
+        assertEquals(a, b)
+    }
+
+    @Test
+    fun degenerateBoxStillProducesValidFontSize() {
+        // Even when box dims are unknowable, mokuroFs alone drives the result.
         assertEquals(
             42,
-            clampMokuroFontSize(
-                mokuroFontSize = 42.0,
-                boxWidth = 100,
-                boxHeight = 0,
-                vertical = true,
-                lines = listOf("a"),
-            ),
+            clampMokuroFontSize(42.0, boxWidth = 0, boxHeight = 100, vertical = true, lines = listOf("a")),
         )
-    }
-
-    @Test
-    fun verticalPathExercisesNumLinesAcrossWidth() {
-        // Multi-line vertical with a *narrow* box: the binding constraint is boxWidth / numLines
-        // (5 lines spanning a 50px wide box -> 10 px per line). Each line has 1 char so the
-        // height-axis (50/(1*1.1) ~ 45) is the other candidate. Fit=10; mokuro fs=80 is in the
-        // mid-range, safety ~= 1.5 + ((80-40)/60) * (-0.5) = 1.166...; cap = 10 * 1.166 ~= 11.66
-        // -> floored to 11. This pins the vertical numLines-across-width branch behavior.
+        // mokuroFs=0 floors to 1, then the boost lifts that to ~15 px — still
+        // readable, never invisible.
         assertEquals(
-            11,
-            clampMokuroFontSize(
-                mokuroFontSize = 80.0,
-                boxWidth = 50,
-                boxHeight = 1_000,
-                vertical = true,
-                lines = listOf("a", "b", "c", "d", "e"),
-            ),
+            15,
+            clampMokuroFontSize(0.0, boxWidth = 100, boxHeight = 100, vertical = true, lines = listOf("a")),
         )
     }
 }

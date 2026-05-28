@@ -528,20 +528,28 @@ internal object MangaPageHtml {
                 window.hoshiSelection.clearSelection();
               }
             },
-            // Promote a single box's layout from nowrap (one row/column per <br>-separated
-            // line) to wrap (text reflows within each line) **iff** wrap permits a font
-            // meaningfully larger than nowrap. Ported from Gnathonic's mokuro-reader 'auto'
-            // mode (calculateOptimalFontSize in TextBoxes.svelte) but trimmed to just the
-            // wrap-fallback: the per-box font_size is already set by the parser's
-            // adaptive clamp (see MokuroBookParser.clampMokuroFontSize), which gives a
-            // sane nowrap fit. The only case the clamp can't help is mokuro mis-tagging a
-            // tall narrow bubble as horizontal — clamp shrinks to a tiny one-row strip,
-            // and *wrapping* into multiple short rows lets a much larger glyph fit.
+            // Two artwork glyphs of the same drawn size must reveal at the same OCR
+            // text size — independent of how many characters fit beside them in the
+            // bubble. The parser's clamp gives that property: it uses mokuro's
+            // reported drawn-glyph height directly and adds a continuous boost
+            // (`mokuroFs + max(0, target - mokuroFs) × strength`), so the result
+            // depends only on mokuroFs, not on box dims or char count. See
+            // MokuroBookParser.clampMokuroFontSize.
             //
-            // Runs on first reveal (cached via the dataset flag so the binary search is
-            // amortised) and only on horizontal boxes — vertical CJK with `text-
-            // orientation: upright` doesn't soft-wrap usefully (one glyph = one column
-            // cell), so wrap mode would give the same or worse size.
+            // So at reveal time we leave the parser-set font size *alone* and only
+            // step in for the case the parser can't fix: mokuro mis-tagging a tall
+            // narrow vertical bubble as horizontal. Wrap mode (CJK breaks at every
+            // character via `.ocr-box.wrap`'s CSS) reflows into multiple short rows
+            // and fits a meaningfully larger glyph than the single-row strip nowrap
+            // produces. We promote only when wrap gives at least [WRAP_WIN_RATIO]
+            // more font size than the parser's value — the cosmetic change of
+            // stacking the bubble is only worth it when the reader sees a clearly
+            // bigger character. Otherwise the parser's value stays.
+            //
+            // Runs on first reveal (cached via the dataset flag so the binary search
+            // is amortised) and only on horizontal boxes — vertical CJK with
+            // `text-orientation: upright` doesn't soft-wrap usefully (one glyph =
+            // one column cell), so wrap mode would give the same or worse size.
             tryWrapFallback: function(box) {
               if (box.dataset.wrapTried === '1') return;
               box.dataset.wrapTried = '1';
@@ -598,34 +606,25 @@ internal object MangaPageHtml {
                 }
                 return Math.floor(low);
               }
-              // Largest nowrap font that fits the box. May be < initialPx when mokuro
-              // (or the parser clamp) over-estimated and nowrap actually overflows; may
-              // be > initialPx when the clamp left headroom we can recover.
-              box.classList.remove('wrap');
-              var nowrapFs = findMaxFitting(initialPx);
-              // Largest wrap font that fits the box. CJK breaks at every character via
-              // `.ocr-box.wrap`'s CSS so multi-row layouts are reachable.
+              // Largest wrap font that fits the box. CJK breaks at every character
+              // via `.ocr-box.wrap`'s CSS so multi-row layouts are reachable.
               box.classList.add('wrap');
               var wrapFs = findMaxFitting(initialPx);
-              // Wrap "wins" only when it permits a meaningfully larger glyph (Gnathonic
-              // uses 1.3x; the cosmetic change of stacking the bubble is only worth it
-              // when the reader sees a clearly bigger character). Otherwise keep nowrap
-              // — which may itself differ from initialPx (above) if it had to be trimmed.
+              // Compare against the parser's nowrap size (initialPx). We deliberately
+              // do *not* re-fit nowrap to find its max — that would grow few-char
+              // bubbles to fill their box and shrink many-char bubbles to fit theirs,
+              // making the same drawn glyph render at different sizes in different
+              // bubbles, which is exactly what the parser-side zoom is designed to
+              // avoid.
               var WRAP_WIN_RATIO = 1.3;
-              if (wrapFs >= nowrapFs * WRAP_WIN_RATIO) {
+              if (wrapFs >= initialPx * WRAP_WIN_RATIO) {
                 setFs(wrapFs);
               } else {
+                // Keep the parser-set size as-is. Restoring the original cqw inline
+                // value (rather than setting an absolute px) keeps the box responsive
+                // to container resizes (e.g. orientation change).
                 box.classList.remove('wrap');
-                // initialPx is a float from getComputedStyle (e.g. 24.31); nowrapFs is
-                // Math.floor of the binary-search result, so a strict === almost never
-                // matches. Treat "within 1 px" as "no meaningful change" and keep the
-                // original cqw inline value so the box stays responsive to container
-                // resizes (e.g. orientation change).
-                if (originalInlineFontSize && Math.abs(nowrapFs - initialPx) < 1) {
-                  box.style.fontSize = originalInlineFontSize;
-                } else {
-                  setFs(nowrapFs);
-                }
+                box.style.fontSize = originalInlineFontSize;
               }
             },
             installTapListener: function(maxLength) {
