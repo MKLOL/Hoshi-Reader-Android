@@ -7,6 +7,24 @@ Semantic Versioning.
 
 ## [Unreleased]
 
+### Changed
+- **Merged upstream Hoshi Reader v1.1.3** (HuangAntimony/Hoshi-Reader-Android, six
+  upstream releases). This is a maintenance sync that rebases the manga build on top of
+  upstream's reworked reader and dictionary-lookup internals. Upstream's EPUB-reader
+  additions (custom themes, full-screen mode, fullscreen image viewer, EPUB folder
+  import) stay hidden in this manga-only build.
+
+### Fixed
+- **Dictionary lookup is more robust** thanks to upstream's in-WebView popup rework: the
+  lookup popup now survives process recreation and e-ink mode toggles, dismisses
+  correctly on stylus (S Pen) taps, and no longer freezes when mining a card.
+- **EPUB/Calibre CSS sanitization** keeps publisher stylesheets from crashing the
+  WebView (carried in for completeness; affects the hidden EPUB path).
+
+### Added
+- Optional **AnkiDroid auto-sync after adding a card** and **Opus/Ogg word-audio**
+  support, carried in from upstream.
+
 ## [v0.9.1] - 2026-05-28
 
 ### Added
