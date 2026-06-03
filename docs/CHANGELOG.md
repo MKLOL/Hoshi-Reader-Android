@@ -7,6 +7,8 @@ Semantic Versioning.
 
 ## [Unreleased]
 
+## [v0.9.2] - 2026-06-03
+
 ### Changed
 - **Merged upstream Hoshi Reader v1.1.3** (HuangAntimony/Hoshi-Reader-Android, six
   upstream releases). This is a maintenance sync that rebases the manga build on top of
