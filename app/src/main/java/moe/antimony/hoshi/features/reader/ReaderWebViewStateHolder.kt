@@ -89,6 +89,29 @@ internal class ReaderWebViewStateHolder(
         }
     }
 
+    fun enterFocusModeForReaderInteraction() {
+        focusMode = true
+        showReaderMenu = false
+    }
+
+    fun exitFocusMode() {
+        focusMode = false
+    }
+
+    fun handleBackNavigation(): Boolean {
+        if (focusMode) {
+            exitFocusMode()
+            return false
+        }
+        return true
+    }
+
+    fun toggleFocusModeFromReaderTap(hasVisiblePopups: Boolean): Boolean {
+        if (hasVisiblePopups) return false
+        toggleFocusMode()
+        return true
+    }
+
     fun openChaptersFromMenu() {
         showReaderMenu = false
         showChapters = true
@@ -178,6 +201,18 @@ internal class ReaderWebViewStateHolder(
         return recordDisplayedProgress(progress)
     }
 
+    fun recordContinuousScrollDisplayProgress(progress: Double, restoreEpoch: Int): ReaderChapterPosition? =
+        recordContinuousScrollProgress(progress, restoreEpoch)
+
+    fun canAcceptReaderNavigationInput(): Boolean =
+        !isWebViewRestoring
+
+    fun beginReaderNavigationInput(): Boolean {
+        if (!canAcceptReaderNavigationInput()) return false
+        enterFocusModeForReaderInteraction()
+        return true
+    }
+
     fun prepareReloadAtDisplayedPosition() {
         readerPosition = readerPosition.prepareReloadAtDisplayedPosition()
         markWebViewRestoring()
@@ -248,10 +283,6 @@ internal class ReaderWebViewStateHolder(
 }
 
 internal data class ReaderContentReloadKey(
-    val theme: ReaderTheme,
-    val eInkMode: Boolean,
-    val systemLightSepia: Boolean,
-    val sepiaInvertInDark: Boolean,
     val verticalWriting: Boolean,
     val selectedFont: String,
     val fontSize: Int,
@@ -264,14 +295,11 @@ internal data class ReaderContentReloadKey(
     val layoutAdvanced: Boolean,
     val lineHeight: Double,
     val characterSpacing: Double,
+    val paragraphSpacing: Double,
 )
 
 internal fun ReaderSettings.readerContentReloadKey(): ReaderContentReloadKey =
     ReaderContentReloadKey(
-        theme = theme,
-        eInkMode = eInkMode,
-        systemLightSepia = systemLightSepia,
-        sepiaInvertInDark = sepiaInvertInDark,
         verticalWriting = verticalWriting,
         selectedFont = selectedFont,
         fontSize = fontSize,
@@ -284,4 +312,5 @@ internal fun ReaderSettings.readerContentReloadKey(): ReaderContentReloadKey =
         layoutAdvanced = layoutAdvanced,
         lineHeight = lineHeight,
         characterSpacing = characterSpacing,
+        paragraphSpacing = paragraphSpacing,
     )

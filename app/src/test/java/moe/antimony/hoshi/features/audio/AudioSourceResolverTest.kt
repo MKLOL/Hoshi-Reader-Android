@@ -48,18 +48,44 @@ class AudioSourceResolverTest {
     }
 
     @Test
-    fun localAudioUrlRoundTripsSourceAndFile() {
-        val url = LocalAudioResolver.audioUrl(source = "nhk16", file = "audio/20180222111121.mp3")
+    fun localAudioUsesCustomSourceOrderWithinSameReadingPriority() {
+        val match = LocalAudioResolver.resolve(
+            term = "食べる",
+            reading = "たべる",
+            sourceOrder = listOf("forvo", "nhk16"),
+            rows = listOf(
+                LocalAudioEntry(source = "nhk16", expression = "食べる", reading = "たべる", file = "audio/nhk.mp3"),
+                LocalAudioEntry(source = "forvo", expression = "食べる", reading = "たべる", file = "audio/forvo.mp3"),
+            ),
+        )
 
-        assertEquals("hoshi-local-audio://nhk16/audio%2F20180222111121.mp3", url)
+        assertEquals(LocalAudioEntry(source = "forvo", expression = "食べる", reading = "たべる", file = "audio/forvo.mp3"), match)
+    }
+
+    @Test
+    fun localAudioUrlRoundTripsSourceAndFile() {
+        val url = LocalAudioResolver.audioUrl(source = "nhk16", file = "audio/20180222111121.opus")
+
+        assertEquals("hoshi-local-audio://nhk16/audio%2F20180222111121.opus", url)
         assertEquals(
-            LocalAudioFile(source = "nhk16", file = "audio/20180222111121.mp3"),
+            LocalAudioFile(source = "nhk16", file = "audio/20180222111121.opus"),
             LocalAudioResolver.parseAudioUrl(url),
         )
     }
 
     @Test
-    fun localAudioIgnoresNonMp3Rows() {
+    fun localAudioMatchesOpusRows() {
+        val match = LocalAudioResolver.resolve(
+            term = "食べる",
+            reading = "たべる",
+            rows = listOf(LocalAudioEntry(source = "nhk16", expression = "食べる", reading = "たべる", file = "audio/a.opus")),
+        )
+
+        assertEquals(LocalAudioEntry(source = "nhk16", expression = "食べる", reading = "たべる", file = "audio/a.opus"), match)
+    }
+
+    @Test
+    fun localAudioIgnoresUnsupportedRows() {
         val match = LocalAudioResolver.resolve(
             term = "食べる",
             reading = "たべる",

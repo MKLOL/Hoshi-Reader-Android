@@ -1,6 +1,6 @@
 # Hoshi Android Agent TODO
 
-Last updated: 2026-05-26
+Last updated: 2026-06-03
 
 This file is the short operational handoff for future agents.
 
@@ -20,43 +20,59 @@ This file is the short operational handoff for future agents.
 ### Architecture And Hardening
 
 - Make screen-level Compose Flow collection lifecycle-aware with `collectAsStateWithLifecycle()` where the UI lifecycle is the right owner.
-- Continue Reader state/WebView bridge extraction in behavior-protected slices from `docs/ARCHITECTURE_REFACTORING.md`; keep `ReaderWebView` focused on composition and wiring.
+- Continue Reader state/WebView bridge extraction in behavior-protected slices from `docs/ARCHITECTURE_REFACTORING.md`; `ReaderWebView` is now split into focused WebView host, chrome, popup layer, and fullscreen image modules.
 - Replace remaining brittle source-string tests in touched areas with behavior, API, state-flow, or structured-config coverage where possible.
 - Add EPUB/WebView regression fixtures for cover pages, multi-image pages, vertical text, horizontal text, complex spines, and broken resources.
 - Add repeatable benchmark or baseline-profile entry points for cold start, EPUB import/open reader, reader page turn, dictionary search, and lookup popup open.
 
 ### Bookshelf, Import, And Backup
 
-- Device-validate shelf-name entry and multi-EPUB DocumentsUI import in a session where text input and picker interaction can be driven reliably.
+- Bookshelf covers now publish stable cover sources with shelf state, decode iOS-sized 768px thumbnails, reuse cached bitmaps when returning to Books, and fill the cover frame without letterboxing.
+- Device-validate bookshelf multi-select markers in E-ink mode, confirming unselected books show an empty circle and selected books show a check mark.
+- Device-validate shelf-name entry, including user shelves named Reading alongside the virtual Reading Shelf, multi-EPUB DocumentsUI import, and recursive EPUB folder import in a session where text input and picker interaction can be driven reliably.
 - Device-validate editable text fields in dark and E-ink themes, confirming visible cursors and cursor-driven horizontal scrolling for long search, Audio source, Sync, Anki, shelf, and book-title values.
 - Cross-validate Android-created `Books` and `Dictionaries` `.hoshi` archives restored by iOS.
 
 ### Reader And Lookup
 
-- Use `docs/IOS_UPSTREAM_SYNC_QUEUE.md` as the current iOS upstream sync queue; checked through `09951b4` with popup fixes and reader image blur synced, and Dictionary pull-to-clear plus dictionary auto-update still pending.
-- Device-validate the shared native Android popup overlay rewrite across reader lookup, Dictionary tab, and Process Text, covering warmed reader root lookup reuse, duplicate state, audio error/autoplay, popup scale levels, redirect history, redirected child popup placement, edge-crossing popup gestures, Sasayaki popup controls, collapsed dictionary toggles on slow E-ink devices, E-ink line highlights, lower-screen recursive popup placement, and slow horizontal drags/long presses on controls.
+- Use `docs/IOS_UPSTREAM_SYNC_QUEUE.md` as the current iOS upstream sync queue; checked through `61306c7`, with popup scaling/vertical anchors, reader image/selection follow-up fixes, Dictionary pull-to-clear/auto-update, Anki/IPA glossary behavior, and TTU/Google Drive bookdata sync pending.
+- Completed `docs/IOS_UPSTREAM_SYNC_QUEUE.md` slice 1: continuous reader padding now belongs to the visible viewport, vertical paginated columns resolve from page height, and chapter HTML receives an early XHTML-safe viewport while retaining the fast `loadUrl` chapter path.
+- Completed `docs/IOS_UPSTREAM_SYNC_QUEUE.md` slice 2: large reader images and SVG image media now use iOS-style tap handling, Blur Images first-tap reveal, fullscreen zoom with anchored raster-image gestures, safe-area-aware controls and bounded panning, and copy/save/share controls.
+- Completed `docs/IOS_UPSTREAM_SYNC_QUEUE.md` slice 3: Advanced reader Layout now includes iOS-style paragraph spacing with persistence, WebView reload-key participation, and vertical/horizontal CSS margin mapping.
+- Completed `docs/IOS_UPSTREAM_SYNC_QUEUE.md` slice 4: reader chrome now uses Android immersive system bars with transient edge-swipe reveal, iOS-aligned focus-mode entry on selection/page/scroll, floating center info bubbles, top text safety spacing, screen-edge focus quick controls, a small bottom gesture-safe progress band, and bottom chrome overlays without reserving button space in reader content.
+- Completed `docs/IOS_UPSTREAM_SYNC_QUEUE.md` slice 5: recursive lookup popup selection now uses the configured scan length; zoom-coordinate handling was aligned with iOS but the pre-fix drift was not reproduced on Android WebView.
+- Completed `docs/IOS_UPSTREAM_SYNC_QUEUE.md` slice 7: EPUB publisher CSS rules are sanitized before Android WebView rendering, preserving negative indentation while removing layout-breaking writing mode, line height, height, positive indentation, and nested column-count declarations.
+- Reader Appearance now supports iOS-style Custom theme colors with a separate Interface setting; real-device smoke covered immediate Background, Text, and Info color updates from the reader sheet, with the full theme regression matrix still tracked below.
+- Device-validate the reader lookup iframe popup path across paged and continuous mode, vertical and horizontal writing, recursive child lookup, parent-scroll child dismissal, duplicate state, audio error/autoplay, popup scale levels, redirect history, Sasayaki popup controls, dark-mode action button contrast, E-ink selection marks, swipe dismiss, outside tap/stylus dismiss, dictionary media images, and absence of invisible touch blockers after dismissal.
+- Reader lookup iframe now preloads/reuses the root iframe, gates visibility on first renderable content plus root selection highlight readiness, restores E-ink underline-style root marks, keeps action/Sasayaki controls aligned with the native popup layout, and lazy-loads popup dictionary media; it has real-device smoke coverage for vertical lookup, Sasayaki control-bar layout, popup bottom overscroll isolation, and swipe dismiss, while the full validation matrix above remains open.
+- Smoke-test Dictionary tab and Process Text lookup popups after reader iframe work, confirming their cold native overlay path still supports recursive lookup, audio/Anki buttons, redirects, selection marks, and touch passthrough.
 - Device-validate vertical lookup selection on ruby text, confirming E-ink underlines, regular highlights, and popup placement share one furigana-aware selection area.
 - Device-validate continuous-mode lookup popup placement with nonzero reader padding in both vertical and horizontal writing.
 - Device-validate paginated page turns with top and bottom progress counters enabled on E-ink, confirming the counter no longer refreshes before the page flip.
 - Device-validate E-ink reader lookup underlines in horizontal and vertical text, confirming the line sits close to selected text without obscuring glyphs.
 - Device-validate reader popup Reduced Motion Scrolling on an E-ink target, including vertical swipe threshold, 40%-100% scroll amount, mouse wheel/page-wheel input, and coexistence with horizontal swipe-to-dismiss.
-- Device-validate the warm reader root lookup popup shell on additional devices, confirming repeated root lookups reuse the popup without breaking child popups, redirects, action-bar history, or dismiss/touch passthrough after popup scroll.
-- Device-validate popup-to-popup lookup selections, confirming child popup display syncs with native overlay parent selection marks, E-ink mode uses underlines, and scrolling a parent popup dismisses child popups.
-- Device-validate reader lookup popup open and dismiss on a slow E-ink target, confirming popup content pre-renders before becoming touchable, autoplay does not outrun first visible content, no blank white shell flashes, the native overlay selected-word highlight appears and disappears with the popup, and highlighted text stays readable.
-- Finish remaining iOS `PopupWebView` Anki mining behavior beyond selected popup text export.
+- Device-validate popup-to-popup lookup selections, confirming child popup display syncs with iframe/native parent selection marks, E-ink mode uses underlines, and scrolling a parent popup dismisses child popups.
+- Device-validate reader lookup with a real tablet stylus, confirming hover plus tap opens lookup, tapping outside closes the lookup popup, and finger taps and popup interactions still work.
+- Device-validate reader lookup popup open and dismiss on a slow E-ink target, confirming popup content appears before interaction, autoplay does not outrun first visible content, iframe selection marks appear and disappear with the popup, and highlighted text stays readable.
+- Device-validate lookup popup Anki mining after the v1.1.2 diagnostics fix, covering reader iframe popups, Dictionary tab popups, AnkiDroid, and AnkiConnect without main-thread freezes.
 - Validate paginated and continuous reader modes together for cover image pages, multi-image illustration pages, long text paging, chapter-list jumps into mid-book chapters, forward/backward progress monotonicity, per-page progress updates and restore landing inside large text nodes, forward and backward chapter boundaries, reverse cross-chapter landing at the previous chapter end, lookup popup open, and bookmark restore.
+- Device-validate bookshelf-to-reader open latency after the reader route stopped doing duplicate EPUB text parsing when valid `bookinfo.json` sidecars are present.
 - Device-validate iOS-style reader jump return controls after chapter, character, highlight, and internal-link jumps, confirming back/forward targets remain stable through paginated and continuous manual movement.
-- Re-check forward chapter-boundary landings at chapter start, visual-state-gated chapter jumps, and stable progress counters during rapid boundary flips after reader pagination changes.
-- When touching Sasayaki reader highlighting, validate reader open/restore remains fast and stable at positions with matched cues.
+- Re-check forward chapter-boundary landings at chapter start, restore-gated chapter jumps, and stable progress counters during rapid boundary flips after reader pagination changes.
+- Sasayaki reader highlighting keeps non-E-ink scrolling alignment, preserves EPUB emphasis marks, uses ruby-aware E-ink cue and lookup overlays, restores colored highlights after disabling E-ink Mode, and no longer blocks reader WebView creation on match sidecar loading. Blocked: device-validate horizontal/vertical furigana cues and lookup boxes on an E-ink target, plus popup close, next lookup, navigation clearing, delayed restore/sidecar cue display, continuous-mode non-E-ink cue following, and the span fallback on older WebViews. Next open-to-text performance target: WebView prewarm after bookshelf first paint.
 - Re-run diagonal popup swipe validation once a Reader or nested Dictionary popup state is reliably reachable.
 - Future reader fixes must start from `reference/Hoshi-Reader-iOS/Features/Reader/ReaderWebView/ReaderWebView.swift` plus the matching JS/CSS, and must keep WebView-based reading and lookup.
 
 ### Dictionary
 
 - Device-validate recommended dictionary downloads from the Dictionaries screen, covering JMdict, JMnedict, Jiten, and Jitendex individual downloads and confirming each imported dictionary remains updatable.
+- Device-validate manual multi-dictionary import with one invalid archive, confirming later archives still import and the failed file list is reported at the end.
+- Device-validate Dictionaries row long-press deletion, confirming the title area reveals the delete button while the left reorder handle still only drags.
 - Device-validate Low Memory Usage Mode with a large Yomitan archive, confirming the setting defaults off, persists, reduces peak memory when enabled, and keeps imported term/frequency/pitch dictionaries usable.
 - Device-validate settings segmented controls in Dictionaries, Dictionary Settings, and Advanced Audio, confirming selected labels no longer shift.
+- Device-validate local audio database source ordering with imported MP3 and Opus `android.db` files, confirming default order generation, up/down moves, lookup playback, and Anki audio export.
 - For deinflection regressions, verify conjugated lookup results such as `食べた` show iOS-style explanation overlays when tapping deinflection tags.
+- Device-validate lookup popup theme contrast for deinflection explanation overlays and JMdict forms tables in Light, Sepia Light, and Dark themes.
 - Keep frequency and pitch dictionaries type-specific; do not treat metadata dictionaries as term fallback dictionaries.
 - Do not reimplement Yomitan import, lookup, media, or style extraction outside `third_party/hoshidicts-kotlin-bridge` unless the bridge gap is documented first.
 
@@ -69,7 +85,8 @@ This file is the short operational handoff for future agents.
 
 ### Anki
 
-- Device-validate Android AnkiConnect against both an HTTPS internet host and a private HTTP host: connect, fetch, duplicate check, media storage, add-note, and optional force-sync behavior.
+- Device-validate Android AnkiConnect against both an HTTPS internet host and a private HTTP host: connect, fetch, duplicate check, referenced-only media storage (including no unused cover/audio uploads), add-note, and optional force-sync behavior.
+- Blocked: device-validate AnkiDroid add-card sync on an Android target with AnkiDroid installed, confirming the new Anki setting starts `com.ichi2.anki.DO_SYNC` only after a successful add and respects AnkiDroid's 5-minute sync limit.
 - Keep backend coverage for duplicate checks, AnkiDroid fetch failures, and AnkiConnect request shaping.
 - Keep popup mining decoupled from direct HTTP calls; route backend differences through the Anki backend boundary.
 
@@ -88,6 +105,7 @@ This file is the short operational handoff for future agents.
 
 - Before F-Droid distribution, split update behavior by distribution channel so F-Droid builds do not bypass F-Droid update checks.
 - Device-validate GitHub update prompts after the check/download split, covering skip-version, manual checks, completed-download prompts, user-triggered install, and same-version APK cleanup.
+- Device-validate split GitHub release APK updates on arm64-v8a and armeabi-v7a targets, including the transitional arm64 legacy-name APK alias.
 
 ## Mokuro Manga Support (Android-only)
 
@@ -160,13 +178,15 @@ For bookshelf tab-switch regressions, use real-device screen recording to confir
 
 For bookshelf-to-reader regressions, use real-device continuous screenshots or screen recording to confirm no Bookshelf loading spinner or dark-mode white loading frame appears between tapping a book and showing the Reader.
 
-For reader/dictionary/audio user flows, perform targeted emulator or device validation using the test data listed in `AGENTS.md`; include external AnkiconnectAndroid Local Audio URL add behavior and built-in Local Audio enable behavior when touching audio sources, and use the `pixivで読む` definition link case for dictionary external-link regressions.
+For reader/dictionary/audio user flows, perform targeted emulator or device validation using the test data listed in `AGENTS.md`; include external AnkiconnectAndroid Local Audio URL add behavior, built-in Local Audio enable behavior, MP3 and Opus `android.db` playback, and use the `pixivで読む` definition link case for dictionary external-link regressions.
 
-For reader/dictionary theme regressions, verify open Dictionary tab results, the Dictionary search cursor, open reader lookup popups, and System theme's Use Sepia as Light Theme toggle update immediately when switching between Light, Dark, System, and E-ink appearance modes.
+For reader/dictionary theme regressions, verify open Dictionary tab results, the Dictionary search cursor, reader lookup taps and open reader lookup popups, system status/navigation icon contrast in Light, Sepia Light, Dark, Sepia Dark, and Custom interface modes under Android system dark mode, reader theme-family switches update colors without WebView reload, Custom background/text/info colors update immediately, and System theme's Use Sepia as Light Theme toggle update immediately when switching between Light, Dark, System, Custom, and E-ink appearance modes.
+
+For reader process-restore regressions, verify returning directly to an open book after app process eviction still rebuilds dictionary lookup and opens reader lookup popups without first visiting the bookshelf.
 
 For Dictionary tab input regressions, verify opening the tab focuses the search field, shows the soft keyboard, and hints Japanese input when a Japanese-capable keyboard is installed.
 
-For reader appearance chrome regressions, verify Show Title off, Progress Position Bottom, compact bottom buttons, Sasayaki top-right toggle spacing, top title centering with asymmetric top buttons, bottom reader-menu spacing, focus mode status-bar hiding without text reflow, and all progress indicators hidden against the paginated reader text area.
+For reader appearance chrome regressions, verify Show Title off, Show Back Button on/off, Progress Position Bottom, compact bottom buttons, Sasayaki top-right toggle spacing, top title centering with asymmetric top buttons, bottom reader-menu spacing, iOS visual item order, light-mode menu outline visibility, focus mode status-bar hiding without text reflow, Android Back revealing chrome before closing the reader, and all progress indicators hidden against the paginated reader text area.
 
 For reader appearance controls, verify Layout Mode shows both Paginated and Continuous labels without truncation in the settings page and reader sheet.
 
@@ -176,16 +196,20 @@ For Sasayaki settings regressions, verify fresh installs default Sasayaki, Show 
 
 For Sasayaki matching regressions, verify short low-confidence `＊` subtitle cues are skipped while longer `＊` cues still match and advance playback alignment.
 
-For Sasayaki skip-control regressions, verify the reader bottom skip buttons flank the existing Back/Menu buttons, the same cue/5s/10s/15s/30s action applies from reader chrome, Sasayaki sheet controls, and Android system media controls, and Reverse Vertical Bottom Buttons only swaps the visible bottom reader buttons in vertical writing.
+For Sasayaki skip-control regressions, verify the same cue/5s/10s/15s/30s action applies from reader safe-area playback controls, Sasayaki sheet controls, and Android system media controls.
+
+Blocked: device-validate Sasayaki bottom safe-area playback controls once an Android target is available, covering the inherited/default-on Pin Playback Controls to Safe Area toggle in the Sasayaki menu, left-aligned rewind/play-or-pause/fast-forward controls with corner padding, vertical-writing reverse action behavior, right-aligned bottom progress when both are enabled, centered progress when only progress is fixed, and absence of the old Back/Menu-flanking skip buttons.
 
 For Sasayaki volume-key regressions, verify volume-key seek with loaded audiobook audio, fallback without loaded audio, priority over Volume Keys Turn Pages, and Reverse Volume Key Direction affecting both seek and page-turn controls.
 
 For reader keep-screen-on regressions, verify Behavior -> Keep Screen On defaults off, persists after leaving settings, keeps the display awake while the reader is foregrounded when enabled, clears after closing the reader when disabled, and still keeps Sasayaki playback awake only while playback and Auto-Scroll are active.
 
-For reader text layout regressions, verify Appearance -> Layout changes such as Vertical Padding reload the current chapter at the displayed position and visibly affect text spacing.
+For reader text layout regressions, verify Appearance -> Layout changes such as Vertical Padding reload the current chapter at the displayed position and visibly affect text spacing; also spot-check vertical ruby text near the bottom of a line so furigana-adjacent text continues in the current column when there is room.
 
-For continuous reader layout regressions, verify vertical-writing Horizontal Padding and horizontal-writing Vertical Padding inset the current visible viewport rather than only the chapter ends.
+For continuous reader layout regressions, verify vertical-writing Horizontal Padding and horizontal-writing Vertical Padding inset the current visible viewport rather than only the chapter ends, and continuous reader chrome only re-enters focus mode from a new drag gesture after tapping to reveal controls.
 
 For reader popup settings regressions, verify changing every Popup section control while a continuous reader is open does not rebuild the WebView and does not stop scroll progress updates.
 
 For localization changes, run `./gradlew :app:testDebugUnitTest --tests moe.antimony.hoshi.LocalizationResourceTest` and keep `docs/TRANSLATING.md` aligned with supported locale resource directories.
+
+For app-language regressions, verify the Advanced settings Language card appears only on Android 13+, selection persists through Android system App Language, Follow system clears the app locale, and Android 12 or lower continues to follow the system language without showing the card.

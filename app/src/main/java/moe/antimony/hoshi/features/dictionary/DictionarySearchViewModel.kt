@@ -15,7 +15,6 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import moe.antimony.hoshi.dictionary.DictionaryRepository
-import moe.antimony.hoshi.dictionary.LookupEngine
 import moe.antimony.hoshi.features.audio.AudioSettings
 import moe.antimony.hoshi.features.audio.AudioSettingsRepository
 import moe.antimony.hoshi.features.anki.AnkiPopupSettings
@@ -44,10 +43,10 @@ internal class AndroidDictionarySearchRepository(
     }
 
     override fun lookup(query: String, maxResults: Int, scanLength: Int): List<LookupResult> =
-        LookupEngine.lookup(query, maxResults, scanLength)
+        dictionaryRepository.lookup(query, maxResults, scanLength)
 
     override fun dictionaryStyles(): Map<String, String> =
-        currentDictionaryStyles()
+        dictionaryRepository.dictionaryStyles()
 }
 
 internal class DictionarySearchViewModel(

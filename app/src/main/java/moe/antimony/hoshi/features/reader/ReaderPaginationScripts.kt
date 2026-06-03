@@ -18,7 +18,7 @@ internal object ReaderPaginationScripts {
         "window.hoshiReader.calculateProgress()"
 
     fun applySasayakiCuesInvocation(cuesJson: String): String =
-        "window.hoshiReader.applySasayakiCues($cuesJson)"
+        "if (window.hoshiReader && typeof window.hoshiReader.applySasayakiCues === 'function') { window.hoshiReader.applySasayakiCues($cuesJson); }"
 
     fun highlightSasayakiCueInvocation(cue: SasayakiCueRange, reveal: Boolean): String =
         "window.hoshiReader.highlightSasayakiCue(${cue.toJavaScriptObjectLiteral()}, $reveal)"
@@ -38,6 +38,22 @@ internal object ReaderPaginationScripts {
         sasayakiCuesJson: String? = null,
         highlightsJson: String? = null,
         initialFragment: String? = null,
+    ): String = shellScriptWithRestoreToken(
+        initialProgress = initialProgress,
+        settings = settings,
+        sasayakiCuesJson = sasayakiCuesJson,
+        highlightsJson = highlightsJson,
+        initialFragment = initialFragment,
+        restoreToken = "restoreCompleted",
+    )
+
+    fun shellScriptWithRestoreToken(
+        initialProgress: Double = 0.0,
+        settings: ReaderSettings = ReaderSettings(),
+        sasayakiCuesJson: String? = null,
+        highlightsJson: String? = null,
+        initialFragment: String? = null,
+        restoreToken: String,
     ): String {
         if (settings.continuousMode) {
             return continuousShellScript(
@@ -46,11 +62,19 @@ internal object ReaderPaginationScripts {
                 sasayakiCuesJson = sasayakiCuesJson,
                 highlightsJson = highlightsJson,
                 initialFragment = initialFragment,
+                restoreToken = restoreToken,
             )
         }
         val initialRestoreScript = initialFragment?.let { fragment ->
             "window.hoshiReader.jumpToFragment(${fragment.javaScriptStringLiteral()});"
         } ?: "window.hoshiReader.restoreProgress($initialProgress);"
+        val restoreScripts = readerRestoreScripts(
+            sasayakiCuesJson = sasayakiCuesJson,
+            highlightsJson = highlightsJson,
+            initialRestoreScript = initialRestoreScript,
+        )
+        val restoreTokenLiteral = restoreToken.javaScriptStringLiteral()
+        val generatedLayout = ReaderGeneratedLayout.from(settings)
         return """
         <script>
         window.hoshiReader = {
@@ -59,6 +83,10 @@ internal object ReaderPaginationScripts {
           nativeSelectionActive: false,
           nativeSelectionScrollPosition: null,
           cueWrappers: new Map(),
+          cueSourceRanges: new Map(),
+          cueRanges: new Map(),
+          cueGeometryRanges: new Map(),
+          cueRubyElements: new Map(),
           activeCueId: null,
           ttuRegexNegated: /[^0-9A-Za-z○◯々-〇〻ぁ-ゖゝ-ゞァ-ヺー０-９Ａ-Ｚａ-ｚｦ-ﾝ\p{Radical}\p{Unified_Ideograph}]+/gimu,
           ttuRegex: /[0-9A-Za-z○◯々-〇〻ぁ-ゖゝ-ゞァ-ヺー０-９Ａ-Ｚａ-ｚｦ-ﾝ\p{Radical}\p{Unified_Ideograph}]/iu,
@@ -67,6 +95,12 @@ internal object ReaderPaginationScripts {
           paginationMetrics: null,
           isVertical: function() {
             return window.getComputedStyle(document.body).writingMode === "vertical-rl";
+          },
+          readerCssVariable: function(name) {
+            return window.getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+          },
+          isEInkMode: function() {
+            return this.readerCssVariable('--hoshi-reader-eink-mode') === '1';
           },
           isFurigana: function(node) {
             var el = node.nodeType === Node.TEXT_NODE ? node.parentElement : node;
@@ -100,11 +134,12 @@ internal object ReaderPaginationScripts {
             }
             return fallbackOffset;
           },
-          notifyRestoreComplete: function() {
-            if (window.HoshiReaderRestore && window.HoshiReaderRestore.postMessage) {
-              window.HoshiReaderRestore.postMessage('restoreCompleted');
-            }
-          },
+	          notifyRestoreComplete: function() {
+	            if (window.HoshiReaderRestore && window.HoshiReaderRestore.postMessage) {
+	              window.HoshiReaderRestore.postMessage($restoreTokenLiteral);
+	            }
+	            this.warmPaginationMetrics();
+	          },
           createWalker: function(rootNode) {
             var root = rootNode || document.body;
             return document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
@@ -245,19 +280,33 @@ internal object ReaderPaginationScripts {
               return { id: cue.id, ranges: cueRanges.get(cue.id) || [] };
             });
           },
-          applySasayakiCues: function(cues) {
-            this.resetSasayakiCues();
-            var cueRanges = this.collectSasayakiCueRanges(cues);
-            this.wrapSasayakiCueRanges(cueRanges);
-            this.buildNodeOffsets();
-          },
+	          applySasayakiCues: function(cues) {
+	            var activeCueId = this.activeCueId;
+	            this.resetSasayakiCues();
+	            var cueRanges = this.collectSasayakiCueRanges(cues);
+	            this.rememberSasayakiCueSources(cueRanges);
+	            this.cueGeometryRanges = this.buildSasayakiGeometryRanges(cueRanges);
+	            this.prepareSasayakiInlineTargets(cueRanges, true);
+	            this.buildNodeOffsets();
+	            if (activeCueId && this.hasSasayakiCueTarget(activeCueId)) {
+	              this.activeCueId = activeCueId;
+	              this.refreshSasayakiCuePresentation();
+	            }
+	          },
           wrapSasayakiCue: function(cue) {
-            var existing = this.cueWrappers.get(cue.id);
-            if (existing && existing.length) return existing;
-            var cueRanges = this.collectSasayakiCueRanges([cue]);
-            var wrapped = this.wrapSasayakiCueRanges(cueRanges);
+            if (this.isEInkMode()) {
+              this.ensureSasayakiCueGeometry(cue);
+              return this.cueGeometryRanges.get(cue.id) || [];
+            }
+	            var existing = this.sasayakiInlineTargetsForCue(cue.id);
+	            if (existing.length) return existing;
+	            var cueRanges = this.collectSasayakiCueRanges([cue]);
+	            this.rememberSasayakiCueSources(cueRanges);
+	            var geometryRanges = this.buildSasayakiGeometryRanges(cueRanges).get(cue.id) || [];
+	            if (geometryRanges.length) this.cueGeometryRanges.set(cue.id, geometryRanges);
+	            this.prepareSasayakiInlineTargets(cueRanges);
             this.buildNodeOffsets();
-            return wrapped.get(cue.id) || [];
+            return this.sasayakiInlineTargetsForCue(cue.id);
           },
           wrapSasayakiCueRanges: function(cueRanges) {
             var wrapped = new Map();
@@ -278,41 +327,175 @@ internal object ReaderPaginationScripts {
                 wrappers.push(wrapper);
               }
               wrappers.reverse();
-              this.cueWrappers.set(id, wrappers);
-              wrapped.set(id, wrappers);
+	              this.cueWrappers.set(id, wrappers);
+	              wrapped.set(id, wrappers);
+	            }
+	            return wrapped;
+	          },
+	          rememberSasayakiCueSources: function(cueRanges) {
+	            for (var i = 0; i < cueRanges.length; i++) {
+	              this.cueSourceRanges.set(cueRanges[i].id, cueRanges[i]);
+	            }
+	          },
+	          ${sasayakiInlineHighlightHelpersScript()}
+          buildSasayakiGeometryRanges: function(cueRanges) {
+            var geometryRanges = new Map();
+            for (var i = 0; i < cueRanges.length; i++) {
+              var id = cueRanges[i].id;
+              var ranges = cueRanges[i].ranges;
+              if (!ranges.length) continue;
+              var cueGeometryRanges = [];
+              for (var j = 0; j < ranges.length; j++) {
+                var segment = ranges[j];
+                var range = document.createRange();
+                range.setStart(segment.node, segment.start);
+                range.setEnd(segment.node, segment.end);
+                cueGeometryRanges.push(range);
+              }
+              if (cueGeometryRanges.length) geometryRanges.set(id, cueGeometryRanges);
             }
-            return wrapped;
+            return geometryRanges;
           },
+          ensureSasayakiCueGeometry: function(cue) {
+            if (!cue || typeof cue === 'string') return;
+            var existing = this.cueGeometryRanges.get(cue.id);
+            if (existing && existing.length) return;
+	            var cueRanges = this.collectSasayakiCueRanges([cue]);
+	            this.rememberSasayakiCueSources(cueRanges);
+	            var geometryRanges = this.buildSasayakiGeometryRanges(cueRanges).get(cue.id) || [];
+	            if (geometryRanges.length) this.cueGeometryRanges.set(cue.id, geometryRanges);
+	          },
+          sasayakiOverlayRects: function(cueId) {
+            var ranges = this.cueGeometryRanges.get(cueId) || [];
+            var rects = [];
+            ranges.forEach(function(range) {
+              if (window.hoshiRubyGeometry) {
+                window.hoshiRubyGeometry.rectsForRange(range).forEach(function(rect) { rects.push(rect); });
+              } else {
+                Array.from(range.getClientRects()).forEach(function(rect) {
+                  rects.push({ x: rect.x, y: rect.y, width: rect.width, height: rect.height });
+                });
+              }
+            });
+            return window.hoshiRubyGeometry ? window.hoshiRubyGeometry.mergeInlineRects(rects) : rects;
+          },
+          renderSasayakiOverlay: function() {
+            if (!this.activeCueId || !this.isEInkMode()) {
+              this.clearSasayakiOverlay();
+              return;
+            }
+            window.hoshiReaderPopupHost?.renderSasayakiHighlight?.({
+              rects: this.sasayakiOverlayRects(this.activeCueId),
+              eInkMode: true,
+              verticalWriting: this.isVertical()
+            });
+          },
+          clearSasayakiOverlay: function() {
+            window.hoshiReaderPopupHost?.clearSasayakiHighlight?.();
+          },
+          clearInlineSasayakiCue: function(cueId) {
+            if (this.supportsSasayakiRangeHighlights()) {
+              CSS.highlights.delete('hoshi-sasayaki');
+              var rubyElements = this.cueRubyElements.get(cueId) || [];
+              rubyElements.forEach(function(ruby) { ruby.classList.remove('hoshi-sasayaki-ruby-active'); });
+            }
+            var wrappers = this.cueWrappers.get(cueId) || [];
+            wrappers.forEach(function(wrapper) { wrapper.classList.remove('hoshi-sasayaki-active'); });
+          },
+          applyInlineSasayakiCue: function(cueId) {
+            if (this.supportsSasayakiRangeHighlights()) {
+              var ranges = this.cueRanges.get(cueId) || [];
+              if (ranges.length) {
+                CSS.highlights.set('hoshi-sasayaki', new Highlight(...ranges));
+              }
+              var rubyElements = this.cueRubyElements.get(cueId) || [];
+              rubyElements.forEach(function(ruby) { ruby.classList.add('hoshi-sasayaki-ruby-active'); });
+              var wrappers = this.cueWrappers.get(cueId) || [];
+              wrappers.forEach(function(wrapper) { wrapper.classList.add('hoshi-sasayaki-active'); });
+              return ranges.length > 0 || rubyElements.length > 0 || wrappers.length > 0;
+            }
+            var wrappers = this.cueWrappers.get(cueId) || [];
+            wrappers.forEach(function(wrapper) { wrapper.classList.add('hoshi-sasayaki-active'); });
+            return wrappers.length > 0;
+          },
+          refreshSasayakiCuePresentation: function() {
+            if (!this.activeCueId) {
+              this.clearSasayakiOverlay();
+              return;
+            }
+            this.clearInlineSasayakiCue(this.activeCueId);
+            if (this.isEInkMode()) {
+              this.renderSasayakiOverlay();
+	            } else {
+	              this.clearSasayakiOverlay();
+	              this.ensureSasayakiInlineTargetsForCue(this.activeCueId);
+	              this.applyInlineSasayakiCue(this.activeCueId);
+	            }
+	          },
           highlightSasayakiCue: function(cue, reveal) {
             this.clearSasayakiCue();
             var cueId = typeof cue === 'string' ? cue : cue.id;
-            var wrappers = this.cueWrappers.get(cueId);
-            if ((!wrappers || !wrappers.length) && typeof cue !== 'string') {
-              wrappers = this.wrapSasayakiCue(cue);
+            if (this.isEInkMode()) {
+              this.ensureSasayakiCueGeometry(cue);
+              var geometryRanges = this.cueGeometryRanges.get(cueId) || [];
+              if (!geometryRanges.length) return null;
+	              this.activeCueId = cueId;
+	              var geometryTarget = geometryRanges[0];
+	              var didScroll = reveal && geometryTarget && this.scrollToRange(geometryTarget);
+	              this.renderSasayakiOverlay();
+              var self = this;
+              requestAnimationFrame(function() { self.renderSasayakiOverlay(); });
+              if (didScroll) return this.calculateProgress();
+              return null;
             }
-            if (!wrappers || !wrappers.length) return null;
+            var targets = this.sasayakiInlineTargetsForCue(cueId);
+            var rubyElements = this.supportsSasayakiRangeHighlights() ? (this.cueRubyElements.get(cueId) || []) : [];
+            if (!targets.length && !rubyElements.length && typeof cue !== 'string') {
+              this.wrapSasayakiCue(cue);
+              targets = this.sasayakiInlineTargetsForCue(cueId);
+              rubyElements = this.supportsSasayakiRangeHighlights() ? (this.cueRubyElements.get(cueId) || []) : [];
+            }
+            if (!targets.length && !rubyElements.length) return null;
             this.activeCueId = cueId;
-            wrappers.forEach(function(wrapper) { wrapper.classList.add('hoshi-sasayaki-active'); });
+            this.applyInlineSasayakiCue(cueId);
             if (reveal) {
               var range = document.createRange();
-              range.selectNodeContents(wrappers[0]);
-              if (this.scrollToRange(range)) {
+              var scrollRange = targets.length ? targets[0] : rubyElements[0];
+              if (scrollRange && scrollRange.nodeType === Node.ELEMENT_NODE && scrollRange.classList.contains('hoshi-sasayaki-cue')) {
+                range.selectNodeContents(scrollRange);
+                scrollRange = range;
+              }
+              if (this.scrollToRange(scrollRange)) {
                 return this.calculateProgress();
               }
             }
             return null;
           },
           clearSasayakiCue: function() {
-            if (!this.activeCueId) return;
-            var wrappers = this.cueWrappers.get(this.activeCueId) || [];
-            wrappers.forEach(function(wrapper) { wrapper.classList.remove('hoshi-sasayaki-active'); });
+            if (!this.activeCueId) {
+              this.clearSasayakiOverlay();
+              return;
+            }
+            this.clearInlineSasayakiCue(this.activeCueId);
             this.activeCueId = null;
+            this.clearSasayakiOverlay();
           },
           resetSasayakiCues: function() {
+            if (this.supportsSasayakiRangeHighlights()) {
+              CSS.highlights.delete('hoshi-sasayaki');
+            }
+            this.cueRubyElements.forEach(function(rubyElements) {
+              rubyElements.forEach(function(ruby) { ruby.classList.remove('hoshi-sasayaki-ruby-active'); });
+            });
+	            this.cueRubyElements.clear();
+	            this.cueSourceRanges.clear();
+	            this.cueRanges.clear();
+            this.cueGeometryRanges.clear();
             var self = this;
             this.cueWrappers.forEach(function(wrappers) { self.unwrap(wrappers); });
             this.cueWrappers.clear();
             this.activeCueId = null;
+            this.clearSasayakiOverlay();
           },
           unwrap: function(wrappers) {
             wrappers.forEach(function(wrapper) {
@@ -323,6 +506,49 @@ internal object ReaderPaginationScripts {
               }
               parent.removeChild(wrapper);
               parent.normalize();
+            });
+          },
+          isJapaneseBreakCharacter: function(text) {
+            var code = (text || '').codePointAt(0);
+            return (code >= 0x3000 && code <= 0x303f) ||
+              (code >= 0x3040 && code <= 0x30ff) ||
+              (code >= 0x3400 && code <= 0x9fff) ||
+              (code >= 0xf900 && code <= 0xfaff) ||
+              (code >= 0xff00 && code <= 0xffef);
+          },
+          stabilizeRubyAdjacentTextNodes: function() {
+            if (!this.isVertical()) return;
+            var self = this;
+            var splitLimit = 64;
+            document.querySelectorAll('ruby').forEach(function(ruby) {
+              if (ruby.closest('rt, rp')) return;
+              var node = ruby.nextSibling;
+              while (node && node.nodeType === Node.TEXT_NODE && !node.nodeValue.trim()) {
+                node = node.nextSibling;
+              }
+              if (!node || node.nodeType !== Node.TEXT_NODE || !node.nodeValue) return;
+              var chars = Array.from(node.nodeValue);
+              if (chars.length <= 1) return;
+              var fragment = document.createDocumentFragment();
+              var pending = '';
+              var splitCount = 0;
+              var flush = function() {
+                if (!pending) return;
+                fragment.appendChild(document.createTextNode(pending));
+                pending = '';
+              };
+              chars.forEach(function(char) {
+                if (splitCount < splitLimit && self.isJapaneseBreakCharacter(char)) {
+                  flush();
+                  fragment.appendChild(document.createTextNode(char));
+                  splitCount += 1;
+                } else {
+                  pending += char;
+                }
+              });
+              if (splitCount === 0) return;
+              flush();
+              node.replaceWith(fragment);
             });
           },
           getScrollContext: function() {
@@ -365,6 +591,7 @@ internal object ReaderPaginationScripts {
             var clamped = Math.min(Math.max(0, position), context.maxScroll);
             window.lastPageScroll = clamped;
             this.assignPagePosition(context, clamped);
+            this.refreshSasayakiCuePresentation();
             return clamped;
           },
           setNativeSelectionActive: function(active) {
@@ -455,6 +682,18 @@ internal object ReaderPaginationScripts {
           contentFirstPageScroll: function(context) {
             var metrics = this.paginationMetrics || this.buildPaginationMetrics();
             return metrics.minScroll;
+          },
+          warmPaginationMetrics: function() {
+            if (this.paginationMetrics) return;
+            var run = () => {
+              if (this.paginationMetrics) return;
+              this.buildPaginationMetrics();
+            };
+            if (window.requestIdleCallback) {
+              window.requestIdleCallback(run, { timeout: 1000 });
+            } else {
+              setTimeout(run, 200);
+            }
           },
           buildPaginationMetrics: function() {
             var context = this.getScrollContext();
@@ -662,25 +901,29 @@ internal object ReaderPaginationScripts {
           document.documentElement.style.setProperty('--hoshi-vertical-padding-gap', (window.innerHeight * ${settings.verticalPadding / 100.0}) + 'px');
           document.documentElement.style.setProperty('--page-height', pageHeight + 'px');
           document.documentElement.style.setProperty('--page-width', pageWidth + 'px');
-          document.documentElement.style.setProperty('--hoshi-image-max-width', Math.max(1, Math.floor(pageWidth * ${settings.imageWidthViewportRatio})) + 'px');
+          document.documentElement.style.setProperty('--hoshi-image-max-width', Math.max(1, Math.floor(pageWidth * ${generatedLayout.imageWidthViewportRatio})) + 'px');
           document.documentElement.style.setProperty('--hoshi-image-max-height', Math.max(1, pageHeight - ${settings.bottomOverlapPx}) + 'px');
           window.hoshiReader.pageHeight = pageHeight;
           window.hoshiReader.pageWidth = pageWidth;
-          ${readerImageBlurScript(settings)}
-          Array.from(document.querySelectorAll('svg')).forEach(function(svg) {
-            if (svg.querySelector('image') && svg.getAttribute('preserveAspectRatio') === 'none') {
+          ${readerImageTapScript(settings)}
+          var svgImages = Array.from(document.querySelectorAll('svg image'));
+          svgImages.forEach(function(svgImage) {
+            var svg = svgImage.closest('svg');
+            if (!svg) return;
+            if (svg.getAttribute('preserveAspectRatio') === 'none') {
               svg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
             }
+            var svgImageSrc = svgImage.href && svgImage.href.baseVal ? svgImage.href.baseVal : (svgImage.getAttribute('href') || svgImage.getAttribute('xlink:href'));
+            setupReaderImage(svgImage, svgImageSrc, false, svg);
           });
-          var imagePromises = Array.from(document.querySelectorAll('img')).map(function(img) {
+          var images = Array.from(document.querySelectorAll('img'));
+          var imagePromises = images.map(function(img) {
             return new Promise(function(resolve) {
               var isGaiji = img.classList.contains('gaiji') || img.classList.contains('gaiji-line');
               var mark = function() {
                 if (!isGaiji && (img.naturalWidth > 256 || img.naturalHeight > 256)) {
                   img.classList.add('block-img');
-                  if (${settings.blurImages}) {
-                    blurImage(img);
-                  }
+                  setupReaderImage(img, img.currentSrc || img.src, true);
                 }
                 resolve();
               };
@@ -698,13 +941,13 @@ internal object ReaderPaginationScripts {
           spacer.style.display = 'block';
           spacer.style.breakInside = 'avoid';
           document.body.appendChild(spacer);
+          window.hoshiReader.stabilizeRubyAdjacentTextNodes();
           Promise.all(imagePromises).then(function() {
+            if (!images.length) return;
             return new Promise(function(resolve) { setTimeout(resolve, 50); });
           }).then(function() {
             window.hoshiReader.buildNodeOffsets();
-            ${sasayakiCuesJson?.let { "window.hoshiReader.applySasayakiCues($it);" }.orEmpty()}
-            ${highlightsJson?.let { "window.hoshiHighlights.applyHighlights($it);" }.orEmpty()}
-            $initialRestoreScript
+            $restoreScripts
           });
         };
         window.addEventListener('load', function() {
@@ -717,20 +960,139 @@ internal object ReaderPaginationScripts {
     """.trimIndent()
     }
 
+    private fun sasayakiInlineHighlightHelpersScript(): String = """
+          supportsSasayakiRangeHighlights: function() {
+            return !!(window.CSS && CSS.highlights && window.Highlight);
+          },
+	          sasayakiInlineTargetsForCue: function(cueId) {
+	            var ranges = this.cueRanges.get(cueId) || [];
+	            if (ranges.length) return ranges;
+	            return this.cueWrappers.get(cueId) || [];
+	          },
+	          hasSasayakiCueTarget: function(cueId) {
+	            return (this.cueGeometryRanges.get(cueId) || []).length > 0 ||
+	              (this.cueRanges.get(cueId) || []).length > 0 ||
+	              (this.cueRubyElements.get(cueId) || []).length > 0 ||
+	              (this.cueWrappers.get(cueId) || []).length > 0;
+	          },
+	          ensureSasayakiInlineTargetsForCue: function(cueId) {
+	            if (this.isEInkMode()) return;
+	            var source = this.cueSourceRanges.get(cueId);
+	            if (!source) return;
+	            if (this.supportsSasayakiRangeHighlights() && this.cueRangeNeedsWrapper(source)) {
+	              this.cueRanges.delete(cueId);
+	              this.cueRubyElements.delete(cueId);
+	              if (!(this.cueWrappers.get(cueId) || []).length) {
+	                this.wrapSasayakiCueRanges([source]);
+	              }
+	              return;
+	            }
+	            if (!this.sasayakiInlineTargetsForCue(cueId).length) {
+	              this.prepareSasayakiInlineTargets([source]);
+	            }
+	          },
+	          prepareSasayakiInlineTargets: function(cueRanges, replace) {
+	            if (this.supportsSasayakiRangeHighlights()) {
+              var targets = this.buildSasayakiHighlightRanges(cueRanges);
+              if (replace) {
+                this.cueRanges = targets.ranges;
+                this.cueRubyElements = targets.rubyElements;
+              } else {
+                targets.ranges.forEach(function(ranges, id) {
+                  this.cueRanges.set(id, ranges);
+                }, this);
+                targets.rubyElements.forEach(function(rubyElements, id) {
+                  this.cueRubyElements.set(id, rubyElements);
+                }, this);
+              }
+              if (targets.wrapperCueRanges.length) {
+                this.wrapSasayakiCueRanges(targets.wrapperCueRanges);
+              }
+              return;
+            }
+            if (!this.isEInkMode()) {
+              this.wrapSasayakiCueRanges(cueRanges);
+            }
+          },
+          textEmphasisElementForNode: function(node) {
+            var el = node && node.nodeType === Node.TEXT_NODE ? node.parentElement : node;
+            while (el && el !== document.body) {
+              var style = window.getComputedStyle(el);
+              var emphasisStyle = style.webkitTextEmphasisStyle || style.textEmphasisStyle || 'none';
+              if (emphasisStyle && emphasisStyle !== 'none') return el;
+              el = el.parentElement;
+            }
+            return null;
+          },
+          cueRangeNeedsWrapper: function(cueRange) {
+            for (var i = 0; i < cueRange.ranges.length; i++) {
+              if (this.textEmphasisElementForNode(cueRange.ranges[i].node)) return true;
+            }
+            return false;
+          },
+          buildSasayakiHighlightRanges: function(cueRanges) {
+            var highlightedRanges = new Map();
+            var highlightedRubyElements = new Map();
+            var wrapperCueRanges = [];
+            var rubyForNode = function(node) {
+              var el = node.nodeType === Node.TEXT_NODE ? node.parentElement : node;
+              return el && el.closest ? el.closest('ruby') : null;
+            };
+            for (var i = 0; i < cueRanges.length; i++) {
+              var id = cueRanges[i].id;
+              var ranges = cueRanges[i].ranges;
+              if (!ranges.length) continue;
+              if (!this.isEInkMode() && this.cueRangeNeedsWrapper(cueRanges[i])) {
+                wrapperCueRanges.push(cueRanges[i]);
+                continue;
+              }
+              var highlightRanges = [];
+              var rubyElements = [];
+              for (var j = 0; j < ranges.length; j++) {
+                var segment = ranges[j];
+                var ruby = rubyForNode(segment.node);
+                if (ruby) {
+                  if (rubyElements.indexOf(ruby) < 0) rubyElements.push(ruby);
+                  continue;
+                }
+                var range = document.createRange();
+                range.setStart(segment.node, segment.start);
+                range.setEnd(segment.node, segment.end);
+                highlightRanges.push(range);
+              }
+              if (highlightRanges.length) highlightedRanges.set(id, highlightRanges);
+              if (rubyElements.length) highlightedRubyElements.set(id, rubyElements);
+            }
+            return { ranges: highlightedRanges, rubyElements: highlightedRubyElements, wrapperCueRanges: wrapperCueRanges };
+          },
+    """.trimIndent().prependIndent("          ")
+
     private fun continuousShellScript(
         initialProgress: Double,
         settings: ReaderSettings,
         sasayakiCuesJson: String?,
         highlightsJson: String?,
         initialFragment: String?,
+        restoreToken: String,
     ): String {
         val initialRestoreScript = initialFragment?.let { fragment ->
             "window.hoshiReader.jumpToFragment(${fragment.javaScriptStringLiteral()});"
         } ?: "window.hoshiReader.restoreProgress($initialProgress);"
+        val restoreScripts = readerRestoreScripts(
+            sasayakiCuesJson = sasayakiCuesJson,
+            highlightsJson = highlightsJson,
+            initialRestoreScript = initialRestoreScript,
+        )
+        val restoreTokenLiteral = restoreToken.javaScriptStringLiteral()
+        val generatedLayout = ReaderGeneratedLayout.from(settings)
         return """
         <script>
-        window.hoshiReader = {
-          cueWrappers: new Map(),
+	        window.hoshiReader = {
+	          cueWrappers: new Map(),
+	          cueSourceRanges: new Map(),
+	          cueRanges: new Map(),
+	          cueGeometryRanges: new Map(),
+	          cueRubyElements: new Map(),
           activeCueId: null,
           ttuRegexNegated: /[^0-9A-Za-z○◯々-〇〻ぁ-ゖゝ-ゞァ-ヺー０-９Ａ-Ｚａ-ｚｦ-ﾝ\p{Radical}\p{Unified_Ideograph}]+/gimu,
           ttuRegex: /[0-9A-Za-z○◯々-〇〻ぁ-ゖゝ-ゞァ-ヺー０-９Ａ-Ｚａ-ｚｦ-ﾝ\p{Radical}\p{Unified_Ideograph}]/iu,
@@ -738,6 +1100,12 @@ internal object ReaderPaginationScripts {
           nodeStartRawOffsets: new WeakMap(),
           isVertical: function() {
             return window.getComputedStyle(document.body).writingMode === "vertical-rl";
+          },
+          readerCssVariable: function(name) {
+            return window.getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+          },
+          isEInkMode: function() {
+            return this.readerCssVariable('--hoshi-reader-eink-mode') === '1';
           },
           isFurigana: function(node) {
             var el = node.nodeType === Node.TEXT_NODE ? node.parentElement : node;
@@ -771,11 +1139,11 @@ internal object ReaderPaginationScripts {
             }
             return fallbackOffset;
           },
-          notifyRestoreComplete: function() {
-            if (window.HoshiReaderRestore && window.HoshiReaderRestore.postMessage) {
-              window.HoshiReaderRestore.postMessage('restoreCompleted');
-            }
-          },
+	          notifyRestoreComplete: function() {
+	            if (window.HoshiReaderRestore && window.HoshiReaderRestore.postMessage) {
+	              window.HoshiReaderRestore.postMessage($restoreTokenLiteral);
+	            }
+	          },
           scrollToChapterStart: function() {
             var root = document.scrollingElement || document.documentElement;
             window.scrollTo(0, 0);
@@ -879,7 +1247,23 @@ internal object ReaderPaginationScripts {
             } else if (rect.top >= 0 && rect.bottom <= window.innerHeight) {
               return false;
             }
-            target.scrollIntoView({ block: 'start', inline: 'nearest' });
+            if (typeof target.scrollIntoView === 'function') {
+              target.scrollIntoView({ block: 'start', inline: 'nearest' });
+            } else if (this.isVertical()) {
+              var root = document.scrollingElement || document.documentElement;
+              var currentLeft = window.scrollX;
+              if (currentLeft === 0 && root.scrollLeft !== 0) currentLeft = root.scrollLeft;
+              var targetLeft = currentLeft + rect.right - window.innerWidth;
+              window.scrollTo({ left: targetLeft, top: window.scrollY, behavior: 'instant' });
+              root.scrollLeft = targetLeft;
+            } else {
+              var root = document.scrollingElement || document.documentElement;
+              var currentTop = root.scrollTop;
+              if (currentTop === 0 && window.scrollY !== 0) currentTop = window.scrollY;
+              var targetTop = currentTop + rect.top;
+              window.scrollTo({ left: window.scrollX, top: targetTop, behavior: 'instant' });
+              root.scrollTop = targetTop;
+            }
             return true;
           },
           collectSasayakiCueRanges: function(cues) {
@@ -940,19 +1324,33 @@ internal object ReaderPaginationScripts {
               return { id: cue.id, ranges: cueRanges.get(cue.id) || [] };
             });
           },
-          applySasayakiCues: function(cues) {
-            this.resetSasayakiCues();
-            var cueRanges = this.collectSasayakiCueRanges(cues);
-            this.wrapSasayakiCueRanges(cueRanges);
-            this.buildNodeOffsets();
-          },
+	          applySasayakiCues: function(cues) {
+	            var activeCueId = this.activeCueId;
+	            this.resetSasayakiCues();
+	            var cueRanges = this.collectSasayakiCueRanges(cues);
+	            this.rememberSasayakiCueSources(cueRanges);
+	            this.cueGeometryRanges = this.buildSasayakiGeometryRanges(cueRanges);
+	            this.prepareSasayakiInlineTargets(cueRanges, true);
+	            this.buildNodeOffsets();
+	            if (activeCueId && this.hasSasayakiCueTarget(activeCueId)) {
+	              this.activeCueId = activeCueId;
+	              this.refreshSasayakiCuePresentation();
+	            }
+	          },
           wrapSasayakiCue: function(cue) {
-            var existing = this.cueWrappers.get(cue.id);
-            if (existing && existing.length) return existing;
-            var cueRanges = this.collectSasayakiCueRanges([cue]);
-            var wrapped = this.wrapSasayakiCueRanges(cueRanges);
+            if (this.isEInkMode()) {
+              this.ensureSasayakiCueGeometry(cue);
+              return this.cueGeometryRanges.get(cue.id) || [];
+            }
+	            var existing = this.sasayakiInlineTargetsForCue(cue.id);
+	            if (existing.length) return existing;
+	            var cueRanges = this.collectSasayakiCueRanges([cue]);
+	            this.rememberSasayakiCueSources(cueRanges);
+	            var geometryRanges = this.buildSasayakiGeometryRanges(cueRanges).get(cue.id) || [];
+	            if (geometryRanges.length) this.cueGeometryRanges.set(cue.id, geometryRanges);
+	            this.prepareSasayakiInlineTargets(cueRanges);
             this.buildNodeOffsets();
-            return wrapped.get(cue.id) || [];
+            return this.sasayakiInlineTargetsForCue(cue.id);
           },
           wrapSasayakiCueRanges: function(cueRanges) {
             var wrapped = new Map();
@@ -973,37 +1371,168 @@ internal object ReaderPaginationScripts {
                 wrappers.push(wrapper);
               }
               wrappers.reverse();
-              this.cueWrappers.set(id, wrappers);
-              wrapped.set(id, wrappers);
+	              this.cueWrappers.set(id, wrappers);
+	              wrapped.set(id, wrappers);
+	            }
+	            return wrapped;
+	          },
+	          rememberSasayakiCueSources: function(cueRanges) {
+	            for (var i = 0; i < cueRanges.length; i++) {
+	              this.cueSourceRanges.set(cueRanges[i].id, cueRanges[i]);
+	            }
+	          },
+	          ${sasayakiInlineHighlightHelpersScript()}
+          buildSasayakiGeometryRanges: function(cueRanges) {
+            var geometryRanges = new Map();
+            for (var i = 0; i < cueRanges.length; i++) {
+              var id = cueRanges[i].id;
+              var ranges = cueRanges[i].ranges;
+              if (!ranges.length) continue;
+              var cueGeometryRanges = [];
+              for (var j = 0; j < ranges.length; j++) {
+                var segment = ranges[j];
+                var range = document.createRange();
+                range.setStart(segment.node, segment.start);
+                range.setEnd(segment.node, segment.end);
+                cueGeometryRanges.push(range);
+              }
+              if (cueGeometryRanges.length) geometryRanges.set(id, cueGeometryRanges);
             }
-            return wrapped;
+            return geometryRanges;
           },
+          ensureSasayakiCueGeometry: function(cue) {
+            if (!cue || typeof cue === 'string') return;
+            var existing = this.cueGeometryRanges.get(cue.id);
+            if (existing && existing.length) return;
+	            var cueRanges = this.collectSasayakiCueRanges([cue]);
+	            this.rememberSasayakiCueSources(cueRanges);
+	            var geometryRanges = this.buildSasayakiGeometryRanges(cueRanges).get(cue.id) || [];
+	            if (geometryRanges.length) this.cueGeometryRanges.set(cue.id, geometryRanges);
+	          },
+          sasayakiOverlayRects: function(cueId) {
+            var ranges = this.cueGeometryRanges.get(cueId) || [];
+            var rects = [];
+            ranges.forEach(function(range) {
+              if (window.hoshiRubyGeometry) {
+                window.hoshiRubyGeometry.rectsForRange(range).forEach(function(rect) { rects.push(rect); });
+              } else {
+                Array.from(range.getClientRects()).forEach(function(rect) {
+                  rects.push({ x: rect.x, y: rect.y, width: rect.width, height: rect.height });
+                });
+              }
+            });
+            return window.hoshiRubyGeometry ? window.hoshiRubyGeometry.mergeInlineRects(rects) : rects;
+          },
+          renderSasayakiOverlay: function() {
+            if (!this.activeCueId || !this.isEInkMode()) {
+              this.clearSasayakiOverlay();
+              return;
+            }
+            window.hoshiReaderPopupHost?.renderSasayakiHighlight?.({
+              rects: this.sasayakiOverlayRects(this.activeCueId),
+              eInkMode: true,
+              verticalWriting: this.isVertical()
+            });
+          },
+          clearSasayakiOverlay: function() {
+            window.hoshiReaderPopupHost?.clearSasayakiHighlight?.();
+          },
+          clearInlineSasayakiCue: function(cueId) {
+            if (this.supportsSasayakiRangeHighlights()) {
+              CSS.highlights.delete('hoshi-sasayaki');
+              var rubyElements = this.cueRubyElements.get(cueId) || [];
+              rubyElements.forEach(function(ruby) { ruby.classList.remove('hoshi-sasayaki-ruby-active'); });
+            }
+            var wrappers = this.cueWrappers.get(cueId) || [];
+            wrappers.forEach(function(wrapper) { wrapper.classList.remove('hoshi-sasayaki-active'); });
+          },
+          applyInlineSasayakiCue: function(cueId) {
+            if (this.supportsSasayakiRangeHighlights()) {
+              var ranges = this.cueRanges.get(cueId) || [];
+              if (ranges.length) {
+                CSS.highlights.set('hoshi-sasayaki', new Highlight(...ranges));
+              }
+              var rubyElements = this.cueRubyElements.get(cueId) || [];
+              rubyElements.forEach(function(ruby) { ruby.classList.add('hoshi-sasayaki-ruby-active'); });
+              var wrappers = this.cueWrappers.get(cueId) || [];
+              wrappers.forEach(function(wrapper) { wrapper.classList.add('hoshi-sasayaki-active'); });
+              return ranges.length > 0 || rubyElements.length > 0 || wrappers.length > 0;
+            }
+            var wrappers = this.cueWrappers.get(cueId) || [];
+            wrappers.forEach(function(wrapper) { wrapper.classList.add('hoshi-sasayaki-active'); });
+            return wrappers.length > 0;
+          },
+          refreshSasayakiCuePresentation: function() {
+            if (!this.activeCueId) {
+              this.clearSasayakiOverlay();
+              return;
+            }
+            this.clearInlineSasayakiCue(this.activeCueId);
+            if (this.isEInkMode()) {
+              this.renderSasayakiOverlay();
+	            } else {
+	              this.clearSasayakiOverlay();
+	              this.ensureSasayakiInlineTargetsForCue(this.activeCueId);
+	              this.applyInlineSasayakiCue(this.activeCueId);
+	            }
+	          },
           highlightSasayakiCue: function(cue, reveal) {
             this.clearSasayakiCue();
             var cueId = typeof cue === 'string' ? cue : cue.id;
-            var wrappers = this.cueWrappers.get(cueId);
-            if ((!wrappers || !wrappers.length) && typeof cue !== 'string') {
-              wrappers = this.wrapSasayakiCue(cue);
+            if (this.isEInkMode()) {
+              this.ensureSasayakiCueGeometry(cue);
+              var geometryRanges = this.cueGeometryRanges.get(cueId) || [];
+              if (!geometryRanges.length) return null;
+              this.activeCueId = cueId;
+              var geometryTarget = geometryRanges[0];
+              var didScroll = reveal && geometryTarget && this.scrollToTarget(geometryTarget);
+              this.renderSasayakiOverlay();
+              var self = this;
+              requestAnimationFrame(function() { self.renderSasayakiOverlay(); });
+              if (didScroll) return this.calculateProgress();
+              return null;
             }
-            if (!wrappers || !wrappers.length) return null;
+            var targets = this.sasayakiInlineTargetsForCue(cueId);
+            var rubyElements = this.supportsSasayakiRangeHighlights() ? (this.cueRubyElements.get(cueId) || []) : [];
+            if (!targets.length && !rubyElements.length && typeof cue !== 'string') {
+              this.wrapSasayakiCue(cue);
+              targets = this.sasayakiInlineTargetsForCue(cueId);
+              rubyElements = this.supportsSasayakiRangeHighlights() ? (this.cueRubyElements.get(cueId) || []) : [];
+            }
+            if (!targets.length && !rubyElements.length) return null;
             this.activeCueId = cueId;
-            wrappers.forEach(function(wrapper) { wrapper.classList.add('hoshi-sasayaki-active'); });
-            if (reveal && this.scrollToTarget(wrappers[0])) {
+            this.applyInlineSasayakiCue(cueId);
+            var scrollTarget = targets.length ? targets[0] : rubyElements[0];
+            if (reveal && scrollTarget && this.scrollToTarget(scrollTarget)) {
               return this.calculateProgress();
             }
             return null;
           },
           clearSasayakiCue: function() {
-            if (!this.activeCueId) return;
-            var wrappers = this.cueWrappers.get(this.activeCueId) || [];
-            wrappers.forEach(function(wrapper) { wrapper.classList.remove('hoshi-sasayaki-active'); });
+            if (!this.activeCueId) {
+              this.clearSasayakiOverlay();
+              return;
+            }
+            this.clearInlineSasayakiCue(this.activeCueId);
             this.activeCueId = null;
+            this.clearSasayakiOverlay();
           },
           resetSasayakiCues: function() {
+            if (this.supportsSasayakiRangeHighlights()) {
+              CSS.highlights.delete('hoshi-sasayaki');
+            }
+            this.cueRubyElements.forEach(function(rubyElements) {
+              rubyElements.forEach(function(ruby) { ruby.classList.remove('hoshi-sasayaki-ruby-active'); });
+            });
+	            this.cueRubyElements.clear();
+	            this.cueSourceRanges.clear();
+	            this.cueRanges.clear();
+            this.cueGeometryRanges.clear();
             var self = this;
             this.cueWrappers.forEach(function(wrappers) { self.unwrap(wrappers); });
             this.cueWrappers.clear();
             this.activeCueId = null;
+            this.clearSasayakiOverlay();
           },
           unwrap: function(wrappers) {
             wrappers.forEach(function(wrapper) {
@@ -1138,23 +1667,27 @@ internal object ReaderPaginationScripts {
           document.documentElement.style.setProperty('--hoshi-vertical-padding-block', (window.innerHeight * ${settings.verticalPadding / 200.0}) + 'px');
           document.documentElement.style.setProperty('--hoshi-vertical-padding-gap', (window.innerHeight * ${settings.verticalPadding / 100.0}) + 'px');
           document.documentElement.style.setProperty('--hoshi-continuous-height', window.innerHeight + 'px');
-          document.documentElement.style.setProperty('--hoshi-image-max-width', Math.max(1, Math.floor(window.innerWidth * ${settings.imageWidthViewportRatio})) + 'px');
+          document.documentElement.style.setProperty('--hoshi-image-max-width', Math.max(1, Math.floor(window.innerWidth * ${generatedLayout.imageWidthViewportRatio})) + 'px');
           document.documentElement.style.setProperty('--hoshi-image-max-height', Math.max(1, window.innerHeight - ${settings.bottomOverlapPx}) + 'px');
-          ${readerImageBlurScript(settings)}
-          Array.from(document.querySelectorAll('svg')).forEach(function(svg) {
-            if (svg.querySelector('image') && svg.getAttribute('preserveAspectRatio') === 'none') {
+          ${readerImageTapScript(settings)}
+          var svgImages = Array.from(document.querySelectorAll('svg image'));
+          svgImages.forEach(function(svgImage) {
+            var svg = svgImage.closest('svg');
+            if (!svg) return;
+            if (svg.getAttribute('preserveAspectRatio') === 'none') {
               svg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
             }
+            var svgImageSrc = svgImage.href && svgImage.href.baseVal ? svgImage.href.baseVal : (svgImage.getAttribute('href') || svgImage.getAttribute('xlink:href'));
+            setupReaderImage(svgImage, svgImageSrc, false, svg);
           });
-          var imagePromises = Array.from(document.querySelectorAll('img')).map(function(img) {
+          var images = Array.from(document.querySelectorAll('img'));
+          var imagePromises = images.map(function(img) {
             return new Promise(function(resolve) {
               var isGaiji = img.classList.contains('gaiji') || img.classList.contains('gaiji-line');
               var mark = function() {
                 if (!isGaiji && (img.naturalWidth > 256 || img.naturalHeight > 256)) {
                   img.classList.add('block-img');
-                  if (${settings.blurImages}) {
-                    blurImage(img);
-                  }
+                  setupReaderImage(img, img.currentSrc || img.src, true);
                 }
                 resolve();
               };
@@ -1167,12 +1700,11 @@ internal object ReaderPaginationScripts {
             });
           });
           Promise.all(imagePromises).then(function() {
+            if (!images.length) return;
             return new Promise(function(resolve) { setTimeout(resolve, 50); });
           }).then(function() {
             window.hoshiReader.buildNodeOffsets();
-            ${sasayakiCuesJson?.let { "window.hoshiReader.applySasayakiCues($it);" }.orEmpty()}
-            ${highlightsJson?.let { "window.hoshiHighlights.applyHighlights($it);" }.orEmpty()}
-            $initialRestoreScript
+            $restoreScripts
           });
         };
         window.addEventListener('load', function() {
@@ -1186,19 +1718,28 @@ internal object ReaderPaginationScripts {
     }
 }
 
-private fun readerImageBlurScript(settings: ReaderSettings): String = """
-    function blurImage(element) {
-      element.classList.add('blurred');
+private fun readerImageTapScript(settings: ReaderSettings): String = """
+    function setupReaderImage(element, src, wrap, blurElement) {
+      if (!element || !src) return;
+      blurElement = blurElement || element;
+      if (${settings.blurImages}) {
+        blurElement.classList.add('blurred');
+        if (wrap && !blurElement.parentElement?.classList.contains('blur-wrapper')) {
+          var target = document.createElement('span');
+          target.className = 'blur-wrapper';
+          blurElement.parentNode.insertBefore(target, blurElement);
+          target.appendChild(blurElement);
+        }
+      }
       element.addEventListener('click', function(event) {
         event.preventDefault();
         event.stopPropagation();
-        element.classList.remove('blurred');
-      }, { once: true });
-    }
-    if (${settings.blurImages}) {
-      Array.from(document.querySelectorAll('svg')).forEach(function(svg) {
-        if (svg.querySelector('image')) {
-          blurImage(svg);
+        if (blurElement.classList.contains('blurred')) {
+          blurElement.classList.remove('blurred');
+          return;
+        }
+        if (window.HoshiReaderImage && window.HoshiReaderImage.postMessage) {
+          HoshiReaderImage.postMessage(new URL(src, document.baseURI).href);
         }
       });
     }
@@ -1318,6 +1859,16 @@ private fun readerHighlightsScript(): String = """
       }
     };
 """.trimIndent()
+
+private fun readerRestoreScripts(
+    sasayakiCuesJson: String?,
+    highlightsJson: String?,
+    initialRestoreScript: String,
+): String = listOfNotNull(
+    sasayakiCuesJson?.let(ReaderPaginationScripts::applySasayakiCuesInvocation),
+    highlightsJson?.let { "window.hoshiHighlights.applyHighlights($it);" },
+    initialRestoreScript,
+).joinToString(separator = "\n")
 
 private fun String.javaScriptStringLiteral(): String =
     buildString(length + 2) {

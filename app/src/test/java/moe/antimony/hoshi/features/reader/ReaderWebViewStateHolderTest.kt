@@ -122,6 +122,19 @@ class ReaderWebViewStateHolderTest {
     }
 
     @Test
+    fun readerNavigationInputIsIgnoredWhileWebViewIsRestoring() {
+        val holder = stateHolder(initialIndex = 2)
+
+        assertFalse(holder.canAcceptReaderNavigationInput())
+
+        holder.markWebViewRestored()
+        assertTrue(holder.canAcceptReaderNavigationInput())
+
+        holder.goToNextChapter(lastIndex = 3)
+        assertFalse(holder.canAcceptReaderNavigationInput())
+    }
+
+    @Test
     fun staleContinuousScrollProgressFromPreviousRestoreEpochIsIgnored() {
         val holder = stateHolder(initialIndex = 2)
         holder.markWebViewRestored()
@@ -130,6 +143,20 @@ class ReaderWebViewStateHolderTest {
         holder.goToNextChapter(lastIndex = 3)
         holder.markWebViewRestored()
         val staleProgress = holder.recordContinuousScrollProgress(0.72, oldEpoch)
+
+        assertNull(staleProgress)
+        assertEquals(ReaderChapterPosition(index = 3, progress = 0.0), holder.readerPosition.displayedPosition)
+    }
+
+    @Test
+    fun staleContinuousScrollDisplayProgressFromPreviousRestoreEpochIsIgnored() {
+        val holder = stateHolder(initialIndex = 2)
+        holder.markWebViewRestored()
+        val oldEpoch = holder.webViewRestoreEpoch
+
+        holder.goToNextChapter(lastIndex = 3)
+        holder.markWebViewRestored()
+        val staleProgress = holder.recordContinuousScrollDisplayProgress(1.0, oldEpoch)
 
         assertNull(staleProgress)
         assertEquals(ReaderChapterPosition(index = 3, progress = 0.0), holder.readerPosition.displayedPosition)
@@ -151,6 +178,116 @@ class ReaderWebViewStateHolderTest {
     fun readerWebViewWaitsForMeasuredViewportBeforeInitialLoad() {
         assertFalse(readerWebViewReadyToLoad(IntSize.Zero))
         assertTrue(readerWebViewReadyToLoad(IntSize(800, 1200)))
+    }
+
+    @Test
+    fun readerWebViewLoadKeyTracksContentReloadKey() {
+        val baseSettings = ReaderSettings()
+        val changedSettings = baseSettings.copy(fontSize = 28)
+        val setupReloadKey = ReaderWebViewSetupReloadKey(
+            initialProgress = 0.2,
+            initialFragment = null,
+            scanNonJapaneseText = false,
+            fontFaceUrl = "https://hoshi.local/fonts/default.ttf",
+        )
+        val viewportSize = IntSize(800, 1200)
+
+        val baseLoadKey = readerWebViewLoadKey(
+            baseUrl = "https://hoshi.local/epub/chapter.xhtml",
+            readerContentReloadKey = baseSettings.readerContentReloadKey(),
+            readerSetupReloadKey = setupReloadKey,
+            webViewViewportSize = viewportSize,
+        )
+        val changedLoadKey = readerWebViewLoadKey(
+            baseUrl = "https://hoshi.local/epub/chapter.xhtml",
+            readerContentReloadKey = changedSettings.readerContentReloadKey(),
+            readerSetupReloadKey = setupReloadKey,
+            webViewViewportSize = viewportSize,
+        )
+
+        assertFalse(baseLoadKey == changedLoadKey)
+    }
+
+    @Test
+    fun readerWebViewLoadKeyTracksChapterRestoreTarget() {
+        val settings = ReaderSettings()
+        val viewportSize = IntSize(800, 1200)
+
+        val baseLoadKey = readerWebViewLoadKey(
+            baseUrl = "https://hoshi.local/epub/chapter.xhtml",
+            readerContentReloadKey = settings.readerContentReloadKey(),
+            readerSetupReloadKey = ReaderWebViewSetupReloadKey(
+                initialProgress = 0.2,
+                initialFragment = null,
+                scanNonJapaneseText = false,
+                fontFaceUrl = "https://hoshi.local/fonts/default.ttf",
+            ),
+            webViewViewportSize = viewportSize,
+        )
+        val changedLoadKey = readerWebViewLoadKey(
+            baseUrl = "https://hoshi.local/epub/chapter.xhtml",
+            readerContentReloadKey = settings.readerContentReloadKey(),
+            readerSetupReloadKey = ReaderWebViewSetupReloadKey(
+                initialProgress = 0.6,
+                initialFragment = null,
+                scanNonJapaneseText = false,
+                fontFaceUrl = "https://hoshi.local/fonts/default.ttf",
+            ),
+            webViewViewportSize = viewportSize,
+        )
+
+        assertFalse(baseLoadKey == changedLoadKey)
+    }
+
+    @Test
+    fun readerWebViewLoadKeyIgnoresThemeOnlySettings() {
+        val baseSettings = ReaderSettings(theme = ReaderTheme.Light)
+        val changedSettings = baseSettings.copy(theme = ReaderTheme.Dark)
+        val setupReloadKey = ReaderWebViewSetupReloadKey(
+            initialProgress = 0.2,
+            initialFragment = null,
+            scanNonJapaneseText = false,
+            fontFaceUrl = "https://hoshi.local/fonts/default.ttf",
+        )
+        val viewportSize = IntSize(800, 1200)
+
+        val baseLoadKey = readerWebViewLoadKey(
+            baseUrl = "https://hoshi.local/epub/chapter.xhtml",
+            readerContentReloadKey = baseSettings.readerContentReloadKey(),
+            readerSetupReloadKey = setupReloadKey,
+            webViewViewportSize = viewportSize,
+        )
+        val changedLoadKey = readerWebViewLoadKey(
+            baseUrl = "https://hoshi.local/epub/chapter.xhtml",
+            readerContentReloadKey = changedSettings.readerContentReloadKey(),
+            readerSetupReloadKey = setupReloadKey,
+            webViewViewportSize = viewportSize,
+        )
+
+        assertEquals(baseLoadKey, changedLoadKey)
+    }
+
+    @Test
+    fun readerChapterHtmlInjectsSingleEarlyViewportMetaBeforeBodyContent() {
+        val html = """
+            <!doctype html>
+            <html>
+            <head>
+                <title>Chapter</title>
+                <meta name="viewport" content="width=320">
+            </head>
+            <body><p>Reader text</p></body>
+            </html>
+        """.trimIndent()
+
+        val prepared = readerHtmlWithEarlyViewport(html)
+
+        assertEquals(1, Regex("""<meta\s+name=["']viewport["']""").findAll(prepared).count())
+        assertTrue(
+            prepared.indexOf("width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no") <
+                prepared.indexOf("<body>"),
+        )
+        assertTrue(prepared.contains("<p>Reader text</p>"))
     }
 
     @Test
@@ -191,7 +328,19 @@ class ReaderWebViewStateHolderTest {
         holder.markWebViewRestored()
         val previousEpoch = holder.webViewRestoreEpoch
 
-        holder.syncSettings(ReaderSettings(showTitle = false, showProgressTop = false))
+        holder.syncSettings(ReaderSettings(showTitle = false, alwaysShowProgress = false, showProgressTop = false))
+
+        assertFalse(holder.isWebViewRestoring)
+        assertEquals(previousEpoch, holder.webViewRestoreEpoch)
+    }
+
+    @Test
+    fun syncedEInkModeDoesNotReloadWebView() {
+        val holder = stateHolder(initialIndex = 1)
+        holder.markWebViewRestored()
+        val previousEpoch = holder.webViewRestoreEpoch
+
+        holder.syncSettings(ReaderSettings(eInkMode = true))
 
         assertFalse(holder.isWebViewRestoring)
         assertEquals(previousEpoch, holder.webViewRestoreEpoch)
@@ -238,7 +387,40 @@ class ReaderWebViewStateHolderTest {
         val base = ReaderSettings()
 
         assertFalse(base.readerContentReloadKey() == base.copy(fontSize = 28).readerContentReloadKey())
-        assertFalse(base.readerContentReloadKey() == base.copy(systemLightSepia = true).readerContentReloadKey())
+        assertFalse(base.readerContentReloadKey() == base.copy(verticalWriting = false).readerContentReloadKey())
+        assertFalse(base.readerContentReloadKey() == base.copy(paragraphSpacing = 1.2).readerContentReloadKey())
+    }
+
+    @Test
+    fun readerContentReloadKeyIgnoresAppearanceColors() {
+        val base = ReaderSettings()
+
+        assertEquals(base.readerContentReloadKey(), base.copy(theme = ReaderTheme.Dark).readerContentReloadKey())
+        assertEquals(base.readerContentReloadKey(), base.copy(systemLightSepia = true).readerContentReloadKey())
+        assertEquals(base.readerContentReloadKey(), base.copy(sepiaInvertInDark = true).readerContentReloadKey())
+        assertEquals(base.readerContentReloadKey(), base.copy(eInkMode = true).readerContentReloadKey())
+    }
+
+    @Test
+    fun readerAppearanceUpdateKeyTracksCustomContentColorsWithoutReloadingContent() {
+        val base = ReaderSettings(
+            theme = ReaderTheme.Custom,
+            customBackgroundColor = 0xFF112233,
+            customTextColor = 0xFF445566,
+        )
+        val backgroundChanged = base.copy(customBackgroundColor = 0xFF778899)
+        val textChanged = base.copy(customTextColor = 0xFFABCDEF)
+
+        assertEquals(base.readerContentReloadKey(), backgroundChanged.readerContentReloadKey())
+        assertEquals(base.readerContentReloadKey(), textChanged.readerContentReloadKey())
+        assertFalse(
+            readerAppearanceUpdateKey(base, systemDark = false, sasayakiTextColor = 0xFF111111, sasayakiBackgroundColor = 0xFFFFFFFF) ==
+                readerAppearanceUpdateKey(backgroundChanged, systemDark = false, sasayakiTextColor = 0xFF111111, sasayakiBackgroundColor = 0xFFFFFFFF),
+        )
+        assertFalse(
+            readerAppearanceUpdateKey(base, systemDark = false, sasayakiTextColor = 0xFF111111, sasayakiBackgroundColor = 0xFFFFFFFF) ==
+                readerAppearanceUpdateKey(textChanged, systemDark = false, sasayakiTextColor = 0xFF111111, sasayakiBackgroundColor = 0xFFFFFFFF),
+        )
     }
 
     @Test
@@ -257,6 +439,105 @@ class ReaderWebViewStateHolderTest {
 
         assertFalse(holder.focusMode)
         assertEquals(previousEpoch, holder.webViewRestoreEpoch)
+    }
+
+    @Test
+    fun readerInteractionsEnterFocusModeWithoutReloadingTheReaderContent() {
+        val holder = stateHolder(initialIndex = 1)
+        holder.markWebViewRestored()
+        val previousEpoch = holder.webViewRestoreEpoch
+
+        holder.enterFocusModeForReaderInteraction()
+
+        assertTrue(holder.focusMode)
+        assertFalse(holder.isWebViewRestoring)
+        assertEquals(previousEpoch, holder.webViewRestoreEpoch)
+
+        holder.enterFocusModeForReaderInteraction()
+
+        assertTrue(holder.focusMode)
+        assertEquals(previousEpoch, holder.webViewRestoreEpoch)
+    }
+
+    @Test
+    fun acceptedReaderNavigationInputEntersFocusModeWithoutReloadingTheReaderContent() {
+        val holder = stateHolder(initialIndex = 1)
+        holder.markWebViewRestored()
+        holder.showReaderMenu()
+        val previousEpoch = holder.webViewRestoreEpoch
+
+        assertTrue(holder.beginReaderNavigationInput())
+
+        assertTrue(holder.focusMode)
+        assertFalse(holder.showReaderMenu)
+        assertFalse(holder.isWebViewRestoring)
+        assertEquals(previousEpoch, holder.webViewRestoreEpoch)
+    }
+
+    @Test
+    fun readerNavigationInputIsRejectedWhileWebViewIsRestoringWithoutChangingFocus() {
+        val holder = stateHolder(initialIndex = 1)
+
+        assertFalse(holder.beginReaderNavigationInput())
+
+        assertFalse(holder.focusMode)
+        assertTrue(holder.isWebViewRestoring)
+    }
+
+    @Test
+    fun readerTapTogglesFocusModeOnlyWhenNoPopupIsVisible() {
+        val holder = stateHolder(initialIndex = 1)
+        holder.markWebViewRestored()
+        val previousEpoch = holder.webViewRestoreEpoch
+
+        assertTrue(holder.toggleFocusModeFromReaderTap(hasVisiblePopups = false))
+        assertTrue(holder.focusMode)
+
+        assertFalse(holder.toggleFocusModeFromReaderTap(hasVisiblePopups = true))
+        assertTrue(holder.focusMode)
+
+        assertTrue(holder.toggleFocusModeFromReaderTap(hasVisiblePopups = false))
+        assertFalse(holder.focusMode)
+        assertEquals(previousEpoch, holder.webViewRestoreEpoch)
+    }
+
+    @Test
+    fun continuousScrollFocusTrackerOnlyStartsFocusForRealScrollGestures() {
+        val tracker = ReaderContinuousScrollFocusTracker()
+
+        tracker.onDown()
+        assertFalse(tracker.onMove(2f, 2f))
+        assertTrue(tracker.onMove(12f, 1f))
+        assertFalse(tracker.onMove(20f, 1f))
+
+        tracker.onCancel()
+        assertFalse(tracker.onMove(2f, 2f))
+
+        tracker.onDown()
+        assertTrue(tracker.onMove(0f, -12f))
+    }
+
+    @Test
+    fun enteringFocusModeClosesTheReaderMenu() {
+        val holder = stateHolder()
+        holder.showReaderMenu()
+        assertTrue(holder.showReaderMenu)
+
+        holder.enterFocusModeForReaderInteraction()
+
+        assertTrue(holder.focusMode)
+        assertFalse(holder.showReaderMenu)
+    }
+
+    @Test
+    fun backNavigationExitsFocusModeBeforeClosingReader() {
+        val holder = stateHolder()
+        holder.enterFocusModeForReaderInteraction()
+
+        assertFalse(holder.handleBackNavigation())
+        assertFalse(holder.focusMode)
+
+        assertTrue(holder.handleBackNavigation())
     }
 
     @Test

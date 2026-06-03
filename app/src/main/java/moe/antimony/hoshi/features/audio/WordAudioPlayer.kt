@@ -53,9 +53,13 @@ class WordAudioPlayer private constructor(context: Context) {
             if (localFile != null) {
                 val data = LocalAudioRepository.fromContext(appContext).loadAudio(localFile)
                     ?: error("Local audio not found.")
+                val mediaItem = MediaItem.Builder()
+                    .setUri("memory://hoshi-local-audio/${localFile.file.urlEncode()}")
+                    .setMimeType(LocalAudioResolver.mimeType(localFile.file))
+                    .build()
                 val mediaSource = ProgressiveMediaSource.Factory {
                     ByteArrayDataSource(data)
-                }.createMediaSource(MediaItem.fromUri("memory://hoshi-local-audio"))
+                }.createMediaSource(mediaItem)
                 nextPlayer.setMediaSource(mediaSource)
             } else {
                 nextPlayer.setMediaItem(MediaItem.fromUri(url))

@@ -141,6 +141,9 @@ class BookRepository(
     suspend fun loadBookInfo(bookRoot: File): BookInfo? =
         sidecarDataSource.loadBookInfo(bookRoot)
 
+    override suspend fun loadReaderBookInfo(bookRoot: File): BookInfo? =
+        loadBookInfo(bookRoot)
+
     override suspend fun saveBookInfo(bookRoot: File, bookInfo: BookInfo) {
         sidecarDataSource.saveBookInfo(bookRoot, bookInfo)
     }
@@ -223,6 +226,7 @@ interface ReaderRouteBookRepository {
     suspend fun saveBookmark(bookRoot: File, bookmark: Bookmark)
     suspend fun loadStatistics(bookRoot: File): List<ReadingStatistics>
     suspend fun saveStatistics(bookRoot: File, statistics: List<ReadingStatistics>)
+    suspend fun loadReaderBookInfo(bookRoot: File): BookInfo?
     suspend fun saveBookInfo(bookRoot: File, bookInfo: BookInfo)
     fun currentAppleReferenceDateSeconds(): Double
 }

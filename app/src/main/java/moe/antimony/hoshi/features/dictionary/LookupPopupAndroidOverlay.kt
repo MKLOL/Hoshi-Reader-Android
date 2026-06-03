@@ -40,82 +40,12 @@ import moe.antimony.hoshi.features.reader.ReaderFontManager
 import moe.antimony.hoshi.features.reader.ReaderSelectionData
 import moe.antimony.hoshi.features.reader.ReaderSelectionRect
 import moe.antimony.hoshi.webview.applyHoshiWebViewSecurityDefaults
+import kotlin.math.abs
+import kotlin.math.max
+import kotlin.math.min
 import kotlin.math.roundToInt
 
-@Composable
-internal fun LookupPopupAndroidOverlay(
-    popups: List<LookupPopupItem>,
-    warmRootPopup: LookupPopupItem,
-    rootHighlightRects: List<ReaderSelectionRect>,
-    rootHighlightVerticalWriting: Boolean,
-    onPopupsChange: (List<LookupPopupItem>) -> Unit,
-    lookupChildPopup: (ReaderSelectionData) -> Pair<LookupPopupItem, Int>?,
-    modifier: Modifier = Modifier,
-    onRootPopupDismissed: () -> Boolean = { false },
-    isRootPopupVisible: (LookupPopupItem) -> Boolean = { true },
-    onRootPopupContentReady: (String) -> Unit = {},
-    sasayakiWasPaused: Boolean = false,
-    sasayakiIsPlaying: Boolean = false,
-    onSasayakiReplayCue: (SasayakiMatch) -> Unit = {},
-    onSasayakiTogglePlayback: () -> Unit = {},
-    onSasayakiPauseStateCleared: () -> Unit = {},
-    onSasayakiPlayForward: (SasayakiMatch) -> Unit = {},
-    onPrepareSasayakiAudio: (SasayakiMatch, String) -> String? = { _, _ -> null },
-    rootSelectionOffsetX: Double = 0.0,
-    rootSelectionOffsetY: Double = 0.0,
-) {
-    val context = LocalContext.current
-    val appContainer = LocalHoshiAppContainer.current
-    val ankiViewModel: AnkiViewModel = viewModel(
-        factory = remember(appContainer) {
-            object : ViewModelProvider.Factory {
-                @Suppress("UNCHECKED_CAST")
-                override fun <T : ViewModel> create(modelClass: Class<T>): T =
-                    AnkiViewModel(appContainer.ankiRepository) as T
-            }
-        },
-    )
-    val ankiUiState by ankiViewModel.uiState.collectAsState()
-    val assets = remember(context) { LookupPopupAssets.load(context) }
-    val controller = remember(context) {
-        LookupPopupOverlayController(
-            context = context,
-            assets = assets,
-            fontManager = appContainer.readerFontManager,
-            warmRootEnabled = true,
-        )
-    }
-    AndroidView(
-        modifier = modifier,
-        factory = { controller.view },
-        update = {
-            controller.update(
-                popups = popups,
-                warmRootPopup = warmRootPopup,
-                rootHighlightRects = rootHighlightRects,
-                rootHighlightDarkMode = warmRootPopup.state.darkMode,
-                rootHighlightEInkMode = warmRootPopup.state.eInkMode,
-                rootHighlightVerticalWriting = rootHighlightVerticalWriting,
-                ankiViewModel = ankiViewModel,
-                ankiSettings = ankiUiState.popupSettings,
-                onPopupsChange = onPopupsChange,
-                lookupChildPopup = lookupChildPopup,
-                onRootPopupDismissed = onRootPopupDismissed,
-                isRootPopupVisible = isRootPopupVisible,
-                onRootPopupContentReady = onRootPopupContentReady,
-                sasayakiWasPaused = sasayakiWasPaused,
-                sasayakiIsPlaying = sasayakiIsPlaying,
-                onSasayakiReplayCue = onSasayakiReplayCue,
-                onSasayakiTogglePlayback = onSasayakiTogglePlayback,
-                onSasayakiPauseStateCleared = onSasayakiPauseStateCleared,
-                onSasayakiPlayForward = onSasayakiPlayForward,
-                onPrepareSasayakiAudio = onPrepareSasayakiAudio,
-                rootSelectionOffsetX = rootSelectionOffsetX,
-                rootSelectionOffsetY = rootSelectionOffsetY,
-            )
-        },
-    )
-}
+private const val PopupSelectionEInkLineSizeCssPx = 1.5f
 
 @Composable
 internal fun LookupPopupAndroidStack(
@@ -128,6 +58,7 @@ internal fun LookupPopupAndroidStack(
     rootHighlightDarkMode: Boolean = false,
     rootHighlightEInkMode: Boolean = false,
     rootHighlightVerticalWriting: Boolean = false,
+    rootHighlightEInkStyle: PopupSelectionEInkStyle = PopupSelectionEInkStyle.Underline,
 ) {
     val context = LocalContext.current
     val appContainer = LocalHoshiAppContainer.current
@@ -147,7 +78,6 @@ internal fun LookupPopupAndroidStack(
             context = context,
             assets = assets,
             fontManager = appContainer.readerFontManager,
-            warmRootEnabled = false,
         )
     }
     AndroidView(
@@ -156,18 +86,16 @@ internal fun LookupPopupAndroidStack(
         update = {
             controller.update(
                 popups = popups,
-                warmRootPopup = null,
                 rootHighlightRects = rootHighlightRects,
                 rootHighlightDarkMode = rootHighlightDarkMode,
                 rootHighlightEInkMode = rootHighlightEInkMode,
                 rootHighlightVerticalWriting = rootHighlightVerticalWriting,
+                rootHighlightEInkStyle = rootHighlightEInkStyle,
                 ankiViewModel = ankiViewModel,
                 ankiSettings = ankiUiState.popupSettings,
                 onPopupsChange = onPopupsChange,
                 lookupChildPopup = lookupChildPopup,
                 onRootPopupDismissed = onRootPopupDismissed,
-                isRootPopupVisible = { true },
-                onRootPopupContentReady = {},
                 sasayakiWasPaused = false,
                 sasayakiIsPlaying = false,
                 onSasayakiReplayCue = {},
@@ -175,8 +103,6 @@ internal fun LookupPopupAndroidStack(
                 onSasayakiPauseStateCleared = {},
                 onSasayakiPlayForward = {},
                 onPrepareSasayakiAudio = { _, _ -> null },
-                rootSelectionOffsetX = 0.0,
-                rootSelectionOffsetY = 0.0,
             )
         },
     )
@@ -186,21 +112,15 @@ private class LookupPopupOverlayController(
     context: Context,
     private val assets: LookupPopupAssets,
     private val fontManager: ReaderFontManager,
-    private val warmRootEnabled: Boolean,
 ) {
     val view = LookupPopupOverlayLayout(context)
-    private val rootHost = if (warmRootEnabled) {
-        LookupPopupHostView(context, assets, fontManager, warmRoot = true)
-    } else {
-        null
-    }
     private val childHosts = linkedMapOf<String, LookupPopupHostView>()
     private val rootHighlightView = PopupSelectionHighlightView(context)
     private var lastUpdate: OverlayUpdate? = null
 
     init {
         view.onOverlaySizeChanged = { lastUpdate?.let(::applyUpdate) }
-        view.onTapOutsidePopup = { dismissAllPopups() }
+        view.onOutsideStylusTouch = ::dismissFromOverlay
         view.addView(
             rootHighlightView,
             FrameLayout.LayoutParams(
@@ -208,14 +128,11 @@ private class LookupPopupOverlayController(
                 ViewGroup.LayoutParams.MATCH_PARENT,
             ),
         )
-        rootHost?.let { host -> view.addView(host) }
     }
 
-    private fun dismissAllPopups() {
+    private fun dismissFromOverlay() {
         val update = lastUpdate ?: return
         if (update.popups.isEmpty()) return
-        // Same path as the root popup's close button (dismiss at index 0): the reader
-        // handles it, falling back to clearing the popup list if it does not.
         if (!update.onRootPopupDismissed()) {
             update.onPopupsChange(emptyList())
         }
@@ -223,18 +140,16 @@ private class LookupPopupOverlayController(
 
     fun update(
         popups: List<LookupPopupItem>,
-        warmRootPopup: LookupPopupItem?,
         rootHighlightRects: List<ReaderSelectionRect>,
         rootHighlightDarkMode: Boolean,
         rootHighlightEInkMode: Boolean,
         rootHighlightVerticalWriting: Boolean,
+        rootHighlightEInkStyle: PopupSelectionEInkStyle,
         ankiViewModel: AnkiViewModel,
         ankiSettings: AnkiPopupSettings,
         onPopupsChange: (List<LookupPopupItem>) -> Unit,
         lookupChildPopup: (ReaderSelectionData) -> Pair<LookupPopupItem, Int>?,
         onRootPopupDismissed: () -> Boolean,
-        isRootPopupVisible: (LookupPopupItem) -> Boolean,
-        onRootPopupContentReady: (String) -> Unit,
         sasayakiWasPaused: Boolean,
         sasayakiIsPlaying: Boolean,
         onSasayakiReplayCue: (SasayakiMatch) -> Unit,
@@ -242,23 +157,19 @@ private class LookupPopupOverlayController(
         onSasayakiPauseStateCleared: () -> Unit,
         onSasayakiPlayForward: (SasayakiMatch) -> Unit,
         onPrepareSasayakiAudio: (SasayakiMatch, String) -> String?,
-        rootSelectionOffsetX: Double,
-        rootSelectionOffsetY: Double,
     ) {
         lastUpdate = OverlayUpdate(
             popups = popups,
-            warmRootPopup = warmRootPopup,
             rootHighlightRects = rootHighlightRects,
             rootHighlightDarkMode = rootHighlightDarkMode,
             rootHighlightEInkMode = rootHighlightEInkMode,
             rootHighlightVerticalWriting = rootHighlightVerticalWriting,
+            rootHighlightEInkStyle = rootHighlightEInkStyle,
             ankiViewModel = ankiViewModel,
             ankiSettings = ankiSettings,
             onPopupsChange = onPopupsChange,
             lookupChildPopup = lookupChildPopup,
             onRootPopupDismissed = onRootPopupDismissed,
-            isRootPopupVisible = isRootPopupVisible,
-            onRootPopupContentReady = onRootPopupContentReady,
             sasayakiWasPaused = sasayakiWasPaused,
             sasayakiIsPlaying = sasayakiIsPlaying,
             onSasayakiReplayCue = onSasayakiReplayCue,
@@ -266,78 +177,33 @@ private class LookupPopupOverlayController(
             onSasayakiPauseStateCleared = onSasayakiPauseStateCleared,
             onSasayakiPlayForward = onSasayakiPlayForward,
             onPrepareSasayakiAudio = onPrepareSasayakiAudio,
-            rootSelectionOffsetX = rootSelectionOffsetX,
-            rootSelectionOffsetY = rootSelectionOffsetY,
         )
         lastUpdate?.let(::applyUpdate)
     }
 
     private fun applyUpdate(update: OverlayUpdate) {
-        // The overlay sits on top of the reader WebView. With no popup to show it must be
-        // fully out of the input path — a VISIBLE full-screen overlay that merely returns
-        // false from dispatchTouchEvent still swallows Samsung S Pen input meant for the
-        // reader WebView behind it (regression from the v0.7.4 popup overlay rewrite).
-        // GONE keeps it clear of touch and hover dispatch until a popup actually needs it.
-        view.visibility = if (update.popups.isEmpty()) View.GONE else View.VISIBLE
+        // The overlay sits above the reader WebView. When no popup is visible it must leave the
+        // input path entirely; some stylus implementations do not pass through a visible full-size
+        // parent even when its touch dispatch returns false.
+        view.visibility = lookupPopupOverlayVisibility(hasPopups = update.popups.isNotEmpty())
 
-        val rootPopup = if (warmRootEnabled) {
-            update.popups.firstOrNull()
-                ?.withRootSelectionOffset(update.rootSelectionOffsetX, update.rootSelectionOffsetY)
-                ?: update.warmRootPopup?.withRootSelectionOffset(update.rootSelectionOffsetX, update.rootSelectionOffsetY)
-        } else {
-            null
-        }
-        val rootVisible = update.popups.firstOrNull()?.let { update.isRootPopupVisible(it) } ?: false
-        if (rootPopup != null && rootHost != null) {
-            rootHighlightView.update(
-                rects = if (rootVisible) {
-                    update.rootHighlightRects.withOffset(update.rootSelectionOffsetX, update.rootSelectionOffsetY)
-                } else {
-                    emptyList()
-                },
-                darkMode = rootPopup.state.darkMode,
-                eInkMode = rootPopup.state.eInkMode,
-                verticalWriting = update.rootHighlightVerticalWriting,
-            )
-            rootHost.update(
-                popup = rootPopup,
-                index = 0,
-                allPopups = update.popups,
-                ankiViewModel = update.ankiViewModel,
-                ankiSettings = update.ankiSettings,
-                isContentVisible = rootVisible,
-                isPopupActive = update.popups.isNotEmpty(),
-                onPopupsChange = update.onPopupsChange,
-                lookupChildPopup = update.lookupChildPopup,
-                onRootPopupDismissed = update.onRootPopupDismissed,
-                onContentReady = update.onRootPopupContentReady,
-                sasayakiWasPaused = update.sasayakiWasPaused,
-                sasayakiIsPlaying = update.sasayakiIsPlaying,
-                onSasayakiReplayCue = update.onSasayakiReplayCue,
-                onSasayakiTogglePlayback = update.onSasayakiTogglePlayback,
-                onSasayakiPauseStateCleared = update.onSasayakiPauseStateCleared,
-                onSasayakiPlayForward = update.onSasayakiPlayForward,
-                onPrepareSasayakiAudio = update.onPrepareSasayakiAudio,
-            )
-            rootHost.bringToFront()
-        } else {
-            rootHighlightView.update(
-                rects = if (update.popups.isNotEmpty()) update.rootHighlightRects else emptyList(),
-                darkMode = update.rootHighlightDarkMode,
-                eInkMode = update.rootHighlightEInkMode,
-                verticalWriting = update.rootHighlightVerticalWriting,
-            )
-        }
+        rootHighlightView.update(
+            rects = if (update.popups.isNotEmpty()) update.rootHighlightRects else emptyList(),
+            darkMode = update.rootHighlightDarkMode,
+            eInkMode = update.rootHighlightEInkMode,
+            verticalWriting = update.rootHighlightVerticalWriting,
+            eInkStyle = update.rootHighlightEInkStyle,
+        )
 
-        val childPopups = if (warmRootEnabled) update.popups.drop(1) else update.popups
+        val childPopups = update.popups
         val childKeys = childPopups.mapTo(mutableSetOf()) { it.id }
         childHosts.keys.filterNot(childKeys::contains).forEach { key ->
             childHosts.remove(key)?.let { view.removeView(it) }
         }
         childPopups.forEachIndexed { childIndex, popup ->
-            val index = if (warmRootEnabled) childIndex + 1 else childIndex
+            val index = childIndex
             val host = childHosts.getOrPut(popup.id) {
-                LookupPopupHostView(view.context, assets, fontManager, warmRoot = false).also { view.addView(it) }
+                LookupPopupHostView(view.context, assets, fontManager).also { view.addView(it) }
             }
             host.update(
                 popup = popup,
@@ -364,20 +230,21 @@ private class LookupPopupOverlayController(
     }
 }
 
+internal fun lookupPopupOverlayVisibility(hasPopups: Boolean): Int =
+    if (hasPopups) View.VISIBLE else View.GONE
+
 private data class OverlayUpdate(
     val popups: List<LookupPopupItem>,
-    val warmRootPopup: LookupPopupItem?,
     val rootHighlightRects: List<ReaderSelectionRect>,
     val rootHighlightDarkMode: Boolean,
     val rootHighlightEInkMode: Boolean,
     val rootHighlightVerticalWriting: Boolean,
+    val rootHighlightEInkStyle: PopupSelectionEInkStyle,
     val ankiViewModel: AnkiViewModel,
     val ankiSettings: AnkiPopupSettings,
     val onPopupsChange: (List<LookupPopupItem>) -> Unit,
     val lookupChildPopup: (ReaderSelectionData) -> Pair<LookupPopupItem, Int>?,
     val onRootPopupDismissed: () -> Boolean,
-    val isRootPopupVisible: (LookupPopupItem) -> Boolean,
-    val onRootPopupContentReady: (String) -> Unit,
     val sasayakiWasPaused: Boolean,
     val sasayakiIsPlaying: Boolean,
     val onSasayakiReplayCue: (SasayakiMatch) -> Unit,
@@ -385,13 +252,11 @@ private data class OverlayUpdate(
     val onSasayakiPauseStateCleared: () -> Unit,
     val onSasayakiPlayForward: (SasayakiMatch) -> Unit,
     val onPrepareSasayakiAudio: (SasayakiMatch, String) -> String?,
-    val rootSelectionOffsetX: Double,
-    val rootSelectionOffsetY: Double,
 )
 
 private class LookupPopupOverlayLayout(context: Context) : FrameLayout(context) {
     var onOverlaySizeChanged: () -> Unit = {}
-    var onTapOutsidePopup: () -> Unit = {}
+    var onOutsideStylusTouch: () -> Unit = {}
     private val touchStreamTracker = PopupTouchStreamTracker()
 
     override fun onSizeChanged(width: Int, height: Int, oldWidth: Int, oldHeight: Int) {
@@ -401,13 +266,15 @@ private class LookupPopupOverlayLayout(context: Context) : FrameLayout(context) 
 
     override fun dispatchTouchEvent(event: MotionEvent): Boolean {
         val hitPopup = hitPopup(event)
-        // A press that misses every popup dismisses the stack. The overlay is GONE while
-        // no popup is shown, so reaching here means a popup is up. This must be handled
-        // here rather than left to fall through to the reader: an S Pen press does not
-        // fall through the overlay to the reader the way a finger press does.
-        if (!hitPopup && event.actionMasked == MotionEvent.ACTION_DOWN) {
-            onTapOutsidePopup()
+        if (shouldDismissForOutsideStylusTouch(
+            actionMasked = event.actionMasked,
+            toolType = event.getToolType(0),
+            hitPopup = hitPopup,
+        )) {
+            onOutsideStylusTouch()
+            return true
         }
+
         val shouldDispatch = touchStreamTracker.shouldDispatch(event.actionMasked, hitPopup)
         if (!shouldDispatch) return false
         val handled = super.dispatchTouchEvent(event)
@@ -426,6 +293,16 @@ private class LookupPopupOverlayLayout(context: Context) : FrameLayout(context) 
         return false
     }
 }
+
+internal fun shouldDismissForOutsideStylusTouch(
+    actionMasked: Int,
+    toolType: Int,
+    hitPopup: Boolean,
+): Boolean =
+    actionMasked == MotionEvent.ACTION_DOWN && !hitPopup && isStylusTool(toolType)
+
+private fun isStylusTool(toolType: Int): Boolean =
+    toolType == MotionEvent.TOOL_TYPE_STYLUS || toolType == MotionEvent.TOOL_TYPE_ERASER
 
 internal class PopupTouchStreamTracker {
     private var activePopupStream = false
@@ -454,7 +331,6 @@ private class LookupPopupHostView(
     context: Context,
     private val assets: LookupPopupAssets,
     private val fontManager: ReaderFontManager,
-    private val warmRoot: Boolean,
 ) : FrameLayout(context) {
     private val density = resources.displayMetrics.density
     private val callbacks = PopupWebViewCallbackHolder(PopupWebViewCallbacks())
@@ -469,9 +345,7 @@ private class LookupPopupHostView(
     private val sasayakiBar = PopupControlBar(context)
     private var loadedHtml: String? = null
     private var loadedPopupId: String? = null
-    private var pendingWarmResults: List<LookupResult>? = null
     private var contentReady = false
-    private var shellReady = false
     private var clearSelectionSignal = 0
     private var popupScale = 1.0
     private var backCount = 0
@@ -523,32 +397,25 @@ private class LookupPopupHostView(
         onPrepareSasayakiAudio: (SasayakiMatch, String) -> String?,
     ) {
         val state = popup.state
-        val htmlResults = if (warmRoot) emptyList() else state.results
-        val html = renderHtml(state, htmlResults, ankiSettings)
+        val html = renderHtml(state, state.results, ankiSettings)
         if (loadedHtml != html) {
             loadedHtml = html
             loadedPopupId = null
-            shellReady = false
             contentReady = false
-            pendingWarmResults = null
             backCount = 0
             forwardCount = 0
             webView.clearActionButtons()
-            lookupResultsHolder.results = htmlResults
+            lookupResultsHolder.results = state.results
             webView.loadDataWithBaseURL("https://hoshi.local/popup/", html, "text/html", "UTF-8", null)
         }
-        if (warmRoot && loadedPopupId != popup.id) {
+        if (loadedPopupId != popup.id) {
             loadedPopupId = popup.id
             contentReady = false
             backCount = 0
             forwardCount = 0
             webView.clearActionButtons()
-            pendingWarmResults = state.results
-            applyWarmResultsIfReady()
-        } else if (!warmRoot && loadedPopupId != popup.id) {
-            loadedPopupId = popup.id
         }
-        if (!warmRoot) lookupResultsHolder.results = state.results
+        lookupResultsHolder.results = state.results
         if (popupScale != state.popupScale) {
             popupScale = state.popupScale
             webView.evaluateJavascript(
@@ -602,7 +469,7 @@ private class LookupPopupHostView(
         webView.isClickable = interactive
         if (!interactive) webView.clearFocus()
         layoutAt(frame)
-        visibility = if (isPopupActive || warmRoot) VISIBLE else INVISIBLE
+        visibility = if (isPopupActive) VISIBLE else INVISIBLE
         alpha = if (interactive) 1f else 0f
         if (!isPopupActive) selectionHighlightView.update(emptyList(), state.darkMode, state.eInkMode)
     }
@@ -663,15 +530,19 @@ private class LookupPopupHostView(
             onPlayWordAudio = { url, mode ->
                 WordAudioPlayer.get(context).play(url, mode)
             },
-            onMineEntry = { payload ->
-                runCatching {
-                    val ankiContext = popup.sasayakiCue?.let { cue ->
+            onMineEntry = { payload, reply ->
+                val miningContext = runCatching {
+                    popup.sasayakiCue?.let { cue ->
                         state.ankiContext.copy(
                             sasayakiAudioPath = onPrepareSasayakiAudio(cue, state.selection.sentence),
                         )
                     } ?: state.ankiContext
-                    ankiViewModel.mineEntry(payload, ankiContext)
-                }.getOrDefault(false)
+                }.getOrNull()
+                if (miningContext == null) {
+                    reply(false)
+                } else {
+                    ankiViewModel.mineEntryAsync(payload, miningContext, reply)
+                }
             },
             onDuplicateCheck = { expression, reply ->
                 ankiViewModel.duplicateCheckAsync(expression, reply)
@@ -828,14 +699,6 @@ private class LookupPopupHostView(
         popupScale = state.popupScale,
     )
 
-    private fun applyWarmResultsIfReady() {
-        val results = pendingWarmResults ?: return
-        if (!shellReady) return
-        pendingWarmResults = null
-        lookupResultsHolder.results = results
-        webView.evaluateJavascript("window.replacePopupResults && window.replacePopupResults(${results.size})", null)
-    }
-
     private fun createWebView(context: Context): PopupActionButtonWebView =
         PopupActionButtonWebView(context).apply {
             applyHoshiWebViewSecurityDefaults()
@@ -849,10 +712,6 @@ private class LookupPopupHostView(
                     callbackHolder = callbacks,
                     lookupResultsHolder = lookupResultsHolder,
                     selectionOffsetHolder = selectionOffsetHolder,
-                    onShellReady = {
-                        shellReady = true
-                        applyWarmResultsIfReady()
-                    },
                 ),
                 "HoshiPopup",
             )
@@ -1017,40 +876,197 @@ private class PopupControlBar(context: Context) : LinearLayout(context) {
     }
 }
 
+internal enum class PopupSelectionEInkStyle {
+    Underline,
+    Box,
+}
+
+internal data class PopupSelectionBoxEdges(
+    val top: Boolean = true,
+    val right: Boolean = true,
+    val bottom: Boolean = true,
+    val left: Boolean = true,
+)
+
+internal fun popupSelectionBoxRects(
+    rects: List<ReaderSelectionRect>,
+    verticalWriting: Boolean,
+): List<ReaderSelectionRect> {
+    val merged = mutableListOf<ReaderSelectionRect>()
+    rects.filter { it.width > 0.0 && it.height > 0.0 }.forEach { rect ->
+        val previous = merged.lastOrNull()
+        if (previous != null && popupSelectionRectsInlineAdjacent(previous, rect, verticalWriting)) {
+            merged[merged.lastIndex] = previous.union(rect)
+        } else {
+            merged += rect
+        }
+    }
+    return merged
+}
+
+internal fun popupSelectionBoxEdges(
+    rects: List<ReaderSelectionRect>,
+    verticalWriting: Boolean,
+    viewportWidth: Double,
+    viewportHeight: Double,
+): List<PopupSelectionBoxEdges> {
+    val edges = rects.map { PopupSelectionBoxEdges() }.toMutableList()
+    for (index in 0 until rects.lastIndex) {
+        if (!popupSelectionSplitAcrossPage(rects[index], rects[index + 1], verticalWriting, viewportWidth, viewportHeight)) {
+            continue
+        }
+        if (verticalWriting) {
+            edges[index] = edges[index].copy(bottom = false)
+            edges[index + 1] = edges[index + 1].copy(top = false)
+        } else {
+            edges[index] = edges[index].copy(right = false)
+            edges[index + 1] = edges[index + 1].copy(left = false)
+        }
+    }
+    return edges
+}
+
+private fun popupSelectionRectsInlineAdjacent(
+    first: ReaderSelectionRect,
+    second: ReaderSelectionRect,
+    verticalWriting: Boolean,
+): Boolean {
+    val tolerance = 1.0
+    return if (verticalWriting) {
+        val sameColumn = popupSelectionRangesOverlap(
+            first.x,
+            first.x + first.width,
+            second.x,
+            second.x + second.width,
+            tolerance,
+        )
+        val touches = popupSelectionRangesOverlap(
+            first.y,
+            first.y + first.height,
+            second.y,
+            second.y + second.height,
+            tolerance,
+        )
+        sameColumn && touches
+    } else {
+        val sameLine = popupSelectionRangesOverlap(
+            first.y,
+            first.y + first.height,
+            second.y,
+            second.y + second.height,
+            tolerance,
+        )
+        val touches = popupSelectionRangesOverlap(
+            first.x,
+            first.x + first.width,
+            second.x,
+            second.x + second.width,
+            tolerance,
+        )
+        sameLine && touches
+    }
+}
+
+private fun popupSelectionRangesOverlap(
+    firstStart: Double,
+    firstEnd: Double,
+    secondStart: Double,
+    secondEnd: Double,
+    tolerance: Double,
+): Boolean = secondStart <= firstEnd + tolerance && secondEnd >= firstStart - tolerance
+
+private fun ReaderSelectionRect.union(other: ReaderSelectionRect): ReaderSelectionRect {
+    val left = min(x, other.x)
+    val top = min(y, other.y)
+    val right = max(x + width, other.x + other.width)
+    val bottom = max(y + height, other.y + other.height)
+    return ReaderSelectionRect(
+        x = left,
+        y = top,
+        width = right - left,
+        height = bottom - top,
+    )
+}
+
+private fun popupSelectionSplitAcrossPage(
+    first: ReaderSelectionRect,
+    second: ReaderSelectionRect,
+    verticalWriting: Boolean,
+    viewportWidth: Double,
+    viewportHeight: Double,
+): Boolean {
+    val tolerance = 8.0
+    return if (verticalWriting) {
+        val sameWidth = abs(first.width - second.width) <= tolerance
+        val wrapsToNextLine = first.y > second.y + tolerance
+        val touchesPageEdge = first.y + first.height >= viewportHeight - tolerance ||
+            second.y <= tolerance
+        sameWidth && (wrapsToNextLine || touchesPageEdge)
+    } else {
+        val sameHeight = abs(first.height - second.height) <= tolerance
+        val wrapsToNextLine = first.y + first.height <= second.y + tolerance &&
+            first.x > second.x + tolerance
+        val touchesPageEdge = first.x + first.width >= viewportWidth - tolerance ||
+            second.x <= tolerance
+        sameHeight && (wrapsToNextLine || touchesPageEdge)
+    }
+}
+
 private class PopupSelectionHighlightView(context: Context) : View(context) {
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
     private var rects = emptyList<ReaderSelectionRect>()
     private var darkMode = false
     private var eInkMode = false
     private var verticalWriting = false
+    private var eInkStyle = PopupSelectionEInkStyle.Underline
 
     fun update(
         rects: List<ReaderSelectionRect>,
         darkMode: Boolean,
         eInkMode: Boolean,
         verticalWriting: Boolean = false,
+        eInkStyle: PopupSelectionEInkStyle = PopupSelectionEInkStyle.Underline,
     ) {
         this.rects = rects
         this.darkMode = darkMode
         this.eInkMode = eInkMode
         this.verticalWriting = verticalWriting
+        this.eInkStyle = eInkStyle
         invalidate()
     }
 
     override fun onDraw(canvas: Canvas) {
         val density = resources.displayMetrics.density
-        rects.forEach { rect ->
-            if (rect.width <= 0.0 || rect.height <= 0.0) return@forEach
-            val left = (rect.x * density).toFloat()
-            val top = (rect.y * density).toFloat()
-            val right = ((rect.x + rect.width) * density).toFloat()
-            val bottom = ((rect.y + rect.height) * density).toFloat()
+        val drawRects = if (eInkMode && eInkStyle == PopupSelectionEInkStyle.Box) {
+            popupSelectionBoxRects(rects, verticalWriting)
+        } else {
+            rects
+        }
+        val boxEdges = if (eInkMode && eInkStyle == PopupSelectionEInkStyle.Box) {
+            popupSelectionBoxEdges(
+                rects = drawRects,
+                verticalWriting = verticalWriting,
+                viewportWidth = width / density.toDouble(),
+                viewportHeight = height / density.toDouble(),
+            )
+        } else {
+            emptyList()
+        }
+        drawRects.forEachIndexed { index, rect ->
+            if (rect.width <= 0.0 || rect.height <= 0.0) return@forEachIndexed
+            val left = (rect.x * density).roundToInt().toFloat()
+            val top = (rect.y * density).roundToInt().toFloat()
+            val right = ((rect.x + rect.width) * density).roundToInt().toFloat()
+            val bottom = ((rect.y + rect.height) * density).roundToInt().toFloat()
             paint.style = Paint.Style.FILL
             if (eInkMode) {
                 paint.isAntiAlias = false
                 paint.color = if (darkMode) AndroidColor.WHITE else AndroidColor.BLACK
-                val lineHeight = (1.5f * density).roundToInt().coerceAtLeast(1).toFloat()
-                if (verticalWriting) {
+                val lineHeight = (PopupSelectionEInkLineSizeCssPx * density).roundToInt().coerceAtLeast(1).toFloat()
+                if (eInkStyle == PopupSelectionEInkStyle.Box) {
+                    val edges = boxEdges.getOrElse(index) { PopupSelectionBoxEdges() }
+                    drawBoxEdges(canvas, left, top, right, bottom, lineHeight, edges)
+                } else if (verticalWriting) {
                     val lineLeft = (right - 2f * density - lineHeight).coerceAtLeast(left).roundToInt().toFloat()
                     canvas.drawRect(lineLeft, top, lineLeft + lineHeight, bottom, paint)
                 } else {
@@ -1064,18 +1080,27 @@ private class PopupSelectionHighlightView(context: Context) : View(context) {
             }
         }
     }
-}
 
-private fun LookupPopupItem.withRootSelectionOffset(offsetX: Double, offsetY: Double): LookupPopupItem {
-    if (offsetX == 0.0 && offsetY == 0.0) return this
-    val rect = state.selection.rect
-    return copy(
-        state = state.copy(
-            selection = state.selection.copy(
-                rect = rect.copy(x = rect.x + offsetX, y = rect.y + offsetY),
-            ),
-        ),
-    )
+    private fun drawBoxEdges(
+        canvas: Canvas,
+        left: Float,
+        top: Float,
+        right: Float,
+        bottom: Float,
+        lineHeight: Float,
+        edges: PopupSelectionBoxEdges,
+    ) {
+        val rightLineLeft = (right - lineHeight).coerceAtLeast(left)
+        val rightLineRight = rightLineLeft + lineHeight
+        val bottomLineTop = (bottom - lineHeight).coerceAtLeast(top)
+        val bottomLineBottom = bottomLineTop + lineHeight
+        val inlineEnd = right
+        val blockEnd = bottom
+        if (edges.top) canvas.drawRect(left, top, inlineEnd, top + lineHeight, paint)
+        if (edges.right) canvas.drawRect(rightLineLeft, top, rightLineRight, blockEnd, paint)
+        if (edges.bottom) canvas.drawRect(left, bottomLineTop, inlineEnd, bottomLineBottom, paint)
+        if (edges.left) canvas.drawRect(left, top, left + lineHeight, blockEnd, paint)
+    }
 }
 
 private fun LookupPopupItem.withoutRootInsets(): LookupPopupItem {
@@ -1086,13 +1111,6 @@ private fun LookupPopupItem.withoutRootInsets(): LookupPopupItem {
             bottomInset = 0.0,
         ),
     )
-}
-
-private fun List<ReaderSelectionRect>.withOffset(offsetX: Double, offsetY: Double): List<ReaderSelectionRect> {
-    if (isEmpty() || offsetX == 0.0 && offsetY == 0.0) return this
-    return map { rect ->
-        rect.copy(x = rect.x + offsetX, y = rect.y + offsetY)
-    }
 }
 
 private fun LookupPopupState.popupBackground(): GradientDrawable =

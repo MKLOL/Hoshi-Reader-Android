@@ -29,6 +29,10 @@ class ReaderSettingsRepositoryTest {
             assertFalse(settings.disablePageTurnAnimation)
             assertFalse(settings.systemLightSepia)
             assertFalse(settings.sepiaInvertInDark)
+            assertEquals(ReaderInterfaceTheme.System, settings.uiTheme)
+            assertEquals(0xFFFFFFFFL, settings.customBackgroundColor)
+            assertEquals(0xFF000000L, settings.customTextColor)
+            assertEquals(0xFF999999L, settings.customInfoColor)
             assertTrue(settings.verticalWriting)
             assertEquals(ReaderFontManager.defaultMinchoFont, settings.selectedFont)
             assertEquals(22, settings.fontSize)
@@ -48,10 +52,13 @@ class ReaderSettingsRepositoryTest {
             assertFalse(settings.layoutAdvanced)
             assertEquals(1.65, settings.lineHeight, 0.000001)
             assertEquals(0.0, settings.characterSpacing, 0.0)
+            assertEquals(0.0, settings.paragraphSpacing, 0.0)
             assertTrue(settings.showTitle)
             assertTrue(settings.showCharacters)
             assertTrue(settings.showPercentage)
+            assertTrue(settings.alwaysShowProgress)
             assertTrue(settings.showProgressTop)
+            assertTrue(settings.showReaderBackButton)
             assertEquals(320, settings.popupWidth)
             assertEquals(250, settings.popupHeight)
             assertEquals(1.0, settings.popupScale, 0.000001)
@@ -73,11 +80,16 @@ class ReaderSettingsRepositoryTest {
                 theme = ReaderTheme.Dark,
                 eInkMode = true,
                 disablePageTurnAnimation = true,
+                uiTheme = ReaderInterfaceTheme.Dark,
+                customBackgroundColor = 0xFF112233,
+                customTextColor = 0xFF445566,
+                customInfoColor = 0xFF778899,
                 selectedFont = "Hiragino Mincho ProN",
                 fontSize = 29,
                 continuousMode = true,
                 chapterSwipeDistance = 120,
                 lineHeight = 1.9,
+                paragraphSpacing = 2.2,
                 popupSwipeThreshold = 120,
                 volumeKeysTurnPages = true,
                 volumeKeysSeekSasayaki = true,
@@ -91,11 +103,16 @@ class ReaderSettingsRepositoryTest {
             assertEquals(ReaderTheme.Dark, migrated.theme)
             assertTrue(migrated.eInkMode)
             assertTrue(migrated.disablePageTurnAnimation)
+            assertEquals(ReaderInterfaceTheme.Dark, migrated.uiTheme)
+            assertEquals(0xFF112233, migrated.customBackgroundColor)
+            assertEquals(0xFF445566, migrated.customTextColor)
+            assertEquals(0xFF778899, migrated.customInfoColor)
             assertEquals(ReaderFontManager.defaultMinchoFont, migrated.selectedFont)
             assertEquals(29, migrated.fontSize)
             assertTrue(migrated.continuousMode)
             assertEquals(60, migrated.chapterSwipeDistance)
             assertEquals(1.9, migrated.lineHeight, 0.000001)
+            assertEquals(2.2, migrated.paragraphSpacing, 0.000001)
             assertEquals(60, migrated.popupSwipeThreshold)
             assertTrue(migrated.volumeKeysTurnPages)
             assertTrue(migrated.volumeKeysSeekSasayaki)
@@ -113,9 +130,13 @@ class ReaderSettingsRepositoryTest {
             repository.update { current ->
                 current.copy(
                     theme = ReaderTheme.Sepia,
+                    uiTheme = ReaderInterfaceTheme.Dark,
                     systemLightSepia = true,
                     sepiaInvertInDark = true,
                     disablePageTurnAnimation = true,
+                    customBackgroundColor = 0xFF102030,
+                    customTextColor = 0xFF405060,
+                    customInfoColor = 0xFF708090,
                     verticalWriting = false,
                     selectedFont = ReaderFontManager.defaultGothicFont,
                     fontSize = 24,
@@ -135,10 +156,13 @@ class ReaderSettingsRepositoryTest {
                     layoutAdvanced = true,
                     lineHeight = 1.8,
                     characterSpacing = 0.03,
+                    paragraphSpacing = 1.7,
                     showTitle = false,
                     showCharacters = false,
                     showPercentage = false,
+                    alwaysShowProgress = false,
                     showProgressTop = false,
+                    showReaderBackButton = false,
                     popupWidth = 420,
                     popupHeight = 300,
                     popupScale = 1.25,
@@ -156,9 +180,13 @@ class ReaderSettingsRepositoryTest {
             val saved = repository.settings.first()
 
             assertEquals(ReaderTheme.Sepia, saved.theme)
+            assertEquals(ReaderInterfaceTheme.Dark, saved.uiTheme)
             assertTrue(saved.systemLightSepia)
             assertTrue(saved.sepiaInvertInDark)
             assertTrue(saved.disablePageTurnAnimation)
+            assertEquals(0xFF102030, saved.customBackgroundColor)
+            assertEquals(0xFF405060, saved.customTextColor)
+            assertEquals(0xFF708090, saved.customInfoColor)
             assertFalse(saved.verticalWriting)
             assertEquals(ReaderFontManager.defaultGothicFont, saved.selectedFont)
             assertEquals(24, saved.fontSize)
@@ -178,10 +206,13 @@ class ReaderSettingsRepositoryTest {
             assertTrue(saved.layoutAdvanced)
             assertEquals(1.8, saved.lineHeight, 0.000001)
             assertEquals(0.03, saved.characterSpacing, 0.000001)
+            assertEquals(1.7, saved.paragraphSpacing, 0.000001)
             assertFalse(saved.showTitle)
             assertFalse(saved.showCharacters)
             assertFalse(saved.showPercentage)
+            assertFalse(saved.alwaysShowProgress)
             assertFalse(saved.showProgressTop)
+            assertFalse(saved.showReaderBackButton)
             assertEquals(420, saved.popupWidth)
             assertEquals(300, saved.popupHeight)
             assertEquals(1.25, saved.popupScale, 0.000001)

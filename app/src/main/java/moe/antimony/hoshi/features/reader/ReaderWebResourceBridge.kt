@@ -34,6 +34,21 @@ internal class ReaderWebResourceBridge(
         }
     }
 
+    fun imageResourceForUrl(url: String): ReaderWebResource? {
+        val uri = runCatching { URI(url) }.getOrNull() ?: return null
+        if (uri.host != "hoshi.local") return null
+        val path = uri.path.orEmpty().removePrefix("/epub/")
+        if (path.isBlank() || path == uri.path.orEmpty()) return null
+        val mediaType = book.mediaType(path).substringBefore(';').trim()
+        if (!mediaType.startsWith("image/", ignoreCase = true)) return null
+        val data = book.readResource(path) ?: return null
+        return ReaderWebResource(
+            mediaType = mediaType,
+            encoding = null,
+            data = data,
+        )
+    }
+
     private fun fontResource(fileName: String): ReaderWebResource? {
         val fontFile = fontFileForRequest(fileName) ?: return null
         return ReaderWebResource(
@@ -45,8 +60,17 @@ internal class ReaderWebResourceBridge(
 
     private fun epubResource(path: String): ReaderWebResource? {
         val mediaType = book.mediaType(path)
-        val data = book.readResource(path)?.let { sanitizeReaderResource(mediaType, it) } ?: return null
-        val encoding = if (mediaType.substringBefore(';').trim().equals("text/css", ignoreCase = true)) {
+        val rawData = book.readResource(path) ?: return null
+        val normalizedMediaType = mediaType.substringBefore(';').trim()
+        val data = if (normalizedMediaType.isReaderHtmlMediaType()) {
+            readerHtmlWithEarlyViewport(rawData.toString(Charsets.UTF_8)).toByteArray(Charsets.UTF_8)
+        } else {
+            sanitizeReaderResource(mediaType, rawData)
+        }
+        val encoding = if (
+            normalizedMediaType.equals("text/css", ignoreCase = true) ||
+            normalizedMediaType.isReaderHtmlMediaType()
+        ) {
             "UTF-8"
         } else {
             null
@@ -58,3 +82,8 @@ internal class ReaderWebResourceBridge(
         )
     }
 }
+
+private fun String.isReaderHtmlMediaType(): Boolean =
+    equals("application/xhtml+xml", ignoreCase = true) ||
+        equals("text/html", ignoreCase = true) ||
+        endsWith("+html", ignoreCase = true)

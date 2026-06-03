@@ -113,6 +113,9 @@ class LocalizationResourceTest {
         assertEquals("有声书", zhResources.strings.getValue("sasayaki_title").value)
         assertEquals("自动翻页", zhResources.strings.getValue("sasayaki_auto_scroll").value)
         assertEquals("标注", zhResources.strings.getValue("reader_highlight_action").value)
+        assertEquals("复制", zhResources.strings.getValue("action_copy").value)
+        assertEquals("分享", zhResources.strings.getValue("action_share").value)
+        assertEquals("段落间距", zhResources.strings.getValue("reader_appearance_paragraph_spacing").value)
     }
 
     @Test

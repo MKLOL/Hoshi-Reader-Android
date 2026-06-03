@@ -19,9 +19,14 @@ class ReaderSettingsTest {
         assertEquals(5, settings.horizontalPadding)
         assertEquals(0, settings.verticalPadding)
         assertEquals(1.65, settings.lineHeight, 0.0)
+        assertEquals(0.0, settings.paragraphSpacing, 0.0)
         assertEquals("Noto Serif CJK JP", settings.selectedFont)
         assertFalse(settings.systemLightSepia)
         assertFalse(settings.sepiaInvertInDark)
+        assertEquals(ReaderInterfaceTheme.System, settings.uiTheme)
+        assertEquals(0xFFFFFFFFL, settings.customBackgroundColor)
+        assertEquals(0xFF000000L, settings.customTextColor)
+        assertEquals(0xFF999999L, settings.customInfoColor)
         assertFalse(settings.continuousMode)
         assertFalse(settings.blurImages)
         assertFalse(settings.enableStatistics)
@@ -86,6 +91,7 @@ class ReaderSettingsTest {
             layoutAdvanced = true,
             lineHeight = 1.85,
             characterSpacing = 2.0,
+            paragraphSpacing = 1.4,
         )
 
         val css = ReaderContentStyles.styleTag(
@@ -101,9 +107,44 @@ class ReaderSettingsTest {
         assertTrue(css.contains("font-size: 28px !important;"))
         assertTrue(css.contains("line-height: 1.85 !important;"))
         assertTrue(css.contains("letter-spacing: 0.02em !important;"))
+        assertTrue(css.contains("margin-right: 1.4em !important;"))
+        assertTrue(css.contains("margin-left: 1.4em !important;"))
+        assertFalse(css.contains("margin-top: 1.4em !important;"))
+        assertFalse(css.contains("margin-bottom: 1.4em !important;"))
         assertTrue(css.contains("column-gap: calc(var(--hoshi-vertical-padding-gap, 8vh) + 28px);"))
         assertTrue(css.contains("padding: var(--hoshi-vertical-padding-block, 4.0vh) 6.0vw !important;"))
         assertTrue(css.contains("padding-bottom: calc(var(--hoshi-vertical-padding-block, 4.0vh) + 28px) !important;"))
+    }
+
+    @Test
+    fun horizontalReaderCssAppliesAdvancedParagraphSpacingToBlockMargins() {
+        val css = ReaderContentStyles.styleTag(
+            ReaderSettings(
+                verticalWriting = false,
+                layoutAdvanced = true,
+                paragraphSpacing = 2.3,
+            ),
+        )
+
+        assertTrue(css.contains("margin-top: 2.3em !important;"))
+        assertTrue(css.contains("margin-bottom: 2.3em !important;"))
+        assertFalse(css.contains("margin-right: 2.3em !important;"))
+        assertFalse(css.contains("margin-left: 2.3em !important;"))
+    }
+
+    @Test
+    fun readerCssOmitsParagraphSpacingWhenAdvancedLayoutIsOff() {
+        val css = ReaderContentStyles.styleTag(
+            ReaderSettings(
+                layoutAdvanced = false,
+                paragraphSpacing = 2.3,
+            ),
+        )
+
+        assertFalse(css.contains("margin-right: 2.3em !important;"))
+        assertFalse(css.contains("margin-left: 2.3em !important;"))
+        assertFalse(css.contains("margin-top: 2.3em !important;"))
+        assertFalse(css.contains("margin-bottom: 2.3em !important;"))
     }
 
     @Test
@@ -159,6 +200,58 @@ class ReaderSettingsTest {
         assertFalse(css.contains("height: var(--page-height, 100vh) !important;"))
         assertFalse(css.contains("column-width: var(--page-width, 100vw) !important;"))
         assertFalse(css.contains("column-gap:"))
+    }
+
+    @Test
+    fun verticalContinuousLayoutMovesHorizontalPaddingToViewportOnly() {
+        val layout = ReaderGeneratedLayout.from(
+            ReaderSettings(
+                continuousMode = true,
+                verticalWriting = true,
+                horizontalPadding = 24,
+                verticalPadding = 10,
+                fontSize = 28,
+            ),
+        )
+
+        assertEquals(0.12, layout.viewportHorizontalPaddingRatio, 0.0)
+        assertEquals(0.0, layout.viewportVerticalPaddingRatio, 0.0)
+        assertEquals("var(--hoshi-vertical-padding-block, 5.0vh) 0", layout.continuousBodyPaddingCss)
+        assertEquals(
+            "calc(var(--hoshi-vertical-padding-block, 5.0vh) + 28px)",
+            layout.continuousBodyBottomPaddingCss,
+        )
+        assertEquals(1.0, layout.imageWidthViewportRatio, 0.0)
+    }
+
+    @Test
+    fun horizontalContinuousLayoutMovesVerticalPaddingToViewportOnly() {
+        val layout = ReaderGeneratedLayout.from(
+            ReaderSettings(
+                continuousMode = true,
+                verticalWriting = false,
+                horizontalPadding = 24,
+                verticalPadding = 10,
+            ),
+        )
+
+        assertEquals(0.0, layout.viewportHorizontalPaddingRatio, 0.0)
+        assertEquals(0.05, layout.viewportVerticalPaddingRatio, 0.0)
+        assertEquals("0 12.0vw", layout.continuousBodyPaddingCss)
+        assertEquals("0", layout.continuousBodyBottomPaddingCss)
+        assertEquals(0.76, layout.imageWidthViewportRatio, 0.0)
+    }
+
+    @Test
+    fun paginatedVerticalLayoutUsesPageHeightAsColumnWidth() {
+        assertEquals(
+            "var(--page-height, 100vh)",
+            ReaderGeneratedLayout.from(ReaderSettings(verticalWriting = true)).paginatedColumnWidthCss,
+        )
+        assertEquals(
+            "var(--page-width, 100vw)",
+            ReaderGeneratedLayout.from(ReaderSettings(verticalWriting = false)).paginatedColumnWidthCss,
+        )
     }
 
     @Test
@@ -228,6 +321,30 @@ class ReaderSettingsTest {
         assertFalse(ReaderSettings(theme = ReaderTheme.Light).usesDarkInterface(systemDark = true))
         assertTrue(ReaderSettings(theme = ReaderTheme.Dark).usesDarkInterface(systemDark = false))
         assertFalse(ReaderSettings(theme = ReaderTheme.Sepia).usesDarkInterface(systemDark = true))
+        assertFalse(
+            ReaderSettings(
+                theme = ReaderTheme.Custom,
+                uiTheme = ReaderInterfaceTheme.Light,
+            ).usesDarkInterface(systemDark = true),
+        )
+        assertTrue(
+            ReaderSettings(
+                theme = ReaderTheme.Custom,
+                uiTheme = ReaderInterfaceTheme.Dark,
+            ).usesDarkInterface(systemDark = false),
+        )
+        assertTrue(
+            ReaderSettings(
+                theme = ReaderTheme.Custom,
+                uiTheme = ReaderInterfaceTheme.System,
+            ).usesDarkInterface(systemDark = true),
+        )
+        assertFalse(
+            ReaderSettings(
+                theme = ReaderTheme.Custom,
+                uiTheme = ReaderInterfaceTheme.System,
+            ).usesDarkInterface(systemDark = false),
+        )
         assertTrue(
             ReaderSettings(
                 theme = ReaderTheme.Sepia,
@@ -242,6 +359,33 @@ class ReaderSettingsTest {
         )
         assertTrue(ReaderSettings(theme = ReaderTheme.System).usesDarkInterface(systemDark = true))
         assertFalse(ReaderSettings(theme = ReaderTheme.System).usesDarkInterface(systemDark = false))
+    }
+
+    @Test
+    fun systemBarIconAppearanceFollowsResolvedReaderInterfaceTheme() {
+        assertTrue(ReaderSettings(theme = ReaderTheme.Light).usesDarkSystemBarIcons(systemDark = true))
+        assertTrue(ReaderSettings(theme = ReaderTheme.Sepia).usesDarkSystemBarIcons(systemDark = true))
+        assertFalse(
+            ReaderSettings(
+                theme = ReaderTheme.Sepia,
+                sepiaInvertInDark = true,
+            ).usesDarkSystemBarIcons(systemDark = true),
+        )
+        assertFalse(ReaderSettings(theme = ReaderTheme.Dark).usesDarkSystemBarIcons(systemDark = false))
+        assertFalse(ReaderSettings(theme = ReaderTheme.System).usesDarkSystemBarIcons(systemDark = true))
+        assertTrue(ReaderSettings(theme = ReaderTheme.System).usesDarkSystemBarIcons(systemDark = false))
+        assertFalse(
+            ReaderSettings(
+                theme = ReaderTheme.Custom,
+                uiTheme = ReaderInterfaceTheme.Dark,
+            ).usesDarkSystemBarIcons(systemDark = false),
+        )
+        assertTrue(
+            ReaderSettings(
+                theme = ReaderTheme.Custom,
+                uiTheme = ReaderInterfaceTheme.Light,
+            ).usesDarkSystemBarIcons(systemDark = true),
+        )
     }
 
     @Test
@@ -261,8 +405,10 @@ class ReaderSettingsTest {
             systemDark = true,
         )
 
-        assertTrue(css.contains("background: #000 !important;"))
-        assertTrue(css.contains("color: #fff !important;"))
+        assertTrue(css.contains("--hoshi-background-color: #000;"))
+        assertTrue(css.contains("--hoshi-text-color: #fff;"))
+        assertTrue(css.contains("background: var(--hoshi-background-color) !important;"))
+        assertTrue(css.contains("color: var(--hoshi-text-color) !important;"))
     }
 
     @Test
@@ -292,10 +438,54 @@ class ReaderSettingsTest {
     fun sepiaCanInvertReaderColorsInSystemDarkModeLikeIos() {
         val settings = ReaderSettings(theme = ReaderTheme.Sepia, sepiaInvertInDark = true)
 
-        assertEquals(0xFF18150C, settings.backgroundColor(systemDark = true))
+        assertEquals(0xFF17150F, settings.backgroundColor(systemDark = true))
         assertEquals("#F2E2C9", settings.textColorCss(systemDark = true))
         assertEquals(0xFFF2E2C9, settings.backgroundColor(systemDark = false))
         assertEquals("#332A1B", settings.textColorCss(systemDark = false))
+    }
+
+    @Test
+    fun customReaderThemeUsesConfiguredContentColorsAndSeparateInterfaceTheme() {
+        val settings = ReaderSettings(
+            theme = ReaderTheme.Custom,
+            uiTheme = ReaderInterfaceTheme.Dark,
+            customBackgroundColor = 0xFF112233,
+            customTextColor = 0xFF445566,
+        )
+
+        assertEquals(0xFF112233, settings.backgroundColor(systemDark = false))
+        assertEquals(0xFF112233, settings.backgroundColor(systemDark = true))
+        assertEquals("#445566", settings.textColorCss(systemDark = false))
+        assertEquals("#445566", settings.textColorCss(systemDark = true))
+        assertTrue(settings.usesDarkInterface(systemDark = false))
+    }
+
+    @Test
+    fun customReaderCssPreservesConfiguredColorAlpha() {
+        val css = ReaderContentStyles.styleTag(
+            settings = ReaderSettings(
+                theme = ReaderTheme.Custom,
+                customBackgroundColor = 0x44112233,
+                customTextColor = 0x88445566,
+            ),
+        )
+
+        assertTrue(css.contains("--hoshi-background-color: #11223344;"))
+        assertTrue(css.contains("--hoshi-text-color: #44556688;"))
+    }
+
+    @Test
+    fun eInkModeOverridesCustomThemeContentColors() {
+        val settings = ReaderSettings(
+            theme = ReaderTheme.Custom,
+            eInkMode = true,
+            uiTheme = ReaderInterfaceTheme.Dark,
+            customBackgroundColor = 0xFF112233,
+            customTextColor = 0xFF445566,
+        )
+
+        assertEquals(0xFF000000, settings.backgroundColor(systemDark = false))
+        assertEquals("#fff", settings.textColorCss(systemDark = false))
     }
 
     @Test
@@ -307,6 +497,36 @@ class ReaderSettingsTest {
         assertTrue(css.contains("ruby > rt, ruby > rp"))
         assertTrue(css.contains("-webkit-user-select: none;"))
         assertTrue(css.contains("user-select: none;"))
+    }
+
+    @Test
+    fun paginatedReaderCssAllowsFillingPageBottomAcrossParagraphs() {
+        val paginatedCss = ReaderContentStyles.styleTag(
+            ReaderSettings(continuousMode = false),
+        )
+        val continuousCss = ReaderContentStyles.styleTag(
+            ReaderSettings(continuousMode = true),
+        )
+
+        assertTrue(paginatedCss.contains("orphans: 1 !important;"))
+        assertTrue(paginatedCss.contains("widows: 1 !important;"))
+        assertFalse(continuousCss.contains("orphans: 1 !important;"))
+        assertFalse(continuousCss.contains("widows: 1 !important;"))
+    }
+
+    @Test
+    fun paginatedReaderCssResetsNestedColumnCounts() {
+        val paginatedCss = ReaderContentStyles.styleTag(
+            ReaderSettings(continuousMode = false),
+        )
+        val continuousCss = ReaderContentStyles.styleTag(
+            ReaderSettings(continuousMode = true),
+        )
+
+        assertTrue(paginatedCss.contains("body * {\n                column-count: auto !important;"))
+        assertTrue(paginatedCss.contains("-webkit-column-count: auto !important;"))
+        assertFalse(continuousCss.contains("column-count: auto !important;"))
+        assertFalse(continuousCss.contains("-webkit-column-count: auto !important;"))
     }
 
     @Test

@@ -21,6 +21,12 @@ let audioUrls = {};
 let lastSelection = '';
 let currentDictionaryMedia = null;
 let selectedDictionaries = {};
+let dictionaryMediaObserver = null;
+let renderGeneration = 0;
+
+if (typeof window.nativePopupButtons !== 'boolean') {
+    window.nativePopupButtons = true;
+}
 
 function getPopupSelectionText() {
     return window.hoshiSelection?.selection?.text || window.getSelection()?.toString() || '';
@@ -361,6 +367,40 @@ function getDictionaryMediaUrl(dictionary, path) {
     return `image://?dictionary=${encodeURIComponent(dictionary)}&path=${encodeURIComponent(path)}`;
 }
 
+function observeDictionaryMedia(target, load) {
+    if (typeof IntersectionObserver !== 'function') {
+        load();
+        return;
+    }
+    if (!dictionaryMediaObserver) {
+        dictionaryMediaObserver = new IntersectionObserver((entries, observer) => {
+            for (const entry of entries) {
+                if (!entry.isIntersecting) continue;
+                observer.unobserve(entry.target);
+                const fn = entry.target._loadDictionaryMedia;
+                delete entry.target._loadDictionaryMedia;
+                fn?.();
+            }
+        }, { root: null, rootMargin: '200px' });
+    }
+    target._loadDictionaryMedia = load;
+    dictionaryMediaObserver.observe(target);
+}
+
+function resetDictionaryMediaObserver() {
+    dictionaryMediaObserver?.disconnect();
+    dictionaryMediaObserver = null;
+}
+
+function observePendingDictionaryMedia(root) {
+    root.querySelectorAll?.('.gloss-image-container').forEach(target => {
+        const fn = target._loadDictionaryMedia;
+        if (fn) {
+            observeDictionaryMedia(target, fn);
+        }
+    });
+}
+
 function applyDictionaryImageContainerFixes(imageContainer) {
     if (window.disablePopupImageViewportMaxHeight) {
         imageContainer.style.maxHeight = 'none';
@@ -667,9 +707,11 @@ function createDefinitionImage(data, dictionary, exporting = false) {
     if (!exporting) {
         const imageUrl = getDictionaryMediaUrl(dictionary, path);
         if (shouldRenderDefinitionImageToCanvas(path, appearance, usedWidth, invAspectRatio)) {
-            imageContainer.appendChild(createDefinitionImageCanvas(imageUrl, nodeData?.alt || title || '', (canvas, sourceImage) => {
+            const canvas = createDefinitionImageCanvas(imageUrl, nodeData?.alt || title || '', (canvas, sourceImage) => {
                 renderDefinitionImageToCanvas(canvas, sourceImage, usedWidth, invAspectRatio, appearance);
-            }));
+            });
+            imageContainer.appendChild(canvas);
+            observeDictionaryMedia(imageContainer, () => canvas.loadDictionaryMedia?.());
         } else {
             const img = document.createElement('img');
             img.classList.add('gloss-image');
@@ -690,8 +732,10 @@ function createDefinitionImage(data, dictionary, exporting = false) {
                     applyDictionaryImageContainerFixes(imageContainer);
                 }, {once: true});
             }
-            img.src = imageUrl;
             imageContainer.appendChild(img);
+            observeDictionaryMedia(imageContainer, () => {
+                img.src = imageUrl;
+            });
         }
     } else {
         const alt = nodeData?.alt || title || '';
@@ -733,7 +777,9 @@ function createDefinitionImageCanvas(imageUrl, alt, onLoad) {
     sourceImage.addEventListener('load', () => {
         onLoad(canvas, sourceImage);
     }, {once: true});
-    sourceImage.src = imageUrl;
+    canvas.loadDictionaryMedia = () => {
+        sourceImage.src = imageUrl;
+    };
 
     return canvas;
 }
@@ -1240,16 +1286,30 @@ function playWordAudio(audioUrl) {
 let buttonFrameSyncScheduled = false;
 let visualStateButtonFrameSyncScheduled = false;
 
+function getButtonRectScale() {
+    const zoom = Number.parseFloat(getComputedStyle(document.documentElement).zoom);
+    if (zoom === 1) {
+        return 1;
+    }
+
+    const probe = el('div', { style: 'position:absolute;width:100px;visibility:hidden;' });
+    document.body.appendChild(probe);
+    const width = probe.getBoundingClientRect().width;
+    probe.remove();
+    return 100 * zoom / width;
+}
+
 function collectButtonFrames() {
+    const scale = getButtonRectScale();
     return [...document.querySelectorAll('.button-slot')].map(slot => {
         const rect = slot.getBoundingClientRect();
         return {
             kind: slot.dataset.kind,
             entryIndex: Number(slot.dataset.entryIndex),
-            x: rect.left + window.scrollX,
-            y: rect.top + window.scrollY,
-            width: rect.width,
-            height: rect.height,
+            x: (rect.left + window.scrollX) * scale,
+            y: (rect.top + window.scrollY) * scale,
+            width: rect.width * scale,
+            height: rect.height * scale,
             state: slot.dataset.state || 'default',
             enabled: slot.dataset.enabled !== 'false'
         };
@@ -1294,12 +1354,30 @@ window.addEventListener('resize', scheduleButtonFrameSync);
 document.addEventListener('toggle', scheduleButtonFrameSyncAtVisualState, true);
 
 function createButtonSlot(kind, entryIndex, enabled = true) {
-    return el('span', {
+    const slot = el(window.nativePopupButtons ? 'span' : 'button', {
         className: 'button-slot',
         'data-kind': kind,
         'data-entry-index': entryIndex,
         'data-enabled': String(enabled)
     });
+    if (window.nativePopupButtons) {
+        return slot;
+    }
+    slot.type = 'button';
+    slot.setAttribute('aria-label', kind === 'audio' ? 'Play audio' : 'Add to Anki');
+    slot.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        if (slot.dataset.enabled === 'false') { return; }
+        if (kind === 'audio') {
+            playEntryAudio(entryIndex);
+        } else if (kind === 'mine') {
+            mineEntryAtIndex(entryIndex);
+        }
+    });
+    slot.appendChild(el('span', { className: 'button-slot-icon' }));
+    applyButtonSlotVisualState(slot);
+    return slot;
 }
 
 function getButtonSlot(kind, entryIndex) {
@@ -1310,7 +1388,20 @@ function updateButtonSlot(slot, changes) {
     if (!slot || !slot.isConnected) { return; }
     if ('state' in changes) { slot.dataset.state = changes.state; }
     if ('enabled' in changes) { slot.dataset.enabled = String(changes.enabled); }
+    applyButtonSlotVisualState(slot);
     scheduleButtonFrameSync();
+}
+
+function applyButtonSlotVisualState(slot) {
+    if (window.nativePopupButtons || !slot) { return; }
+    const kind = slot.dataset.kind;
+    const state = slot.dataset.state || 'default';
+    const enabled = slot.dataset.enabled !== 'false';
+    const iconName = kind === 'audio'
+        ? (state === 'error' ? 'volume_off' : 'volume_up')
+        : (state === 'duplicate' ? 'check_box' : 'add_box');
+    slot.disabled = !enabled;
+    slot.style.setProperty('--button-icon-url', `url("https://hoshi.local/popup/icons/${iconName}.svg")`);
 }
 
 async function playEntryAudio(entryIndex) {
@@ -1442,6 +1533,7 @@ function createGlossarySection(dictName, contents, isFirst, entryIdx) {
             }
         `.trim()
     }));
+    window.hoshiPopupPrewarmFonts?.();
 
     const termTags = [...new Set(parseTags(contents[0]?.termTags))];
     const renderContent = (parent, content) => {
@@ -1499,6 +1591,21 @@ const backStack = [];
 const forwardStack = [];
 let pendingHistoryRestore = null;
 
+window.resetPopupResults = function() {
+    renderGeneration++;
+    flushPendingHistoryRestore();
+    backStack.length = 0;
+    forwardStack.length = 0;
+    pendingHistoryRestore = null;
+    window.lookupEntries = undefined;
+    window.entryCount = 0;
+    audioUrls = {};
+    selectedDictionaries = {};
+    resetDictionaryMediaObserver();
+    document.getElementById('entries-container')?.replaceChildren();
+    document.scrollingElement.scrollTop = 0;
+};
+
 function appendPendingHistoryRestore(flush = false) {
     const pending = pendingHistoryRestore;
     if (!pending) {
@@ -1508,6 +1615,7 @@ function appendPendingHistoryRestore(flush = false) {
     const chunk = pending.nodes.splice(0, count);
     if (chunk.length) {
         pending.container.append(...chunk);
+        observePendingDictionaryMedia(pending.container);
         scheduleButtonFrameSync();
     }
     if (!pending.nodes.length) {
@@ -1525,6 +1633,7 @@ function flushPendingHistoryRestore() {
 
 function redirect(count) {
     flushPendingHistoryRestore();
+    resetDictionaryMediaObserver();
     backStack.push(snapshot());
     forwardStack.length = 0;
     window.lookupEntries = undefined;
@@ -1542,15 +1651,17 @@ function redirect(count) {
     });
 }
 
-window.replacePopupResults = function(count) {
+window.replacePopupResults = function(count, initialEntries) {
     closeOverlay();
     flushPendingHistoryRestore();
+    renderGeneration++;
     backStack.length = 0;
     forwardStack.length = 0;
-    window.lookupEntries = undefined;
+    window.lookupEntries = Array.isArray(initialEntries) && initialEntries.length ? initialEntries : undefined;
     window.entryCount = count;
     audioUrls = {};
     selectedDictionaries = {};
+    resetDictionaryMediaObserver();
     const container = document.getElementById('entries-container');
     if (container) {
         container.innerHTML = '';
@@ -1581,15 +1692,18 @@ function restore(snapshot) {
     const shouldDeferOffscreenNodes = snapshot.scrollTop === 0 && nodes.length > 6;
     if (shouldDeferOffscreenNodes) {
         container.replaceChildren(...nodes.splice(0, 4));
+        observePendingDictionaryMedia(container);
         pendingHistoryRestore = { container, nodes };
         setTimeout(() => appendPendingHistoryRestore(), 50);
     } else {
         container.replaceChildren(...nodes);
+        observePendingDictionaryMedia(container);
     }
     window.lookupEntries = snapshot.lookupEntries;
     window.entryCount = snapshot.entryCount;
     audioUrls = {};
     selectedDictionaries = {};
+    applyHoshiPopupThemeOverrides(container);
     scheduleButtonFrameSync();
     requestAnimationFrame(() => {
         document.scrollingElement.scrollTop = snapshot.scrollTop;
@@ -1607,15 +1721,34 @@ function navigate(origin, destination) {
 window.navigateBack = () => navigate(backStack, forwardStack);
 window.navigateForward = () => navigate(forwardStack, backStack);
 
+function applyHoshiPopupThemeOverrides(root = document) {
+    const colorScheme = document.documentElement.dataset.hoshiColorScheme;
+    const buttonColor = colorScheme === 'dark' ? 'rgba(235, 235, 245, 0.92)' : 'rgba(60, 60, 67, 0.86)';
+    const tableHeaderBackgroundColor = colorScheme === 'dark' ? '#333333' : '#eeeeee';
+    const tableHeaderTextColor = colorScheme === 'dark' ? '#ffffff' : '#000000';
+    root.querySelectorAll('button.button-slot').forEach(button => {
+        button.style.setProperty('color', buttonColor, 'important');
+    });
+    root.querySelectorAll('table[data-sc-content="formsTable"] th, table[data-sc-content="formsTable"] .gloss-sc-th').forEach(header => {
+        header.style.setProperty('background-color', tableHeaderBackgroundColor, 'important');
+        header.style.setProperty('color', tableHeaderTextColor, 'important');
+        header.querySelectorAll('*').forEach(child => {
+            child.style.setProperty('color', 'inherit', 'important');
+        });
+    });
+}
+
 window.renderPopup = function() {
     const container = document.getElementById('entries-container');
     if (!window.entryCount) {
         return;
     }
+    const generation = ++renderGeneration;
 
     (async () => {
         for (let idx = 0; idx < window.entryCount; idx++) {
             const entry = window.lookupEntries?.[idx] ?? await webkit.messageHandlers.getEntry.postMessage(idx);
+            if (generation !== renderGeneration) return;
             if (!entry) continue;
 
             window.lookupEntries ??= [];
@@ -1629,9 +1762,7 @@ window.renderPopup = function() {
             entryDiv.appendChild(createEntryHeader(entry, idx));
 
             if (window.audioEnableAutoplay && window.audioSources?.length && idx === 0) {
-                setTimeout(() => {
-                    playEntryAudio(idx);
-                }, 70);
+                playEntryAudio(idx);
             }
 
             const tags = createTags(entry);
@@ -1641,6 +1772,7 @@ window.renderPopup = function() {
 
             container.appendChild(entryDiv);
             await new Promise(r => requestAnimationFrame(r));
+            if (generation !== renderGeneration) return;
 
             const grouped = {};
             entry.glossaries.forEach(g => {
@@ -1654,9 +1786,12 @@ window.renderPopup = function() {
             const dictNames = Object.keys(grouped);
             for (let dictIdx = 0; dictIdx < dictNames.length; dictIdx++) {
                 entryDiv.appendChild(createGlossarySection(dictNames[dictIdx], grouped[dictNames[dictIdx]], dictIdx === 0, idx));
+                applyHoshiPopupThemeOverrides(entryDiv);
                 await new Promise(r => requestAnimationFrame(r));
+                if (generation !== renderGeneration) return;
             }
         }
+        if (generation !== renderGeneration) return;
 
         container.querySelectorAll('.glossary-content ruby').forEach(ruby => {
             ruby.childNodes.forEach(node => {
@@ -1667,6 +1802,7 @@ window.renderPopup = function() {
                 }
             });
         });
+        applyHoshiPopupThemeOverrides(container);
     })();
 
     if (window.compactGlossaries && !document.getElementById('popup-compact-glossaries')) {
@@ -1711,7 +1847,8 @@ window.renderPopup = function() {
         const customStyle = document.createElement('style');
         customStyle.id = 'popup-custom-css';
         customStyle.textContent = window.customCSS;
-        document.body.appendChild(customStyle);
+        document.head.appendChild(customStyle);
+        window.hoshiPopupPrewarmFonts?.();
     }
 
     if (container.clickAttached) {
@@ -1727,7 +1864,10 @@ window.renderPopup = function() {
             webkit.messageHandlers.tapOutside.postMessage(null);
             return;
         }
-        const selected = window.hoshiSelection?.selectText(e.clientX, e.clientY, 16);
+        const scale = getButtonRectScale();
+        const rectX = (e.clientX + window.scrollX) / scale - window.scrollX;
+        const rectY = (e.clientY + window.scrollY) / scale - window.scrollY;
+        const selected = window.hoshiSelection?.selectText(e.clientX, e.clientY, window.scanLength, rectX, rectY);
         if (!selected) {
             webkit.messageHandlers.tapOutside.postMessage(null);
             return;

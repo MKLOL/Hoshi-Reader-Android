@@ -61,6 +61,49 @@ class LookupPopupHtmlTest {
     }
 
     @Test
+    fun iframePopupShellUsesDomButtonsAndAbsoluteAssets() {
+        val html = LookupPopupHtml.renderIframeDocument(
+            assets = null,
+            settings = DictionarySettings(scanLength = 24),
+            darkMode = true,
+            eInkMode = true,
+            popupScale = 1.15,
+        )
+
+        assertTrue(html.contains("""<link rel="stylesheet" href="https://hoshi.local/popup/popup.css">"""))
+        assertTrue(html.contains("""<script src="https://hoshi.local/popup/selection.js"></script>"""))
+        assertTrue(html.contains("""<script src="https://hoshi.local/popup/popup.js"></script>"""))
+        assertTrue(html.contains("window.nativePopupButtons = false;"))
+        assertTrue(html.contains("window.scanLength = 24;"))
+        assertTrue(html.contains("html { zoom: 1.15; }"))
+        assertTrue(html.contains("""data-hoshi-color-scheme="dark""""))
+        assertTrue(html.contains("""data-hoshi-eink-mode="true""""))
+        assertTrue(html.contains("""window.lookupEntries = [];"""))
+        assertTrue(html.contains("""window.entryCount = 0;"""))
+        assertFalse(html.contains("""<section class="entry">"""))
+    }
+
+    @Test
+    fun iframePopupShellInstallsSwipeDismissGesture() {
+        val html = LookupPopupHtml.renderIframeDocument(
+            swipeToDismiss = true,
+            swipeThreshold = 35,
+        )
+
+        assertTrue(html.contains("window.swipeThreshold = 35;"))
+        assertTrue(html.contains("document.addEventListener('touchstart', function(e)"))
+        assertTrue(html.contains("document.addEventListener('touchend', function(e)"))
+        assertTrue(html.contains("webkit.messageHandlers.swipeDismiss.postMessage(null);"))
+    }
+
+    @Test
+    fun iframePopupShellDisablesOverscrollStretch() {
+        val html = LookupPopupHtml.renderIframeDocument()
+
+        assertTrue(html.contains("overscroll-behavior: none;"))
+    }
+
+    @Test
     fun popupHtmlInjectsFontFacesAndInitialScaleLikeIosPopupWebView() {
         val html = LookupPopupHtml.render(
             listOf(lookupResult(expression = "食べる", reading = "たべる", glossary = "to eat")),
@@ -81,6 +124,71 @@ class LookupPopupHtmlTest {
         assertTrue(html.contains("""font-family: "Klee One";"""))
         assertTrue(html.contains("""src: url("https://hoshi.local/fonts/Klee%20One.ttf");"""))
         assertTrue(html.contains("html { zoom: 1.25; }"))
+    }
+
+    @Test
+    fun popupHtmlInstallsCustomCssInHeadBeforeRenderingAndPrewarmsFonts() {
+        val html = LookupPopupHtml.render(
+            listOf(lookupResult(expression = "食べる", reading = "たべる", glossary = "to eat")),
+            assets = LookupPopupAssets(
+                popupJs = "window.renderPopup = function() {};",
+                popupCss = ".entry-header {}",
+                selectionJs = "window.hoshiSelection = { selectText: function() {} };",
+            ),
+            settings = DictionarySettings(
+                customCSS = """
+                    @font-face {
+                        font-family: "Slow Popup Font";
+                        src: url("https://hoshi.local/fonts/SlowPopupFont.ttf");
+                    }
+                    .glossary-content { font-family: "Slow Popup Font"; }
+                """.trimIndent(),
+            ),
+        )
+
+        val customCssIndex = html.indexOf("""<style id="popup-custom-css">""")
+        assertTrue(customCssIndex >= 0)
+        assertTrue(customCssIndex < html.indexOf("window.renderPopup();"))
+        assertTrue(html.contains("""font-family: "Slow Popup Font";"""))
+        assertTrue(html.contains("window.hoshiPopupPrewarmFonts = function()"))
+        assertTrue(html.contains("window.hoshiPopupPrewarmFonts();"))
+    }
+
+    @Test
+    fun iframePopupShellInstallsCustomCssInHeadAndPrewarmsFontsDuringIdleLoad() {
+        val html = LookupPopupHtml.renderIframeDocument(
+            settings = DictionarySettings(
+                customCSS = """
+                    @font-face {
+                        font-family: "Slow Iframe Font";
+                        src: url("https://hoshi.local/fonts/SlowIframeFont.ttf");
+                    }
+                    .entry { font-family: "Slow Iframe Font"; }
+                """.trimIndent(),
+            ),
+        )
+
+        val customCssIndex = html.indexOf("""<style id="popup-custom-css">""")
+        assertTrue(customCssIndex >= 0)
+        assertTrue(customCssIndex < html.indexOf("""<script src="https://hoshi.local/popup/popup.js"></script>"""))
+        assertTrue(html.contains("""font-family: "Slow Iframe Font";"""))
+        assertTrue(html.contains("window.hoshiPopupPrewarmFonts = function()"))
+        assertTrue(html.contains("window.hoshiPopupPrewarmFonts();"))
+    }
+
+    @Test
+    fun popupHtmlExposesConfiguredScanLengthToRecursiveSelectionJavascript() {
+        val html = LookupPopupHtml.render(
+            listOf(lookupResult(expression = "食べる", reading = "たべる", glossary = "to eat")),
+            assets = LookupPopupAssets(
+                popupJs = "window.renderPopup = function() {};",
+                popupCss = ".entry-header {}",
+                selectionJs = "window.hoshiSelection = { selectText: function() {} };",
+            ),
+            settings = DictionarySettings(scanLength = 33),
+        )
+
+        assertTrue(html.contains("window.scanLength = 33;"))
     }
 
     @Test
@@ -157,6 +265,21 @@ class LookupPopupHtmlTest {
         )
 
         assertTrue(html.contains("buttonFrames: { postMessage: function(frames) { window.HoshiAndroidPopup.postMessage('buttonFrames', frames); } }"))
+    }
+
+    @Test
+    fun popupHtmlMinesEntriesThroughAsyncRequestBridgeLikeIos() {
+        val html = LookupPopupHtml.render(
+            listOf(lookupResult(expression = "食べる", reading = "たべる", glossary = "to eat")),
+            assets = LookupPopupAssets(
+                popupJs = "window.renderPopup = function() {};",
+                popupCss = ".button-slot {}",
+                selectionJs = "window.hoshiSelection = { selectText: function() {} };",
+            ),
+        )
+
+        assertTrue(html.contains("mineEntry: { postMessage: function(content) { return window.HoshiAndroidPopup.requestMessage('mineEntry', content); } }"))
+        assertFalse(html.contains("window.HoshiPopup.mineEntry(JSON.stringify(content))"))
     }
 
     @Test

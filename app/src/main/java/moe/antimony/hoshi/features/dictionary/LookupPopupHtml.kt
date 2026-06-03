@@ -16,6 +16,7 @@ internal data class LookupPopupAssets(
     val popupJs: String,
     val popupCss: String,
     val selectionJs: String = "",
+    val readerPopupHostJs: String = "",
 ) {
     companion object {
         @Volatile
@@ -34,6 +35,9 @@ internal data class LookupPopupAssets(
                 .bufferedReader()
                 .use { it.readText() },
             selectionJs = context.assets.open("hoshi-popup/selection.js")
+                .bufferedReader()
+                .use { it.readText() },
+            readerPopupHostJs = context.assets.open("hoshi-popup/reader-popup-host.js")
                 .bufferedReader()
                 .use { it.readText() },
         )
@@ -80,6 +84,8 @@ internal object LookupPopupHtml {
                 html { zoom: ${popupCssNumber(popupScale.coerceIn(0.8, 1.5))}; }
             </style>
         """.trimIndent()
+        val customCss = customCssStyle(normalizedSettings.customCSS)
+        val fontPrewarmScript = """<script>${popupFontPrewarmScript()}</script>"""
         val eInkCss = if (eInkMode) """<style>$eInkPopupCss</style>""" else ""
         val selectionJs = assets?.let { """<script>${it.selectionJs}</script>""" }
             ?: """<script src="$PopupAssetBaseUrl/selection.js"></script>"""
@@ -103,6 +109,8 @@ internal object LookupPopupHtml {
                 $popupCss
                 <style>$androidColorSchemeCss</style>
                 $popupTypographyCss
+                $customCss
+                $fontPrewarmScript
                 $eInkCss
                 $selectionJs
                 $popupJs
@@ -153,7 +161,7 @@ internal object LookupPopupHtml {
                             shellReady: { postMessage: function() { window.HoshiAndroidPopup.postMessage('shellReady'); } },
                             contentReady: { postMessage: function(frames) { window.HoshiAndroidPopup.postMessage('contentReady', frames); } },
                             popupScrolled: { postMessage: function() { window.HoshiAndroidPopup.postMessage('popupScrolled'); } },
-                            mineEntry: { postMessage: async function(content) { return window.HoshiPopup.mineEntry(JSON.stringify(content)); } },
+                            mineEntry: { postMessage: function(content) { return window.HoshiAndroidPopup.requestMessage('mineEntry', content); } },
                             duplicateCheck: { postMessage: function(expression) { return window.HoshiAndroidPopup.requestMessage('duplicateCheck', expression); } },
                             getEntry: { postMessage: async function(index) {
                                 if (window.HoshiPopup && window.HoshiPopup.getEntry) {
@@ -171,6 +179,7 @@ internal object LookupPopupHtml {
                         }
                     };
                     window.scanNonJapaneseText = ${normalizedSettings.scanNonJapaneseText};
+                    window.scanLength = ${normalizedSettings.scanLength};
                     window.collapseMode = "${normalizedSettings.collapseMode.rawValue}";
                     window.expandFirstDictionary = ${normalizedSettings.expandFirstDictionary};
                     window.collapsedDictionaries = $collapsedDictionaries;
@@ -199,69 +208,7 @@ internal object LookupPopupHtml {
                     window.lookupEntries = $entries;
                     window.entryCount = $entryCount;
                 </script>
-                <script>
-                    (function() {
-                        if (window.reducedMotionScrolling) {
-                            var reducedMotionStartY = 0;
-                            var root = function() {
-                                return document.scrollingElement || document.documentElement || document.body;
-                            };
-                            var scrollByPopupHeight = function(direction) {
-                                var scrollRoot = root();
-                                var popupHeight = document.documentElement.clientHeight || window.innerHeight || scrollRoot.clientHeight;
-                                var maxScroll = Math.max(0, scrollRoot.scrollHeight - popupHeight);
-                                var current = scrollRoot.scrollTop || window.scrollY || 0;
-                                var target = Math.max(0, Math.min(maxScroll, current + popupHeight * window.reducedMotionScrollScale * direction));
-                                scrollRoot.scrollTop = target;
-                                window.scrollTo(0, target);
-                            };
-                            document.addEventListener('touchstart', function(e) {
-                                if (e.touches.length === 1) {
-                                    reducedMotionStartY = e.touches[0].clientY;
-                                }
-                            }, { passive: true });
-                            document.addEventListener('touchmove', function(e) {
-                                if (e.touches.length === 1 && e.cancelable) {
-                                    e.preventDefault();
-                                }
-                            }, { passive: false });
-                            document.addEventListener('touchend', function(e) {
-                                if (!e.changedTouches.length) return;
-                                var delta = reducedMotionStartY - e.changedTouches[0].clientY;
-                                var threshold = window.reducedMotionSwipeThreshold;
-                                if (delta > threshold) {
-                                    scrollByPopupHeight(1);
-                                } else if (delta < -threshold) {
-                                    scrollByPopupHeight(-1);
-                                }
-                            }, { passive: true });
-                            document.addEventListener('wheel', function(e) {
-                                if (e.deltaY === 0) return;
-                                scrollByPopupHeight(e.deltaY > 0 ? 1 : -1);
-                                e.preventDefault();
-                            }, { passive: false });
-                        }
-                        if (!window.swipeThreshold) {
-                            return;
-                        }
-                        var startX, startY;
-                        document.addEventListener('touchstart', function(e) {
-                            startX = e.touches[0].clientX;
-                            startY = e.touches[0].clientY;
-                        });
-                        document.addEventListener('touchend', function(e) {
-                            var dx = e.changedTouches[0].clientX - startX;
-                            var dy = e.changedTouches[0].clientY - startY;
-                            var absDx = Math.abs(dx);
-                            var absDy = Math.abs(dy);
-                            var isHorizontalDismiss = absDx > window.swipeThreshold && absDx > absDy * 1.75;
-                            var hasSelection = window.getSelection().toString();
-                            if (isHorizontalDismiss && !hasSelection) {
-                                webkit.messageHandlers.swipeDismiss.postMessage(null);
-                            }
-                        });
-                    })();
-                </script>
+                <script>${popupGestureScript()}</script>
                 $topSpacer
                 $entriesContainer
                 <div class="overlay">
@@ -318,6 +265,252 @@ internal object LookupPopupHtml {
         """.trimIndent()
     }
 
+    fun renderIframeDocument(
+        assets: LookupPopupAssets? = null,
+        dictionaryStyles: Map<String, String> = emptyMap(),
+        settings: DictionarySettings = DictionarySettings(),
+        swipeToDismiss: Boolean = false,
+        swipeThreshold: Int = 40,
+        reducedMotionScrolling: Boolean = false,
+        reducedMotionScrollPercent: Int = 100,
+        reducedMotionSwipeThreshold: Int = 40,
+        darkMode: Boolean = false,
+        eInkMode: Boolean = false,
+        audioSettings: AudioSettings = AudioSettings(),
+        ankiSettings: AnkiPopupSettings = AnkiPopupSettings(),
+        fontFaceCss: String = "",
+        popupScale: Double = 1.0,
+    ): String {
+        val normalizedSettings = settings.normalized()
+        val collapsedDictionaries = dictionaryNamesJson(normalizedSettings.collapsedDictionaries)
+        val effectiveSwipeThreshold = if (swipeToDismiss) swipeThreshold.coerceAtLeast(0) else 0
+        val effectiveReducedMotionScrollScale = reducedMotionScrollPercent.coerceIn(40, 100) / 100.0
+        val effectiveReducedMotionSwipeThreshold = reducedMotionSwipeThreshold.coerceAtLeast(0)
+        val colorScheme = if (darkMode) "dark" else "light"
+        val styles = dictionaryStylesJson(dictionaryStyles)
+        val popupCss = assets?.let { """<style>${it.popupCss}</style>""" }
+            ?: """<link rel="stylesheet" href="$PopupAssetBaseUrl/popup.css">"""
+        val popupTypographyCss = """
+            <style>
+                ${fontFaceCss.trim()}
+                html { zoom: ${popupCssNumber(popupScale.coerceIn(0.8, 1.5))}; }
+            </style>
+        """.trimIndent()
+        val customCss = customCssStyle(normalizedSettings.customCSS)
+        val fontPrewarmScript = """<script>${popupFontPrewarmScript()}</script>"""
+        val eInkCss = if (eInkMode) """<style>$eInkPopupCss</style>""" else ""
+        val selectionJs = assets?.let { """<script>${it.selectionJs}</script>""" }
+            ?: """<script src="$PopupAssetBaseUrl/selection.js"></script>"""
+        val popupJs = assets?.let { """<script>${it.popupJs}</script>""" }
+            ?: """<script src="$PopupAssetBaseUrl/popup.js"></script>"""
+        return """
+            <!DOCTYPE html>
+            <html data-hoshi-color-scheme="$colorScheme" data-hoshi-eink-mode="$eInkMode">
+            <head>
+                <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+                $popupCss
+                <style>$androidColorSchemeCss</style>
+                $popupTypographyCss
+                $customCss
+                $fontPrewarmScript
+                $eInkCss
+                <style>
+                    html,
+                    body {
+                        overscroll-behavior: none;
+                    }
+                </style>
+                <script>
+                    window.nativePopupButtons = false;
+                    window.HoshiAndroidPopup = window.HoshiAndroidPopup || (function() {
+                        var nextMessageId = 1;
+                        var pendingMessages = {};
+                        function postMessage(name, body, id) {
+                            try {
+                                window.parent.postMessage({
+                                    source: 'hoshi-popup-iframe',
+                                    popupId: window.popupId || null,
+                                    name: name,
+                                    id: id || null,
+                                    body: body === undefined ? null : body
+                                }, 'https://hoshi.local');
+                            } catch (e) {
+                                console.warn('Hoshi reader popup bridge failed', e);
+                            }
+                        }
+                        return {
+                            postMessage: postMessage,
+                            requestMessage: function(name, body) {
+                                return new Promise(function(resolve) {
+                                    var id = String(nextMessageId++);
+                                    pendingMessages[id] = resolve;
+                                    postMessage(name, body, id);
+                                });
+                            },
+                            resolveMessage: function(id, result) {
+                                var resolve = pendingMessages[id];
+                                if (!resolve) return;
+                                delete pendingMessages[id];
+                                resolve(result);
+                            }
+                        };
+                    })();
+                    window.webkit = {
+                        messageHandlers: {
+                            openLink: { postMessage: function(url) { window.HoshiAndroidPopup.postMessage('openLink', url); } },
+                            textSelected: { postMessage: function(selection) { window.HoshiAndroidPopup.postMessage('textSelected', selection); } },
+                            tapOutside: { postMessage: function() { window.HoshiAndroidPopup.postMessage('tapOutside'); } },
+                            swipeDismiss: { postMessage: function() { window.HoshiAndroidPopup.postMessage('swipeDismiss'); } },
+                            playWordAudio: { postMessage: function(content) { window.HoshiAndroidPopup.postMessage('playWordAudio', content); } },
+                            buttonFrames: { postMessage: function() {} },
+                            visualStateButtonFrames: { postMessage: function() {} },
+                            shellReady: { postMessage: function() { window.HoshiAndroidPopup.postMessage('shellReady'); } },
+                            contentReady: { postMessage: function(frames) { window.HoshiAndroidPopup.postMessage('contentReady', frames); } },
+                            popupScrolled: { postMessage: function() { window.HoshiAndroidPopup.postMessage('popupScrolled'); } },
+                            mineEntry: { postMessage: function(content) { return window.HoshiAndroidPopup.requestMessage('mineEntry', content); } },
+                            duplicateCheck: { postMessage: function(expression) { return window.HoshiAndroidPopup.requestMessage('duplicateCheck', expression); } },
+                            getEntry: { postMessage: function(index) { return window.HoshiAndroidPopup.requestMessage('getEntry', index); } },
+                            lookupRedirect: { postMessage: function(query) { return window.HoshiAndroidPopup.requestMessage('lookupRedirect', query); } }
+                        }
+                    };
+                    window.scanNonJapaneseText = ${normalizedSettings.scanNonJapaneseText};
+                    window.scanLength = ${normalizedSettings.scanLength};
+                    window.collapseMode = "${normalizedSettings.collapseMode.rawValue}";
+                    window.expandFirstDictionary = ${normalizedSettings.expandFirstDictionary};
+                    window.collapsedDictionaries = $collapsedDictionaries;
+                    window.compactGlossaries = ${normalizedSettings.compactGlossaries};
+                    window.showExpressionTags = ${normalizedSettings.showExpressionTags};
+                    window.harmonicFrequency = ${normalizedSettings.harmonicFrequency};
+                    window.deduplicatePitchAccents = ${normalizedSettings.deduplicatePitchAccents};
+                    window.compactPitchAccents = ${normalizedSettings.compactPitchAccents};
+                    window.audioSources = ${audioSourcesJson(audioSettings)};
+                    window.audioRequestEndpoint = "https://hoshi.local/audio";
+                    window.dictionaryMediaRequestEndpoint = "https://hoshi.local/image";
+                    window.disablePopupImageViewportMaxHeight = true;
+                    window.audioEnableAutoplay = ${audioSettings.enableAutoplay};
+                    window.audioPlaybackMode = "${audioSettings.playbackMode.rawValue}";
+                    window.needsAudio = ${ankiSettings.needsAudio};
+                    window.allowDupes = ${ankiSettings.allowDupes};
+                    window.useAnkiConnect = ${ankiSettings.useAnkiConnect};
+                    window.embedMedia = ${ankiSettings.embedMedia};
+                    window.compactGlossariesAnki = ${ankiSettings.compactGlossaries};
+                    window.customCSS = ${JsonPrimitive(normalizedSettings.customCSS)};
+                    window.swipeThreshold = $effectiveSwipeThreshold;
+                    window.reducedMotionScrolling = $reducedMotionScrolling;
+                    window.reducedMotionScrollScale = $effectiveReducedMotionScrollScale;
+                    window.reducedMotionSwipeThreshold = $effectiveReducedMotionSwipeThreshold;
+                    window.dictionaryStyles = $styles;
+                    window.lookupEntries = [];
+                    window.entryCount = 0;
+                    window.popupId = null;
+                </script>
+                $selectionJs
+                $popupJs
+            </head>
+            <body>
+                <script>${popupGestureScript()}</script>
+                <div id="entries-container"></div>
+                <div class="overlay">
+                    <div class="overlay-close" onclick="closeOverlay()">×</div>
+                    <div class="overlay-content"></div>
+                </div>
+                <script>
+                    (function() {
+                        var container = document.getElementById('entries-container');
+                        var posted = false;
+                        var observer = null;
+                        function postReady() {
+                            if (posted) return;
+                            posted = true;
+                            webkit.messageHandlers.contentReady.postMessage(collectButtonFrames());
+                        }
+                        function hasRenderableContent() {
+                            if (!container || !window.entryCount) {
+                                return true;
+                            }
+                            return !!container.querySelector('.entry .glossary-content');
+                        }
+                        window.hoshiPopupObserveContentReady = function() {
+                            posted = false;
+                            if (observer) {
+                                observer.disconnect();
+                                observer = null;
+                            }
+                            if (hasRenderableContent()) {
+                                postReady();
+                                return;
+                            }
+                            observer = new MutationObserver(function() {
+                                if (hasRenderableContent()) {
+                                    postReady();
+                                    observer.disconnect();
+                                    observer = null;
+                                }
+                            });
+                            observer.observe(container, { childList: true, subtree: true });
+                            if (hasRenderableContent()) {
+                                postReady();
+                            }
+                        };
+                        window.addEventListener('message', function(event) {
+                            if (event.origin !== 'https://hoshi.local') return;
+                            var message = event.data || {};
+                            if (message.type === 'reply') {
+                                window.HoshiAndroidPopup.resolveMessage(message.id, message.body);
+                                return;
+                            }
+                            if (message.type === 'highlightSelection') {
+                                window.hoshiSelection?.highlightSelection(message.count || 0);
+                                return;
+                            }
+                            if (message.type === 'clearSelection') {
+                                window.hoshiSelection?.clearSelection();
+                                return;
+                            }
+                            if (message.type === 'resetPopup') {
+                                window.popupId = null;
+                                closeOverlay();
+                                window.hoshiSelection?.clearSelection();
+                                window.resetPopupResults?.();
+                                return;
+                            }
+                            if (message.type === 'renderPopup') {
+                                window.popupId = message.popupId || null;
+                                closeOverlay();
+                                window.entryCount = message.entriesCount || 0;
+                                var initialEntries = [];
+                                if (message.initialEntryJson) {
+                                    try {
+                                        initialEntries[0] = JSON.parse(message.initialEntryJson);
+                                    } catch (e) {
+                                        initialEntries = [];
+                                    }
+                                }
+                                if (window.replacePopupResults) {
+                                    window.replacePopupResults(window.entryCount, initialEntries);
+                                } else {
+                                    window.lookupEntries = initialEntries;
+                                    window.hoshiPopupObserveContentReady?.();
+                                    window.renderPopup();
+                                }
+                                return;
+                            }
+                            if (message.type === 'navigateBack') {
+                                window.navigateBack?.();
+                                return;
+                            }
+                            if (message.type === 'navigateForward') {
+                                window.navigateForward?.();
+                            }
+                        });
+                        webkit.messageHandlers.shellReady.postMessage(null);
+                    })();
+                </script>
+            </body>
+            </html>
+        """.trimIndent()
+    }
+
     internal fun entryJsonString(result: LookupResult): String = result.toEntryJson().toString()
 
     private fun dictionaryStylesJson(styles: Map<String, String>): JsonObject =
@@ -345,6 +538,119 @@ internal object LookupPopupHtml {
         val formatted = String.format(Locale.US, "%.2f", value).trimEnd('0')
         return if (formatted.endsWith('.')) "${formatted}0" else formatted
     }
+
+    private fun customCssStyle(css: String): String {
+        val content = css.trim()
+        if (content.isEmpty()) return ""
+        return """<style id="popup-custom-css">${content.styleElementContentEscaped()}</style>"""
+    }
+
+    private fun String.styleElementContentEscaped(): String =
+        replace(Regex("</style", RegexOption.IGNORE_CASE), "<\\/style")
+
+    private fun popupFontPrewarmScript(): String = """
+        (function() {
+            var prewarmedFaces = typeof WeakSet === 'function' ? new WeakSet() : null;
+            function rememberFace(face) {
+                if (!face) return false;
+                if (prewarmedFaces) {
+                    if (prewarmedFaces.has(face)) return false;
+                    prewarmedFaces.add(face);
+                }
+                return true;
+            }
+            function syncAfterFontLoad() {
+                if (typeof scheduleButtonFrameSyncAtVisualState === 'function') {
+                    scheduleButtonFrameSyncAtVisualState();
+                } else if (typeof scheduleButtonFrameSync === 'function') {
+                    scheduleButtonFrameSync();
+                }
+            }
+            window.hoshiPopupPrewarmFonts = function() {
+                if (!document.fonts) return;
+                var loads = [];
+                try {
+                    document.fonts.forEach(function(face) {
+                        if (!rememberFace(face) || face.status !== 'unloaded' || typeof face.load !== 'function') {
+                            return;
+                        }
+                        try {
+                            loads.push(face.load().catch(function() {}));
+                        } catch (e) {}
+                    });
+                } catch (e) {}
+                if (!loads.length) return;
+                Promise.all(loads).then(syncAfterFontLoad, syncAfterFontLoad);
+            };
+            window.hoshiPopupPrewarmFonts();
+            setTimeout(window.hoshiPopupPrewarmFonts, 0);
+            setTimeout(window.hoshiPopupPrewarmFonts, 100);
+        })();
+    """.trimIndent()
+
+    private fun popupGestureScript(): String = """
+        (function() {
+            if (window.reducedMotionScrolling) {
+                var reducedMotionStartY = 0;
+                var root = function() {
+                    return document.scrollingElement || document.documentElement || document.body;
+                };
+                var scrollByPopupHeight = function(direction) {
+                    var scrollRoot = root();
+                    var popupHeight = document.documentElement.clientHeight || window.innerHeight || scrollRoot.clientHeight;
+                    var maxScroll = Math.max(0, scrollRoot.scrollHeight - popupHeight);
+                    var current = scrollRoot.scrollTop || window.scrollY || 0;
+                    var target = Math.max(0, Math.min(maxScroll, current + popupHeight * window.reducedMotionScrollScale * direction));
+                    scrollRoot.scrollTop = target;
+                    window.scrollTo(0, target);
+                };
+                document.addEventListener('touchstart', function(e) {
+                    if (e.touches.length === 1) {
+                        reducedMotionStartY = e.touches[0].clientY;
+                    }
+                }, { passive: true });
+                document.addEventListener('touchmove', function(e) {
+                    if (e.touches.length === 1 && e.cancelable) {
+                        e.preventDefault();
+                    }
+                }, { passive: false });
+                document.addEventListener('touchend', function(e) {
+                    if (!e.changedTouches.length) return;
+                    var delta = reducedMotionStartY - e.changedTouches[0].clientY;
+                    var threshold = window.reducedMotionSwipeThreshold;
+                    if (delta > threshold) {
+                        scrollByPopupHeight(1);
+                    } else if (delta < -threshold) {
+                        scrollByPopupHeight(-1);
+                    }
+                }, { passive: true });
+                document.addEventListener('wheel', function(e) {
+                    if (e.deltaY === 0) return;
+                    scrollByPopupHeight(e.deltaY > 0 ? 1 : -1);
+                    e.preventDefault();
+                }, { passive: false });
+            }
+            if (!window.swipeThreshold) {
+                return;
+            }
+            var startX, startY;
+            document.addEventListener('touchstart', function(e) {
+                startX = e.touches[0].clientX;
+                startY = e.touches[0].clientY;
+            });
+            document.addEventListener('touchend', function(e) {
+                var dx = e.changedTouches[0].clientX - startX;
+                var dy = e.changedTouches[0].clientY - startY;
+                var absDx = Math.abs(dx);
+                var absDy = Math.abs(dy);
+                var isHorizontalDismiss = absDx > window.swipeThreshold && absDx > absDy * 1.75;
+                var hasSelection = window.getSelection().toString();
+                if (isHorizontalDismiss && !hasSelection) {
+                    webkit.messageHandlers.swipeDismiss.postMessage(null);
+                }
+            });
+        })();
+    """.trimIndent()
 
     private fun LookupResult.toEntryJson(): JsonObject = buildJsonObject {
         put("expression", term.expression)
@@ -420,6 +726,11 @@ internal object LookupPopupHtml {
             background-color: #fff !important;
         }
 
+        html[data-hoshi-color-scheme="light"] .overlay {
+            background: #eee;
+            color: #000;
+        }
+
         html[data-hoshi-color-scheme="dark"],
         html[data-hoshi-color-scheme="dark"] body {
             --background-color: #000;
@@ -436,6 +747,7 @@ internal object LookupPopupHtml {
 
         html[data-hoshi-color-scheme="dark"] .overlay {
             background: #000;
+            color: #fff;
         }
 
         html[data-hoshi-color-scheme="dark"] .glossary-group > div[data-dictionary] {
@@ -468,6 +780,15 @@ internal object LookupPopupHtml {
             animation-duration: 0s !important;
             box-shadow: none !important;
             text-shadow: none !important;
+        }
+
+        html[data-hoshi-eink-mode="true"] ::highlight(hoshi-selection) {
+            background-color: transparent !important;
+            color: inherit;
+            text-decoration-line: underline;
+            text-decoration-color: #000;
+            text-decoration-thickness: 1.5px;
+            text-underline-offset: 2px;
         }
 
         html[data-hoshi-eink-mode="true"] .deinflection-tag,
@@ -546,6 +867,10 @@ internal object LookupPopupHtml {
             background-color: #000 !important;
             color: #fff !important;
             border: 1px solid #fff !important;
+        }
+
+        html[data-hoshi-color-scheme="dark"][data-hoshi-eink-mode="true"] ::highlight(hoshi-selection) {
+            text-decoration-color: #fff;
         }
 
         html[data-hoshi-color-scheme="dark"][data-hoshi-eink-mode="true"] .frequency-dict-label {

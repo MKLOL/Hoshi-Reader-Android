@@ -9,6 +9,7 @@ import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
+import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
@@ -22,8 +23,12 @@ data class ReaderSettings(
     val theme: ReaderTheme = ReaderTheme.System,
     val eInkMode: Boolean = false,
     val disablePageTurnAnimation: Boolean = false,
+    val uiTheme: ReaderInterfaceTheme = ReaderInterfaceTheme.System,
     val systemLightSepia: Boolean = false,
     val sepiaInvertInDark: Boolean = false,
+    val customBackgroundColor: Long = 0xFFFFFFFF,
+    val customTextColor: Long = 0xFF000000,
+    val customInfoColor: Long = 0xFF999999,
     val verticalWriting: Boolean = true,
     val selectedFont: String = ReaderFontManager.defaultMinchoFont,
     val fontSize: Int = 22,
@@ -45,10 +50,13 @@ data class ReaderSettings(
     val layoutAdvanced: Boolean = false,
     val lineHeight: Double = 1.65,
     val characterSpacing: Double = 0.0,
+    val paragraphSpacing: Double = 0.0,
     val showTitle: Boolean = true,
     val showCharacters: Boolean = true,
     val showPercentage: Boolean = true,
+    val alwaysShowProgress: Boolean = true,
     val showProgressTop: Boolean = true,
+    val showReaderBackButton: Boolean = true,
     val popupWidth: Int = 320,
     val popupHeight: Int = 250,
     val popupScale: Double = 1.0,
@@ -140,10 +148,14 @@ data class ReaderSettings(
         return when (theme) {
             ReaderTheme.System -> if (systemDark) 0xFF000000 else if (systemLightSepia) 0xFFF2E2C9 else 0xFFFFFFFF
             ReaderTheme.Dark -> 0xFF000000
-            ReaderTheme.Sepia -> if (sepiaInvertInDark && systemDark) 0xFF18150C else 0xFFF2E2C9
+            ReaderTheme.Sepia -> if (sepiaInvertInDark && systemDark) 0xFF17150F else 0xFFF2E2C9
             ReaderTheme.Light -> 0xFFFFFFFF
+            ReaderTheme.Custom -> customBackgroundColor
         }
     }
+
+    fun backgroundColorCss(systemDark: Boolean): String =
+        backgroundColor(systemDark).toReaderCssColor(includeAlpha = !eInkMode && theme == ReaderTheme.Custom)
 
     fun textColorCss(systemDark: Boolean): String {
         if (eInkMode) {
@@ -154,6 +166,7 @@ data class ReaderSettings(
             ReaderTheme.Light -> "#000"
             ReaderTheme.Dark -> "#fff"
             ReaderTheme.Sepia -> if (sepiaInvertInDark && systemDark) "#F2E2C9" else "#332A1B"
+            ReaderTheme.Custom -> customTextColor.toReaderCssColor(includeAlpha = true)
         }
     }
 
@@ -175,6 +188,24 @@ enum class ReaderTheme(val label: String) {
     Light("Light"),
     Dark("Dark"),
     Sepia("Sepia"),
+    Custom("Custom"),
+}
+
+enum class ReaderInterfaceTheme(val label: String) {
+    System("System"),
+    Light("Light"),
+    Dark("Dark");
+
+    fun usesDarkInterface(systemDark: Boolean): Boolean = when (this) {
+        System -> systemDark
+        Light -> false
+        Dark -> true
+    }
+
+    companion object {
+        fun fromStorage(value: String?): ReaderInterfaceTheme =
+            entries.firstOrNull { it.label == value || it.name == value } ?: System
+    }
 }
 
 enum class StatisticsAutostartMode(val rawValue: String, @get:StringRes val labelRes: Int) {
@@ -193,7 +224,11 @@ fun ReaderSettings.usesDarkInterface(systemDark: Boolean): Boolean = when (theme
     ReaderTheme.Light -> false
     ReaderTheme.Dark -> true
     ReaderTheme.Sepia -> sepiaInvertInDark && systemDark
+    ReaderTheme.Custom -> uiTheme.usesDarkInterface(systemDark)
 }
+
+fun ReaderSettings.usesDarkSystemBarIcons(systemDark: Boolean): Boolean =
+    !usesDarkInterface(systemDark)
 
 fun ReaderSettings.usesSepiaLightContent(systemDark: Boolean): Boolean =
     !eInkMode && (
@@ -214,8 +249,12 @@ class ReaderSettingsStore(context: Context) : ReaderSettingsLegacySource {
             ?: ReaderTheme.System,
         eInkMode = preferences.getBoolean("eInkMode", false),
         disablePageTurnAnimation = preferences.getBoolean("disablePageTurnAnimation", false),
+        uiTheme = ReaderInterfaceTheme.fromStorage(preferences.getString("uiTheme", null)),
         systemLightSepia = preferences.getBoolean("systemLightSepia", false),
         sepiaInvertInDark = preferences.getBoolean("sepiaInvertInDark", false),
+        customBackgroundColor = preferences.getLong("customBackgroundColor", 0xFFFFFFFF),
+        customTextColor = preferences.getLong("customTextColor", 0xFF000000),
+        customInfoColor = preferences.getLong("customInfoColor", 0xFF999999),
         verticalWriting = preferences.getBoolean("verticalWriting", true),
         selectedFont = ReaderFontManager.normalizeDefaultFont(
             preferences.getString("selectedFont", null) ?: ReaderFontManager.defaultMinchoFont,
@@ -241,10 +280,13 @@ class ReaderSettingsStore(context: Context) : ReaderSettingsLegacySource {
         layoutAdvanced = preferences.getBoolean("layoutAdvanced", false),
         lineHeight = preferences.getFloat("lineHeight", 1.65f).toDouble(),
         characterSpacing = preferences.getFloat("characterSpacing", 0f).toDouble(),
+        paragraphSpacing = preferences.getFloat("paragraphSpacing", 0f).toDouble(),
         showTitle = preferences.getBoolean("readerShowTitle", true),
         showCharacters = preferences.getBoolean("readerShowCharacters", true),
         showPercentage = preferences.getBoolean("readerShowPercentage", true),
+        alwaysShowProgress = preferences.getBoolean("readerAlwaysShowProgress", true),
         showProgressTop = preferences.getBoolean("readerShowProgressTop", true),
+        showReaderBackButton = preferences.getBoolean("readerShowBackButton", true),
         popupWidth = preferences.getInt("popupWidth", 320),
         popupHeight = preferences.getInt("popupHeight", 250),
         popupScale = preferences.getFloat("popupScale", 1.0f).toDouble().coerceIn(0.8, 1.5),
@@ -268,8 +310,12 @@ class ReaderSettingsStore(context: Context) : ReaderSettingsLegacySource {
             .putString("theme", settings.theme.label)
             .putBoolean("eInkMode", settings.eInkMode)
             .putBoolean("disablePageTurnAnimation", settings.disablePageTurnAnimation)
+            .putString("uiTheme", settings.uiTheme.label)
             .putBoolean("systemLightSepia", settings.systemLightSepia)
             .putBoolean("sepiaInvertInDark", settings.sepiaInvertInDark)
+            .putLong("customBackgroundColor", settings.customBackgroundColor)
+            .putLong("customTextColor", settings.customTextColor)
+            .putLong("customInfoColor", settings.customInfoColor)
             .putBoolean("verticalWriting", settings.verticalWriting)
             .putString("selectedFont", settings.selectedFont)
             .putInt("fontSize", settings.fontSize)
@@ -291,10 +337,13 @@ class ReaderSettingsStore(context: Context) : ReaderSettingsLegacySource {
             .putBoolean("layoutAdvanced", settings.layoutAdvanced)
             .putFloat("lineHeight", settings.lineHeight.toFloat())
             .putFloat("characterSpacing", settings.characterSpacing.toFloat())
+            .putFloat("paragraphSpacing", settings.paragraphSpacing.toFloat())
             .putBoolean("readerShowTitle", settings.showTitle)
             .putBoolean("readerShowCharacters", settings.showCharacters)
             .putBoolean("readerShowPercentage", settings.showPercentage)
+            .putBoolean("readerAlwaysShowProgress", settings.alwaysShowProgress)
             .putBoolean("readerShowProgressTop", settings.showProgressTop)
+            .putBoolean("readerShowBackButton", settings.showReaderBackButton)
             .putInt("popupWidth", settings.popupWidth)
             .putInt("popupHeight", settings.popupHeight)
             .putFloat("popupScale", settings.popupScale.coerceIn(0.8, 1.5).toFloat())
@@ -355,8 +404,12 @@ class ReaderSettingsRepository(
                 ?: ReaderTheme.System,
             eInkMode = this[KEY_E_INK_MODE] ?: false,
             disablePageTurnAnimation = this[KEY_DISABLE_PAGE_TURN_ANIMATION] ?: false,
+            uiTheme = ReaderInterfaceTheme.fromStorage(this[KEY_UI_THEME]),
             systemLightSepia = this[KEY_SYSTEM_LIGHT_SEPIA] ?: false,
             sepiaInvertInDark = this[KEY_SEPIA_INVERT_IN_DARK] ?: false,
+            customBackgroundColor = this[KEY_CUSTOM_BACKGROUND_COLOR] ?: 0xFFFFFFFF,
+            customTextColor = this[KEY_CUSTOM_TEXT_COLOR] ?: 0xFF000000,
+            customInfoColor = this[KEY_CUSTOM_INFO_COLOR] ?: 0xFF999999,
             verticalWriting = this[KEY_VERTICAL_WRITING] ?: true,
             selectedFont = ReaderFontManager.normalizeDefaultFont(
                 this[KEY_SELECTED_FONT] ?: ReaderFontManager.defaultMinchoFont,
@@ -380,10 +433,13 @@ class ReaderSettingsRepository(
             layoutAdvanced = this[KEY_LAYOUT_ADVANCED] ?: false,
             lineHeight = (this[KEY_LINE_HEIGHT] ?: 1.65f).toDouble(),
             characterSpacing = (this[KEY_CHARACTER_SPACING] ?: 0f).toDouble(),
+            paragraphSpacing = (this[KEY_PARAGRAPH_SPACING] ?: 0f).toDouble(),
             showTitle = this[KEY_SHOW_TITLE] ?: true,
             showCharacters = this[KEY_SHOW_CHARACTERS] ?: true,
             showPercentage = this[KEY_SHOW_PERCENTAGE] ?: true,
+            alwaysShowProgress = this[KEY_ALWAYS_SHOW_PROGRESS] ?: true,
             showProgressTop = this[KEY_SHOW_PROGRESS_TOP] ?: true,
+            showReaderBackButton = this[KEY_SHOW_READER_BACK_BUTTON] ?: true,
             popupWidth = this[KEY_POPUP_WIDTH] ?: 320,
             popupHeight = this[KEY_POPUP_HEIGHT] ?: 250,
             popupScale = (this[KEY_POPUP_SCALE] ?: 1.0f).toDouble().coerceIn(0.8, 1.5),
@@ -406,8 +462,12 @@ class ReaderSettingsRepository(
         this[KEY_THEME] = settings.theme.label
         this[KEY_E_INK_MODE] = settings.eInkMode
         this[KEY_DISABLE_PAGE_TURN_ANIMATION] = settings.disablePageTurnAnimation
+        this[KEY_UI_THEME] = settings.uiTheme.label
         this[KEY_SYSTEM_LIGHT_SEPIA] = settings.systemLightSepia
         this[KEY_SEPIA_INVERT_IN_DARK] = settings.sepiaInvertInDark
+        this[KEY_CUSTOM_BACKGROUND_COLOR] = settings.customBackgroundColor
+        this[KEY_CUSTOM_TEXT_COLOR] = settings.customTextColor
+        this[KEY_CUSTOM_INFO_COLOR] = settings.customInfoColor
         this[KEY_VERTICAL_WRITING] = settings.verticalWriting
         this[KEY_SELECTED_FONT] = settings.selectedFont
         this[KEY_FONT_SIZE] = settings.fontSize
@@ -429,10 +489,13 @@ class ReaderSettingsRepository(
         this[KEY_LAYOUT_ADVANCED] = settings.layoutAdvanced
         this[KEY_LINE_HEIGHT] = settings.lineHeight.toFloat()
         this[KEY_CHARACTER_SPACING] = settings.characterSpacing.toFloat()
+        this[KEY_PARAGRAPH_SPACING] = settings.paragraphSpacing.toFloat()
         this[KEY_SHOW_TITLE] = settings.showTitle
         this[KEY_SHOW_CHARACTERS] = settings.showCharacters
         this[KEY_SHOW_PERCENTAGE] = settings.showPercentage
+        this[KEY_ALWAYS_SHOW_PROGRESS] = settings.alwaysShowProgress
         this[KEY_SHOW_PROGRESS_TOP] = settings.showProgressTop
+        this[KEY_SHOW_READER_BACK_BUTTON] = settings.showReaderBackButton
         this[KEY_POPUP_WIDTH] = settings.popupWidth
         this[KEY_POPUP_HEIGHT] = settings.popupHeight
         this[KEY_POPUP_SCALE] = settings.popupScale.coerceIn(0.8, 1.5).toFloat()
@@ -460,8 +523,12 @@ class ReaderSettingsRepository(
         private val KEY_E_INK_MODE = booleanPreferencesKey("eInkMode")
         private val KEY_DISABLE_PAGE_TURN_ANIMATION =
             booleanPreferencesKey("disablePageTurnAnimation")
+        private val KEY_UI_THEME = stringPreferencesKey("uiTheme")
         private val KEY_SYSTEM_LIGHT_SEPIA = booleanPreferencesKey("systemLightSepia")
         private val KEY_SEPIA_INVERT_IN_DARK = booleanPreferencesKey("sepiaInvertInDark")
+        private val KEY_CUSTOM_BACKGROUND_COLOR = longPreferencesKey("customBackgroundColor")
+        private val KEY_CUSTOM_TEXT_COLOR = longPreferencesKey("customTextColor")
+        private val KEY_CUSTOM_INFO_COLOR = longPreferencesKey("customInfoColor")
         private val KEY_VERTICAL_WRITING = booleanPreferencesKey("verticalWriting")
         private val KEY_SELECTED_FONT = stringPreferencesKey("selectedFont")
         private val KEY_FONT_SIZE = intPreferencesKey("fontSize")
@@ -483,10 +550,13 @@ class ReaderSettingsRepository(
         private val KEY_LAYOUT_ADVANCED = booleanPreferencesKey("layoutAdvanced")
         private val KEY_LINE_HEIGHT = floatPreferencesKey("lineHeight")
         private val KEY_CHARACTER_SPACING = floatPreferencesKey("characterSpacing")
+        private val KEY_PARAGRAPH_SPACING = floatPreferencesKey("paragraphSpacing")
         private val KEY_SHOW_TITLE = booleanPreferencesKey("readerShowTitle")
         private val KEY_SHOW_CHARACTERS = booleanPreferencesKey("readerShowCharacters")
         private val KEY_SHOW_PERCENTAGE = booleanPreferencesKey("readerShowPercentage")
+        private val KEY_ALWAYS_SHOW_PROGRESS = booleanPreferencesKey("readerAlwaysShowProgress")
         private val KEY_SHOW_PROGRESS_TOP = booleanPreferencesKey("readerShowProgressTop")
+        private val KEY_SHOW_READER_BACK_BUTTON = booleanPreferencesKey("readerShowBackButton")
         private val KEY_POPUP_WIDTH = intPreferencesKey("popupWidth")
         private val KEY_POPUP_HEIGHT = intPreferencesKey("popupHeight")
         private val KEY_POPUP_SCALE = floatPreferencesKey("popupScale")

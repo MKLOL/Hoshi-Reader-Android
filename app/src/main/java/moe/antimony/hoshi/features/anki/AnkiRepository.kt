@@ -146,19 +146,22 @@ class AnkiRepository(
         val fieldMappings = settings.fieldMappings
         val payload = runCatching { AnkiMiningPayload.fromJson(rawPayload) }.getOrNull()
             ?: return@withContext false
+        val needsCover = fieldMappings.referencesAnkiHandlebar("{book-cover}")
+        val needsSasayakiAudio = fieldMappings.referencesAnkiHandlebar("{sasayaki-audio}")
+        val needsAudio = fieldMappings.referencesAnkiHandlebar("{audio}")
         val mediaContext = AnkiMiningContext(
             sentence = context.sentence,
             documentTitle = context.documentTitle,
-            coverPath = context.coverPath?.let {
+            coverPath = context.coverPath?.takeIf { needsCover }?.let {
                 addMediaFile(it, "hoshi_cover_${File(it).name}", mimeTypeForPath(it), activeBackend, settings.backendKind)
             },
-            sasayakiAudioPath = context.sasayakiAudioPath?.let {
+            sasayakiAudioPath = context.sasayakiAudioPath?.takeIf { needsSasayakiAudio }?.let {
                 addMediaFile(it, File(it).name, mimeTypeForPath(it), activeBackend, settings.backendKind)
             },
             sentenceOffset = context.sentenceOffset,
         )
         val mediaPayload = payload.copy(
-            audio = payload.audio.takeIf { it.isNotBlank() }
+            audio = payload.audio.takeIf { needsAudio && it.isNotBlank() }
                 ?.let { addRemoteAudio(it, activeBackend, settings.backendKind) }
                 .orEmpty(),
         )
@@ -181,8 +184,11 @@ class AnkiRepository(
             duplicateScope = settings.duplicateScope,
             checkDuplicatesAcrossAllModels = settings.checkDuplicatesAcrossAllModels,
         )
-        if (added && settings.backendKind == AnkiBackendKind.AnkiConnect && settings.ankiConnectForceSync) {
-            activeBackend.sync()
+        if (added) {
+            when (settings.backendKind) {
+                AnkiBackendKind.AnkiConnect -> if (settings.ankiConnectForceSync) activeBackend.sync()
+                AnkiBackendKind.AnkiDroid -> if (settings.ankiDroidForceSync) activeBackend.sync()
+            }
         }
         added
     }
@@ -220,9 +226,10 @@ class AnkiRepository(
                 readRemoteAudio = { remoteUrl -> URL(remoteUrl).openStream().use { it.readBytes() } },
             )
                 ?: return null
-            val file = mediaCacheFile("hoshi_audio_${data.contentHashCode()}.mp3")
+            val media = ankiAudioMediaFile(url, data)
+            val file = mediaCacheFile(media.preferredName)
             file.writeBytes(data)
-            addMediaFile(file.absolutePath, file.name, "audio/mpeg", activeBackend, backendKind)
+            addMediaFile(file.absolutePath, file.name, media.mimeType, activeBackend, backendKind)
         }.getOrNull()
 
     private fun addDictionaryMedia(media: DictionaryMedia, activeBackend: AnkiBackend, backendKind: AnkiBackendKind): String? =
@@ -283,6 +290,37 @@ internal fun readAnkiAudioBytes(
         readRemoteAudio(url)
     }
 }
+
+internal data class AnkiAudioMediaFile(
+    val preferredName: String,
+    val mimeType: String,
+)
+
+internal fun ankiAudioMediaFile(url: String, data: ByteArray): AnkiAudioMediaFile {
+    val extension = ankiAudioExtension(url)
+    val preferredName = "hoshi_audio_${data.contentHashCode()}.$extension"
+    return AnkiAudioMediaFile(
+        preferredName = preferredName,
+        mimeType = mimeTypeForPath(preferredName),
+    )
+}
+
+private fun ankiAudioExtension(url: String): String {
+    LocalAudioResolver.parseAudioUrl(url)?.file?.let { localFile ->
+        LocalAudioResolver.audioExtension(localFile)
+            .takeIf(::isSupportedAnkiAudioExtension)
+            ?.let { return it }
+    }
+    return runCatching { URL(url).path }
+        .getOrDefault(url.substringBefore('?'))
+        .substringAfterLast('.', missingDelimiterValue = "")
+        .lowercase()
+        .takeIf(::isSupportedAnkiAudioExtension)
+        ?: "mp3"
+}
+
+private fun isSupportedAnkiAudioExtension(extension: String): Boolean =
+    extension in setOf("mp3", "opus", "ogg", "aac", "m4a", "wav")
 
 private const val TAG = "AnkiRepository"
 
@@ -346,6 +384,7 @@ sealed interface AnkiConnectConnectionResult {
 fun mimeTypeForPath(path: String): String =
     when (path.substringAfterLast('.', missingDelimiterValue = "").lowercase()) {
         "mp3" -> "audio/mpeg"
+        "opus" -> "audio/ogg"
         "aac" -> "audio/aac"
         "m4a" -> "audio/mp4"
         "wav" -> "audio/wav"

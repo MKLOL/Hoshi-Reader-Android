@@ -85,36 +85,51 @@ class ReaderPaginationScriptsTest {
     fun normalizesCalibreCoverSvgAspectRatio() {
         val script = ReaderPaginationScripts.shellScript()
 
-        assertTrue(script.contains("svg.querySelector('image')"))
+        assertTrue(script.contains("document.querySelectorAll('svg image')"))
+        assertTrue(script.contains("var svg = svgImage.closest('svg');"))
         assertTrue(script.contains("svg.setAttribute('preserveAspectRatio', 'xMidYMid meet')"))
     }
 
     @Test
-    fun blurImagesScriptRunsForPagedAndContinuousReadersLikeIos() {
+    fun imageTapScriptRunsForPagedAndContinuousReadersLikeIos() {
         val scripts = listOf(
             ReaderPaginationScripts.shellScript(settings = ReaderSettings(blurImages = true)),
             ReaderPaginationScripts.shellScript(settings = ReaderSettings(continuousMode = true, blurImages = true)),
         )
 
         scripts.forEach { script ->
-            assertTrue(script.contains("function blurImage(element)"))
-            assertTrue(script.contains("element.classList.add('blurred');"))
+            assertTrue(script.contains("function setupReaderImage(element, src, wrap, blurElement)"))
+            assertTrue(script.contains("blurElement.classList.add('blurred');"))
+            assertTrue(script.contains("target.className = 'blur-wrapper';"))
             assertTrue(script.contains("event.preventDefault();"))
             assertTrue(script.contains("event.stopPropagation();"))
-            assertTrue(script.contains("element.classList.remove('blurred');"))
+            assertTrue(script.contains("blurElement.classList.remove('blurred');"))
+            assertTrue(script.contains("HoshiReaderImage.postMessage(new URL(src, document.baseURI).href);"))
             assertTrue(script.contains("if (true) {"))
-            assertTrue(script.contains("if (svg.querySelector('image'))"))
-            assertTrue(script.contains("blurImage(svg);"))
+            assertTrue(script.contains("var svgImages = Array.from(document.querySelectorAll('svg image'));"))
+            assertTrue(script.contains("svgImages.forEach(function(svgImage)"))
+            assertTrue(script.contains("svgImage.href && svgImage.href.baseVal"))
+            assertTrue(script.contains("setupReaderImage(svgImage, svgImageSrc, false, svg);"))
             assertTrue(script.contains("img.classList.add('block-img');"))
-            assertTrue(script.contains("blurImage(img);"))
+            assertTrue(script.contains("setupReaderImage(img, img.currentSrc || img.src, true);"))
         }
     }
 
     @Test
-    fun verticalPageHeightIncludesIosBottomOverlap() {
+    fun verticalPageHeightExtendsPastViewportByBottomOverlap() {
         val script = ReaderPaginationScripts.shellScript()
 
         assertTrue(script.contains("var pageHeight = window.innerHeight + 22;"))
+    }
+
+    @Test
+    fun horizontalPageHeightMatchesMeasuredViewportWithoutBottomOverlap() {
+        val script = ReaderPaginationScripts.shellScript(
+            settings = ReaderSettings(verticalWriting = false),
+        )
+
+        assertTrue(script.contains("var pageHeight = window.innerHeight + 0;"))
+        assertFalse(script.contains("var pageHeight = window.innerHeight + 22;"))
     }
 
     @Test
@@ -125,6 +140,22 @@ class ReaderPaginationScriptsTest {
         assertTrue(script.contains("function(progress)"))
         assertTrue(script.contains("if (progress >= 0.99)"))
         assertTrue(script.contains("window.hoshiReader.restoreProgress(1.0)"))
+    }
+
+    @Test
+    fun loadScriptOmitsAbsentOptionalPayloadScriptsBeforeRestore() {
+        val script = ReaderPaginationScripts.shellScript(
+            sasayakiCuesJson = null,
+            highlightsJson = null,
+        )
+        val restoreBlock = script.substringAfter("Promise.all(imagePromises).then(function()")
+            .substringAfter("window.hoshiReader.buildNodeOffsets();")
+            .substringBefore("});")
+
+        assertFalse(restoreBlock.contains("applySasayakiCues"))
+        assertFalse(restoreBlock.contains("applyHighlights"))
+        assertFalse(restoreBlock.contains("null"))
+        assertTrue(restoreBlock.contains("window.hoshiReader.restoreProgress(0.0)"))
     }
 
     @Test
@@ -147,7 +178,6 @@ class ReaderPaginationScriptsTest {
         val script = ReaderPaginationScripts.shellScript()
 
         assertTrue(script.contains("notifyRestoreComplete: function()"))
-        assertTrue(script.contains("window.HoshiReaderRestore.postMessage('restoreCompleted')"))
         assertTrue(script.contains("var targetCharCount = Math.ceil(totalChars * progress)"))
         assertTrue(script.contains("textOffsetForCharCount: function(node, targetCount)"))
         assertTrue(script.contains("if ((runningSum + nodeLen) > targetCharCount)"))

@@ -162,10 +162,16 @@ data class BookshelfSectionModel(
     val isReading: Boolean = false,
     val isCollapsible: Boolean = false,
 ) {
-    val collapseKey: String?
+    val layoutKey: String
         get() = when {
             isReading -> "__reading__"
             shelfName != null -> "shelf:$shelfName"
+            else -> "unshelved"
+        }
+
+    val collapseKey: String?
+        get() = when {
+            isCollapsible -> layoutKey
             else -> null
         }
 }

@@ -77,6 +77,7 @@ interface AnkiContentApi {
     ): Boolean
     fun addNote(modelId: Long, deckId: Long, fields: Array<String>, tags: Set<String>): Long?
     fun addMediaFromUri(uriString: String, preferredName: String, mimeType: String): String? = null
+    fun sync(): Boolean = false
     fun isAvailable(): Boolean = true
 }
 
@@ -163,4 +164,6 @@ class AnkiDroidBackendAdapter(
 
     override fun addMediaFromUri(uriString: String, preferredName: String, mimeType: String): String? =
         api.addMediaFromUri(uriString, preferredName, mimeType)
+
+    override fun sync(): Boolean = api.sync()
 }

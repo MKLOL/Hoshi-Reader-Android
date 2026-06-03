@@ -56,4 +56,17 @@ class ReaderSelectionCommandTest {
         assertTrue(ReaderSelectionResult.fromWebViewResult("undefined").selectedNothing)
         assertFalse(ReaderSelectionResult.fromWebViewResult("\"猫\"").selectedNothing)
     }
+
+    @Test
+    fun selectTextResultDistinguishesImageAndLinkTaps() {
+        val image = ReaderSelectionResult.fromWebViewResult("\"image\"")
+        val link = ReaderSelectionResult.fromWebViewResult("\"link\"")
+
+        assertTrue(image.isImageTap)
+        assertFalse(image.selectedNothing)
+        assertTrue(link.isLinkTap)
+        assertFalse(link.selectedNothing)
+        assertFalse(ReaderSelectionResult.fromWebViewResult("\"猫\"").isImageTap)
+        assertFalse(ReaderSelectionResult.fromWebViewResult("\"猫\"").isLinkTap)
+    }
 }

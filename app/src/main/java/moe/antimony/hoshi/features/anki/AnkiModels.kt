@@ -49,6 +49,7 @@ data class AnkiSettings(
     val duplicateScope: AnkiDuplicateScope = AnkiDuplicateScope.Collection,
     val compactGlossaries: Boolean = false,
     val embedMedia: Boolean = true,
+    val ankiDroidForceSync: Boolean = false,
     val ankiConnectUrl: String = "",
     val ankiConnectForceSync: Boolean = false,
 )
@@ -57,12 +58,16 @@ data class AnkiPopupSettings(
     val isConfigured: Boolean = false,
     val useAnkiConnect: Boolean = false,
     val needsAudio: Boolean = false,
+    val needsSasayakiAudio: Boolean = false,
     val allowDupes: Boolean = false,
     val compactGlossaries: Boolean = false,
 ) {
     val embedMedia: Boolean
         get() = isConfigured
 }
+
+internal fun Map<String, String>.referencesAnkiHandlebar(handlebar: String): Boolean =
+    values.any { template -> handlebar in template }
 
 @Serializable
 data class DictionaryMedia(

@@ -8,7 +8,7 @@ abstract class SwipePageTouchListener : View.OnTouchListener {
     private val tracker = ReaderSwipeGestureTracker(minDistance = MIN_DISTANCE)
 
     override fun onTouch(view: View, event: MotionEvent): Boolean {
-        if (shouldIgnoreReaderGesture()) {
+        if (shouldIgnoreReaderGesture(event)) {
             tracker.suppressCurrentGesture()
             return false
         }
@@ -24,7 +24,7 @@ abstract class SwipePageTouchListener : View.OnTouchListener {
     open fun onLeftSwipe() = Unit
     open fun onRightSwipe() = Unit
     open fun onTap(x: Float, y: Float) = Unit
-    open fun shouldIgnoreReaderGesture(): Boolean = false
+    open fun shouldIgnoreReaderGesture(event: MotionEvent): Boolean = false
 
     private fun dispatch(result: ReaderSwipeGestureTracker.Result) {
         when (result) {

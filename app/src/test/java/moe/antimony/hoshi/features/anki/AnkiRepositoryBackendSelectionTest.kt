@@ -108,6 +108,115 @@ class AnkiRepositoryBackendSelectionTest {
     }
 
     @Test
+    fun mineEntryForceSyncsAnkiDroidAfterSuccessfulAddWhenEnabled() = runBlocking {
+        val deck = AnkiDeck(10L, "Mining")
+        val noteType = AnkiNoteType(20L, "Lapis", listOf("Expression"))
+        val ankiDroid = RecordingBackend(decks = listOf(deck), noteTypes = listOf(noteType))
+        val repository = repository(
+            backend = ankiDroid,
+            settingsRepository = InMemoryAnkiSettingsRepository(
+                AnkiSettings(
+                    backendKind = AnkiBackendKind.AnkiDroid,
+                    ankiDroidForceSync = true,
+                    selectedDeckId = deck.id,
+                    selectedDeckName = deck.name,
+                    selectedNoteTypeId = noteType.id,
+                    selectedNoteTypeName = noteType.name,
+                    availableDecks = listOf(deck),
+                    availableNoteTypes = listOf(noteType),
+                    fieldMappings = mapOf("Expression" to "{expression}"),
+                ),
+            ),
+        )
+
+        assertTrue(
+            repository.mineEntry(
+                rawPayload = """{"expression":"食べる"}""",
+                context = AnkiMiningContext(sentence = "パンを食べる。"),
+                decks = emptyList(),
+                noteTypes = emptyList(),
+            ),
+        )
+
+        assertTrue(ankiDroid.addNoteCalled)
+        assertEquals(1, ankiDroid.syncCalls)
+    }
+
+    @Test
+    fun mineEntryDoesNotForceSyncAnkiDroidWhenDisabled() = runBlocking {
+        val deck = AnkiDeck(10L, "Mining")
+        val noteType = AnkiNoteType(20L, "Lapis", listOf("Expression"))
+        val ankiDroid = RecordingBackend(decks = listOf(deck), noteTypes = listOf(noteType))
+        val repository = repository(
+            backend = ankiDroid,
+            settingsRepository = InMemoryAnkiSettingsRepository(
+                AnkiSettings(
+                    backendKind = AnkiBackendKind.AnkiDroid,
+                    ankiDroidForceSync = false,
+                    selectedDeckId = deck.id,
+                    selectedDeckName = deck.name,
+                    selectedNoteTypeId = noteType.id,
+                    selectedNoteTypeName = noteType.name,
+                    availableDecks = listOf(deck),
+                    availableNoteTypes = listOf(noteType),
+                    fieldMappings = mapOf("Expression" to "{expression}"),
+                ),
+            ),
+        )
+
+        assertTrue(
+            repository.mineEntry(
+                rawPayload = """{"expression":"食べる"}""",
+                context = AnkiMiningContext(sentence = "パンを食べる。"),
+                decks = emptyList(),
+                noteTypes = emptyList(),
+            ),
+        )
+
+        assertTrue(ankiDroid.addNoteCalled)
+        assertEquals(0, ankiDroid.syncCalls)
+    }
+
+    @Test
+    fun mineEntryDoesNotForceSyncAnkiDroidAfterFailedAdd() = runBlocking {
+        val deck = AnkiDeck(10L, "Mining")
+        val noteType = AnkiNoteType(20L, "Lapis", listOf("Expression"))
+        val ankiDroid = RecordingBackend(
+            decks = listOf(deck),
+            noteTypes = listOf(noteType),
+            addNoteResult = false,
+        )
+        val repository = repository(
+            backend = ankiDroid,
+            settingsRepository = InMemoryAnkiSettingsRepository(
+                AnkiSettings(
+                    backendKind = AnkiBackendKind.AnkiDroid,
+                    ankiDroidForceSync = true,
+                    selectedDeckId = deck.id,
+                    selectedDeckName = deck.name,
+                    selectedNoteTypeId = noteType.id,
+                    selectedNoteTypeName = noteType.name,
+                    availableDecks = listOf(deck),
+                    availableNoteTypes = listOf(noteType),
+                    fieldMappings = mapOf("Expression" to "{expression}"),
+                ),
+            ),
+        )
+
+        assertFalse(
+            repository.mineEntry(
+                rawPayload = """{"expression":"食べる"}""",
+                context = AnkiMiningContext(sentence = "パンを食べる。"),
+                decks = emptyList(),
+                noteTypes = emptyList(),
+            ),
+        )
+
+        assertTrue(ankiDroid.addNoteCalled)
+        assertEquals(0, ankiDroid.syncCalls)
+    }
+
+    @Test
     fun duplicateCheckUsesActiveAnkiConnectBackend() = runBlocking {
         val deck = AnkiDeck(10L, "Mining")
         val noteType = AnkiNoteType(20L, "Lapis", listOf("Expression"))
@@ -183,18 +292,143 @@ class AnkiRepositoryBackendSelectionTest {
         assertEquals("<img src=\"hoshi_cover_${cover.fileName}\">", ankiConnect.lastFields["Cover"])
     }
 
+    @Test
+    fun mineEntryDoesNotStoreUnreferencedHandlebarMedia() = runBlocking {
+        val deck = AnkiDeck(10L, "Mining")
+        val noteType = AnkiNoteType(20L, "Basic", listOf("Expression"))
+        val ankiConnect = RecordingBackend(decks = listOf(deck), noteTypes = listOf(noteType))
+        val cover = Files.createTempFile("hoshi-cover", ".png").also { Files.write(it, byteArrayOf(1)) }
+        val sasayaki = Files.createTempFile("hoshi-sasayaki", ".m4a").also { Files.write(it, byteArrayOf(2)) }
+        val wordAudio = Files.createTempFile("hoshi-word", ".mp3").also { Files.write(it, byteArrayOf(3)) }
+        val repository = repository(
+            settingsRepository = InMemoryAnkiSettingsRepository(
+                AnkiSettings(
+                    backendKind = AnkiBackendKind.AnkiConnect,
+                    ankiConnectUrl = "https://anki.example.com",
+                    selectedDeckId = deck.id,
+                    selectedDeckName = deck.name,
+                    selectedNoteTypeId = noteType.id,
+                    selectedNoteTypeName = noteType.name,
+                    availableDecks = listOf(deck),
+                    availableNoteTypes = listOf(noteType),
+                    fieldMappings = mapOf("Expression" to "{expression}"),
+                ),
+            ),
+            ankiConnectBackendFactory = { ankiConnect },
+        )
+
+        assertTrue(
+            repository.mineEntry(
+                rawPayload = """{"expression":"食べる","audio":"${wordAudio.toUri()}"}""",
+                context = AnkiMiningContext(
+                    sentence = "パンを食べる。",
+                    coverPath = cover.toString(),
+                    sasayakiAudioPath = sasayaki.toString(),
+                ),
+                decks = emptyList(),
+                noteTypes = emptyList(),
+            ),
+        )
+
+        assertEquals(0, ankiConnect.addMediaFromBytesCalls)
+        assertEquals(mapOf("Expression" to "食べる"), ankiConnect.lastFields)
+    }
+
+    @Test
+    fun mineEntryStoresAudioMediaReferencedInsideFieldTemplates() = runBlocking {
+        val deck = AnkiDeck(10L, "Mining")
+        val noteType = AnkiNoteType(20L, "Basic", listOf("Media"))
+        val ankiConnect = RecordingBackend(decks = listOf(deck), noteTypes = listOf(noteType))
+        val sasayaki = Files.createTempFile("hoshi-sasayaki", ".m4a").also { Files.write(it, byteArrayOf(2)) }
+        val wordAudio = Files.createTempFile("hoshi-word", ".mp3").also { Files.write(it, byteArrayOf(3)) }
+        val repository = repository(
+            settingsRepository = InMemoryAnkiSettingsRepository(
+                AnkiSettings(
+                    backendKind = AnkiBackendKind.AnkiConnect,
+                    ankiConnectUrl = "https://anki.example.com",
+                    selectedDeckId = deck.id,
+                    selectedDeckName = deck.name,
+                    selectedNoteTypeId = noteType.id,
+                    selectedNoteTypeName = noteType.name,
+                    availableDecks = listOf(deck),
+                    availableNoteTypes = listOf(noteType),
+                    fieldMappings = mapOf("Media" to "{audio} {sasayaki-audio}"),
+                ),
+            ),
+            ankiConnectBackendFactory = { ankiConnect },
+        )
+
+        assertTrue(
+            repository.mineEntry(
+                rawPayload = """{"expression":"食べる","audio":"${wordAudio.toUri()}"}""",
+                context = AnkiMiningContext(
+                    sentence = "パンを食べる。",
+                    sasayakiAudioPath = sasayaki.toString(),
+                ),
+                decks = emptyList(),
+                noteTypes = emptyList(),
+            ),
+        )
+
+        assertEquals(2, ankiConnect.addMediaFromBytesCalls)
+        assertTrue(ankiConnect.lastFields.getValue("Media").contains("hoshi_audio_"))
+        assertTrue(ankiConnect.lastFields.getValue("Media").contains(sasayaki.fileName.toString()))
+    }
+
+    @Test
+    fun mineEntryStoresOpusAudioMediaWithOpusNameAndMimeType() = runBlocking {
+        val deck = AnkiDeck(10L, "Mining")
+        val noteType = AnkiNoteType(20L, "Basic", listOf("Media"))
+        val ankiConnect = RecordingBackend(decks = listOf(deck), noteTypes = listOf(noteType))
+        val wordAudio = Files.createTempFile("hoshi-word", ".opus").also { Files.write(it, byteArrayOf(3, 4, 5)) }
+        val repository = repository(
+            settingsRepository = InMemoryAnkiSettingsRepository(
+                AnkiSettings(
+                    backendKind = AnkiBackendKind.AnkiConnect,
+                    ankiConnectUrl = "https://anki.example.com",
+                    selectedDeckId = deck.id,
+                    selectedDeckName = deck.name,
+                    selectedNoteTypeId = noteType.id,
+                    selectedNoteTypeName = noteType.name,
+                    availableDecks = listOf(deck),
+                    availableNoteTypes = listOf(noteType),
+                    fieldMappings = mapOf("Media" to "{audio}"),
+                ),
+            ),
+            ankiConnectBackendFactory = { ankiConnect },
+        )
+
+        assertTrue(
+            repository.mineEntry(
+                rawPayload = """{"expression":"食べる","audio":"${wordAudio.toUri()}"}""",
+                context = AnkiMiningContext(sentence = "パンを食べる。"),
+                decks = emptyList(),
+                noteTypes = emptyList(),
+            ),
+        )
+
+        assertEquals(1, ankiConnect.addMediaFromBytesCalls)
+        assertTrue(ankiConnect.lastMediaName.endsWith(".opus"))
+        assertEquals("audio/ogg", ankiConnect.lastMediaMimeType)
+        assertTrue(ankiConnect.lastFields.getValue("Media").contains(".opus"))
+    }
+
     private fun repository(
         backend: AnkiBackend = RecordingBackend(),
         settingsRepository: InMemoryAnkiSettingsRepository = InMemoryAnkiSettingsRepository(),
         ankiConnectBackendFactory: (String) -> AnkiBackend = { RecordingBackend() },
-    ): AnkiRepository =
-        AnkiRepository(
-            context = ContextWrapper(null),
+    ): AnkiRepository {
+        val cacheDir = Files.createTempDirectory("hoshi-anki-cache").toFile()
+        return AnkiRepository(
+            context = object : ContextWrapper(null) {
+                override fun getCacheDir() = cacheDir
+            },
             backend = backend,
             settingsRepository = settingsRepository,
             localAudioRepository = LocalAudioRepository(Files.createTempDirectory("hoshi-anki-test").toFile()),
             ankiConnectBackendFactory = ankiConnectBackendFactory,
         )
+    }
 
     private class InMemoryAnkiSettingsRepository(
         initial: AnkiSettings = AnkiSettings(),
@@ -215,6 +449,7 @@ class AnkiRepositoryBackendSelectionTest {
         private val decks: List<AnkiDeck> = listOf(AnkiDeck(1L, "Default")),
         private val noteTypes: List<AnkiNoteType> = listOf(AnkiNoteType(2L, "Basic", listOf("Front"))),
         private val duplicate: Boolean = false,
+        private val addNoteResult: Boolean = true,
     ) : AnkiBackend {
         var fetchDecksCalls = 0
             private set
@@ -227,6 +462,10 @@ class AnkiRepositoryBackendSelectionTest {
         var syncCalls = 0
             private set
         var lastMediaBytes: ByteArray = byteArrayOf()
+            private set
+        var lastMediaName: String = ""
+            private set
+        var lastMediaMimeType: String = ""
             private set
         var lastFields: Map<String, String> = emptyMap()
             private set
@@ -262,7 +501,7 @@ class AnkiRepositoryBackendSelectionTest {
         ): Boolean {
             addNoteCalled = true
             lastFields = fieldsByName
-            return true
+            return addNoteResult
         }
 
         override fun addMediaFromUri(uriString: String, preferredName: String, mimeType: String): String? = null
@@ -270,6 +509,8 @@ class AnkiRepositoryBackendSelectionTest {
         override fun addMediaFromBytes(bytes: ByteArray, preferredName: String, mimeType: String): String? {
             addMediaFromBytesCalls += 1
             lastMediaBytes = bytes
+            lastMediaName = preferredName
+            lastMediaMimeType = mimeType
             return if (mimeType.startsWith("image/")) {
                 """<img src="$preferredName">"""
             } else {

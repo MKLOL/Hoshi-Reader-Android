@@ -1,88 +1,24 @@
 package moe.antimony.hoshi.features.reader
 
-import moe.antimony.hoshi.epub.SasayakiPlaybackData
-import moe.antimony.hoshi.epub.SasayakiMatchData
-import moe.antimony.hoshi.epub.SasayakiMatch
-import moe.antimony.hoshi.epub.HighlightColor
-import moe.antimony.hoshi.epub.ReaderHighlight
-
-import android.annotation.SuppressLint
+import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
-import android.graphics.Color as AndroidColor
-import android.graphics.Rect
-import android.graphics.drawable.ColorDrawable
-import android.graphics.drawable.GradientDrawable
-import android.graphics.drawable.InsetDrawable
-import android.net.Uri
 import android.os.SystemClock
-import android.webkit.JavascriptInterface
-import android.webkit.RenderProcessGoneDetail
-import android.webkit.WebResourceRequest
-import android.webkit.WebResourceResponse
 import android.webkit.WebView
-import android.webkit.WebViewClient
-import android.view.ActionMode
 import android.view.KeyEvent
-import android.view.Menu
-import android.view.MenuItem
-import android.view.MotionEvent
-import android.view.View
-import android.view.View.MeasureSpec
-import android.view.ViewGroup
 import android.view.WindowManager
-import android.view.Gravity
-import android.widget.LinearLayout
-import android.widget.PopupWindow
-import android.widget.TextView
 import androidx.activity.compose.BackHandler
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.isSystemInDarkTheme
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.BoxWithConstraints
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.RowScope
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.statusBars
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.rounded.ArrowBack
-import androidx.compose.material.icons.automirrored.rounded.List
-import androidx.compose.material.icons.automirrored.rounded.ShowChart
-import androidx.compose.material.icons.rounded.FastForward
-import androidx.compose.material.icons.rounded.FastRewind
-import androidx.compose.material.icons.rounded.BorderColor
-import androidx.compose.material.icons.rounded.GraphicEq
-import androidx.compose.material.icons.rounded.Palette
-import androidx.compose.material.icons.rounded.Pause
-import androidx.compose.material.icons.rounded.PlayArrow
-import androidx.compose.material.icons.rounded.Timer
-import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -92,39 +28,49 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
-import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.unit.Dp
-import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.findViewTreeLifecycleOwner
-import java.util.WeakHashMap
-import java.util.UUID
+import androidx.lifecycle.viewmodel.compose.viewModel
+import java.io.File
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import moe.antimony.hoshi.LocalHoshiAppContainer
-import moe.antimony.hoshi.R
 import moe.antimony.hoshi.epub.EpubBook
+import moe.antimony.hoshi.epub.HighlightColor
 import moe.antimony.hoshi.epub.ReadingStatistics
+import moe.antimony.hoshi.epub.ReaderHighlight
+import moe.antimony.hoshi.epub.SasayakiMatch
+import moe.antimony.hoshi.epub.SasayakiMatchData
+import moe.antimony.hoshi.epub.SasayakiPlaybackData
+import moe.antimony.hoshi.features.audio.AudioRequestHandler
 import moe.antimony.hoshi.features.audio.AudioSettings
+import moe.antimony.hoshi.features.audio.LocalAudioRepository
+import moe.antimony.hoshi.features.audio.WordAudioPlayer
+import moe.antimony.hoshi.features.anki.AnkiViewModel
+import moe.antimony.hoshi.features.dictionary.DictionaryImageRequestHandler
 import moe.antimony.hoshi.features.dictionary.DictionarySettings
-import moe.antimony.hoshi.features.dictionary.LookupPopupAndroidOverlay
+import moe.antimony.hoshi.features.dictionary.LookupPopupAndroidStack
+import moe.antimony.hoshi.features.dictionary.LookupPopupAssets
+import moe.antimony.hoshi.features.dictionary.LookupPopupHtml
 import moe.antimony.hoshi.features.dictionary.LookupPopupItem
 import moe.antimony.hoshi.features.dictionary.LookupPopupOptions
-import moe.antimony.hoshi.features.dictionary.LookupPopupState
+import moe.antimony.hoshi.features.dictionary.PopupSelectionEInkStyle
+import moe.antimony.hoshi.features.dictionary.closeChildPopupsForScrolledParent
 import moe.antimony.hoshi.features.dictionary.clearPopupSelectionHighlights
 import moe.antimony.hoshi.features.dictionary.createLookupPopupItem
-import moe.antimony.hoshi.features.dictionary.currentDictionaryStyles
+import moe.antimony.hoshi.features.dictionary.dismissPopupAt
+import moe.antimony.hoshi.features.dictionary.openPopupExternalLink
 import moe.antimony.hoshi.features.dictionary.withLookupPopupVisualOptions
 import moe.antimony.hoshi.features.sasayaki.BookSasayakiPlaybackRepository
 import moe.antimony.hoshi.features.sasayaki.SasayakiAudioRepository
@@ -132,52 +78,7 @@ import moe.antimony.hoshi.features.sasayaki.SasayakiCueRange
 import moe.antimony.hoshi.features.sasayaki.SasayakiPlayer
 import moe.antimony.hoshi.features.sasayaki.SasayakiSettings
 import moe.antimony.hoshi.features.sasayaki.SasayakiSheet
-import moe.antimony.hoshi.webview.applyHoshiWebViewSecurityDefaults
-import java.io.File
-import kotlin.math.abs
-
-private data class PendingRootSelectionHighlight(
-    val popupId: String,
-    val rects: List<ReaderSelectionRect>? = null,
-    val contentReady: Boolean = false,
-)
-
-private fun popupAnchorRect(rects: List<ReaderSelectionRect>): ReaderSelectionRect? =
-    rects.firstOrNull()
-
-private fun warmRootLookupPopupItem(
-    settings: ReaderSettings,
-    dictionarySettings: DictionarySettings,
-    darkMode: Boolean,
-    audioSettings: AudioSettings,
-): LookupPopupItem = LookupPopupItem(
-    id = "warm-root-popup",
-    state = LookupPopupState(
-        selection = ReaderSelectionData(
-            text = "",
-            sentence = "",
-            rect = ReaderSelectionRect(x = 0.0, y = 0.0, width = 1.0, height = 1.0),
-            normalizedOffset = null,
-        ),
-        results = emptyList(),
-        dictionaryStyles = currentDictionaryStyles(),
-        dictionarySettings = dictionarySettings,
-        isVertical = settings.verticalWriting,
-        isFullWidth = settings.popupFullWidth,
-        width = settings.popupWidth,
-        height = settings.popupHeight,
-        swipeToDismiss = settings.popupSwipeToDismiss,
-        swipeThreshold = settings.popupSwipeThreshold,
-        reducedMotionScrolling = settings.popupReducedMotionScrolling,
-        reducedMotionScrollPercent = settings.popupReducedMotionScrollPercent,
-        reducedMotionSwipeThreshold = settings.popupReducedMotionSwipeThreshold,
-        popupScale = settings.popupScale,
-        darkMode = darkMode,
-        eInkMode = settings.eInkMode,
-        audioSettings = audioSettings,
-        popupActionBar = false,
-    ),
-)
+import kotlin.math.roundToInt
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -201,6 +102,10 @@ fun ReaderWebView(
     val appContainer = LocalHoshiAppContainer.current
     val scope = rememberCoroutineScope()
     val fontManager = appContainer.readerFontManager
+    val readerImageResourceBridge = remember(book, fontManager) {
+        ReaderWebResourceBridge(book, fontManager)
+    }
+    val dictionaryRepository = appContainer.dictionaryRepository
     val dictionarySettingsRepository = appContainer.dictionarySettingsRepository
     val audioSettingsRepository = appContainer.audioSettingsRepository
     val sasayakiSettingsRepository = appContainer.sasayakiSettingsRepository
@@ -232,6 +137,7 @@ fun ReaderWebView(
         resolveBookCoverFile(bookRoot, book.coverHref)
     }
     var sasayakiPlayer by remember { mutableStateOf<SasayakiPlayer?>(null) }
+    var pendingSasayakiCue by remember(book) { mutableStateOf<PendingSasayakiCue?>(null) }
     val view = LocalView.current
     val systemDarkTheme = isSystemInDarkTheme()
     val clampedInitialIndex = initialChapterIndex.coerceIn(0, book.chapters.lastIndex)
@@ -249,9 +155,18 @@ fun ReaderWebView(
     }
     var dictionarySettings by remember { mutableStateOf(DictionarySettings()) }
     var audioSettings by remember { mutableStateOf(AudioSettings()) }
+    var dictionaryStyles by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
     LaunchedEffect(dictionarySettingsRepository) {
         dictionarySettingsRepository.settings.collect { settings ->
             dictionarySettings = settings
+        }
+    }
+    LaunchedEffect(dictionaryRepository) {
+        dictionaryStyles = withContext(Dispatchers.IO) {
+            runCatching {
+                dictionaryRepository.ensureLookupQueryReady()
+                dictionaryRepository.dictionaryStyles()
+            }.getOrDefault(emptyMap())
         }
     }
     LaunchedEffect(audioSettingsRepository) {
@@ -267,11 +182,84 @@ fun ReaderWebView(
     val effectiveSettings = stateHolder.effectiveSettings
     val readerPosition = stateHolder.readerPosition
     val lookupPopups = stateHolder.lookupPopups
-    var pendingRootSelectionHighlight by remember { mutableStateOf<PendingRootSelectionHighlight?>(null) }
-    var visibleLookupPopupIds by remember { mutableStateOf<Set<String>>(emptySet()) }
-    var rootSelectionHighlightRects by remember { mutableStateOf<List<ReaderSelectionRect>>(emptyList()) }
-    var warmRootLookupPopup by remember { mutableStateOf<LookupPopupItem?>(null) }
+    val readerIframePopupSupported = remember { ReaderLookupPopupWebBridge.isSupported() }
+    var readerPopupHistories by remember { mutableStateOf<Map<String, ReaderPopupHistoryCounts>>(emptyMap()) }
+    var rootSelectionHighlight by remember { mutableStateOf<ReaderRootSelectionHighlight?>(null) }
+    var fullscreenImage by remember { mutableStateOf<ReaderFullscreenImage?>(null) }
+    val ankiViewModel: AnkiViewModel = viewModel(
+        factory = remember(appContainer) {
+            object : ViewModelProvider.Factory {
+                @Suppress("UNCHECKED_CAST")
+                override fun <T : ViewModel> create(modelClass: Class<T>): T =
+                    AnkiViewModel(appContainer.ankiRepository) as T
+            }
+        },
+    )
+    val ankiUiState by ankiViewModel.uiState.collectAsState()
+    val popupAssets = remember(context) { LookupPopupAssets.load(context) }
+    val readerPopupBridgeHolder = remember { ReaderLookupPopupBridgeCallbackHolder() }
     val popupDarkMode = effectiveSettings.usesDarkInterface(systemDarkTheme)
+    val readerPopupIframeDocument = remember(
+        dictionaryStyles,
+        dictionarySettings,
+        effectiveSettings.popupSwipeToDismiss,
+        effectiveSettings.popupSwipeThreshold,
+        effectiveSettings.popupReducedMotionScrolling,
+        effectiveSettings.popupReducedMotionScrollPercent,
+        effectiveSettings.popupReducedMotionSwipeThreshold,
+        popupDarkMode,
+        effectiveSettings.eInkMode,
+        audioSettings,
+        ankiUiState.popupSettings,
+        fontManager,
+        effectiveSettings.popupScale,
+    ) {
+        LookupPopupHtml.renderIframeDocument(
+            assets = null,
+            dictionaryStyles = dictionaryStyles,
+            settings = dictionarySettings,
+            swipeToDismiss = effectiveSettings.popupSwipeToDismiss,
+            swipeThreshold = effectiveSettings.popupSwipeThreshold,
+            reducedMotionScrolling = effectiveSettings.popupReducedMotionScrolling,
+            reducedMotionScrollPercent = effectiveSettings.popupReducedMotionScrollPercent,
+            reducedMotionSwipeThreshold = effectiveSettings.popupReducedMotionSwipeThreshold,
+            darkMode = popupDarkMode,
+            eInkMode = effectiveSettings.eInkMode,
+            audioSettings = audioSettings,
+            ankiSettings = ankiUiState.popupSettings,
+            fontFaceCss = fontManager.popupFontFaceCss(),
+            popupScale = effectiveSettings.popupScale,
+        )
+    }
+    val currentReaderPopupIframeDocument = rememberUpdatedState(readerPopupIframeDocument)
+    val readerPopupIframeUrl = remember(readerPopupIframeDocument) {
+        readerLookupPopupIframeUrl(readerPopupIframeDocument.hashCode())
+    }
+    LaunchedEffect(webView, readerPopupIframeUrl, readerIframePopupSupported) {
+        if (!readerIframePopupSupported) return@LaunchedEffect
+        webView?.evaluateJavascript(
+            """
+                (function() {
+                  var iframeUrl = ${readerJavaScriptStringLiteral(readerPopupIframeUrl)};
+                  window.__hoshiReaderPopupIframeUrl = iframeUrl;
+                  if (window.hoshiReaderPopupHost) {
+                    window.hoshiReaderPopupHost.preloadIdleRootFrame(iframeUrl);
+                  }
+                })();
+            """.trimIndent(),
+            null,
+        )
+    }
+    val readerPopupResourceHandler = remember(context, popupAssets, fontManager) {
+        ReaderLookupPopupResourceHandler(
+            context = context.applicationContext,
+            assets = popupAssets,
+            fontManager = fontManager,
+            audioRequestHandler = AudioRequestHandler(LocalAudioRepository.fromContext(context.applicationContext)),
+            imageRequestHandler = DictionaryImageRequestHandler(),
+            iframeDocument = { currentReaderPopupIframeDocument.value },
+        )
+    }
     val themedLookupPopups = remember(
         lookupPopups,
         popupDarkMode,
@@ -286,29 +274,6 @@ fun ReaderWebView(
             popupScale = effectiveSettings.popupScale,
         )
     }
-    val warmRootSeedPopup = remember(effectiveSettings, dictionarySettings, popupDarkMode, audioSettings) {
-        warmRootLookupPopupItem(
-            settings = effectiveSettings,
-            dictionarySettings = dictionarySettings,
-            darkMode = popupDarkMode,
-            audioSettings = audioSettings,
-        )
-    }
-    val warmRootSourcePopup = warmRootLookupPopup ?: warmRootSeedPopup
-    val warmRootPopup = listOf(
-        warmRootSourcePopup.copy(
-            state = warmRootSourcePopup.state.copy(
-                results = emptyList(),
-                popupActionBar = false,
-            ),
-            sasayakiCue = null,
-        ),
-    ).withLookupPopupVisualOptions(
-        darkMode = popupDarkMode,
-        eInkMode = effectiveSettings.eInkMode,
-        audioSettings = audioSettings,
-        popupScale = effectiveSettings.popupScale,
-    ).first()
     val showReaderMenu = stateHolder.showReaderMenu
     val showAppearance = stateHolder.showAppearance
     val showChapters = stateHolder.showChapters
@@ -474,6 +439,8 @@ fun ReaderWebView(
     fun lookupRootPopup(selection: ReaderSelectionData): Pair<LookupPopupItem, Int>? =
         createLookupPopupItem(
             selection = selection,
+            dictionaryStyles = dictionaryStyles,
+            lookup = dictionaryRepository::lookup,
             options = LookupPopupOptions(
                 isVertical = effectiveSettings.verticalWriting,
                 isFullWidth = effectiveSettings.popupFullWidth,
@@ -499,6 +466,8 @@ fun ReaderWebView(
     fun lookupChildPopup(selection: ReaderSelectionData): Pair<LookupPopupItem, Int>? =
         createLookupPopupItem(
             selection = selection,
+            dictionaryStyles = dictionaryStyles,
+            lookup = dictionaryRepository::lookup,
             options = LookupPopupOptions(
                 isVertical = false,
                 isFullWidth = false,
@@ -552,22 +521,21 @@ fun ReaderWebView(
         }
     }
     fun setLookupPopups(nextPopups: List<LookupPopupItem>) {
-        nextPopups.firstOrNull()?.let { warmRootLookupPopup = it }
-        visibleLookupPopupIds = visibleLookupPopupIds.intersect(nextPopups.mapTo(mutableSetOf()) { it.id })
+        val activeIds = nextPopups.mapTo(mutableSetOf()) { it.id }
+        readerPopupHistories = readerPopupHistories.filterKeys(activeIds::contains)
+        rootSelectionHighlight = rootSelectionHighlight?.takeIf { highlight ->
+            highlight.popupId == null || highlight.popupId in activeIds
+        }
         stateHolder.setLookupPopups(nextPopups, ::resumeSasayakiAfterLookupIfNeeded)
     }
     fun dismissRootLookupPopup() {
-        pendingRootSelectionHighlight = null
-        visibleLookupPopupIds = emptySet()
-        rootSelectionHighlightRects = emptyList()
+        rootSelectionHighlight = null
         setLookupPopups(clearPopupSelectionHighlights(stateHolder.lookupPopups))
         clearReaderSelection()
         setLookupPopups(emptyList())
     }
     fun closeLookupPopupsAndSelection() {
-        pendingRootSelectionHighlight = null
-        visibleLookupPopupIds = emptySet()
-        rootSelectionHighlightRects = emptyList()
+        rootSelectionHighlight = null
         if (lookupPopups.isNotEmpty()) {
             setLookupPopups(clearPopupSelectionHighlights(stateHolder.lookupPopups))
             clearReaderSelection()
@@ -576,46 +544,10 @@ fun ReaderWebView(
             setLookupPopups(emptyList())
         }
     }
-    fun updateRootPopupSelectionBounds(popupId: String, rects: List<ReaderSelectionRect>) {
-        popupAnchorRect(rects)?.let { anchor ->
-            setLookupPopups(
-                stateHolder.lookupPopups.map { popup ->
-                    if (popup.id == popupId) {
-                        popup.copy(
-                            state = popup.state.copy(
-                                selection = popup.state.selection.copy(rect = anchor),
-                            ),
-                        )
-                    } else {
-                        popup
-                    }
-                },
-            )
-        }
-    }
-    fun revealPendingRootSelectionHighlight(popupId: String) {
-        val pending = pendingRootSelectionHighlight ?: return
-        if (pending.popupId != popupId) return
-        val rects = pending.rects ?: return
-        if (!pending.contentReady) return
-        rootSelectionHighlightRects = rects
-        visibleLookupPopupIds = visibleLookupPopupIds + popupId
-        pendingRootSelectionHighlight = null
-    }
-    fun setPendingRootSelectionRects(popupId: String, rects: List<ReaderSelectionRect>) {
-        val pending = pendingRootSelectionHighlight ?: return
-        if (pending.popupId != popupId) return
-        val fallbackRect = stateHolder.lookupPopups.firstOrNull { it.id == popupId }?.state?.selection?.rect
-        val displayRects = rects.ifEmpty { fallbackRect?.let(::listOf).orEmpty() }
-        updateRootPopupSelectionBounds(popupId, displayRects)
-        pendingRootSelectionHighlight = pending.copy(rects = displayRects)
-        revealPendingRootSelectionHighlight(popupId)
-    }
-    fun markRootPopupContentReady(popupId: String) {
-        val pending = pendingRootSelectionHighlight ?: return
-        if (pending.popupId != popupId) return
-        pendingRootSelectionHighlight = pending.copy(contentReady = true)
-        revealPendingRootSelectionHighlight(popupId)
+    fun openFullscreenImage(sourceUrl: String) {
+        val resource = readerImageResourceBridge.imageResourceForUrl(sourceUrl) ?: return
+        closeLookupPopupsAndSelection()
+        fullscreenImage = ReaderFullscreenImage(sourceUrl, resource)
     }
     fun updateSasayakiSettings(settings: SasayakiSettings) {
         sasayakiSettings = settings
@@ -626,6 +558,7 @@ fun ReaderWebView(
         sasayakiPlayer?.readerSkipButtonAction = settings.readerSkipButtonAction
     }
     fun goToNextChapter(): Boolean {
+        if (!stateHolder.canAcceptReaderNavigationInput()) return false
         startStatisticsForProgressChangeIfNeeded()
         val next = stateHolder.goToNextChapter(book.chapters.lastIndex)
         if (next != null) {
@@ -637,6 +570,7 @@ fun ReaderWebView(
         return false
     }
     fun goToPreviousChapter(): Boolean {
+        if (!stateHolder.canAcceptReaderNavigationInput()) return false
         startStatisticsForProgressChangeIfNeeded()
         val previous = stateHolder.goToPreviousChapter()
         if (previous != null) {
@@ -648,6 +582,7 @@ fun ReaderWebView(
         return false
     }
     fun saveDisplayedProgress(progress: Double) {
+        stateHolder.enterFocusModeForReaderInteraction()
         startStatisticsForProgressChangeIfNeeded()
         val savedPosition = stateHolder.recordDisplayedProgress(progress)
         stateHolder.clearForwardHistoryAfterManualMovement()
@@ -655,8 +590,15 @@ fun ReaderWebView(
         saveReaderPosition(savedPosition)
     }
     fun displayPagedTurnProgress(progress: Double) {
+        stateHolder.enterFocusModeForReaderInteraction()
         startStatisticsForProgressChangeIfNeeded()
         stateHolder.recordDisplayedProgress(progress)
+        stateHolder.clearForwardHistoryAfterManualMovement()
+        recordStatisticsAtDisplayedPosition()
+    }
+    fun displayContinuousScrollProgress(progress: Double, restoreEpoch: Int) {
+        startStatisticsForProgressChangeIfNeeded()
+        stateHolder.recordContinuousScrollDisplayProgress(progress, restoreEpoch) ?: return
         stateHolder.clearForwardHistoryAfterManualMovement()
         recordStatisticsAtDisplayedPosition()
     }
@@ -669,6 +611,7 @@ fun ReaderWebView(
     }
     fun navigateReaderPage(direction: ReaderNavigationDirection): Boolean {
         val currentWebView = webView ?: return false
+        if (!stateHolder.beginReaderNavigationInput()) return false
         closeLookupPopupsAndSelection()
         val onLimit = when (direction) {
             ReaderNavigationDirection.Forward -> ::goToNextChapter
@@ -688,26 +631,241 @@ fun ReaderWebView(
             player?.pausePlayback()
         }
     }
+    fun replyReaderPopupMessage(popupId: String, messageId: String, bodyJson: String) {
+        webView?.evaluateJavascript(
+            """
+                window.hoshiReaderPopupHost &&
+                window.hoshiReaderPopupHost.resolveMessage(${readerJavaScriptStringLiteral(popupId)}, ${readerJavaScriptStringLiteral(messageId)}, $bodyJson)
+            """.trimIndent(),
+            null,
+        )
+    }
+    fun highlightReaderPopupSelection(popupId: String, highlightCount: Int) {
+        webView?.evaluateJavascript(
+            """
+                window.hoshiReaderPopupHost &&
+                window.hoshiReaderPopupHost.highlightSelection(${readerJavaScriptStringLiteral(popupId)}, $highlightCount)
+            """.trimIndent(),
+            null,
+        )
+    }
+    fun popupIndex(popupId: String): Int =
+        stateHolder.lookupPopups.indexOfFirst { it.id == popupId }
+
+    fun popupById(popupId: String): LookupPopupItem? =
+        stateHolder.lookupPopups.firstOrNull { it.id == popupId }
+
+    fun handleReaderPopupBridgeMessage(message: ReaderLookupPopupBridgeMessage) {
+        when (message) {
+            is ReaderLookupPopupBridgeMessage.OpenLink -> context.openPopupExternalLink(message.url)
+            is ReaderLookupPopupBridgeMessage.TapOutside -> {
+                val index = popupIndex(message.popupId).takeIf { it >= 0 } ?: return
+                setLookupPopups(stateHolder.lookupPopups.take(index + 1))
+            }
+            is ReaderLookupPopupBridgeMessage.SwipeDismiss -> {
+                val index = popupIndex(message.popupId).takeIf { it >= 0 } ?: return
+                if (index == 0) {
+                    dismissRootLookupPopup()
+                } else {
+                    setLookupPopups(dismissPopupAt(stateHolder.lookupPopups, index))
+                }
+            }
+            is ReaderLookupPopupBridgeMessage.TextSelected -> {
+                val index = popupIndex(message.popupId).takeIf { it >= 0 } ?: return
+                val nextPopups = stateHolder.lookupPopups.take(index + 1)
+                val lookup = lookupChildPopup(message.selection)
+                if (lookup == null) {
+                    highlightReaderPopupSelection(message.popupId, 0)
+                    return
+                }
+                val (childPopup, highlightCount) = lookup
+                setLookupPopups(nextPopups + childPopup)
+                highlightReaderPopupSelection(message.popupId, highlightCount)
+            }
+            is ReaderLookupPopupBridgeMessage.PlayWordAudio -> {
+                WordAudioPlayer.get(context).play(message.url, message.mode)
+            }
+            is ReaderLookupPopupBridgeMessage.MineEntry -> {
+                val popup = popupById(message.popupId) ?: return
+                val messageId = message.messageId ?: return
+                val ankiContext = popup.sasayakiCue?.takeIf { ankiUiState.popupSettings.needsSasayakiAudio }?.let { cue ->
+                    popup.state.ankiContext.copy(
+                        sasayakiAudioPath = sasayakiPlayer?.exportCueAudio(cue, popup.state.selection.sentence)?.absolutePath,
+                    )
+                } ?: popup.state.ankiContext
+                ankiViewModel.mineEntryAsync(message.payloadJson, ankiContext) { mined ->
+                    replyReaderPopupMessage(message.popupId, messageId, mined.toString())
+                }
+            }
+            is ReaderLookupPopupBridgeMessage.DuplicateCheck -> {
+                ankiViewModel.duplicateCheckAsync(message.expression) { isDuplicate ->
+                    replyReaderPopupMessage(message.popupId, message.messageId ?: return@duplicateCheckAsync, isDuplicate.toString())
+                }
+            }
+            is ReaderLookupPopupBridgeMessage.LookupRedirect -> {
+                val popup = popupById(message.popupId) ?: return
+                val results = dictionaryRepository.lookup(
+                    message.query,
+                    popup.state.dictionarySettings.maxResults,
+                    popup.state.dictionarySettings.scanLength,
+                )
+                if (results.isNotEmpty()) {
+                    setLookupPopups(
+                        stateHolder.lookupPopups.map { existing ->
+                            if (existing.id == message.popupId) {
+                                existing.copy(state = existing.state.copy(results = results))
+                            } else {
+                                existing
+                            }
+                        },
+                    )
+                    val current = readerPopupHistories[message.popupId] ?: ReaderPopupHistoryCounts()
+                    readerPopupHistories = readerPopupHistories + (
+                        message.popupId to current.copy(
+                            backCount = current.backCount + 1,
+                            forwardCount = 0,
+                        )
+                        )
+                }
+                replyReaderPopupMessage(message.popupId, message.messageId ?: return, results.size.toString())
+            }
+            is ReaderLookupPopupBridgeMessage.GetEntry -> {
+                val entry = popupById(message.popupId)?.state?.results?.getOrNull(message.index)
+                val body = entry?.let(LookupPopupHtml::entryJsonString) ?: "null"
+                replyReaderPopupMessage(message.popupId, message.messageId ?: return, body)
+            }
+            is ReaderLookupPopupBridgeMessage.PopupScrolled -> {
+                val index = popupIndex(message.popupId).takeIf { it >= 0 } ?: return
+                setLookupPopups(closeChildPopupsForScrolledParent(stateHolder.lookupPopups, index))
+            }
+            is ReaderLookupPopupBridgeMessage.NavigateBack -> {
+                val current = readerPopupHistories[message.popupId] ?: return
+                if (current.backCount > 0) {
+                    readerPopupHistories = readerPopupHistories + (
+                        message.popupId to current.copy(
+                            backCount = current.backCount - 1,
+                            forwardCount = current.forwardCount + 1,
+                        )
+                        )
+                }
+            }
+            is ReaderLookupPopupBridgeMessage.NavigateForward -> {
+                val current = readerPopupHistories[message.popupId] ?: return
+                if (current.forwardCount > 0) {
+                    readerPopupHistories = readerPopupHistories + (
+                        message.popupId to current.copy(
+                            backCount = current.backCount + 1,
+                            forwardCount = current.forwardCount - 1,
+                        )
+                        )
+                }
+            }
+            is ReaderLookupPopupBridgeMessage.ContentReady -> Unit
+            is ReaderLookupPopupBridgeMessage.SasayakiReplayCue -> {
+                popupById(message.popupId)?.sasayakiCue?.let { cue ->
+                    WordAudioPlayer.get(context).stop()
+                    sasayakiPlayer?.playCue(cue, stop = true)
+                }
+            }
+            is ReaderLookupPopupBridgeMessage.SasayakiTogglePlayback -> {
+                WordAudioPlayer.get(context).stop()
+                if (sasayakiWasPausedByLookup) {
+                    stateHolder.clearSasayakiPauseState()
+                } else {
+                    sasayakiPlayer?.togglePlayback()
+                }
+            }
+            is ReaderLookupPopupBridgeMessage.SasayakiPlayForward -> {
+                popupById(message.popupId)?.sasayakiCue?.let { cue ->
+                    WordAudioPlayer.get(context).stop()
+                    sasayakiPlayer?.playCue(cue, stop = false)
+                    closeLookupPopupsAndSelection()
+                }
+            }
+        }
+    }
+    readerPopupBridgeHolder.callbacks = ReaderLookupPopupBridgeCallbacks(::handleReaderPopupBridgeMessage)
     val handleTextSelected: (ReaderSelectionData, (Int, (List<ReaderSelectionRect>) -> Unit) -> Unit) -> Unit = { selection, selectionRects ->
-        pendingRootSelectionHighlight = null
-        visibleLookupPopupIds = emptySet()
-        rootSelectionHighlightRects = emptyList()
+        stateHolder.enterFocusModeForReaderInteraction()
+        rootSelectionHighlight = null
         setLookupPopups(emptyList())
         val lookup = lookupRootPopup(selection)
         if (lookup != null) {
             val (popup, highlightCount) = lookup
             pauseSasayakiForLookupIfNeeded()
             val selectionCount = onTextSelected(selection) ?: highlightCount
-            pendingRootSelectionHighlight = PendingRootSelectionHighlight(
+            rootSelectionHighlight = ReaderRootSelectionHighlight(
                 popupId = popup.id,
+                rects = null,
             )
             setLookupPopups(listOf(popup))
-            selectionRects(selectionCount) { rects ->
-                setPendingRootSelectionRects(popup.id, rects)
+            if (readerIframePopupSupported) {
+                selectionRects(selectionCount) { rects ->
+                    if (stateHolder.lookupPopups.none { it.id == popup.id }) return@selectionRects
+                    val displayRects = rects.ifEmpty { listOf(popup.state.selection.rect) }
+                    val anchor = displayRects.firstOrNull()
+                    if (anchor != null) {
+                        setLookupPopups(
+                            stateHolder.lookupPopups.map { existing ->
+                                if (existing.id == popup.id) {
+                                    existing.copy(
+                                        state = existing.state.copy(
+                                            selection = existing.state.selection.copy(rect = anchor),
+                                        ),
+                                    )
+                                } else {
+                                    existing
+                                }
+                            },
+                        )
+                    }
+                    rootSelectionHighlight = ReaderRootSelectionHighlight(
+                        popupId = popup.id,
+                        rects = displayRects,
+                    )
+                }
+            } else {
+                selectionRects(selectionCount) { rects ->
+                    if (stateHolder.lookupPopups.none { it.id == popup.id }) return@selectionRects
+                    val displayRects = rects.ifEmpty { listOf(popup.state.selection.rect) }
+                    val anchor = displayRects.firstOrNull() ?: return@selectionRects
+                    setLookupPopups(
+                        stateHolder.lookupPopups.map { existing ->
+                            if (existing.id == popup.id) {
+                                existing.copy(
+                                    state = existing.state.copy(
+                                        selection = existing.state.selection.copy(rect = anchor),
+                                    ),
+                                )
+                            } else {
+                                existing
+                            }
+                        },
+                    )
+                    rootSelectionHighlight = ReaderRootSelectionHighlight(
+                        popupId = popup.id,
+                        rects = displayRects,
+                    )
+                }
             }
         } else {
-            pendingRootSelectionHighlight = null
-            onTextSelected(selection)?.let { selectionRects(it) { rootSelectionHighlightRects = it } }
+            onTextSelected(selection)?.let { count ->
+                if (readerIframePopupSupported) {
+                    selectionRects(count) { rects ->
+                        rootSelectionHighlight = ReaderRootSelectionHighlight(
+                            popupId = null,
+                            rects = rects,
+                        )
+                    }
+                } else {
+                    selectionRects(count) {}
+                }
+            }
+        }
+    }
+    fun handleReaderTapOutside() {
+        if (!stateHolder.toggleFocusModeFromReaderTap(hasVisiblePopups = stateHolder.lookupPopups.isNotEmpty())) {
+            closeLookupPopupsAndSelection()
         }
     }
     val chromeState = remember(
@@ -731,6 +889,38 @@ fun ReaderWebView(
             },
         )
     }
+    fun dispatchSasayakiCueToReader(cue: SasayakiMatch, reveal: Boolean) {
+        val targetWebView = webView
+        if (targetWebView == null || stateHolder.isWebViewRestoring) {
+            pendingSasayakiCue = PendingSasayakiCue(cue = cue, reveal = reveal)
+            return
+        }
+        pendingSasayakiCue = null
+        targetWebView.evaluateJavascript(
+            ReaderPaginationScripts.highlightSasayakiCueInvocation(cue.toCueRange(), reveal),
+        ) { progressResult ->
+            ReaderPaginationScripts.doubleResult(progressResult)?.let { progress ->
+                startStatisticsForProgressChangeIfNeeded()
+                val savedPosition = stateHolder.recordDisplayedProgress(progress)
+                recordStatisticsAtDisplayedPosition()
+                saveReaderPosition(savedPosition)
+            }
+        }
+    }
+    LaunchedEffect(
+        webView,
+        stateHolder.isWebViewRestoring,
+        readerPosition.displayedPosition.index,
+        pendingSasayakiCue,
+    ) {
+        val pending = pendingSasayakiCue ?: return@LaunchedEffect
+        if (stateHolder.isWebViewRestoring || webView == null) return@LaunchedEffect
+        if (pending.cue.chapterIndex != readerPosition.displayedPosition.index) {
+            pendingSasayakiCue = null
+            return@LaunchedEffect
+        }
+        dispatchSasayakiCueToReader(pending.cue, pending.reveal)
+    }
     LaunchedEffect(bookRoot, sasayakiMatchData, isSasayakiPlaybackLoaded, sasayakiPlaybackData) {
         sasayakiPlayer?.release()
         sasayakiPlayer = if (bookRoot != null && sasayakiMatchData != null && isSasayakiPlaybackLoaded) {
@@ -745,18 +935,10 @@ fun ReaderWebView(
                 persistenceScope = scope,
                 getCurrentChapterIndex = { stateHolder.readerPosition.displayedPosition.index },
                 onCue = { cue, reveal ->
-                    webView?.evaluateJavascript(
-                        ReaderPaginationScripts.highlightSasayakiCueInvocation(cue.toCueRange(), reveal),
-                    ) { progressResult ->
-                        ReaderPaginationScripts.doubleResult(progressResult)?.let { progress ->
-                            startStatisticsForProgressChangeIfNeeded()
-                            val savedPosition = stateHolder.recordDisplayedProgress(progress)
-                            recordStatisticsAtDisplayedPosition()
-                            saveReaderPosition(savedPosition)
-                        }
-                    }
+                    dispatchSasayakiCueToReader(cue, reveal)
                 },
                 onClearCue = {
+                    pendingSasayakiCue = null
                     webView?.evaluateJavascript(ReaderPaginationScripts.clearSasayakiCueInvocation(), null)
                 },
                 onLoadChapter = { chapterIndex ->
@@ -807,7 +989,7 @@ fun ReaderWebView(
         sasayakiAutoScroll = sasayakiSettings.autoScroll,
     )
     DisposableEffect(context, keepScreenOn) {
-        val window = context.findHoshiActivity()?.window
+        val window = context.findActivity()?.window
         if (keepScreenOn) {
             window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         } else {
@@ -873,60 +1055,63 @@ fun ReaderWebView(
         }
     }
 
-    BackHandler(onBack = ::closeReader)
-    val useLightSystemBars = when (effectiveSettings.theme) {
-        ReaderTheme.Dark -> false
-        ReaderTheme.System -> !systemDarkTheme
-        ReaderTheme.Light, ReaderTheme.Sepia -> true
+    BackHandler {
+        if (stateHolder.handleBackNavigation()) {
+            closeReader()
+        }
     }
-    DisposableEffect(context, view, useLightSystemBars, systemDarkTheme) {
-        val activity = context.findHoshiActivity()
+    val useDarkSystemBarIcons = effectiveSettings.usesDarkSystemBarIcons(systemDarkTheme)
+    DisposableEffect(context, view, useDarkSystemBarIcons) {
+        val activity = context.findActivity()
         val controller = activity?.window?.let { window ->
             WindowCompat.getInsetsController(window, view)
         }
-        controller?.isAppearanceLightStatusBars = useLightSystemBars
-        controller?.isAppearanceLightNavigationBars = useLightSystemBars
+        controller?.isAppearanceLightStatusBars = useDarkSystemBarIcons
+        controller?.isAppearanceLightNavigationBars = useDarkSystemBarIcons
         onDispose {
-            controller?.isAppearanceLightStatusBars = !systemDarkTheme
-            controller?.isAppearanceLightNavigationBars = !systemDarkTheme
+            controller?.isAppearanceLightStatusBars = useDarkSystemBarIcons
+            controller?.isAppearanceLightNavigationBars = useDarkSystemBarIcons
         }
     }
-    val useImmersiveSystemBars = readerShouldUseImmersiveSystemBars(focusMode)
-    DisposableEffect(context, view, lifecycle, useImmersiveSystemBars) {
-        val activity = context.findHoshiActivity()
-        val window = activity?.window
-        val controller = window?.let { currentWindow ->
-            WindowCompat.getInsetsController(currentWindow, view)
+    DisposableEffect(context, view) {
+        val activity = context.findActivity()
+        val controller = activity?.window?.let { window ->
+            WindowCompat.getInsetsController(window, view)
         }
-        val previousSystemBarsBehavior = controller?.systemBarsBehavior
-        fun applyReaderSystemBars() {
-            if (useImmersiveSystemBars) {
-                controller?.systemBarsBehavior =
-                    WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-                controller?.hide(WindowInsetsCompat.Type.systemBars())
-            } else {
-                controller?.show(WindowInsetsCompat.Type.systemBars())
-            }
-        }
-        applyReaderSystemBars()
-        val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME) {
-                applyReaderSystemBars()
-            }
-        }
-        lifecycle?.addObserver(observer)
+        val previousBehavior = controller?.systemBarsBehavior
+        controller?.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
         onDispose {
-            lifecycle?.removeObserver(observer)
-            if (previousSystemBarsBehavior != null) {
-                controller?.systemBarsBehavior = previousSystemBarsBehavior
+            if (previousBehavior != null) {
+                controller.systemBarsBehavior = previousBehavior
             }
             controller?.show(WindowInsetsCompat.Type.systemBars())
         }
     }
+    LaunchedEffect(context, view, focusMode) {
+        val activity = context.findActivity()
+        val controller = activity?.window?.let { window ->
+            WindowCompat.getInsetsController(window, view)
+        } ?: return@LaunchedEffect
+        val visibility = readerSystemBarVisibility(focusMode)
+        if (visibility.showStatusBar) {
+            controller.show(WindowInsetsCompat.Type.statusBars())
+        } else {
+            controller.hide(WindowInsetsCompat.Type.statusBars())
+        }
+        if (visibility.showNavigationBar) {
+            controller.show(WindowInsetsCompat.Type.navigationBars())
+        } else {
+            controller.hide(WindowInsetsCompat.Type.navigationBars())
+        }
+    }
 
     val bottomChromeMetrics = readerBottomChromeMetrics()
+    val currentStatusBarPadding = rememberCurrentStatusBarPadding()
     val stableStatusBarPadding = rememberStableStatusBarPadding()
-    val sasayakiBottomSkipButtons = readerSasayakiBottomSkipButtons(
+    val stableNavigationBarPadding = rememberStableNavigationBarPadding()
+    val currentStatusBarPaddingDp = currentStatusBarPadding.value.roundToInt().coerceAtLeast(0)
+    val stableStatusBarPaddingDp = stableStatusBarPadding.value.roundToInt().coerceAtLeast(0)
+    val sasayakiBottomPlaybackControls = readerSasayakiBottomPlaybackControls(
         settings = sasayakiSettings,
         hasAudio = sasayakiPlayer?.hasAudio == true,
         metrics = bottomChromeMetrics,
@@ -948,6 +1133,18 @@ fun ReaderWebView(
     val reserveSasayakiTopToggle = remember(bookRoot, sasayakiSettings) {
         readerShouldReserveSasayakiTopToggle(bookRoot, sasayakiSettings)
     }
+    val contentChromeInsets = readerContentChromeInsets(
+        state = chromeState,
+        settings = effectiveSettings,
+        showSasayakiToggle = reserveSasayakiTopToggle || showSasayakiTopToggle,
+        showStatisticsToggle = effectiveSettings.enableStatistics && effectiveSettings.showStatisticsToggle,
+        focusMode = focusMode,
+        topSystemInsetDp = stableStatusBarPadding.value.roundToInt().coerceAtLeast(0),
+    )
+    val topInfoPadding = readerTopInfoOverlayPaddingDp(
+        topSystemInsetDp = currentStatusBarPaddingDp,
+        focusMode = focusMode,
+    ).dp
     val onSasayakiTopToggle = sasayakiPlayer
         ?.takeIf { showSasayakiTopToggle && it.hasAudio }
         ?.let { player ->
@@ -966,6 +1163,21 @@ fun ReaderWebView(
         showStatisticsToggle = effectiveSettings.enableStatistics && effectiveSettings.showStatisticsToggle,
         focusMode = focusMode,
     )
+    val chromeVisibility = readerChromeVisibility(
+        focusMode = focusMode,
+        hasStatisticsToggle = effectiveSettings.enableStatistics && effectiveSettings.showStatisticsToggle,
+        hasSasayakiToggle = onSasayakiTopToggle != null,
+        hasBackJump = stateHolder.backTargetPosition != null,
+        hasForwardJump = stateHolder.forwardTargetPosition != null,
+    )
+    val topInfoVisibility = chromeVisibility.copy(
+        showTitleAndProgress = chromeVisibility.showTitleAndProgress &&
+            readerShouldShowTitleAndProgress(
+                focusMode = focusMode,
+                currentStatusBarInsetDp = currentStatusBarPaddingDp,
+                stableStatusBarInsetDp = stableStatusBarPaddingDp,
+            ),
+    )
     Box(
         modifier = modifier
             .fillMaxSize()
@@ -974,17 +1186,60 @@ fun ReaderWebView(
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(top = stableStatusBarPadding)
-                .navigationBarsPadding()
                 .padding(
-                    top = chromeLayout.topWebViewPaddingDp.dp,
-                    bottom = bottomChromeMetrics.webViewBottomPaddingDp.dp,
+                    top = contentChromeInsets.topDp.dp,
+                    bottom = contentChromeInsets.bottomDp.dp,
                 ),
         ) {
             BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
                 val viewportHorizontalPadding = maxWidth * effectiveSettings.continuousViewportHorizontalPaddingRatio.toFloat()
                 val viewportVerticalPadding = maxHeight * effectiveSettings.continuousViewportVerticalPaddingRatio.toFloat()
-                highlights?.let { loadedHighlights ->
+                val readerLookupPopupViewport = ReaderLookupPopupViewport(
+                    width = (maxWidth.value - viewportHorizontalPadding.value * 2f).coerceAtLeast(0f).toDouble(),
+                    height = (maxHeight.value - viewportVerticalPadding.value * 2f).coerceAtLeast(0f).toDouble(),
+                )
+                val readerRootSelectionHighlightPayload = remember(
+                    rootSelectionHighlight,
+                    popupDarkMode,
+                    effectiveSettings.eInkMode,
+                    effectiveSettings.verticalWriting,
+                ) {
+                    rootSelectionHighlight?.let { highlight ->
+                        ReaderLookupPopupRootHighlightPayload.fromReaderRects(
+                            popupId = highlight.popupId,
+                            rects = highlight.rects,
+                            darkMode = popupDarkMode,
+                            eInkMode = effectiveSettings.eInkMode,
+                            verticalWriting = effectiveSettings.verticalWriting,
+                        )
+                    }
+                }
+                val readerLookupPopupPayloads = remember(
+                    themedLookupPopups,
+                    readerPopupHistories,
+                    readerLookupPopupViewport,
+                    sasayakiWasPausedByLookup,
+                    sasayakiPlayer?.isPlaying == true,
+                    readerIframePopupSupported,
+                    readerPopupIframeUrl,
+                    rootSelectionHighlight,
+                ) {
+                    if (!readerIframePopupSupported) {
+                        emptyList()
+                    } else {
+                        readerLookupPopupFramePayloads(
+                            popups = themedLookupPopups,
+                            histories = readerPopupHistories,
+                            viewport = readerLookupPopupViewport,
+                            sasayakiWasPaused = sasayakiWasPausedByLookup,
+                            sasayakiIsPlaying = sasayakiPlayer?.isPlaying == true,
+                            iframeUrl = readerPopupIframeUrl,
+                            rootSelectionHighlight = rootSelectionHighlight,
+                        )
+                    }
+                }
+                if (highlights != null) {
+                    val loadChapter = currentLoadChapter()
                     ChapterWebView(
                         book = book,
                         chapterPosition = readerPosition.loadPosition,
@@ -1008,6 +1263,9 @@ fun ReaderWebView(
                         onDisplayProgress = { progress ->
                             displayPagedTurnProgress(progress)
                         },
+                        onContinuousScrollDisplayProgress = { progress, restoreEpoch ->
+                            displayContinuousScrollProgress(progress, restoreEpoch)
+                        },
                         onContinuousScrollProgress = { progress, restoreEpoch ->
                             saveContinuousScrollProgress(progress, restoreEpoch)
                         },
@@ -1018,15 +1276,26 @@ fun ReaderWebView(
                         scanNonJapaneseText = dictionarySettings.scanNonJapaneseText,
                         readerSettings = effectiveSettings,
                         chapterHighlightsJson = ReaderHighlights.chapterHighlightsJson(
-                            highlights = loadedHighlights,
+                            highlights = highlights.orEmpty(),
                             bookInfo = book.bookInfo,
-                            chapter = currentLoadChapter(),
+                            chapter = loadChapter,
+                        ),
+                        chapterSasayakiCuesJson = ReaderSasayakiCues.chapterCuesJson(
+                            matchData = sasayakiMatchData,
+                            chapterIndex = readerPosition.loadPosition.index,
                         ),
                         sasayakiTextColor = sasayakiSettings.textColor(effectiveSettings.usesDarkInterface(systemDarkTheme)),
                         sasayakiBackgroundColor = sasayakiSettings.backgroundColor(effectiveSettings.usesDarkInterface(systemDarkTheme)),
                         onTextSelected = handleTextSelected,
                         onClearLookupPopup = ::closeLookupPopupsAndSelection,
+                        onReaderTapOutside = ::handleReaderTapOutside,
+                        onReaderInteraction = stateHolder::enterFocusModeForReaderInteraction,
+                        onImageTapped = ::openFullscreenImage,
                         onHighlightCreated = ::addHighlight,
+                        readerPopupBridgeHolder = readerPopupBridgeHolder,
+                        readerPopupResourceHandler = readerPopupResourceHandler,
+                        readerIframePopupSupported = readerIframePopupSupported,
+                        readerPopupFrames = readerLookupPopupPayloads,
                         fontManager = fontManager,
                         systemDark = systemDarkTheme,
                         modifier = Modifier
@@ -1037,35 +1306,29 @@ fun ReaderWebView(
                             ),
                     )
                 }
-                LookupPopupAndroidOverlay(
-                    popups = themedLookupPopups,
-                    warmRootPopup = warmRootPopup,
-                    rootHighlightRects = rootSelectionHighlightRects,
-                    rootHighlightVerticalWriting = effectiveSettings.verticalWriting,
-                    onPopupsChange = ::setLookupPopups,
-                    lookupChildPopup = ::lookupChildPopup,
-                    onRootPopupDismissed = {
-                        dismissRootLookupPopup()
-                        true
-                    },
-                    isRootPopupVisible = { popup -> popup.id in visibleLookupPopupIds },
-                    onRootPopupContentReady = ::markRootPopupContentReady,
-                    sasayakiWasPaused = sasayakiWasPausedByLookup,
-                    sasayakiIsPlaying = sasayakiPlayer?.isPlaying == true,
-                    onSasayakiReplayCue = { cue -> sasayakiPlayer?.playCue(cue, stop = true) },
-                    onSasayakiTogglePlayback = { sasayakiPlayer?.togglePlayback() },
-                    onSasayakiPauseStateCleared = stateHolder::clearSasayakiPauseState,
-                    onSasayakiPlayForward = { cue ->
-                        sasayakiPlayer?.playCue(cue, stop = false)
-                        closeLookupPopupsAndSelection()
-                    },
-                    onPrepareSasayakiAudio = { cue, sentence ->
-                        sasayakiPlayer?.exportCueAudio(cue, sentence)?.absolutePath
-                    },
-                    rootSelectionOffsetX = viewportHorizontalPadding.value.toDouble(),
-                    rootSelectionOffsetY = viewportVerticalPadding.value.toDouble(),
-                    modifier = Modifier.fillMaxSize(),
-                )
+                if (readerIframePopupSupported) {
+                    ReaderLookupPopupIframeSync(
+                        webView = webView,
+                        payloads = readerLookupPopupPayloads,
+                        rootHighlight = readerRootSelectionHighlightPayload,
+                    )
+                } else {
+                    LookupPopupAndroidStack(
+                        popups = themedLookupPopups,
+                        onPopupsChange = ::setLookupPopups,
+                        lookupChildPopup = ::lookupChildPopup,
+                        onRootPopupDismissed = {
+                            dismissRootLookupPopup()
+                            true
+                        },
+                        rootHighlightRects = rootSelectionHighlight?.rects.orEmpty(),
+                        rootHighlightDarkMode = popupDarkMode,
+                        rootHighlightEInkMode = effectiveSettings.eInkMode,
+                        rootHighlightVerticalWriting = effectiveSettings.verticalWriting,
+                        rootHighlightEInkStyle = PopupSelectionEInkStyle.Box,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
             }
         }
         ReaderTopInfo(
@@ -1092,21 +1355,33 @@ fun ReaderWebView(
             },
             onSasayakiToggle = onSasayakiTopToggle,
             sasayakiPlaying = sasayakiPlayer?.isPlaying == true || sasayakiWasPausedByLookup,
-            focusMode = focusMode,
+            visibility = topInfoVisibility,
             metrics = bottomChromeMetrics,
             modifier = Modifier
                 .align(Alignment.TopCenter)
-                .padding(top = stableStatusBarPadding)
+                .padding(top = topInfoPadding)
                 .padding(horizontal = 15.dp),
         )
         ReaderFocusModeToggleArea(
             metrics = bottomChromeMetrics,
-            sasayakiSkipButtons = sasayakiBottomSkipButtons,
             focusMode = focusMode,
-            onToggleFocusMode = stateHolder::toggleFocusMode,
+            onToggleFocusMode = ::handleReaderTapOutside,
             modifier = Modifier.align(Alignment.BottomCenter),
         )
-        if (!focusMode) ReaderBottomChrome(
+        ReaderBottomSafeProgress(
+            state = chromeState,
+            settings = effectiveSettings,
+            colors = readerChromeColors(effectiveSettings, systemDarkTheme),
+            metrics = bottomChromeMetrics,
+            focusMode = focusMode,
+            sasayakiPlaybackControls = sasayakiBottomPlaybackControls,
+            sasayakiPlaying = sasayakiPlayer?.isPlaying == true,
+            onSasayakiSkipBackward = { performSasayakiBottomSkipAction(sasayakiBottomSkipButtonActions.left) },
+            onSasayakiTogglePlayback = { sasayakiPlayer?.togglePlayback() },
+            onSasayakiSkipForward = { performSasayakiBottomSkipAction(sasayakiBottomSkipButtonActions.right) },
+            modifier = Modifier.align(Alignment.BottomCenter),
+        )
+        if (chromeVisibility.showBottomChrome) ReaderBottomChrome(
             state = chromeState,
             settings = effectiveSettings,
             layout = chromeLayout,
@@ -1128,9 +1403,6 @@ fun ReaderWebView(
             } else {
                 null
             },
-            sasayakiSkipButtons = sasayakiBottomSkipButtons,
-            onSasayakiSkipBackward = { performSasayakiBottomSkipAction(sasayakiBottomSkipButtonActions.left) },
-            onSasayakiSkipForward = { performSasayakiBottomSkipAction(sasayakiBottomSkipButtonActions.right) },
             metrics = bottomChromeMetrics,
             modifier = Modifier.align(Alignment.BottomCenter),
         )
@@ -1192,1289 +1464,26 @@ fun ReaderWebView(
                 onDismiss = stateHolder::dismissStatistics,
             )
         }
+        fullscreenImage?.let { image ->
+            ReaderFullscreenImageOverlay(
+                image = image,
+                resourceBridge = readerImageResourceBridge,
+                backgroundColor = Color(effectiveSettings.backgroundColor(systemDarkTheme)),
+                topSafeAreaPadding = stableStatusBarPadding,
+                bottomSafeAreaPadding = stableNavigationBarPadding,
+                onDismiss = { fullscreenImage = null },
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
         webView?.let { _ -> Unit }
     }
 }
 
-@Composable
-private fun ReaderTopInfo(
-    state: ReaderChromeState,
-    settings: ReaderSettings,
-    colors: ReaderChromeColors,
-    onStatisticsToggle: (() -> Unit)?,
-    statisticsTracking: Boolean,
-    onJumpBack: (() -> Unit)?,
-    onJumpForward: (() -> Unit)?,
-    onSasayakiToggle: (() -> Unit)?,
-    sasayakiPlaying: Boolean,
-    focusMode: Boolean,
-    metrics: ReaderBottomChromeMetrics,
-    modifier: Modifier = Modifier,
-) {
-    val progress = state.progressText(settings)
-    val showBackJump = !focusMode && state.backTargetCharacter != null && onJumpBack != null
-    val showForwardJump = !focusMode && state.forwardTargetCharacter != null && onJumpForward != null
-    if ((focusMode || !settings.showTitle) &&
-        onStatisticsToggle == null &&
-        !showBackJump &&
-        !showForwardJump &&
-        onSasayakiToggle == null &&
-        (focusMode || progress.isBlank() || !settings.showProgressTop)
-    ) return
-    Box(modifier = modifier.fillMaxWidth()) {
-        val showStartControls = onStatisticsToggle != null || showBackJump
-        val showEndControls = onSasayakiToggle != null || showForwardJump
-        var startControlWidth by remember { mutableStateOf(0) }
-        var endControlWidth by remember { mutableStateOf(0) }
-        val density = LocalDensity.current
-        val dynamicTitlePadding = with(density) {
-            val maxControlWidth = maxOf(
-                if (showStartControls) startControlWidth else 0,
-                if (showEndControls) endControlWidth else 0,
-            )
-            if (maxControlWidth > 0) maxControlWidth.toDp() + 4.dp else 0.dp
-        }
-        val titlePadding = readerTopTitlePaddingDp(
-            hasStartControl = showStartControls,
-            hasEndControl = showEndControls,
-        )
-        val resolvedTitlePadding = maxOf(
-            titlePadding.startDp.dp,
-            titlePadding.endDp.dp,
-            dynamicTitlePadding,
-        )
-        Column(
-            modifier = Modifier.align(Alignment.TopCenter),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(0.dp),
-        ) {
-            if (!focusMode && settings.showTitle) {
-                Text(
-                    text = state.title,
-                    color = Color(colors.infoText),
-                    style = MaterialTheme.typography.labelLarge,
-                    maxLines = 1,
-                    modifier = Modifier.padding(
-                        start = resolvedTitlePadding,
-                        end = resolvedTitlePadding,
-                    ),
-                )
-            }
-            if (!focusMode && settings.showProgressTop && progress.isNotBlank()) {
-                Text(
-                    text = progress,
-                    color = Color(colors.infoText),
-                    style = MaterialTheme.typography.labelMedium,
-                )
-            }
-        }
-        if (showStartControls) {
-            Row(
-                modifier = Modifier
-                    .align(Alignment.TopStart)
-                    .onSizeChanged { startControlWidth = it.width },
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(2.dp),
-            ) {
-                if (onStatisticsToggle != null) {
-                    ReaderRoundButton(
-                        colors = colors,
-                        sizeDp = metrics.topStatisticsButtonSizeDp,
-                        onClick = onStatisticsToggle,
-                    ) {
-                        Icon(
-                            imageVector = readerStatisticsTopToggleIcon(statisticsTracking),
-                            contentDescription = if (statisticsTracking) {
-                                stringResource(R.string.reader_statistics_pause)
-                            } else {
-                                stringResource(R.string.reader_statistics_start)
-                            },
-                            modifier = Modifier.size(metrics.topStatisticsIconSizeDp.dp),
-                            tint = Color(colors.buttonContent),
-                        )
-                    }
-                }
-                if (showBackJump) {
-                    ReaderJumpHistoryButton(
-                        character = requireNotNull(state.backTargetCharacter),
-                        icon = readerJumpBackIcon(),
-                        iconFirst = true,
-                        contentDescription = stringResource(R.string.reader_jump_back),
-                        colors = colors,
-                        heightDp = metrics.topStatisticsButtonSizeDp,
-                        onClick = requireNotNull(onJumpBack),
-                    )
-                }
-            }
-        }
-        if (showEndControls) {
-            Row(
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .onSizeChanged { endControlWidth = it.width },
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(2.dp),
-            ) {
-                if (showForwardJump) {
-                    ReaderJumpHistoryButton(
-                        character = requireNotNull(state.forwardTargetCharacter),
-                        icon = readerJumpForwardIcon(),
-                        iconFirst = false,
-                        contentDescription = stringResource(R.string.reader_jump_forward),
-                        colors = colors,
-                        heightDp = metrics.topSasayakiButtonSizeDp,
-                        onClick = requireNotNull(onJumpForward),
-                    )
-                }
-                if (onSasayakiToggle != null) {
-                    ReaderRoundButton(
-                        colors = colors,
-                        sizeDp = metrics.topSasayakiButtonSizeDp,
-                        onClick = onSasayakiToggle,
-                    ) {
-                        Icon(
-                            imageVector = readerSasayakiTopToggleIcon(sasayakiPlaying),
-                            contentDescription = if (sasayakiPlaying) {
-                                stringResource(R.string.sasayaki_pause)
-                            } else {
-                                stringResource(R.string.sasayaki_play)
-                            },
-                            modifier = Modifier.size(metrics.topSasayakiIconSizeDp.dp),
-                            tint = Color(colors.buttonContent),
-                        )
-                    }
-                }
-            }
-        }
-    }
+private tailrec fun Context.findActivity(): Activity? = when (this) {
+    is Activity -> this
+    is ContextWrapper -> baseContext.findActivity()
+    else -> null
 }
-
-@Composable
-private fun ReaderJumpHistoryButton(
-    character: Int,
-    icon: ImageVector,
-    iconFirst: Boolean,
-    contentDescription: String,
-    colors: ReaderChromeColors,
-    heightDp: Int,
-    onClick: () -> Unit,
-) {
-    Row(
-        modifier = Modifier
-            .height(heightDp.dp)
-            .clickable(onClick = onClick)
-            .padding(horizontal = 4.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(2.dp),
-    ) {
-        if (iconFirst) {
-            Icon(
-                imageVector = icon,
-                contentDescription = contentDescription,
-                modifier = Modifier.size(16.dp),
-                tint = Color(colors.infoText),
-            )
-        }
-        Text(
-            text = readerJumpTargetText(character),
-            color = Color(colors.infoText),
-            style = MaterialTheme.typography.labelSmall,
-        )
-        if (!iconFirst) {
-            Icon(
-                imageVector = icon,
-                contentDescription = contentDescription,
-                modifier = Modifier.size(16.dp),
-                tint = Color(colors.infoText),
-            )
-        }
-    }
-}
-
-internal fun readerStatisticsTopToggleIcon(isTracking: Boolean): ImageVector =
-    if (isTracking) Icons.Rounded.Timer else Icons.AutoMirrored.Rounded.ShowChart
-
-internal fun readerSasayakiTopToggleIcon(isPlaying: Boolean): ImageVector =
-    if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.GraphicEq
-
-@Composable
-private fun ReaderFocusModeToggleArea(
-    metrics: ReaderBottomChromeMetrics,
-    sasayakiSkipButtons: ReaderSasayakiBottomSkipButtons,
-    focusMode: Boolean,
-    onToggleFocusMode: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val toggleArea = readerFocusModeToggleArea(
-        metrics = metrics,
-        sasayakiSkipButtons = sasayakiSkipButtons,
-        focusMode = focusMode,
-    )
-    Box(
-        modifier = modifier
-            .fillMaxWidth()
-            .navigationBarsPadding()
-            .padding(horizontal = toggleArea.horizontalPaddingDp.dp)
-            .height((metrics.buttonSizeDp + metrics.bottomPaddingDp + 8).dp)
-            .clickable(onClick = onToggleFocusMode),
-    )
-}
-
-@Composable
-private fun rememberStableStatusBarPadding(): Dp {
-    val density = LocalDensity.current
-    val currentTop = with(density) { WindowInsets.statusBars.getTop(this).toDp() }
-    var stableTop by remember { mutableStateOf(0.dp) }
-    LaunchedEffect(currentTop) {
-        if (currentTop > 0.dp) {
-            stableTop = currentTop
-        }
-    }
-    return if (currentTop > 0.dp) currentTop else stableTop
-}
-
-@Composable
-private fun BoxScope.ReaderBottomChrome(
-    state: ReaderChromeState,
-    settings: ReaderSettings,
-    layout: ReaderChromeLayout,
-    colors: ReaderChromeColors,
-    onClose: () -> Unit,
-    onMenu: () -> Unit,
-    menuExpanded: Boolean,
-    onDismissMenu: () -> Unit,
-    onChapters: () -> Unit,
-    onHighlights: () -> Unit,
-    onAppearance: () -> Unit,
-    onStatistics: (() -> Unit)?,
-    onSasayaki: (() -> Unit)?,
-    sasayakiSkipButtons: ReaderSasayakiBottomSkipButtons,
-    onSasayakiSkipBackward: () -> Unit,
-    onSasayakiSkipForward: () -> Unit,
-    metrics: ReaderBottomChromeMetrics,
-    modifier: Modifier = Modifier,
-) {
-    if (menuExpanded) {
-        Box(
-            modifier = Modifier
-                .align(Alignment.Center)
-                .fillMaxSize()
-                .clickable(onClick = onDismissMenu),
-        )
-        ReaderMenuCard(
-            colors = colors,
-            metrics = metrics,
-            onChapters = onChapters,
-            onHighlights = onHighlights,
-            onAppearance = onAppearance,
-            onStatistics = onStatistics,
-            onSasayaki = onSasayaki,
-            modifier = Modifier
-                .align(Alignment.BottomEnd)
-                .navigationBarsPadding()
-                .padding(end = metrics.horizontalPaddingDp.dp, bottom = metrics.menuBottomPaddingDp.dp),
-        )
-    }
-    Box(
-        modifier = modifier
-            .fillMaxWidth()
-            .navigationBarsPadding()
-            .padding(
-                start = metrics.horizontalPaddingDp.dp,
-                end = metrics.horizontalPaddingDp.dp,
-                top = 8.dp,
-                bottom = metrics.bottomPaddingDp.dp,
-            ),
-    ) {
-        if (layout.bottomCenterLineCount > 0) {
-            Column(
-                modifier = Modifier
-                    .align(Alignment.Center)
-                    .heightIn(max = layout.bottomCenterMaxHeightDp.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center,
-            ) {
-                if (layout.showStatisticsInBottomBar) {
-                    Text(
-                        text = state.statisticsText(settings),
-                        color = Color(colors.infoText),
-                        style = MaterialTheme.typography.labelMedium,
-                        maxLines = 1,
-                    )
-                }
-                if (layout.showProgressInBottomBar) {
-                    Text(
-                        text = state.progressText(settings),
-                        color = Color(colors.infoText),
-                        style = MaterialTheme.typography.labelMedium,
-                        maxLines = 1,
-                    )
-                }
-            }
-        }
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            ReaderGlassButton(colors = colors, metrics = metrics, onClick = onClose) {
-                Icon(
-                    imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
-                    contentDescription = stringResource(R.string.action_back),
-                    modifier = Modifier.size(metrics.primaryIconSizeDp.dp),
-                    tint = Color(colors.buttonContent),
-                )
-            }
-            if (sasayakiSkipButtons.visible) {
-                Spacer(Modifier.width(sasayakiSkipButtons.adjacentSpacingDp.dp))
-                ReaderGlassButton(colors = colors, metrics = metrics, onClick = onSasayakiSkipBackward) {
-                    Icon(
-                        imageVector = Icons.Rounded.FastRewind,
-                        contentDescription = stringResource(R.string.sasayaki_rewind),
-                        modifier = Modifier.size(sasayakiSkipButtons.iconSizeDp.dp),
-                        tint = Color(colors.buttonContent),
-                    )
-                }
-            }
-            Spacer(Modifier.weight(1f))
-            if (sasayakiSkipButtons.visible) {
-                ReaderGlassButton(colors = colors, metrics = metrics, onClick = onSasayakiSkipForward) {
-                    Icon(
-                        imageVector = Icons.Rounded.FastForward,
-                        contentDescription = stringResource(R.string.sasayaki_fast_forward),
-                        modifier = Modifier.size(sasayakiSkipButtons.iconSizeDp.dp),
-                        tint = Color(colors.buttonContent),
-                    )
-                }
-                Spacer(Modifier.width(sasayakiSkipButtons.adjacentSpacingDp.dp))
-            }
-            ReaderGlassButton(colors = colors, metrics = metrics, onClick = onMenu) {
-                Icon(
-                    imageVector = Icons.Rounded.Tune,
-                    contentDescription = stringResource(R.string.reader_menu),
-                    modifier = Modifier.size(metrics.secondaryIconSizeDp.dp),
-                    tint = Color(colors.buttonContent),
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun ReaderMenuCard(
-    colors: ReaderChromeColors,
-    metrics: ReaderBottomChromeMetrics,
-    onChapters: () -> Unit,
-    onHighlights: () -> Unit,
-    onAppearance: () -> Unit,
-    onStatistics: (() -> Unit)?,
-    onSasayaki: (() -> Unit)?,
-    modifier: Modifier = Modifier,
-) {
-    Surface(
-        modifier = modifier
-            .width(metrics.menuWidthDp.dp),
-        shape = RoundedCornerShape(28.dp),
-        color = Color(colors.menuContainer),
-        border = BorderStroke(1.dp, Color(colors.menuBorder)),
-        tonalElevation = 0.dp,
-        shadowElevation = 0.dp,
-    ) {
-        Column(
-            modifier = Modifier.padding(vertical = metrics.menuVerticalPaddingDp.dp),
-        ) {
-            ReaderMenuItem(
-                text = stringResource(R.string.reader_chapters),
-                icon = {
-                    Icon(
-                        imageVector = Icons.AutoMirrored.Rounded.List,
-                        contentDescription = null,
-                        tint = Color(colors.menuContent),
-                    )
-                },
-                colors = colors,
-                metrics = metrics,
-                onClick = onChapters,
-            )
-            HorizontalDivider(
-                modifier = Modifier.padding(horizontal = metrics.menuItemHorizontalPaddingDp.dp),
-                color = Color(colors.menuBorder),
-            )
-            ReaderMenuItem(
-                text = stringResource(R.string.reader_highlights),
-                icon = {
-                    Icon(
-                        imageVector = Icons.Rounded.BorderColor,
-                        contentDescription = null,
-                        tint = Color(colors.menuContent),
-                    )
-                },
-                colors = colors,
-                metrics = metrics,
-                onClick = onHighlights,
-            )
-            HorizontalDivider(
-                modifier = Modifier.padding(horizontal = metrics.menuItemHorizontalPaddingDp.dp),
-                color = Color(colors.menuBorder),
-            )
-            ReaderMenuItem(
-                text = stringResource(R.string.settings_appearance),
-                icon = {
-                    Icon(
-                        imageVector = Icons.Rounded.Palette,
-                        contentDescription = null,
-                        tint = Color(colors.menuContent),
-                    )
-                },
-                colors = colors,
-                metrics = metrics,
-                onClick = onAppearance,
-            )
-            if (onStatistics != null) {
-                HorizontalDivider(
-                    modifier = Modifier.padding(horizontal = metrics.menuItemHorizontalPaddingDp.dp),
-                    color = Color(colors.menuBorder),
-                )
-                ReaderMenuItem(
-                    text = stringResource(R.string.reader_statistics),
-                    icon = {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Rounded.ShowChart,
-                            contentDescription = null,
-                            tint = Color(colors.menuContent),
-                        )
-                    },
-                    colors = colors,
-                    metrics = metrics,
-                    onClick = onStatistics,
-                )
-            }
-            if (onSasayaki != null) {
-                HorizontalDivider(
-                    modifier = Modifier.padding(horizontal = metrics.menuItemHorizontalPaddingDp.dp),
-                    color = Color(colors.menuBorder),
-                )
-                ReaderMenuItem(
-                    text = stringResource(R.string.sasayaki_title),
-                    icon = {
-                        Icon(
-                            imageVector = Icons.Rounded.GraphicEq,
-                            contentDescription = null,
-                            tint = Color(colors.menuContent),
-                        )
-                    },
-                    colors = colors,
-                    metrics = metrics,
-                    onClick = onSasayaki,
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun ReaderMenuItem(
-    text: String,
-    icon: @Composable () -> Unit,
-    colors: ReaderChromeColors,
-    metrics: ReaderBottomChromeMetrics,
-    onClick: () -> Unit,
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .padding(
-                horizontal = metrics.menuItemHorizontalPaddingDp.dp,
-                vertical = metrics.menuItemVerticalPaddingDp.dp,
-            ),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(metrics.menuItemSpacingDp.dp),
-    ) {
-        Box(
-            modifier = Modifier.size(metrics.menuItemIconBoxSizeDp.dp),
-            contentAlignment = Alignment.Center,
-        ) {
-            icon()
-        }
-        Text(
-            text = text,
-            color = Color(colors.menuContent),
-            style = MaterialTheme.typography.titleMedium,
-        )
-    }
-}
-
-@Composable
-private fun ReaderGlassButton(
-    colors: ReaderChromeColors,
-    metrics: ReaderBottomChromeMetrics,
-    onClick: () -> Unit,
-    content: @Composable RowScope.() -> Unit,
-) {
-    ReaderRoundButton(
-        colors = colors,
-        sizeDp = metrics.buttonSizeDp,
-        onClick = onClick,
-        content = content,
-    )
-}
-
-@Composable
-private fun ReaderRoundButton(
-    colors: ReaderChromeColors,
-    sizeDp: Int,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-    content: @Composable RowScope.() -> Unit,
-) {
-    Surface(
-        modifier = modifier.size(sizeDp.dp),
-        shape = CircleShape,
-        color = Color(colors.buttonContainer),
-        tonalElevation = 0.dp,
-        shadowElevation = 0.dp,
-    ) {
-        Row(
-            modifier = Modifier
-                .clickable(onClick = onClick)
-                .fillMaxSize(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.Center,
-            content = content,
-        )
-    }
-}
-
-@SuppressLint("SetJavaScriptEnabled", "ClickableViewAccessibility")
-@Composable
-private fun ChapterWebView(
-    book: EpubBook,
-    chapterPosition: ReaderChapterPosition,
-    chapterFragment: String?,
-    webViewViewportSize: IntSize,
-    onReaderViewportSizeChanged: (IntSize) -> Unit,
-    onWebViewReady: (WebView) -> Unit,
-    isWebViewRestoring: Boolean,
-    webViewRestoreEpoch: Int,
-    onRestoreStarted: () -> Unit,
-    onRestoreCompleted: () -> Unit,
-    onNextChapter: () -> Boolean,
-    onPreviousChapter: () -> Boolean,
-    onSaveBookmark: (progress: Double) -> Unit,
-    onDisplayProgress: (progress: Double) -> Unit,
-    onContinuousScrollProgress: (progress: Double, restoreEpoch: Int) -> Unit,
-    onInternalLink: (ReaderInternalLinkTarget) -> Unit,
-    scanNonJapaneseText: Boolean,
-    readerSettings: ReaderSettings,
-    chapterHighlightsJson: String?,
-    sasayakiTextColor: Long,
-    sasayakiBackgroundColor: Long,
-    onTextSelected: (ReaderSelectionData, selectionRects: (Int, (List<ReaderSelectionRect>) -> Unit) -> Unit) -> Unit,
-    onClearLookupPopup: () -> Unit,
-    onHighlightCreated: (HighlightColor, String, ReaderHighlightCreationResult) -> Unit,
-    fontManager: ReaderFontManager,
-    systemDark: Boolean,
-    modifier: Modifier = Modifier,
-) {
-    val currentOnTextSelected = rememberUpdatedState(onTextSelected)
-    val currentOnSaveBookmark = rememberUpdatedState(onSaveBookmark)
-    val currentOnDisplayProgress = rememberUpdatedState(onDisplayProgress)
-    val currentOnContinuousScrollProgress = rememberUpdatedState(onContinuousScrollProgress)
-    val currentOnClearLookupPopup = rememberUpdatedState(onClearLookupPopup)
-    val currentOnHighlightCreated = rememberUpdatedState(onHighlightCreated)
-    val currentOnNextChapter = rememberUpdatedState(onNextChapter)
-    val currentOnPreviousChapter = rememberUpdatedState(onPreviousChapter)
-    val currentIsWebViewRestoring = rememberUpdatedState(isWebViewRestoring)
-    val currentWebViewRestoreEpoch = rememberUpdatedState(webViewRestoreEpoch)
-    val currentOnRestoreStarted = rememberUpdatedState(onRestoreStarted)
-    val currentOnRestoreCompleted = rememberUpdatedState(onRestoreCompleted)
-    var lastContinuousProgressUpdate by remember { mutableStateOf(0L) }
-    var continuousScrollSaveRequestId by remember { mutableStateOf(0L) }
-    val currentOnFragmentRestored = rememberUpdatedState<(WebView) -> Unit> { restoredWebView ->
-        if (chapterFragment != null) {
-            restoredWebView.evaluateJavascript(ReaderPaginationScripts.progressInvocation()) { progressResult ->
-                ReaderPaginationScripts.doubleResult(progressResult)?.let(currentOnSaveBookmark.value)
-                currentOnRestoreCompleted.value()
-            }
-        } else {
-            currentOnRestoreCompleted.value()
-        }
-    }
-    val chapter = book.chapters[chapterPosition.index]
-    var readerWebView by remember { mutableStateOf<WebView?>(null) }
-    val fontFaceUrl = remember(readerSettings.selectedFont) {
-        fontManager.webViewFontUrl(readerSettings.selectedFont)
-    }
-    val baseUrl = remember(chapter) { "https://hoshi.local/epub/${chapter.href}" }
-    val readerContentReloadKey = remember(readerSettings) {
-        readerSettings.readerContentReloadKey()
-    }
-    val readerSetupScript = remember(
-        chapter,
-        chapterPosition.progress,
-        chapterFragment,
-        readerContentReloadKey,
-        fontFaceUrl,
-        systemDark,
-        scanNonJapaneseText,
-        sasayakiTextColor,
-        sasayakiBackgroundColor,
-    ) {
-        readerSetupScript(
-            initialProgress = chapterPosition.progress,
-            initialFragment = chapterFragment,
-            settings = readerSettings,
-            fontFaceUrl = fontFaceUrl,
-            systemDark = systemDark,
-            scanNonJapaneseText = scanNonJapaneseText,
-            sasayakiTextColor = sasayakiTextColor,
-            sasayakiBackgroundColor = sasayakiBackgroundColor,
-            highlightsJson = chapterHighlightsJson,
-        )
-    }
-    AndroidView(
-        modifier = modifier
-            .onSizeChanged(onReaderViewportSizeChanged)
-            .background(Color(readerSettings.backgroundColor(systemDark))),
-        factory = { context ->
-            HoshiReaderWebView(context).apply {
-                applyHoshiWebViewSecurityDefaults()
-                isVerticalScrollBarEnabled = false
-                isHorizontalScrollBarEnabled = false
-                this.onHighlightCreated = { color, id, creation ->
-                    currentOnHighlightCreated.value(color, id, creation)
-                }
-                hideForReaderRestore()
-                setBackgroundColor(android.graphics.Color.TRANSPARENT)
-                addJavascriptInterface(
-                    ReaderSelectionBridge(this) { selection, selectionRects ->
-                        currentOnTextSelected.value(selection, selectionRects)
-                    },
-                    "HoshiTextSelection",
-                )
-                addJavascriptInterface(
-                    ReaderRestoreBridge(this) { restoredWebView ->
-                        currentOnFragmentRestored.value(restoredWebView)
-                    },
-                    "HoshiReaderRestore",
-                )
-                webViewClient = EpubWebViewClient(book, fontManager, onInternalLink) { view ->
-                    view.evaluateJavascript(readerSetupScript, null)
-                }
-                readerWebView = this
-                onWebViewReady(this)
-            }
-        },
-        update = { webView ->
-            fun selectAt(x: Float, y: Float) {
-                val density = webView.resources.displayMetrics.density
-                webView.evaluateJavascript(
-                    ReaderSelectionCommand.SelectText(
-                        x = androidPixelsToCssPixels(x, density),
-                        y = androidPixelsToCssPixels(y, density),
-                        maxLength = MAX_SELECTION_LENGTH,
-                    ).source,
-                ) { result ->
-                    if (ReaderSelectionResult.fromWebViewResult(result).selectedNothing) {
-                        currentOnClearLookupPopup.value()
-                    }
-                }
-            }
-            if (readerSettings.continuousMode) {
-                webView.setOnTouchListener(
-                    ContinuousScrollTouchListener(
-                        settings = readerSettings,
-                        shouldIgnoreReaderGesture = webView::isNativeSelectionActionModeActive,
-                        onTap = ::selectAt,
-                        onNextChapter = {
-                            currentOnClearLookupPopup.value()
-                            val changed = currentOnNextChapter.value()
-                            if (changed) webView.hideForReaderRestore()
-                            changed
-                        },
-                        onPreviousChapter = {
-                            currentOnClearLookupPopup.value()
-                            val changed = currentOnPreviousChapter.value()
-                            if (changed) webView.hideForReaderRestore()
-                            changed
-                        },
-                    ),
-                )
-                webView.setOnScrollChangeListener { _, _, _, _, _ ->
-                    val now = SystemClock.uptimeMillis()
-                    if (now - lastContinuousProgressUpdate < CONTINUOUS_PROGRESS_THROTTLE_MS) return@setOnScrollChangeListener
-                    lastContinuousProgressUpdate = now
-                    if (currentIsWebViewRestoring.value) return@setOnScrollChangeListener
-                    val restoreEpoch = currentWebViewRestoreEpoch.value
-                    continuousScrollSaveRequestId += 1L
-                    val requestId = continuousScrollSaveRequestId
-                    readerPendingProgressSaveCallbacks.remove(webView)?.let(webView::removeCallbacks)
-                    currentOnClearLookupPopup.value()
-                    webView.evaluateJavascript(ReaderPaginationScripts.progressInvocation()) { progressResult ->
-                        if (continuousScrollSaveRequestId != requestId) return@evaluateJavascript
-                        ReaderPaginationScripts.doubleResult(progressResult)?.let { progress ->
-                            when (readerProgressPersistenceAction(ReaderProgressPersistenceEvent.ContinuousScrollChanged)) {
-                                ReaderProgressPersistenceAction.DisplayOnly -> currentOnDisplayProgress.value(progress)
-                                ReaderProgressPersistenceAction.SaveBookmark -> {
-                                    currentOnContinuousScrollProgress.value(progress, restoreEpoch)
-                                }
-                            }
-                            lateinit var saveCallback: Runnable
-                            saveCallback = Runnable {
-                                if (continuousScrollSaveRequestId != requestId) return@Runnable
-                                if (readerPendingProgressSaveCallbacks[webView] == saveCallback) {
-                                    readerPendingProgressSaveCallbacks.remove(webView)
-                                }
-                                when (readerProgressPersistenceAction(ReaderProgressPersistenceEvent.ContinuousScrollIdle)) {
-                                    ReaderProgressPersistenceAction.DisplayOnly -> currentOnDisplayProgress.value(progress)
-                                    ReaderProgressPersistenceAction.SaveBookmark -> {
-                                        currentOnContinuousScrollProgress.value(progress, restoreEpoch)
-                                    }
-                                }
-                            }
-                            readerPendingProgressSaveCallbacks[webView] = saveCallback
-                            webView.postDelayed(saveCallback, CONTINUOUS_SCROLL_SAVE_IDLE_DELAY_MS)
-                        }
-                    }
-                }
-            } else {
-                readerPendingProgressSaveCallbacks.remove(webView)?.let(webView::removeCallbacks)
-                webView.setOnScrollChangeListener(null)
-                webView.setOnTouchListener(object : SwipePageTouchListener() {
-                    override fun shouldIgnoreReaderGesture(): Boolean =
-                        webView.isNativeSelectionActionModeActive()
-
-                    override fun onTap(x: Float, y: Float) {
-                        selectAt(x, y)
-                    }
-
-                    override fun onLeftSwipe() {
-                        currentOnClearLookupPopup.value()
-                        val direction = readerNavigationDirectionForSwipe(
-                            isVerticalWriting = readerSettings.verticalWriting,
-                            swipeDirection = ReaderSwipeDirection.Left,
-                        )
-                        webView.navigatePageForDirection(
-                            direction = direction,
-                            onNextChapter = currentOnNextChapter.value,
-                            onPreviousChapter = currentOnPreviousChapter.value,
-                            onDisplayedProgress = currentOnDisplayProgress.value,
-                            onSaveProgress = currentOnSaveBookmark.value,
-                        )
-                    }
-
-                    override fun onRightSwipe() {
-                        currentOnClearLookupPopup.value()
-                        val direction = readerNavigationDirectionForSwipe(
-                            isVerticalWriting = readerSettings.verticalWriting,
-                            swipeDirection = ReaderSwipeDirection.Right,
-                        )
-                        webView.navigatePageForDirection(
-                            direction = direction,
-                            onNextChapter = currentOnNextChapter.value,
-                            onPreviousChapter = currentOnPreviousChapter.value,
-                            onDisplayedProgress = currentOnDisplayProgress.value,
-                            onSaveProgress = currentOnSaveBookmark.value,
-                        )
-                    }
-                })
-            }
-            if (!readerWebViewReadyToLoad(webViewViewportSize)) return@AndroidView
-            val loadKey = "$baseUrl#${readerSetupScript.hashCode()}#$webViewViewportSize"
-            if (webView.tag != loadKey) {
-                webView.tag = loadKey
-                webView.hideForReaderRestore()
-                currentOnRestoreStarted.value()
-                webView.webViewClient = EpubWebViewClient(book, fontManager, onInternalLink) { view ->
-                    view.evaluateJavascript(readerSetupScript, null)
-                }
-                webView.loadUrl(baseUrl)
-            }
-        },
-    )
-}
-
-internal fun readerWebViewReadyToLoad(webViewViewportSize: IntSize): Boolean =
-    webViewViewportSize != IntSize.Zero
-
-internal fun readerShouldReserveSasayakiTopToggle(bookRoot: File?, settings: SasayakiSettings): Boolean =
-    settings.enabled &&
-        settings.showReaderToggle &&
-        bookRoot?.resolve(ReaderSasayakiMatchFileName)?.isFile == true &&
-        bookRoot.resolve(ReaderSasayakiPlaybackFileName).isFile
-
-private class HoshiReaderWebView(context: Context) : WebView(context) {
-    var onHighlightCreated: (HighlightColor, String, ReaderHighlightCreationResult) -> Unit = { _, _, _ -> }
-    private var nativeSelectionActionModeActive = false
-    private var nativeSelectionActionMode: ActionMode? = null
-    private var nativeSelectionContentRect: Rect? = null
-    private var highlightColorPopup: PopupWindow? = null
-
-    fun isNativeSelectionActionModeActive(): Boolean = nativeSelectionActionModeActive
-    fun setNativeSelectionActionMode(mode: ActionMode?) {
-        nativeSelectionActionMode = mode
-        nativeSelectionActionModeActive = mode != null
-        evaluateJavascript(ReaderPaginationScripts.nativeSelectionActiveInvocation(nativeSelectionActionModeActive), null)
-        if (mode == null) {
-            nativeSelectionContentRect = null
-            dismissHighlightColorPopup()
-        }
-    }
-
-    fun setNativeSelectionContentRect(rect: Rect) {
-        nativeSelectionContentRect = Rect(rect)
-    }
-
-    fun prepareHighlightColorPicker(mode: ActionMode) {
-        val anchor = nativeSelectionContentRect?.let { Rect(it) }
-        evaluateJavascript(ReaderHighlightCommand.PrepareSelection.source) { result ->
-            if (result?.trim() == "true") {
-                mode.finish()
-                post { showHighlightColorPicker(anchor) }
-            }
-        }
-    }
-
-    fun showHighlightColorPicker(anchorRect: Rect? = nativeSelectionContentRect) {
-        dismissHighlightColorPopup()
-        val density = resources.displayMetrics.density
-        val popupContent = LinearLayout(context).apply {
-            orientation = LinearLayout.HORIZONTAL
-            background = GradientDrawable().apply {
-                setColor(AndroidColor.WHITE)
-                cornerRadius = 20f * density
-                setStroke((1f * density).toInt().coerceAtLeast(1), 0x22000000)
-            }
-            elevation = 8f * density
-            val paddingHorizontal = (ReaderHighlightSelectionMenu.colorPickerHorizontalPaddingDp * density).toInt()
-            val paddingVertical = (ReaderHighlightSelectionMenu.colorPickerVerticalPaddingDp * density).toInt()
-            setPadding(paddingHorizontal, paddingVertical, paddingHorizontal, paddingVertical)
-            ReaderHighlightSelectionMenu.colorItems.forEach { item ->
-                addView(highlightColorButton(item, density))
-            }
-        }
-        popupContent.measure(
-            MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED),
-            MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED),
-        )
-        highlightColorPopup = PopupWindow(
-            popupContent,
-            ViewGroup.LayoutParams.WRAP_CONTENT,
-            ViewGroup.LayoutParams.WRAP_CONTENT,
-            false,
-        ).apply {
-            isOutsideTouchable = true
-            setBackgroundDrawable(ColorDrawable(AndroidColor.TRANSPARENT))
-            elevation = 8f * density
-        }
-
-        val location = IntArray(2)
-        getLocationOnScreen(location)
-        val margin = (16f * density).toInt()
-        val screenWidth = resources.displayMetrics.widthPixels
-        val screenHeight = resources.displayMetrics.heightPixels
-        val popupWidth = popupContent.measuredWidth
-        val popupHeight = popupContent.measuredHeight
-        val anchor = anchorRect?.let {
-            ReaderHighlightSelectionAnchor(
-                left = it.left,
-                top = it.top,
-                right = it.right,
-                bottom = it.bottom,
-            )
-        }
-        val position = ReaderHighlightSelectionMenu.colorPickerPopupPosition(
-            viewLeft = location[0],
-            viewTop = location[1],
-            viewWidth = width,
-            screenWidth = screenWidth,
-            screenHeight = screenHeight,
-            popupWidth = popupWidth,
-            popupHeight = popupHeight,
-            margin = margin,
-            anchor = anchor,
-        )
-        highlightColorPopup?.showAtLocation(this, Gravity.NO_GRAVITY, position.x, position.y)
-    }
-
-    private fun highlightColorButton(item: ReaderHighlightSelectionMenuItem, density: Float): TextView {
-        val touchTargetSize = (ReaderHighlightSelectionMenu.colorPickerTouchTargetSizeDp * density).toInt()
-        val swatchInset = (
-            (ReaderHighlightSelectionMenu.colorPickerTouchTargetSizeDp - ReaderHighlightSelectionMenu.colorPickerSwatchSizeDp) *
-                density / 2f
-            ).toInt()
-        val margin = (ReaderHighlightSelectionMenu.colorPickerButtonMarginDp * density).toInt()
-        return TextView(context).apply {
-            contentDescription = item.title
-            background = InsetDrawable(
-                GradientDrawable().apply {
-                    shape = GradientDrawable.OVAL
-                    setColor(item.color.swatchArgb.toInt())
-                },
-                swatchInset,
-            )
-            setOnClickListener { createHighlightFromNativeSelection(item.color) }
-            layoutParams = LinearLayout.LayoutParams(touchTargetSize, touchTargetSize).apply {
-                setMargins(margin, 0, margin, 0)
-            }
-        }
-    }
-
-    fun createHighlightFromNativeSelection(color: HighlightColor) {
-        val mode = nativeSelectionActionMode
-        val id = UUID.randomUUID().toString()
-        dismissHighlightColorPopup()
-        evaluateJavascript(ReaderHighlightCommand.Create(color, id).source) { result ->
-            ReaderHighlightCreationResult.fromWebViewResult(result)?.let { creation ->
-                onHighlightCreated(color, id, creation)
-            }
-            mode?.finish()
-        }
-    }
-
-    private fun dismissHighlightColorPopup() {
-        highlightColorPopup?.dismiss()
-        highlightColorPopup = null
-    }
-
-    override fun startActionMode(callback: ActionMode.Callback): ActionMode? =
-        super.startActionMode(ReaderHighlightActionModeCallback(this, callback))
-
-    override fun startActionMode(callback: ActionMode.Callback, type: Int): ActionMode? =
-        super.startActionMode(ReaderHighlightActionModeCallback(this, callback), type)
-}
-
-private class ReaderHighlightActionModeCallback(
-    private val webView: HoshiReaderWebView,
-    private val delegate: ActionMode.Callback,
-) : ActionMode.Callback2() {
-    override fun onCreateActionMode(mode: ActionMode, menu: Menu): Boolean {
-        addHighlightMenu(menu)
-        val created = delegate.onCreateActionMode(mode, menu)
-        if (created) {
-            webView.setNativeSelectionActionMode(mode)
-            addHighlightMenu(menu)
-        }
-        return created
-    }
-
-    override fun onPrepareActionMode(mode: ActionMode, menu: Menu): Boolean {
-        addHighlightMenu(menu)
-        return delegate.onPrepareActionMode(mode, menu)
-    }
-
-    override fun onActionItemClicked(mode: ActionMode, item: MenuItem): Boolean {
-        if (item.itemId == ReaderHighlightSelectionMenu.parentItemId) {
-            webView.prepareHighlightColorPicker(mode)
-            return true
-        }
-        val color = ReaderHighlightSelectionMenu.colorForItemId(item.itemId)
-        if (color != null) {
-            webView.createHighlightFromNativeSelection(color)
-            return true
-        }
-        return delegate.onActionItemClicked(mode, item)
-    }
-
-    override fun onDestroyActionMode(mode: ActionMode) {
-        webView.setNativeSelectionActionMode(null)
-        delegate.onDestroyActionMode(mode)
-    }
-
-    override fun onGetContentRect(mode: ActionMode, view: View, outRect: Rect) {
-        if (delegate is ActionMode.Callback2) {
-            delegate.onGetContentRect(mode, view, outRect)
-        } else {
-            super.onGetContentRect(mode, view, outRect)
-        }
-        webView.setNativeSelectionContentRect(outRect)
-    }
-
-    private fun addHighlightMenu(menu: Menu) {
-        if (menu.findItem(ReaderHighlightSelectionMenu.parentItemId) != null) return
-        ReaderHighlightSelectionMenu.actionModeItems.forEach { item ->
-            menu.add(
-                ReaderHighlightSelectionMenu.groupId,
-                item.id,
-                item.order,
-                webView.context.getString(R.string.reader_highlight_action),
-            ).setShowAsAction(item.showAsAction)
-        }
-    }
-}
-
-private class EpubWebViewClient(
-    private val book: EpubBook,
-    private val fontManager: ReaderFontManager,
-    private val onInternalLink: (ReaderInternalLinkTarget) -> Unit,
-    private val onReaderPageFinished: (WebView) -> Unit,
-) : WebViewClient() {
-    private val resourceBridge = ReaderWebResourceBridge(book, fontManager)
-
-    override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
-        val target = book.resolveInternalReaderLink(request.url?.toString().orEmpty()) ?: return false
-        onInternalLink(target)
-        return true
-    }
-
-    override fun onPageFinished(view: WebView, url: String?) {
-        super.onPageFinished(view, url)
-        if (Uri.parse(url ?: return).host == "hoshi.local") {
-            onReaderPageFinished(view)
-        }
-    }
-
-    override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? {
-        val url = request.url?.toString() ?: return null
-        return resourceBridge.resourceForUrl(url)?.toWebResourceResponse()
-    }
-
-    override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
-        view.destroy()
-        return true
-    }
-}
-
-private fun readerSetupScript(
-    initialProgress: Double,
-    initialFragment: String?,
-    settings: ReaderSettings,
-    fontFaceUrl: String?,
-    systemDark: Boolean,
-    scanNonJapaneseText: Boolean,
-    sasayakiTextColor: Long,
-    sasayakiBackgroundColor: Long,
-    highlightsJson: String?,
-): String {
-    val css = ReaderContentStyles.css(
-        settings = settings,
-        fontFaceUrl = fontFaceUrl,
-        systemDark = systemDark,
-        sasayakiTextColor = sasayakiTextColor,
-        sasayakiBackgroundColor = sasayakiBackgroundColor,
-    ).javaScriptStringLiteral()
-    val selectionScript = ReaderSelectionScripts.source()
-    val paginationScript = ReaderPaginationScripts.shellScript(
-        initialProgress = initialProgress,
-        initialFragment = initialFragment,
-        settings = settings,
-        highlightsJson = highlightsJson,
-    ).scriptTagBody()
-    return """
-        (function() {
-          var style = document.createElement('style');
-          style.textContent = $css;
-          document.head.appendChild(style);
-          window.scanNonJapaneseText = $scanNonJapaneseText;
-          $selectionScript
-          $paginationScript
-        })();
-    """.trimIndent()
-}
-
-private fun String.scriptTagBody(): String =
-    substringAfter("<script>").substringBeforeLast("</script>").trim()
-
-private fun String.javaScriptStringLiteral(): String =
-    buildString(length + 2) {
-        append('"')
-        this@javaScriptStringLiteral.forEach { ch ->
-            when (ch) {
-                '\\' -> append("\\\\")
-                '"' -> append("\\\"")
-                '\n' -> append("\\n")
-                '\r' -> append("\\r")
-                '\t' -> append("\\t")
-                else -> append(ch)
-            }
-        }
-        append('"')
-    }
-
-internal fun File.mediaType(): String = when (extension.lowercase()) {
-    "ttf" -> "font/ttf"
-    "otf" -> "font/otf"
-    "woff" -> "font/woff"
-    "woff2" -> "font/woff2"
-    else -> "application/octet-stream"
-}
-
-private fun WebView.navigatePage(
-    direction: ReaderNavigationDirection,
-    onLimit: () -> Boolean,
-    onDisplayedProgress: (progress: Double) -> Unit,
-    onSaveProgress: (progress: Double) -> Unit,
-) {
-    evaluateJavascript(ReaderPaginationScripts.paginateInvocation(direction)) { result ->
-        if (ReaderPaginationScripts.didScroll(result)) {
-            val webView = this
-            val requestId = nextReaderPageTurnProgressRequestId()
-            readerPageTurnProgressRequestIds[webView] = requestId
-            webView.postVisualStateCallback(
-                requestId,
-                object : WebView.VisualStateCallback() {
-                    override fun onComplete(requestId: Long) {
-                        if (readerPageTurnProgressRequestIds[webView] != requestId) return
-                        webView.postOnAnimation {
-                            webView.evaluateJavascript(ReaderPaginationScripts.progressInvocation()) { progressResult ->
-                                if (readerPageTurnProgressRequestIds[webView] != requestId) return@evaluateJavascript
-                                readerPageTurnProgressRequestIds.remove(webView)
-                                val progress = ReaderPaginationScripts.doubleResult(progressResult) ?: return@evaluateJavascript
-                                onDisplayedProgress(progress)
-                                when (readerProgressPersistenceAction(ReaderProgressPersistenceEvent.PaginatedPageTurnCompleted)) {
-                                    ReaderProgressPersistenceAction.DisplayOnly -> Unit
-                                    ReaderProgressPersistenceAction.SaveBookmark -> onSaveProgress(progress)
-                                }
-                            }
-                        }
-                    }
-                },
-            )
-        } else {
-            readerPageTurnProgressRequestIds.remove(this)
-            onLimit()
-        }
-    }
-}
-
-private fun nextReaderPageTurnProgressRequestId(): Long {
-    readerPageTurnProgressRequestId += 1
-    return readerPageTurnProgressRequestId
-}
-
-private fun WebView.navigatePageForDirection(
-    direction: ReaderNavigationDirection,
-    onNextChapter: () -> Boolean,
-    onPreviousChapter: () -> Boolean,
-    onDisplayedProgress: (progress: Double) -> Unit,
-    onSaveProgress: (progress: Double) -> Unit,
-) {
-    val onLimit = when (direction) {
-        ReaderNavigationDirection.Forward -> onNextChapter
-        ReaderNavigationDirection.Backward -> onPreviousChapter
-    }
-    navigatePage(direction, onLimit, onDisplayedProgress, onSaveProgress)
-}
-
-private fun WebView.flushPendingProgressSave() {
-    val progressCallback = readerPendingProgressSaveCallbacks.remove(this) ?: return
-    removeCallbacks(progressCallback)
-    progressCallback.run()
-}
-
-private class ContinuousScrollTouchListener(
-    private val settings: ReaderSettings,
-    private val shouldIgnoreReaderGesture: () -> Boolean,
-    private val onTap: (Float, Float) -> Unit,
-    private val onNextChapter: () -> Boolean,
-    private val onPreviousChapter: () -> Boolean,
-) : View.OnTouchListener {
-    private var downX = 0f
-    private var downY = 0f
-    private var downTime = 0L
-    private var currentGestureIgnored = false
-
-    override fun onTouch(view: View, event: MotionEvent): Boolean {
-        val webView = view as? WebView ?: return false
-        if (shouldIgnoreReaderGesture()) {
-            currentGestureIgnored = true
-            return false
-        }
-        when (event.actionMasked) {
-            MotionEvent.ACTION_DOWN -> {
-                downX = event.x
-                downY = event.y
-                downTime = event.eventTime
-                currentGestureIgnored = false
-            }
-            MotionEvent.ACTION_CANCEL -> {
-                currentGestureIgnored = false
-            }
-            MotionEvent.ACTION_UP -> {
-                if (currentGestureIgnored) {
-                    currentGestureIgnored = false
-                    return false
-                }
-                val dx = event.x - downX
-                val dy = event.y - downY
-                val elapsedMs = event.eventTime - downTime
-                if (elapsedMs <= MAX_TAP_DURATION_MS && abs(dx) < TAP_SLOP && abs(dy) < TAP_SLOP) {
-                    onTap(event.x, event.y)
-                    return false
-                }
-                handleBoundarySwipe(webView, dx, dy)
-            }
-        }
-        return false
-    }
-
-    private fun handleBoundarySwipe(webView: WebView, dx: Float, dy: Float) {
-        val threshold = settings.chapterSwipeDistance * webView.resources.displayMetrics.density
-        if (settings.verticalWriting) {
-            if (abs(dx) < threshold || abs(dx) < abs(dy)) return
-            when {
-                dx > 0 && !webView.canScrollHorizontally(-1) -> onNextChapter()
-                dx < 0 && !webView.canScrollHorizontally(1) -> onPreviousChapter()
-            }
-        } else {
-            if (abs(dy) < threshold || abs(dy) < abs(dx)) return
-            when {
-                dy < 0 && !webView.canScrollVertically(1) -> onNextChapter()
-                dy > 0 && !webView.canScrollVertically(-1) -> onPreviousChapter()
-            }
-        }
-    }
-
-    private companion object {
-        const val TAP_SLOP = 12f
-        const val MAX_TAP_DURATION_MS = 500L
-    }
-}
-
-private class ReaderRestoreBridge(
-    private val webView: WebView,
-    private val onRestoreCompleted: (WebView) -> Unit,
-) {
-    @JavascriptInterface
-    fun postMessage(@Suppress("UNUSED_PARAMETER") message: String) {
-        webView.post {
-            onRestoreCompleted(webView)
-            webView.showAfterReaderRestore()
-        }
-    }
-}
-
-private fun WebView.hideForReaderRestore() {
-    animate().cancel()
-    readerRestoreGenerations[this] = (readerRestoreGenerations[this] ?: 0L) + 1L
-    alpha = 0f
-}
-
-private fun WebView.showAfterReaderRestore() {
-    animate().cancel()
-    val generation = readerRestoreGenerations[this] ?: 0L
-    postVisualStateCallback(
-        generation,
-        object : WebView.VisualStateCallback() {
-            override fun onComplete(requestId: Long) {
-                post {
-                    if (readerRestoreGenerations[this@showAfterReaderRestore] == generation) {
-                        animate().cancel()
-                        alpha = 1f
-                    }
-                }
-            }
-        },
-    )
-}
-
-private val readerRestoreGenerations = WeakHashMap<WebView, Long>()
-private val readerPendingProgressSaveCallbacks = WeakHashMap<WebView, Runnable>()
-private val readerPageTurnProgressRequestIds = WeakHashMap<WebView, Long>()
-private var readerPageTurnProgressRequestId = 0L
-private const val MAX_SELECTION_LENGTH = 16
-private const val CONTINUOUS_PROGRESS_THROTTLE_MS = 50L
-private const val CONTINUOUS_SCROLL_SAVE_IDLE_DELAY_MS = 250L
 
 private fun resolveBookCoverFile(bookRoot: File?, coverHref: String?): File? {
     val root = bookRoot?.canonicalFile ?: return null
@@ -2487,14 +1496,10 @@ private fun resolveBookCoverFile(bookRoot: File?, coverHref: String?): File? {
 private fun SasayakiMatch.toCueRange(): SasayakiCueRange =
     SasayakiCueRange(id = id, start = start, length = length)
 
+private data class PendingSasayakiCue(
+    val cue: SasayakiMatch,
+    val reveal: Boolean,
+)
+
 private fun SasayakiPlaybackData?.hasStoredAudioSource(): Boolean =
     this?.audioUri?.isNotBlank() == true || this?.audioFileName?.isNotBlank() == true
-
-private const val ReaderSasayakiMatchFileName = "sasayaki_match.json"
-private const val ReaderSasayakiPlaybackFileName = "sasayaki_playback.json"
-
-internal fun androidPixelsToCssPixels(value: Float, density: Float): Float =
-    value / density.coerceAtLeast(1f)
-
-private fun String.codePointCount(): Int =
-    codePointCount(0, length)

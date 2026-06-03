@@ -54,26 +54,63 @@ data class ReaderStatisticsChromeState(
 
 data class ReaderChromeColors(
     val buttonContainer: Long,
+    val buttonBorder: Long,
+    val buttonOutline: Long,
+    val buttonShadowElevationDp: Int,
+    val buttonShadowColor: Long,
+    val buttonInnerShadowColor: Long,
     val buttonContent: Long,
     val menuContainer: Long,
     val menuContent: Long,
     val menuBorder: Long,
+    val bubbleOutline: Long,
+    val bubbleShadowElevationDp: Int,
+    val bubbleShadowColor: Long,
+    val bubbleInnerShadowColor: Long,
     val infoText: Long,
 )
 
 data class ReaderChromeLayout(
-    val topWebViewPaddingDp: Int,
     val showProgressInBottomBar: Boolean,
     val showStatisticsInBottomBar: Boolean,
     val bottomCenterLineCount: Int,
     val bottomCenterMaxHeightDp: Int,
 )
 
-data class ReaderSasayakiBottomSkipButtons(
+data class ReaderContentChromeInsets(
+    val topDp: Int,
+    val bottomDp: Int,
+)
+
+data class ReaderInfoBubbleMetrics(
+    val horizontalPaddingDp: Int,
+    val verticalPaddingDp: Int,
+    val cornerRadiusDp: Int,
+)
+
+data class ReaderChromeVisibility(
+    val showTitleAndProgress: Boolean,
+    val showBottomChrome: Boolean,
+    val showStatisticsToggle: Boolean,
+    val showSasayakiToggle: Boolean,
+    val showBackJump: Boolean,
+    val showForwardJump: Boolean,
+)
+
+enum class ReaderMenuDestination {
+    Appearance,
+    Chapters,
+    Highlights,
+    Statistics,
+    Sasayaki,
+}
+
+data class ReaderSasayakiBottomPlaybackControls(
     val visible: Boolean,
-    val buttonSizeDp: Int,
+    val rowHeightDp: Int,
+    val buttonWidthDp: Int,
     val iconSizeDp: Int,
-    val adjacentSpacingDp: Int,
+    val horizontalPaddingDp: Int,
 )
 
 enum class ReaderSasayakiBottomSkipButtonAction {
@@ -87,7 +124,13 @@ data class ReaderSasayakiBottomSkipButtonActions(
 )
 
 data class ReaderFocusModeToggleArea(
+    val visible: Boolean,
     val horizontalPaddingDp: Int,
+)
+
+data class ReaderSystemBarVisibility(
+    val showStatusBar: Boolean,
+    val showNavigationBar: Boolean,
 )
 
 data class ReaderTopTitlePaddingDp(
@@ -99,12 +142,16 @@ data class ReaderBottomChromeMetrics(
     val buttonSizeDp: Int,
     val topSasayakiButtonSizeDp: Int,
     val topStatisticsButtonSizeDp: Int,
+    val topButtonOffsetYDp: Int,
+    val topButtonHorizontalInsetDp: Int,
     val primaryIconSizeDp: Int,
     val secondaryIconSizeDp: Int,
     val topSasayakiIconSizeDp: Int,
     val topStatisticsIconSizeDp: Int,
     val horizontalPaddingDp: Int,
     val bottomPaddingDp: Int,
+    val bottomSafeAreaDp: Int,
+    val menuButtonGapDp: Int,
     val trailingButtonSpacingDp: Int,
     val menuWidthDp: Int,
     val menuVerticalPaddingDp: Int,
@@ -113,8 +160,7 @@ data class ReaderBottomChromeMetrics(
     val menuItemIconBoxSizeDp: Int,
     val menuItemSpacingDp: Int,
 ) {
-    val webViewBottomPaddingDp: Int = buttonSizeDp + bottomPaddingDp
-    val menuBottomPaddingDp: Int = webViewBottomPaddingDp
+    val menuBottomOffsetDp: Int = buttonSizeDp + bottomPaddingDp + bottomSafeAreaDp + menuButtonGapDp
 }
 
 fun readerChromeLayout(
@@ -126,15 +172,9 @@ fun readerChromeLayout(
 ): ReaderChromeLayout {
     val progress = state.progressText(settings)
     val statistics = state.statisticsText(settings)
-    val showProgressInBottomBar = !settings.showProgressTop && progress.isNotBlank()
+    val showProgressInBottomBar = !settings.alwaysShowProgress && !settings.showProgressTop && progress.isNotBlank()
     val showStatisticsInBottomBar = statistics.isNotBlank()
     return ReaderChromeLayout(
-        topWebViewPaddingDp = readerWebViewTopPaddingDp(
-            state = state,
-            settings = settings,
-            showSasayakiToggle = showSasayakiToggle,
-            showStatisticsToggle = showStatisticsToggle,
-        ),
         showProgressInBottomBar = showProgressInBottomBar,
         showStatisticsInBottomBar = showStatisticsInBottomBar,
         bottomCenterLineCount = listOf(showStatisticsInBottomBar, showProgressInBottomBar).count { it },
@@ -142,38 +182,95 @@ fun readerChromeLayout(
     )
 }
 
-fun readerWebViewTopPaddingDp(
+fun readerShowsProgressInTopBubble(settings: ReaderSettings): Boolean =
+    !settings.alwaysShowProgress && settings.showProgressTop
+
+@Suppress("UNUSED_PARAMETER")
+fun readerBottomSafeProgressText(
     state: ReaderChromeState,
     settings: ReaderSettings,
+    focusMode: Boolean = false,
+): String = if (settings.alwaysShowProgress) state.progressText(settings) else ""
+
+@Suppress("UNUSED_PARAMETER")
+fun readerContentChromeInsets(
+    state: ReaderChromeState? = null,
+    settings: ReaderSettings? = null,
     showSasayakiToggle: Boolean = false,
     showStatisticsToggle: Boolean = false,
-): Int {
-    val progress = state.progressText(settings)
-    val textRows = listOf(
-        settings.showTitle,
-        settings.showProgressTop && progress.isNotBlank(),
-    ).count { it }
-    val textHeight = textRows * ReaderChromeLineHeightDp
-    val hasJumpHistoryControl = state.backTargetCharacter != null || state.forwardTargetCharacter != null
-    val buttonHeight = if (showSasayakiToggle || showStatisticsToggle || hasJumpHistoryControl) {
-        ReaderTopButtonSizeDp
+    focusMode: Boolean = false,
+    topSystemInsetDp: Int = 0,
+): ReaderContentChromeInsets =
+    ReaderContentChromeInsets(
+        topDp = ReaderContentTopReservedSpaceDp + ReaderWebViewTopPaddingDp,
+        bottomDp = ReaderBottomGestureSafeAreaDp,
+    )
+
+fun readerTopInfoOverlayPaddingDp(
+    topSystemInsetDp: Int,
+    focusMode: Boolean,
+): Int =
+    if (focusMode) {
+        ReaderFocusTopOverlayPaddingDp
+    } else if (topSystemInsetDp > 0) {
+        topSystemInsetDp
     } else {
-        0
+        ReaderTopInfoFallbackPaddingDp
     }
-    return ReaderWebViewTopBasePaddingDp + maxOf(textHeight, buttonHeight)
-}
+
+fun readerShouldShowTitleAndProgress(
+    focusMode: Boolean,
+    currentStatusBarInsetDp: Int,
+    stableStatusBarInsetDp: Int,
+): Boolean =
+    !focusMode &&
+        currentStatusBarInsetDp > 0 &&
+        (stableStatusBarInsetDp <= 0 || currentStatusBarInsetDp >= stableStatusBarInsetDp)
+
+fun readerInfoBubbleMetrics(): ReaderInfoBubbleMetrics =
+    ReaderInfoBubbleMetrics(
+        horizontalPaddingDp = 12,
+        verticalPaddingDp = 6,
+        cornerRadiusDp = 24,
+    )
+
+fun readerSystemBarVisibility(focusMode: Boolean): ReaderSystemBarVisibility =
+    ReaderSystemBarVisibility(
+        showStatusBar = !focusMode,
+        showNavigationBar = false,
+    )
+
+fun readerChromeVisibility(
+    focusMode: Boolean,
+    hasStatisticsToggle: Boolean,
+    hasSasayakiToggle: Boolean,
+    hasBackJump: Boolean,
+    hasForwardJump: Boolean,
+): ReaderChromeVisibility =
+    ReaderChromeVisibility(
+        showTitleAndProgress = !focusMode,
+        showBottomChrome = !focusMode,
+        showStatisticsToggle = focusMode && hasStatisticsToggle,
+        showSasayakiToggle = focusMode && hasSasayakiToggle,
+        showBackJump = focusMode && hasBackJump,
+        showForwardJump = focusMode && hasForwardJump,
+    )
 
 fun readerBottomChromeMetrics(): ReaderBottomChromeMetrics =
     ReaderBottomChromeMetrics(
         buttonSizeDp = ReaderBottomChromeButtonSizeDp,
         topSasayakiButtonSizeDp = ReaderTopButtonSizeDp,
         topStatisticsButtonSizeDp = ReaderTopButtonSizeDp,
+        topButtonOffsetYDp = ReaderTopButtonOffsetYDp,
+        topButtonHorizontalInsetDp = ReaderTopButtonHorizontalInsetDp,
         primaryIconSizeDp = 28,
         secondaryIconSizeDp = 28,
         topSasayakiIconSizeDp = ReaderTopButtonIconSizeDp,
         topStatisticsIconSizeDp = ReaderTopButtonIconSizeDp,
         horizontalPaddingDp = 22,
         bottomPaddingDp = 2,
+        bottomSafeAreaDp = ReaderBottomGestureSafeAreaDp,
+        menuButtonGapDp = ReaderMenuButtonGapDp,
         trailingButtonSpacingDp = 8,
         menuWidthDp = 204,
         menuVerticalPaddingDp = 4,
@@ -183,16 +280,28 @@ fun readerBottomChromeMetrics(): ReaderBottomChromeMetrics =
         menuItemSpacingDp = 12,
     )
 
-fun readerSasayakiBottomSkipButtons(
+fun readerBottomMenuVisualOrder(
+    showStatistics: Boolean,
+    showSasayaki: Boolean,
+): List<ReaderMenuDestination> = buildList {
+    if (showSasayaki) add(ReaderMenuDestination.Sasayaki)
+    if (showStatistics) add(ReaderMenuDestination.Statistics)
+    add(ReaderMenuDestination.Highlights)
+    add(ReaderMenuDestination.Chapters)
+    add(ReaderMenuDestination.Appearance)
+}
+
+fun readerSasayakiBottomPlaybackControls(
     settings: moe.antimony.hoshi.features.sasayaki.SasayakiSettings,
     hasAudio: Boolean,
     metrics: ReaderBottomChromeMetrics,
-): ReaderSasayakiBottomSkipButtons =
-    ReaderSasayakiBottomSkipButtons(
-        visible = settings.enabled && settings.showReaderSkipButtons && hasAudio,
-        buttonSizeDp = metrics.buttonSizeDp,
-        iconSizeDp = metrics.secondaryIconSizeDp,
-        adjacentSpacingDp = metrics.trailingButtonSpacingDp,
+): ReaderSasayakiBottomPlaybackControls =
+    ReaderSasayakiBottomPlaybackControls(
+        visible = settings.enabled && settings.showReaderBottomPlaybackControls && hasAudio,
+        rowHeightDp = metrics.bottomSafeAreaDp,
+        buttonWidthDp = 40,
+        iconSizeDp = 14,
+        horizontalPaddingDp = 18,
     )
 
 fun readerSasayakiBottomSkipButtonActions(
@@ -213,20 +322,9 @@ fun readerSasayakiBottomSkipButtonActions(
 
 fun readerFocusModeToggleArea(
     metrics: ReaderBottomChromeMetrics,
-    sasayakiSkipButtons: ReaderSasayakiBottomSkipButtons,
     focusMode: Boolean,
 ): ReaderFocusModeToggleArea {
-    if (focusMode) {
-        return ReaderFocusModeToggleArea(horizontalPaddingDp = 0)
-    }
-    val sideClusterWidth = if (sasayakiSkipButtons.visible) {
-        metrics.buttonSizeDp + sasayakiSkipButtons.adjacentSpacingDp + sasayakiSkipButtons.buttonSizeDp
-    } else {
-        metrics.buttonSizeDp
-    }
-    return ReaderFocusModeToggleArea(
-        horizontalPaddingDp = metrics.horizontalPaddingDp + sideClusterWidth,
-    )
+    return ReaderFocusModeToggleArea(visible = false, horizontalPaddingDp = 0)
 }
 
 fun readerTopTitlePaddingDp(
@@ -243,47 +341,116 @@ fun readerJumpBackIcon(): ImageVector = Icons.AutoMirrored.Rounded.Undo
 
 fun readerJumpForwardIcon(): ImageVector = Icons.AutoMirrored.Rounded.Redo
 
-fun readerChromeColors(settings: ReaderSettings, systemDark: Boolean): ReaderChromeColors = when {
-    settings.eInkMode && settings.usesDarkInterface(systemDark) -> ReaderChromeColors(
-        buttonContainer = 0xFF000000,
-        buttonContent = 0xFFFFFFFF,
-        menuContainer = 0xFF000000,
-        menuContent = 0xFFFFFFFF,
-        menuBorder = 0xFFFFFFFF,
-        infoText = 0xFFFFFFFF,
-    )
-    settings.eInkMode -> ReaderChromeColors(
-        buttonContainer = 0xFFFFFFFF,
-        buttonContent = 0xFF000000,
-        menuContainer = 0xFFFFFFFF,
-        menuContent = 0xFF000000,
-        menuBorder = 0xFF000000,
-        infoText = 0xFF000000,
-    )
-    settings.usesDarkInterface(systemDark) -> ReaderChromeColors(
-        buttonContainer = 0x661A1A1A,
-        buttonContent = 0xFFF4F4F4,
-        menuContainer = 0xF21F1F1F,
-        menuContent = 0xFFF4F4F4,
-        menuBorder = 0x26FFFFFF,
-        infoText = 0x99FFFFFF,
-    )
-    settings.usesSepiaLightContent(systemDark) -> ReaderChromeColors(
-        buttonContainer = 0x40FFFFFF,
-        buttonContent = 0xFF1F170D,
-        menuContainer = 0xFFF8EFDD,
-        menuContent = 0xFF1F170D,
-        menuBorder = 0xB3FFFFFF,
-        infoText = 0x7A5C5448,
-    )
-    else -> ReaderChromeColors(
-        buttonContainer = 0xD9FFFFFF,
-        buttonContent = 0xFF111111,
-        menuContainer = 0xFAFFFFFF,
-        menuContent = 0xFF111111,
-        menuBorder = 0xCCFFFFFF,
-        infoText = 0x8A000000,
-    )
+fun readerChromeColors(settings: ReaderSettings, systemDark: Boolean): ReaderChromeColors {
+    val colors = when {
+        settings.eInkMode && settings.usesDarkInterface(systemDark) -> ReaderChromeColors(
+            buttonContainer = 0xFF000000,
+            buttonBorder = 0xFFFFFFFF,
+            buttonOutline = 0x00000000,
+            buttonShadowElevationDp = 0,
+            buttonShadowColor = 0x00000000,
+            buttonInnerShadowColor = 0x00000000,
+            buttonContent = 0xFFFFFFFF,
+            menuContainer = 0xFF000000,
+            menuContent = 0xFFFFFFFF,
+            menuBorder = 0xFFFFFFFF,
+            bubbleOutline = 0x00000000,
+            bubbleShadowElevationDp = 0,
+            bubbleShadowColor = 0x00000000,
+            bubbleInnerShadowColor = 0x00000000,
+            infoText = 0xFFFFFFFF,
+        )
+        settings.eInkMode -> ReaderChromeColors(
+            buttonContainer = 0xFFFFFFFF,
+            buttonBorder = 0xFF000000,
+            buttonOutline = 0x00000000,
+            buttonShadowElevationDp = 0,
+            buttonShadowColor = 0x00000000,
+            buttonInnerShadowColor = 0x00000000,
+            buttonContent = 0xFF000000,
+            menuContainer = 0xFFFFFFFF,
+            menuContent = 0xFF000000,
+            menuBorder = 0xFF000000,
+            bubbleOutline = 0x00000000,
+            bubbleShadowElevationDp = 0,
+            bubbleShadowColor = 0x00000000,
+            bubbleInnerShadowColor = 0x00000000,
+            infoText = 0xFF000000,
+        )
+        settings.theme == ReaderTheme.Sepia && settings.sepiaInvertInDark && systemDark -> ReaderChromeColors(
+            buttonContainer = 0xE6191713,
+            buttonBorder = 0xFF4A4438,
+            buttonOutline = 0x00000000,
+            buttonShadowElevationDp = 1,
+            buttonShadowColor = 0x25000000,
+            buttonInnerShadowColor = 0x00000000,
+            buttonContent = 0xFFF2E2C9,
+            menuContainer = 0xE6191713,
+            menuContent = 0xFFF2E2C9,
+            menuBorder = 0xFF4A4438,
+            bubbleOutline = 0x00000000,
+            bubbleShadowElevationDp = 1,
+            bubbleShadowColor = 0x25000000,
+            bubbleInnerShadowColor = 0x00000000,
+            infoText = 0xCCF2E2C9,
+        )
+        settings.usesDarkInterface(systemDark) -> ReaderChromeColors(
+            buttonContainer = 0xE6141414,
+            buttonBorder = 0xFF484848,
+            buttonOutline = 0x00000000,
+            buttonShadowElevationDp = 1,
+            buttonShadowColor = 0x25000000,
+            buttonInnerShadowColor = 0x00000000,
+            buttonContent = 0xFFF4F4F4,
+            menuContainer = 0xE6141414,
+            menuContent = 0xFFF4F4F4,
+            menuBorder = 0xFF484848,
+            bubbleOutline = 0x00000000,
+            bubbleShadowElevationDp = 1,
+            bubbleShadowColor = 0x25000000,
+            bubbleInnerShadowColor = 0x00000000,
+            infoText = 0xCCFFFFFF,
+        )
+        settings.usesSepiaLightContent(systemDark) -> ReaderChromeColors(
+            buttonContainer = 0xFAF8F0E2,
+            buttonBorder = 0xE6FFFFFF,
+            buttonOutline = 0x00000000,
+            buttonShadowElevationDp = 1,
+            buttonShadowColor = 0x25000000,
+            buttonInnerShadowColor = 0x00000000,
+            buttonContent = 0xFF1F170D,
+            menuContainer = 0xFAF8F0E2,
+            menuContent = 0xFF1F170D,
+            menuBorder = 0xE6FFFFFF,
+            bubbleOutline = 0x00000000,
+            bubbleShadowElevationDp = 1,
+            bubbleShadowColor = 0x25000000,
+            bubbleInnerShadowColor = 0x00000000,
+            infoText = 0xB35C5448,
+        )
+        else -> ReaderChromeColors(
+            buttonContainer = 0xFAFCFCFC,
+            buttonBorder = 0xE6FFFFFF,
+            buttonOutline = 0x00000000,
+            buttonShadowElevationDp = 1,
+            buttonShadowColor = 0x25000000,
+            buttonInnerShadowColor = 0x00000000,
+            buttonContent = 0xFF111111,
+            menuContainer = 0xFAFCFCFC,
+            menuContent = 0xFF111111,
+            menuBorder = 0xE6FFFFFF,
+            bubbleOutline = 0x00000000,
+            bubbleShadowElevationDp = 1,
+            bubbleShadowColor = 0x25000000,
+            bubbleInnerShadowColor = 0x00000000,
+            infoText = 0xB3111111,
+        )
+    }
+    return if (!settings.eInkMode && settings.theme == ReaderTheme.Custom) {
+        colors.copy(infoText = settings.customInfoColor)
+    } else {
+        colors
+    }
 }
 
 private fun ReaderStatisticsChromeState.readingTimeText(): String {
@@ -293,9 +460,23 @@ private fun ReaderStatisticsChromeState.readingTimeText(): String {
     return "$hours:${minutes.toString().padStart(2, '0')}"
 }
 
-private const val ReaderWebViewTopBasePaddingDp = 4
-private const val ReaderChromeLineHeightDp = 20
 private const val ReaderBottomChromeButtonSizeDp = 44
-private const val ReaderTopButtonSizeDp = 36
-private const val ReaderTopButtonIconSizeDp = 20
+private const val ReaderBottomGestureSafeAreaDp = 18
+private const val ReaderMenuButtonGapDp = 8
+private const val ReaderContentTopReservedSpaceDp = 30
+private const val ReaderTopInfoFallbackPaddingDp = 52
+private const val ReaderWebViewTopPaddingDp = 4
+private const val ReaderFocusTopOverlayPaddingDp = 0
+private const val ReaderTopButtonSizeDp = 30
+private const val ReaderTopButtonIconSizeDp = 22
+private const val ReaderTopButtonOffsetYDp = 4
+private const val ReaderTopButtonHorizontalInsetDp = 8
 private const val ReaderTopTitleControlPaddingDp = 42
+
+fun readerTopButtonContainerColor(): Long = 0x00000000
+
+fun readerButtonBorderWidthDp(colors: ReaderChromeColors): Float =
+    if (colors.buttonShadowElevationDp > 0) 0.75f else 1f
+
+fun readerBubbleBorderWidthDp(colors: ReaderChromeColors): Float =
+    if (colors.bubbleShadowElevationDp > 0) 0.75f else 1f

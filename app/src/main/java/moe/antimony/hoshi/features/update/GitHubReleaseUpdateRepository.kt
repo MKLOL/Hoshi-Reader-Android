@@ -1,5 +1,6 @@
 package moe.antimony.hoshi.features.update
 
+import android.os.Build
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -63,20 +64,25 @@ internal fun AvailableUpdate.downloadUrlAfterFailed(failedDownloadUrl: String?):
         candidates.getOrNull(candidates.indexOf(failedDownloadUrl) + 1) ?: downloadUrl
     }
 
-internal fun GitHubRelease.availableUpdateOrNull(currentVersionName: String): AvailableUpdate? {
+internal fun GitHubRelease.availableUpdateOrNull(
+    currentVersionName: String,
+    supportedAbis: List<String> = AndroidSupportedAbis.current(),
+): AvailableUpdate? {
     val releaseVersion = AppVersion.parse(tagName) ?: return null
     val currentVersion = AppVersion.parse(currentVersionName) ?: return null
     if (releaseVersion <= currentVersion) return null
 
     val normalizedVersion = releaseVersion.toString()
     val apkAssets = assets.filter { it.name.endsWith(".apk", ignoreCase = true) }
-    // Manga-era APK name (v1.0.0+). The legacy "Hoshi-Reader-v…" name is still picked up
-    // by the singleOrNull fallback below for releases predating the rename, so users on
-    // 0.8.x can still auto-update across the boundary as long as the release ships a
-    // single APK asset.
+    // Manga-era APK name (v1.0.0+) takes priority. We fall back to upstream's split-ABI
+    // selector (matches "Hoshi-Reader-v…-<abi>.apk") so the app stays compatible if a
+    // release ever ships ABI-split assets, then to the legacy single "Hoshi-Reader-v…"
+    // name for releases predating the rename, then to a lone APK asset. This keeps users
+    // on 0.8.x auto-updating across the boundary as long as the release ships a single APK.
     val expectedManga = "Hoshi-Manga-v$normalizedVersion.apk"
     val expectedReaderLegacy = "Hoshi-Reader-v$normalizedVersion.apk"
     val selectedAsset = apkAssets.firstOrNull { it.name == expectedManga }
+        ?: apkAssets.selectCompatibleAbiAsset(normalizedVersion, supportedAbis)
         ?: apkAssets.firstOrNull { it.name == expectedReaderLegacy }
         ?: apkAssets.singleOrNull()
         ?: return null
@@ -88,6 +94,30 @@ internal fun GitHubRelease.availableUpdateOrNull(currentVersionName: String): Av
         fallbackDownloadUrls = selectedAsset.fallbackDownloadUrls,
         sha256 = selectedAsset.normalizedSha256(),
     )
+}
+
+private fun List<GitHubReleaseAsset>.selectCompatibleAbiAsset(
+    normalizedVersion: String,
+    supportedAbis: List<String>,
+): GitHubReleaseAsset? {
+    val expectedPrefix = "Hoshi-Reader-v$normalizedVersion-"
+    val expectedSuffix = ".apk"
+    val assetsByAbi = mapNotNull { asset ->
+        val abi = asset.name
+            .takeIf { it.startsWith(expectedPrefix) && it.endsWith(expectedSuffix) }
+            ?.removePrefix(expectedPrefix)
+            ?.removeSuffix(expectedSuffix)
+            ?: return@mapNotNull null
+        abi to asset
+    }
+    return supportedAbis.firstNotNullOfOrNull { abi ->
+        assetsByAbi.singleOrNull { (assetAbi, _) -> assetAbi == abi }?.second
+    }
+}
+
+private object AndroidSupportedAbis {
+    fun current(): List<String> =
+        runCatching { Build.SUPPORTED_ABIS.toList() }.getOrDefault(emptyList())
 }
 
 private fun GitHubReleaseAsset.normalizedSha256(): String? =

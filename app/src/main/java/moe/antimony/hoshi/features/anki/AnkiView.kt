@@ -196,6 +196,15 @@ fun AnkiView(
                         checked = uiState.settings.compactGlossaries,
                         onCheckedChange = viewModel::updateCompactGlossaries,
                     )
+                    if (uiState.settings.backendKind == AnkiBackendKind.AnkiDroid) {
+                        AnkiDivider()
+                        AnkiSwitchRow(
+                            label = stringResource(R.string.anki_droid_force_sync),
+                            supportingText = stringResource(R.string.anki_droid_force_sync_description),
+                            checked = uiState.settings.ankiDroidForceSync,
+                            onCheckedChange = viewModel::updateAnkiDroidForceSync,
+                        )
+                    }
                 }
             }
             val selectedNoteType = uiState.selectedNoteType
@@ -339,12 +348,14 @@ private fun <T> AnkiDropdownRow(
 @Composable
 private fun AnkiSwitchRow(
     label: String,
+    supportingText: String? = null,
     checked: Boolean,
     onCheckedChange: (Boolean) -> Unit,
 ) {
     ListItem(
         colors = ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.surface),
         headlineContent = { Text(label) },
+        supportingContent = supportingText?.let { text -> { Text(text) } },
         trailingContent = { Switch(checked = checked, onCheckedChange = onCheckedChange) },
     )
 }

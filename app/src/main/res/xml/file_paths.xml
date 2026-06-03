@@ -3,6 +3,9 @@
     <cache-path
         name="anki_media"
         path="anki-media/" />
+    <cache-path
+        name="reader_images"
+        path="reader-images/" />
     <files-path
         name="files"
         path="." />

@@ -50,6 +50,31 @@ class DictionaryRepositoryTest {
     }
 
     @Test
+    fun lookupQueryReadyRebuildsPersistedDictionariesAfterProcessStart() {
+        val filesDir = temporaryFolder.newFolder("ready-files")
+        val storage = DictionaryStorageDataSource(filesDir)
+        val bridge = RecordingDictionaryNativeBridge()
+        val repository = DictionaryRepository(
+            filesDir,
+            storage,
+            DictionaryImportDataSource(bridge),
+            DictionaryLookupQueryService(bridge),
+        )
+        writeDictionary(storage.typeDirectory(DictionaryType.Term), "First", "First")
+        writeDictionary(storage.typeDirectory(DictionaryType.Frequency), "Freq", "Freq")
+        writeDictionary(storage.typeDirectory(DictionaryType.Pitch), "Pitch", "Pitch")
+        storage.saveConfigFromStorage()
+
+        repository.ensureLookupQueryReady()
+        repository.ensureLookupQueryReady()
+
+        assertEquals(listOf(filesDir.resolve("Dictionaries/Term/First").absolutePath), bridge.termPaths.toList())
+        assertEquals(listOf(filesDir.resolve("Dictionaries/Frequency/Freq").absolutePath), bridge.freqPaths.toList())
+        assertEquals(listOf(filesDir.resolve("Dictionaries/Pitch/Pitch").absolutePath), bridge.pitchPaths.toList())
+        assertEquals(1, bridge.rebuildCount)
+    }
+
+    @Test
     fun repositoryMoveRewritesIosOrderThroughStorage() {
         val filesDir = temporaryFolder.newFolder("move-files")
         val storage = DictionaryStorageDataSource(filesDir)
@@ -409,6 +434,8 @@ class DictionaryRepositoryTest {
         var pitchPaths: Array<String> = emptyArray()
             private set
         val lowRamModes = mutableListOf<Boolean>()
+        var rebuildCount = 0
+            private set
 
         override fun importDictionary(zipPath: String, outputDir: String, lowRam: Boolean): NativeDictionaryImportResult {
             lowRamModes += lowRam
@@ -428,6 +455,7 @@ class DictionaryRepositoryTest {
             freqPaths: Array<String>,
             pitchPaths: Array<String>,
         ) {
+            rebuildCount += 1
             this.termPaths = termPaths
             this.freqPaths = freqPaths
             this.pitchPaths = pitchPaths

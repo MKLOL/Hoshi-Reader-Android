@@ -30,9 +30,14 @@ class BookshelfViewModelTest {
     @Test
     fun reloadBooksPublishesEntriesProgressAndSasayakiState() {
         val entry = bookEntry("book-a")
+        val coverSource = BookCoverSource(
+            path = "/tmp/book-a/cover.jpg",
+            cacheKey = "/tmp/book-a/cover.jpg:10:20",
+        )
         val repository = FakeBookshelfRepository(
             entries = listOf(entry),
             progressById = mapOf("book-a" to 0.25),
+            coverSourcesById = mapOf("book-a" to coverSource),
             shelves = listOf(BookShelf("Manga", listOf("book-a"))),
             settings = BookshelfSettings(sortOption = BookSortOption.Title, showReading = true),
         )
@@ -43,6 +48,7 @@ class BookshelfViewModelTest {
 
         assertEquals(listOf(entry), viewModel.uiState.value.bookEntries)
         assertEquals(mapOf("book-a" to 0.25), viewModel.uiState.value.bookProgressById)
+        assertEquals(mapOf("book-a" to coverSource), viewModel.uiState.value.coverSourcesById)
         assertEquals(listOf(BookShelf("Manga", listOf("book-a"))), viewModel.uiState.value.shelves)
         assertEquals(BookSortOption.Title, viewModel.uiState.value.sortOption)
         assertTrue(viewModel.uiState.value.showReading)
@@ -283,6 +289,53 @@ class BookshelfViewModelTest {
     }
 
     @Test
+    fun importingBookFolderReportsErrorWhenNoEpubFilesAreFound() {
+        val repository = FakeBookshelfRepository()
+        val viewModel = BookshelfViewModel(repository, testScope())
+
+        viewModel.importBookFolder {
+            emptyList()
+        }
+
+        assertEquals("No EPUB files found.", viewModel.uiState.value.errorMessage.testString())
+        assertEquals(emptyList<BookSortOption>(), repository.loadRequests)
+        assertFalse(viewModel.uiState.value.isLoading)
+        assertNull(viewModel.uiState.value.blockingProgressMessage.testString())
+    }
+
+    @Test
+    fun importingBookFolderScansThenUsesBatchImportFlow() {
+        val repository = FakeBookshelfRepository()
+        val viewModel = BookshelfViewModel(repository, testScope())
+        val importedKeys = mutableListOf<String>()
+
+        viewModel.importBookFolder {
+            listOf(
+                PendingBookImport(
+                    importKey = "content://books/folder/first.epub",
+                    displayName = "Series/first.epub",
+                ) {
+                    importedKeys += "first"
+                    "first-book"
+                },
+                PendingBookImport(
+                    importKey = "content://books/folder/second.epub",
+                    displayName = "Series/second.epub",
+                ) {
+                    importedKeys += "second"
+                    "second-book"
+                },
+            )
+        }
+
+        assertEquals(listOf("first", "second"), importedKeys)
+        assertEquals(listOf(BookSortOption.Recent), repository.loadRequests)
+        assertFalse(viewModel.uiState.value.isLoading)
+        assertNull(viewModel.uiState.value.blockingProgressMessage.testString())
+        assertNull(viewModel.uiState.value.errorMessage.testString())
+    }
+
+    @Test
     fun deleteBookReloadsBooksAfterRepositoryDeletion() {
         val entry = bookEntry("book-a")
         val repository = FakeBookshelfRepository(entries = emptyList())
@@ -445,6 +498,7 @@ class BookshelfViewModelTest {
         var openBookId: String = "book-a",
         var importBookId: String = "imported-book",
         var shelves: List<BookShelf> = emptyList(),
+        var coverSourcesById: Map<String, BookCoverSource> = emptyMap(),
         var settings: BookshelfSettings = BookshelfSettings(),
     ) : BookshelfRepository {
         val loadRequests = mutableListOf<BookSortOption>()
@@ -459,7 +513,7 @@ class BookshelfViewModelTest {
 
         override suspend fun loadBooks(sortOption: BookSortOption): BookshelfLoadResult {
             loadRequests += sortOption
-            return BookshelfLoadResult(entries, progressById, shelves, settings)
+            return BookshelfLoadResult(entries, progressById, coverSourcesById, shelves, settings)
         }
 
         override suspend fun openBook(entry: BookEntry): String = openBookId
@@ -529,6 +583,8 @@ private fun UiText?.testString(): String? =
             R.string.bookshelf_importing_named_format -> "Importing ${args[0]}..."
             R.string.bookshelf_importing_progress_format -> "Importing ${args[0]} / ${args[1]}..."
             R.string.bookshelf_import_failed_list_format -> "Failed to import:\n${args[0]}"
+            R.string.bookshelf_scanning_folder -> "Scanning folder..."
+            R.string.bookshelf_no_epub_files_found -> "No EPUB files found."
             R.string.bookshelf_already_synced_format -> "${args[0]} is already synced"
             else -> "resource:$id:${args.joinToString()}"
         }

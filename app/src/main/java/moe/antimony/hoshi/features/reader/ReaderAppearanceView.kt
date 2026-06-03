@@ -36,6 +36,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.LocalMinimumInteractiveComponentSize
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
@@ -67,6 +68,7 @@ import moe.antimony.hoshi.importing.FileImportContent
 import moe.antimony.hoshi.importing.ImportFileType
 import moe.antimony.hoshi.importing.importDisplayName
 import moe.antimony.hoshi.ui.HoshiBlockingProgressOverlay
+import moe.antimony.hoshi.ui.hoshiOutlinedTextFieldColors
 import moe.antimony.hoshi.ui.theme.LocalHoshiEInkMode
 import java.util.Locale
 import kotlin.math.round
@@ -164,6 +166,7 @@ private fun ReaderAppearanceContent(
     var fontToDelete by remember { mutableStateOf<String?>(null) }
     var isImportingFont by remember { mutableStateOf(false) }
     var importingFontMessage by remember { mutableStateOf<String?>(null) }
+    var colorDialogRow by remember { mutableStateOf<ReaderAppearanceCustomColorRow?>(null) }
     val fontImporter = rememberLauncherForActivityResult(FileImportContent()) { uri: Uri? ->
         if (uri == null) return@rememberLauncherForActivityResult
         val displayName = context.contentResolver.importDisplayName(uri)
@@ -251,6 +254,29 @@ private fun ReaderAppearanceContent(
                             checked = settings.sepiaInvertInDark,
                             onCheckedChange = { onSettingsChange(settings.copy(sepiaInvertInDark = it)) },
                         )
+                    }
+                    if (readerAppearanceShowsCustomInterfaceTheme(settings)) {
+                        AppearanceDivider(palette)
+                        val interfaceLabels = ReaderInterfaceTheme.entries.associateWith { stringResource(it.labelRes) }
+                        SegmentedRow(
+                            label = stringResource(R.string.reader_appearance_interface),
+                            options = ReaderInterfaceTheme.entries.map { interfaceLabels.getValue(it) },
+                            selected = interfaceLabels.getValue(settings.uiTheme),
+                            onSelected = { label ->
+                                ReaderInterfaceTheme.entries.firstOrNull { interfaceLabels.getValue(it) == label }?.let {
+                                    onSettingsChange(settings.copy(uiTheme = it))
+                                }
+                            },
+                            palette = palette,
+                        )
+                        readerAppearanceCustomColorRows(settings).forEach { row ->
+                            AppearanceDivider(palette)
+                            ColorRow(
+                                label = stringResource(row.labelRes),
+                                color = row.color(settings),
+                                onClick = { colorDialogRow = row },
+                            )
+                        }
                     }
                 }
                 AppearanceSection(title = stringResource(R.string.reader_appearance_text), palette = palette) {
@@ -392,6 +418,17 @@ private fun ReaderAppearanceContent(
                                 onSettingsChange(settings.copy(characterSpacing = round(value).toDouble()))
                             },
                         )
+                        AppearanceDivider(palette)
+                        SliderRow(
+                            label = stringResource(R.string.reader_appearance_paragraph_spacing),
+                            value = String.format(Locale.US, "%.1fem", settings.paragraphSpacing),
+                            sliderValue = settings.paragraphSpacing.toFloat(),
+                            valueRange = 0f..3f,
+                            steps = 29,
+                            onValueChange = { value ->
+                                onSettingsChange(settings.copy(paragraphSpacing = round(value * 10) / 10.0))
+                            },
+                        )
                     }
                 }
                 AppearanceSection(title = stringResource(R.string.reader_appearance_display), palette = palette) {
@@ -412,7 +449,15 @@ private fun ReaderAppearanceContent(
                         checked = settings.showPercentage,
                         onCheckedChange = { onSettingsChange(settings.copy(showPercentage = it)) },
                     )
-                    if (settings.showCharacters || settings.showPercentage) {
+                    if (readerAppearanceShowsAlwaysShowProgress(settings)) {
+                        AppearanceDivider(palette)
+                        SwitchRow(
+                            label = stringResource(R.string.reader_appearance_always_show_progress),
+                            checked = settings.alwaysShowProgress,
+                            onCheckedChange = { onSettingsChange(settings.copy(alwaysShowProgress = it)) },
+                        )
+                    }
+                    if (readerAppearanceShowsProgressPosition(settings)) {
                         AppearanceDivider(palette)
                         val topLabel = stringResource(R.string.reader_appearance_progress_top)
                         val bottomLabel = stringResource(R.string.reader_appearance_progress_bottom)
@@ -424,6 +469,12 @@ private fun ReaderAppearanceContent(
                             palette = palette,
                         )
                     }
+                    AppearanceDivider(palette)
+                    SwitchRow(
+                        label = stringResource(R.string.reader_appearance_show_back_button),
+                        checked = settings.showReaderBackButton,
+                        onCheckedChange = { onSettingsChange(settings.copy(showReaderBackButton = it)) },
+                    )
                     readerAppearanceStatisticsRows(settings).forEach { row ->
                         AppearanceDivider(palette)
                         SwitchRow(
@@ -581,10 +632,39 @@ private fun ReaderAppearanceContent(
             },
         )
     }
+    colorDialogRow?.let { row ->
+        ReaderColorDialog(
+            title = stringResource(row.labelRes),
+            initialColor = row.color(settings),
+            defaultColor = row.defaultColor,
+            palette = palette,
+            onColorChange = { color ->
+                onSettingsChange(row.updated(settings, color))
+                colorDialogRow = null
+            },
+            onDismiss = { colorDialogRow = null },
+        )
+    }
 }
 
 internal fun readerAppearanceSasayakiRows(settings: SasayakiSettings): List<Int> =
     if (settings.enabled) listOf(R.string.reader_appearance_show_sasayaki_toggle) else emptyList()
+
+internal fun readerAppearanceShowsCustomInterfaceTheme(settings: ReaderSettings): Boolean =
+    settings.theme == ReaderTheme.Custom
+
+internal fun readerAppearanceCustomColorRows(settings: ReaderSettings): List<ReaderAppearanceCustomColorRow> =
+    if (settings.theme == ReaderTheme.Custom) {
+        ReaderAppearanceCustomColorRow.entries
+    } else {
+        emptyList()
+    }
+
+internal fun readerAppearanceShowsAlwaysShowProgress(settings: ReaderSettings): Boolean =
+    settings.showCharacters || settings.showPercentage
+
+internal fun readerAppearanceShowsProgressPosition(settings: ReaderSettings): Boolean =
+    readerAppearanceShowsAlwaysShowProgress(settings) && !settings.alwaysShowProgress
 
 internal fun readerAppearanceStatisticsRows(settings: ReaderSettings): List<ReaderAppearanceStatisticsRow> =
     if (settings.enableStatistics) {
@@ -593,7 +673,7 @@ internal fun readerAppearanceStatisticsRows(settings: ReaderSettings): List<Read
         emptyList()
     }
 
-internal enum class ReaderAppearanceStatisticsRow(@StringRes val labelRes: Int) {
+internal enum class ReaderAppearanceStatisticsRow(@get:StringRes val labelRes: Int) {
     Toggle(R.string.reader_appearance_show_statistics_toggle),
     ReadingSpeed(R.string.reader_appearance_show_reading_speed),
     ReadingTime(R.string.reader_appearance_show_reading_time);
@@ -613,6 +693,26 @@ internal enum class ReaderAppearanceStatisticsRow(@StringRes val labelRes: Int) 
         }
 }
 
+internal enum class ReaderAppearanceCustomColorRow(@get:StringRes val labelRes: Int, val defaultColor: Long) {
+    Background(R.string.reader_appearance_background_color, 0xFFFFFFFF),
+    Text(R.string.reader_appearance_text_color, 0xFF000000),
+    Info(R.string.reader_appearance_info_color, 0xFF999999);
+
+    fun color(settings: ReaderSettings): Long =
+        when (this) {
+            Background -> settings.customBackgroundColor
+            Text -> settings.customTextColor
+            Info -> settings.customInfoColor
+        }
+
+    fun updated(settings: ReaderSettings, color: Long): ReaderSettings =
+        when (this) {
+            Background -> settings.copy(customBackgroundColor = color)
+            Text -> settings.copy(customTextColor = color)
+            Info -> settings.copy(customInfoColor = color)
+        }
+}
+
 @get:StringRes
 private val ReaderTheme.labelRes: Int
     get() = when (this) {
@@ -620,6 +720,15 @@ private val ReaderTheme.labelRes: Int
         ReaderTheme.Light -> R.string.reader_appearance_theme_light
         ReaderTheme.Dark -> R.string.reader_appearance_theme_dark
         ReaderTheme.Sepia -> R.string.reader_appearance_theme_sepia
+        ReaderTheme.Custom -> R.string.reader_appearance_theme_custom
+    }
+
+@get:StringRes
+private val ReaderInterfaceTheme.labelRes: Int
+    get() = when (this) {
+        ReaderInterfaceTheme.System -> R.string.reader_appearance_theme_system
+        ReaderInterfaceTheme.Light -> R.string.reader_appearance_theme_light
+        ReaderInterfaceTheme.Dark -> R.string.reader_appearance_theme_dark
     }
 
 @Composable
@@ -825,6 +934,185 @@ private fun ReaderFontRow(
         }
     }
 }
+
+@Composable
+private fun ColorRow(
+    label: String,
+    color: Long,
+    onClick: () -> Unit,
+) {
+    val metrics = readerSheetDensityMetrics()
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = metrics.appearanceRowVerticalPaddingDp.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = label,
+            modifier = Modifier.weight(1f),
+            style = MaterialTheme.typography.bodyLarge,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Surface(
+                modifier = Modifier.size(28.dp),
+                shape = RoundedCornerShape(14.dp),
+                color = Color(color),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                tonalElevation = 0.dp,
+            ) {}
+            Text(
+                text = color.toReaderColorHexInput(includeAlpha = color.readerColorAlpha() != 0xFF),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+            )
+        }
+    }
+}
+
+@Composable
+private fun ReaderColorDialog(
+    title: String,
+    initialColor: Long,
+    defaultColor: Long,
+    palette: AppearancePalette,
+    onColorChange: (Long) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var draftColor by remember(initialColor) { mutableStateOf(initialColor) }
+    var hexInput by remember(initialColor) {
+        mutableStateOf(initialColor.toReaderColorHexInput(includeAlpha = initialColor.readerColorAlpha() != 0xFF))
+    }
+    val parsedColor = readerColorFromHexInput(hexInput)
+    val inputError = hexInput.isNotBlank() && parsedColor == null
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Surface(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(56.dp),
+                    shape = RoundedCornerShape(8.dp),
+                    color = draftColor.toOpaqueReaderColor(),
+                    border = BorderStroke(1.dp, palette.divider),
+                    tonalElevation = 0.dp,
+                ) {}
+                OutlinedTextField(
+                    value = hexInput,
+                    onValueChange = { value ->
+                        hexInput = value
+                        readerColorFromHexInput(value)?.let { draftColor = it }
+                    },
+                    label = { Text(stringResource(R.string.reader_appearance_color_hex)) },
+                    singleLine = true,
+                    isError = inputError,
+                    supportingText = if (inputError) {
+                        { Text(stringResource(R.string.reader_appearance_color_invalid)) }
+                    } else {
+                        null
+                    },
+                    colors = hoshiOutlinedTextFieldColors(cursorColor = palette.onGroup),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                ReaderColorChannelSlider(
+                    label = stringResource(R.string.reader_appearance_color_alpha),
+                    value = draftColor.readerColorAlpha(),
+                    onValueChange = { value ->
+                        draftColor = draftColor.withReaderColorAlpha(value)
+                        hexInput = draftColor.toReaderColorHexInput(includeAlpha = true)
+                    },
+                )
+                ReaderColorChannelSlider(
+                    label = stringResource(R.string.reader_appearance_color_red),
+                    value = draftColor.readerColorRed(),
+                    onValueChange = { value ->
+                        draftColor = draftColor.withReaderColorRed(value)
+                        hexInput = draftColor.toReaderColorHexInput(includeAlpha = draftColor.readerColorAlpha() != 0xFF)
+                    },
+                )
+                ReaderColorChannelSlider(
+                    label = stringResource(R.string.reader_appearance_color_green),
+                    value = draftColor.readerColorGreen(),
+                    onValueChange = { value ->
+                        draftColor = draftColor.withReaderColorGreen(value)
+                        hexInput = draftColor.toReaderColorHexInput(includeAlpha = draftColor.readerColorAlpha() != 0xFF)
+                    },
+                )
+                ReaderColorChannelSlider(
+                    label = stringResource(R.string.reader_appearance_color_blue),
+                    value = draftColor.readerColorBlue(),
+                    onValueChange = { value ->
+                        draftColor = draftColor.withReaderColorBlue(value)
+                        hexInput = draftColor.toReaderColorHexInput(includeAlpha = draftColor.readerColorAlpha() != 0xFF)
+                    },
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                enabled = !inputError,
+                onClick = { onColorChange(parsedColor ?: draftColor) },
+            ) {
+                Text(stringResource(R.string.action_save))
+            }
+        },
+        dismissButton = {
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                TextButton(
+                    onClick = {
+                        draftColor = defaultColor
+                        hexInput = defaultColor.toReaderColorHexInput(includeAlpha = defaultColor.readerColorAlpha() != 0xFF)
+                    },
+                ) {
+                    Text(stringResource(R.string.action_reset))
+                }
+                TextButton(onClick = onDismiss) {
+                    Text(stringResource(R.string.action_cancel))
+                }
+            }
+        },
+    )
+}
+
+@Composable
+private fun ReaderColorChannelSlider(
+    label: String,
+    value: Int,
+    onValueChange: (Int) -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text(
+                text = label,
+                modifier = Modifier.weight(1f),
+                style = MaterialTheme.typography.bodyMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(value.toString(), style = MaterialTheme.typography.bodyMedium)
+        }
+        Slider(
+            value = value.toFloat(),
+            onValueChange = { onValueChange(round(it).toInt()) },
+            valueRange = 0f..255f,
+            steps = 254,
+        )
+    }
+}
+
+private fun Long.toOpaqueReaderColor(): Color =
+    Color(withReaderColorAlpha(0xFF))
 
 @Composable
 private fun ActionRow(

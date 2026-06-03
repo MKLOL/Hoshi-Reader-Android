@@ -1,6 +1,8 @@
 package moe.antimony.hoshi.features.anki
 
+import android.content.ActivityNotFoundException
 import android.content.Context
+import android.content.Intent
 import android.net.Uri
 import android.util.Log
 import com.ichi2.anki.FlashCardsContract
@@ -84,6 +86,18 @@ class AndroidAnkiContentApi(
             if (mimeType.startsWith("audio/")) "audio" else "image",
         )
 
+    override fun sync(): Boolean =
+        runCatching {
+            appContext.startActivity(ankiDroidSyncIntent())
+            true
+        }.recoverCatching { error ->
+            when (error) {
+                is ActivityNotFoundException -> logAnkiApiFailure("AnkiDroid sync activity is unavailable.", error)
+                else -> logAnkiApiFailure("Unable to start AnkiDroid sync.", error)
+            }
+            false
+        }.getOrDefault(false)
+
     override fun isAvailable(): Boolean =
         AddContentApi.getAnkiDroidPackageName(appContext) != null
 
@@ -132,6 +146,33 @@ class AndroidAnkiContentApi(
 private fun logAnkiApiFailure(message: String, error: Throwable) {
     runCatching { Log.w("AndroidAnkiContentApi", message, error) }
 }
+
+internal fun ankiDroidSyncIntent(): Intent =
+    ankiDroidSyncIntentSpec().let { spec ->
+        Intent(spec.action).apply {
+            setPackage(spec.packageName)
+            spec.categories.forEach(::addCategory)
+            flags = spec.flags
+        }
+    }
+
+internal data class AnkiDroidSyncIntentSpec(
+    val action: String,
+    val packageName: String,
+    val categories: Set<String>,
+    val flags: Int,
+)
+
+internal fun ankiDroidSyncIntentSpec(): AnkiDroidSyncIntentSpec =
+    AnkiDroidSyncIntentSpec(
+        action = "com.ichi2.anki.DO_SYNC",
+        packageName = "com.ichi2.anki",
+        categories = setOf(Intent.CATEGORY_DEFAULT),
+        flags = Intent.FLAG_ACTIVITY_NEW_TASK or
+            Intent.FLAG_ACTIVITY_NO_HISTORY or
+            Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS or
+            Intent.FLAG_ACTIVITY_NO_ANIMATION,
+    )
 
 internal fun ankiDuplicateNoteSelection(
     modelId: Long,

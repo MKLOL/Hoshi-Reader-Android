@@ -1,9 +1,25 @@
 package moe.antimony.hoshi.features.dictionary
 
+import de.manhhao.hoshi.GlossaryEntry
+import de.manhhao.hoshi.LookupResult
+import de.manhhao.hoshi.TermResult
 import moe.antimony.hoshi.features.reader.ReaderSelectionData
 import moe.antimony.hoshi.features.reader.ReaderSelectionRect
+import moe.antimony.hoshi.features.reader.ReaderLookupPopupFramePayload
+import moe.antimony.hoshi.features.reader.ReaderLookupPopupRootHighlightPayload
+import moe.antimony.hoshi.features.reader.ReaderLookupPopupStackPayload
+import moe.antimony.hoshi.features.reader.ReaderLookupPopupViewport
+import moe.antimony.hoshi.features.reader.readerLookupPopupIframeUrl
+import moe.antimony.hoshi.features.reader.readerLookupPopupTouchBlocksReaderGesture
 import moe.antimony.hoshi.features.audio.AudioSettings
 import android.view.MotionEvent
+import android.view.View
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.boolean
+import kotlinx.serialization.json.double
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -130,6 +146,193 @@ class LookupPopupTest {
         assertEquals(27.0, shifted[0].state.selection.rect.y, 0.0)
         assertEquals(11.0, shifted[1].state.selection.rect.x, 0.0)
         assertEquals(21.0, shifted[1].state.selection.rect.y, 0.0)
+    }
+
+    @Test
+    fun readerIframeFramePayloadUsesWebViewViewportCoordinatesWithoutRootPaddingOffset() {
+        val popup = LookupPopupItem(
+            id = "root",
+            state = LookupPopupState(
+                selection = ReaderSelectionData(
+                    text = "root",
+                    sentence = "root",
+                    rect = ReaderSelectionRect(x = 100.0, y = 100.0, width = 20.0, height = 30.0),
+                    normalizedOffset = null,
+                ),
+                results = emptyList(),
+                isVertical = false,
+                width = 320,
+                height = 250,
+                popupActionBar = true,
+            ),
+        )
+
+        val payload = ReaderLookupPopupFramePayload.fromPopup(
+            popup = popup,
+            popupIndex = 0,
+            viewport = ReaderLookupPopupViewport(
+                width = 500.0,
+                height = 800.0,
+            ),
+            entriesCount = 3,
+            backCount = 1,
+            forwardCount = 2,
+        )
+
+        assertEquals("root", payload.id)
+        assertEquals(100.0, payload.frame.left, 0.0)
+        assertEquals(134.0, payload.frame.top, 0.0)
+        assertEquals(320.0, payload.frame.width, 0.0)
+        assertEquals(250.0, payload.frame.height, 0.0)
+        assertEquals(171.0, payload.selectionOffsetY, 0.0)
+        assertTrue(payload.popupActionBar)
+        assertEquals(3, payload.entriesCount)
+        assertEquals("https://hoshi.local/popup/iframe.html", payload.iframeUrl)
+        assertEquals("https://hoshi.local/popup/iframe.html?v=123", readerLookupPopupIframeUrl(123))
+    }
+
+    @Test
+    fun readerIframeFramePayloadSeedsFirstEntryForInitialPaint() {
+        val popup = LookupPopupItem(
+            id = "root",
+            state = LookupPopupState(
+                selection = ReaderSelectionData(
+                    text = "root",
+                    sentence = "root",
+                    rect = ReaderSelectionRect(x = 100.0, y = 100.0, width = 20.0, height = 30.0),
+                    normalizedOffset = null,
+                ),
+                results = listOf(
+                    lookupResult(expression = "食べる", reading = "たべる", glossary = "to eat"),
+                    lookupResult(expression = "読む", reading = "よむ", glossary = "to read"),
+                ),
+                isVertical = false,
+                width = 320,
+                height = 250,
+            ),
+        )
+
+        val payload = ReaderLookupPopupFramePayload.fromPopup(
+            popup = popup,
+            popupIndex = 0,
+            viewport = ReaderLookupPopupViewport(width = 500.0, height = 800.0),
+        )
+
+        assertTrue(payload.initialEntryJson?.contains(""""expression":"食べる"""") == true)
+        assertFalse(payload.initialEntryJson?.contains(""""expression":"読む"""") == true)
+    }
+
+    @Test
+    fun readerIframeFramePayloadCanOmitInitialEntryForFrameOnlyUpdates() {
+        val popup = LookupPopupItem(
+            id = "root",
+            state = LookupPopupState(
+                selection = ReaderSelectionData(
+                    text = "root",
+                    sentence = "root",
+                    rect = ReaderSelectionRect(x = 100.0, y = 100.0, width = 20.0, height = 30.0),
+                    normalizedOffset = null,
+                ),
+                results = listOf(
+                    lookupResult(expression = "食べる", reading = "たべる", glossary = "to eat"),
+                ),
+                isVertical = false,
+                width = 320,
+                height = 250,
+            ),
+        )
+
+        val payload = ReaderLookupPopupFramePayload.fromPopup(
+            popup = popup,
+            popupIndex = 0,
+            viewport = ReaderLookupPopupViewport(width = 500.0, height = 800.0),
+            includeInitialEntryJson = false,
+        )
+
+        assertEquals(1, payload.entriesCount)
+        assertEquals(null, payload.initialEntryJson)
+    }
+
+    @Test
+    fun readerIframeStackPayloadCarriesPendingRootHighlightGate() {
+        val payload = ReaderLookupPopupStackPayload(
+            popups = emptyList(),
+            rootHighlight = ReaderLookupPopupRootHighlightPayload.fromReaderRects(
+                popupId = "root",
+                rects = null,
+                darkMode = false,
+                eInkMode = true,
+                verticalWriting = true,
+            ),
+        )
+
+        val rootHighlight = Json.parseToJsonElement(payload.toJson())
+            .jsonObject
+            .getValue("rootHighlight")
+            .jsonObject
+
+        assertEquals("root", rootHighlight.getValue("popupId").jsonPrimitive.content)
+        assertTrue(rootHighlight.getValue("pending").jsonPrimitive.boolean)
+        assertTrue(rootHighlight.getValue("eInkMode").jsonPrimitive.boolean)
+        assertTrue(rootHighlight.getValue("verticalWriting").jsonPrimitive.boolean)
+        assertEquals(0, rootHighlight.getValue("rects").jsonArray.size)
+    }
+
+    @Test
+    fun readerIframeStackPayloadCarriesReadyRootHighlightRects() {
+        val payload = ReaderLookupPopupStackPayload(
+            popups = emptyList(),
+            rootHighlight = ReaderLookupPopupRootHighlightPayload.fromReaderRects(
+                popupId = "root",
+                rects = listOf(
+                    ReaderSelectionRect(x = 12.0, y = 24.0, width = 30.0, height = 16.0),
+                ),
+                darkMode = true,
+                eInkMode = false,
+                verticalWriting = false,
+            ),
+        )
+
+        val rootHighlight = Json.parseToJsonElement(payload.toJson())
+            .jsonObject
+            .getValue("rootHighlight")
+            .jsonObject
+        val rect = rootHighlight.getValue("rects").jsonArray.first().jsonObject
+
+        assertFalse(rootHighlight.getValue("pending").jsonPrimitive.boolean)
+        assertTrue(rootHighlight.getValue("darkMode").jsonPrimitive.boolean)
+        assertEquals(12.0, rect.getValue("x").jsonPrimitive.double, 0.0)
+        assertEquals(24.0, rect.getValue("y").jsonPrimitive.double, 0.0)
+        assertEquals(30.0, rect.getValue("width").jsonPrimitive.double, 0.0)
+        assertEquals(16.0, rect.getValue("height").jsonPrimitive.double, 0.0)
+    }
+
+    @Test
+    fun readerIframePopupFramesBlockReaderGesturesOnlyInsidePopupBounds() {
+        val popup = LookupPopupItem(
+            id = "root",
+            state = LookupPopupState(
+                selection = ReaderSelectionData(
+                    text = "root",
+                    sentence = "root",
+                    rect = ReaderSelectionRect(x = 100.0, y = 100.0, width = 20.0, height = 30.0),
+                    normalizedOffset = null,
+                ),
+                results = emptyList(),
+                isVertical = false,
+                width = 320,
+                height = 250,
+            ),
+        )
+        val payload = ReaderLookupPopupFramePayload.fromPopup(
+            popup = popup,
+            popupIndex = 0,
+            viewport = ReaderLookupPopupViewport(width = 500.0, height = 800.0),
+        )
+
+        assertTrue(readerLookupPopupTouchBlocksReaderGesture(listOf(payload), x = 130.0, y = 150.0))
+        assertFalse(readerLookupPopupTouchBlocksReaderGesture(listOf(payload), x = 40.0, y = 150.0))
+        assertFalse(readerLookupPopupTouchBlocksReaderGesture(emptyList(), x = 130.0, y = 150.0))
     }
 
     @Test
@@ -293,4 +496,90 @@ class LookupPopupTest {
         assertFalse(tracker.shouldDispatch(MotionEvent.ACTION_MOVE, hitPopup = false))
     }
 
+    @Test
+    fun overlayLeavesInputPathWhenThereAreNoPopups() {
+        assertEquals(View.GONE, lookupPopupOverlayVisibility(hasPopups = false))
+        assertEquals(View.VISIBLE, lookupPopupOverlayVisibility(hasPopups = true))
+    }
+
+    @Test
+    fun stylusOutsidePopupDownConsumesStreamAndRequestsDismiss() {
+        val shouldDismiss = shouldDismissForOutsideStylusTouch(
+            actionMasked = MotionEvent.ACTION_DOWN,
+            toolType = MotionEvent.TOOL_TYPE_STYLUS,
+            hitPopup = false,
+        )
+
+        assertTrue(shouldDismiss)
+    }
+
+    @Test
+    fun fingerOutsidePopupStillFallsThroughToReaderPath() {
+        val shouldDismiss = shouldDismissForOutsideStylusTouch(
+            actionMasked = MotionEvent.ACTION_DOWN,
+            toolType = MotionEvent.TOOL_TYPE_FINGER,
+            hitPopup = false,
+        )
+
+        assertFalse(shouldDismiss)
+    }
+
+    @Test
+    fun stylusInsidePopupStillUsesPopupDispatchPath() {
+        val shouldDismiss = shouldDismissForOutsideStylusTouch(
+            actionMasked = MotionEvent.ACTION_DOWN,
+            toolType = MotionEvent.TOOL_TYPE_STYLUS,
+            hitPopup = true,
+        )
+
+        assertFalse(shouldDismiss)
+    }
+
+    @Test
+    fun eraserOutsidePopupDownAlsoRequestsDismiss() {
+        val shouldDismiss = shouldDismissForOutsideStylusTouch(
+            actionMasked = MotionEvent.ACTION_DOWN,
+            toolType = MotionEvent.TOOL_TYPE_ERASER,
+            hitPopup = false,
+        )
+
+        assertTrue(shouldDismiss)
+    }
+
+    @Test
+    fun stylusOutsidePopupMoveDoesNotStartDismissWithoutDown() {
+        val shouldDismiss = shouldDismissForOutsideStylusTouch(
+            actionMasked = MotionEvent.ACTION_MOVE,
+            toolType = MotionEvent.TOOL_TYPE_STYLUS,
+            hitPopup = false,
+        )
+
+        assertFalse(shouldDismiss)
+    }
+
+    private fun lookupResult(
+        expression: String,
+        reading: String,
+        glossary: String,
+    ): LookupResult = LookupResult(
+        expression,
+        expression,
+        emptyArray(),
+        TermResult(
+            expression = expression,
+            reading = reading,
+            rules = "",
+            glossaries = arrayOf(
+                GlossaryEntry(
+                    dictName = "JMdict",
+                    glossary = glossary,
+                    definitionTags = "",
+                    termTags = "",
+                ),
+            ),
+            frequencies = emptyArray(),
+            pitches = emptyArray(),
+        ),
+        0,
+    )
 }

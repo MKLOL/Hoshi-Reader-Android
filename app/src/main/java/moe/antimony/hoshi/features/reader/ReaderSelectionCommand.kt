@@ -60,14 +60,19 @@ internal sealed interface ReaderHighlightCommand {
 
 internal data class ReaderSelectionResult(
     val selectedNothing: Boolean,
+    val isImageTap: Boolean = false,
+    val isLinkTap: Boolean = false,
 ) {
     companion object {
-        fun fromWebViewResult(result: String?): ReaderSelectionResult =
-            ReaderSelectionResult(
-                selectedNothing = result?.trim()
-                    ?.let { it == "null" || it == "undefined" }
-                    ?: true,
+        fun fromWebViewResult(result: String?): ReaderSelectionResult {
+            val value = result?.trim()
+            val token = value?.removeSurrounding("\"")
+            return ReaderSelectionResult(
+                selectedNothing = value == null || value == "null" || value == "undefined",
+                isImageTap = token == "image",
+                isLinkTap = token == "link",
             )
+        }
     }
 }
 

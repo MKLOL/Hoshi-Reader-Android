@@ -43,5 +43,31 @@ class AnkiUiStateTest {
         assertFalse(settings.checkDuplicatesAcrossAllModels)
         assertEquals("", settings.ankiConnectUrl)
         assertFalse(settings.ankiConnectForceSync)
+        assertFalse(settings.ankiDroidForceSync)
+    }
+
+    @Test
+    fun popupMediaNeedsFollowHandlebarsReferencedInsideTemplates() {
+        val state = AnkiUiState(
+            settings = AnkiSettings(
+                fieldMappings = mapOf(
+                    "Audio" to "<div>{audio}</div>",
+                    "SentenceAudio" to "clip: {sasayaki-audio}",
+                ),
+            ),
+        )
+
+        assertTrue(state.popupSettings.needsAudio)
+        assertTrue(state.popupSettings.needsSasayakiAudio)
+    }
+
+    @Test
+    fun popupMediaNeedsAreOffWhenMediaHandlebarsAreAbsent() {
+        val state = AnkiUiState(
+            settings = AnkiSettings(fieldMappings = mapOf("Expression" to "{expression}")),
+        )
+
+        assertFalse(state.popupSettings.needsAudio)
+        assertFalse(state.popupSettings.needsSasayakiAudio)
     }
 }

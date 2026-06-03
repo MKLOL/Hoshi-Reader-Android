@@ -1,8 +1,6 @@
 package moe.antimony.hoshi.features.audio
 
 import android.webkit.WebResourceResponse
-import org.json.JSONArray
-import org.json.JSONObject
 import java.io.ByteArrayInputStream
 import java.net.HttpURLConnection
 import java.net.URI
@@ -11,6 +9,7 @@ import java.net.URL
 class AudioRequestHandler(
     private val localAudioRepository: LocalAudioRepository,
     private val fetchRemoteAudioList: (String) -> ByteArray = ::fetchRemoteAudioList,
+    private val findLocalAudio: (term: String, reading: String) -> LocalAudioEntry? = localAudioRepository::findAudio,
 ) {
     fun handleAudioRequest(url: String): WebResourceResponse? {
         val body = handleAudioRequestBody(url) ?: return null
@@ -34,18 +33,9 @@ class AudioRequestHandler(
         val query = queryParameters(uri.rawQuery.orEmpty())
         val term = query["term"].orEmpty()
         val reading = query["reading"].orEmpty()
-        val entry = localAudioRepository.findAudio(term, reading) ?: return emptyAudioResponse()
-        val response = JSONObject()
-            .put("type", "audioSourceList")
-            .put(
-                "audioSources",
-                JSONArray().put(
-                    JSONObject()
-                        .put("name", entry.source)
-                        .put("url", LocalAudioResolver.audioUrl(entry.source, entry.file)),
-                ),
-            )
-        return response.toString().toByteArray()
+        val entry = findLocalAudio(term, reading) ?: return emptyAudioResponse()
+        val audioUrl = LocalAudioResolver.audioUrl(entry.source, entry.file)
+        return """{"type":"audioSourceList","audioSources":[{"name":${entry.source.jsonString()},"url":${audioUrl.jsonString()}}]}""".toByteArray()
     }
 
     private fun jsonResponse(body: ByteArray): WebResourceResponse =
@@ -91,4 +81,27 @@ private fun fetchRemoteAudioList(targetUrl: String): ByteArray =
         connection.inputStream.use { it.readBytes() }
     }.getOrElse {
         """{"type":"audioSourceList","audioSources":[]}""".toByteArray()
+    }
+
+private fun String.jsonString(): String =
+    buildString {
+        append('"')
+        for (char in this@jsonString) {
+            when (char) {
+                '\\' -> append("\\\\")
+                '"' -> append("\\\"")
+                '\b' -> append("\\b")
+                '\u000C' -> append("\\f")
+                '\n' -> append("\\n")
+                '\r' -> append("\\r")
+                '\t' -> append("\\t")
+                else -> if (char.code < 0x20) {
+                    append("\\u")
+                    append(char.code.toString(16).padStart(4, '0'))
+                } else {
+                    append(char)
+                }
+            }
+        }
+        append('"')
     }

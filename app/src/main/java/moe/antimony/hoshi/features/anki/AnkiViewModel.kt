@@ -7,7 +7,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
 import moe.antimony.hoshi.R
 import moe.antimony.hoshi.ui.UiText
 
@@ -39,7 +38,8 @@ data class AnkiUiState(
         get() = AnkiPopupSettings(
             isConfigured = isConfigured,
             useAnkiConnect = settings.backendKind == AnkiBackendKind.AnkiConnect,
-            needsAudio = settings.fieldMappings.values.contains("{audio}"),
+            needsAudio = settings.fieldMappings.referencesAnkiHandlebar("{audio}"),
+            needsSasayakiAudio = settings.fieldMappings.referencesAnkiHandlebar("{sasayaki-audio}"),
             allowDupes = settings.allowDupes,
             compactGlossaries = settings.compactGlossaries,
         )
@@ -233,21 +233,31 @@ class AnkiViewModel(
         }
     }
 
+    fun updateAnkiDroidForceSync(value: Boolean) {
+        viewModelScope.launch {
+            repository.updateSettings { it.copy(ankiDroidForceSync = value) }
+        }
+    }
+
     fun updateCompactGlossaries(value: Boolean) {
         viewModelScope.launch {
             repository.updateSettings { it.copy(compactGlossaries = value) }
         }
     }
 
-    fun mineEntry(rawPayload: String, context: AnkiMiningContext): Boolean =
-        runBlocking {
-            repository.mineEntry(
-                rawPayload = rawPayload,
-                context = context,
-                decks = _uiState.value.decks,
-                noteTypes = _uiState.value.noteTypes,
-            )
+    fun mineEntryAsync(rawPayload: String, context: AnkiMiningContext, onResult: (Boolean) -> Unit) {
+        viewModelScope.launch {
+            val mined = runCatching {
+                repository.mineEntry(
+                    rawPayload = rawPayload,
+                    context = context,
+                    decks = _uiState.value.decks,
+                    noteTypes = _uiState.value.noteTypes,
+                )
+            }.getOrDefault(false)
+            onResult(mined)
         }
+    }
 
     fun duplicateCheckAsync(expression: String, onResult: (Boolean) -> Unit) {
         viewModelScope.launch {

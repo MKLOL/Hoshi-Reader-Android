@@ -19,6 +19,49 @@ internal object ReaderLayoutDefaults {
     const val trailingSpacerWidthCss: String = "0"
 }
 
+internal data class ReaderGeneratedLayout(
+    val viewportHorizontalPaddingRatio: Double,
+    val viewportVerticalPaddingRatio: Double,
+    val continuousBodyPaddingCss: String,
+    val continuousBodyBottomPaddingCss: String,
+    val paginatedColumnWidthCss: String,
+    val imageWidthViewportRatio: Double,
+) {
+    companion object {
+        fun from(settings: ReaderSettings): ReaderGeneratedLayout {
+            val verticalPaddingBlock = "var(--hoshi-vertical-padding-block, ${(settings.verticalPadding / 2.0).cssNumber()}vh)"
+            val continuousBodyPadding = if (settings.verticalWriting) {
+                "$verticalPaddingBlock 0"
+            } else {
+                "0 ${(settings.horizontalPadding / 2.0).cssNumber()}vw"
+            }
+            val continuousBottomPadding = if (settings.verticalWriting) {
+                settings.bottomPaddingCss
+            } else {
+                "0"
+            }
+            val columnWidth = if (settings.verticalWriting) {
+                "var(--page-height, 100vh)"
+            } else {
+                "var(--page-width, 100vw)"
+            }
+            val imageRatio = if (settings.continuousMode && settings.verticalWriting) {
+                1.0
+            } else {
+                settings.imageWidthViewportRatio
+            }
+            return ReaderGeneratedLayout(
+                viewportHorizontalPaddingRatio = settings.continuousViewportHorizontalPaddingRatio,
+                viewportVerticalPaddingRatio = settings.continuousViewportVerticalPaddingRatio,
+                continuousBodyPaddingCss = continuousBodyPadding,
+                continuousBodyBottomPaddingCss = continuousBottomPadding,
+                paginatedColumnWidthCss = columnWidth,
+                imageWidthViewportRatio = imageRatio,
+            )
+        }
+    }
+}
+
 internal object ReaderContentStyles {
     fun styleTag(
         settings: ReaderSettings = ReaderSettings(),
@@ -36,7 +79,7 @@ internal object ReaderContentStyles {
         sasayakiBackgroundColor: Long = 0x6687CEEB,
     ): String {
         val textColor = settings.textColorCss(systemDark)
-        val backgroundColor = settings.backgroundColor(systemDark).toReaderCssColor()
+        val backgroundColor = settings.backgroundColorCss(systemDark)
         val normalizedFont = ReaderFontManager.normalizeDefaultFont(settings.selectedFont)
         val fontFaceFamily = normalizedFont.cssString()
         val bodyFontFamily = normalizedFont.readerCssFontFamily()
@@ -56,6 +99,21 @@ internal object ReaderContentStyles {
         } else {
             ""
         }
+        val eInkLineColor = if (settings.usesDarkInterface(systemDark)) "#fff" else "#000"
+        val selectionHighlightCss = """
+        html:not([data-hoshi-reader-eink-mode="true"]) ::highlight(hoshi-selection) {
+            background-color: rgba(160, 160, 160, 0.4) !important;
+            color: inherit;
+        }
+        html[data-hoshi-reader-eink-mode="true"] ::highlight(hoshi-selection) {
+            background-color: transparent !important;
+            color: inherit;
+            text-decoration-line: underline;
+            text-decoration-color: var(--hoshi-eink-line-color);
+            text-decoration-thickness: 1.5px;
+            text-underline-offset: 2px;
+        }
+        """.trimIndent()
         val gridCss = if (!settings.justifyText) {
             """
             text-align: start !important;
@@ -75,6 +133,51 @@ internal object ReaderContentStyles {
         } else {
             ""
         }
+        val paragraphSpacingCss = if (settings.layoutAdvanced) {
+            if (settings.verticalWriting) {
+                """
+                p {
+                    margin-right: ${settings.paragraphSpacing}em !important;
+                    margin-left: ${settings.paragraphSpacing}em !important;
+                }
+                """.trimIndent()
+            } else {
+                """
+                p {
+                    margin-top: ${settings.paragraphSpacing}em !important;
+                    margin-bottom: ${settings.paragraphSpacing}em !important;
+                }
+                """.trimIndent()
+            }
+        } else {
+            ""
+        }
+        val sasayakiHighlightCss = """
+        html[data-hoshi-reader-eink-mode="true"] ::highlight(hoshi-sasayaki) {
+            color: inherit !important;
+            background-color: transparent !important;
+        }
+        html[data-hoshi-reader-eink-mode="true"] ruby.hoshi-sasayaki-ruby-active {
+            color: inherit !important;
+            background-color: transparent !important;
+        }
+        html[data-hoshi-reader-eink-mode="true"] .hoshi-sasayaki-cue.hoshi-sasayaki-active {
+            color: inherit !important;
+            background-color: transparent !important;
+        }
+        html:not([data-hoshi-reader-eink-mode="true"]) ::highlight(hoshi-sasayaki) {
+            color: var(--hoshi-sasayaki-text-color) !important;
+            background-color: var(--hoshi-sasayaki-background-color) !important;
+        }
+        html:not([data-hoshi-reader-eink-mode="true"]) ruby.hoshi-sasayaki-ruby-active {
+            color: var(--hoshi-sasayaki-text-color) !important;
+            background-color: var(--hoshi-sasayaki-background-color) !important;
+        }
+        html:not([data-hoshi-reader-eink-mode="true"]) .hoshi-sasayaki-cue.hoshi-sasayaki-active {
+            color: var(--hoshi-sasayaki-text-color) !important;
+            background-color: var(--hoshi-sasayaki-background-color) !important;
+        }
+        """.trimIndent()
         val furiganaCss = if (settings.hideFurigana) {
             """
             rt {
@@ -88,6 +191,7 @@ internal object ReaderContentStyles {
             }
             """.trimIndent()
         }
+        val generatedLayout = ReaderGeneratedLayout.from(settings)
         val layoutCss = if (settings.continuousMode) {
             val hiddenOverflowAxis = if (settings.verticalWriting) "overflow-y" else "overflow-x"
             val viewportConstraintCss = if (settings.verticalWriting) {
@@ -103,8 +207,8 @@ internal object ReaderContentStyles {
                 $hiddenOverflowAxis: hidden !important;
                 margin: 0 !important;
                 padding: 0 !important;
-                background: $backgroundColor !important;
-                color: $textColor !important;
+                background: var(--hoshi-background-color) !important;
+                color: var(--hoshi-text-color) !important;
                 writing-mode: ${settings.writingModeCss} !important;
             }
             body {
@@ -114,8 +218,8 @@ internal object ReaderContentStyles {
                 $textSpacingCss
                 box-sizing: border-box !important;
                 $viewportConstraintCss
-                padding: ${settings.pagePaddingCss} !important;
-                padding-bottom: ${settings.bottomPaddingCss} !important;
+                padding: ${generatedLayout.continuousBodyPaddingCss} !important;
+                padding-bottom: ${generatedLayout.continuousBodyBottomPaddingCss} !important;
                 $gridCss
                 text-orientation: mixed;
             }
@@ -128,8 +232,8 @@ internal object ReaderContentStyles {
                 width: var(--page-width, 100vw) !important;
                 margin: 0 !important;
                 padding: 0 !important;
-                background: $backgroundColor !important;
-                color: $textColor !important;
+                background: var(--hoshi-background-color) !important;
+                color: var(--hoshi-text-color) !important;
                 writing-mode: ${settings.writingModeCss} !important;
             }
             body {
@@ -138,21 +242,35 @@ internal object ReaderContentStyles {
                 -webkit-text-size-adjust: none !important;
                 $textSpacingCss
                 box-sizing: border-box !important;
-                column-width: var(--page-width, 100vw) !important;
+                column-width: ${generatedLayout.paginatedColumnWidthCss} !important;
                 column-gap: ${settings.columnGapCss};
                 padding: ${settings.pagePaddingCss} !important;
                 padding-bottom: ${settings.bottomPaddingCss} !important;
                 $gridCss
                 text-orientation: mixed;
             }
+            body * {
+                column-count: auto !important;
+                -webkit-column-count: auto !important;
+            }
+            body, body * {
+                orphans: 1 !important;
+                widows: 1 !important;
+            }
             """.trimIndent()
         }
         return """
         $fontFaceCss
         $pageBreakCss
+        $paragraphSpacingCss
         @media (prefers-color-scheme: light) { :root { --hoshi-system-text-color: #000; } }
         @media (prefers-color-scheme: dark) { :root { --hoshi-system-text-color: #fff; } }
         :root {
+            --hoshi-background-color: $backgroundColor;
+            --hoshi-text-color: $textColor;
+            --hoshi-eink-line-color: $eInkLineColor;
+            --hoshi-reader-eink-mode: ${if (settings.eInkMode) "1" else "0"};
+            --hoshi-reader-vertical-writing: ${if (settings.verticalWriting) "1" else "0"};
             --hoshi-sasayaki-text-color: ${sasayakiTextColor.toReaderCssColor()};
             --hoshi-sasayaki-background-color: ${sasayakiBackgroundColor.toReaderCssColor(includeAlpha = true)};
         }
@@ -176,6 +294,12 @@ internal object ReaderContentStyles {
             filter: blur(24px) !important;
             clip-path: inset(0);
         }
+        .blur-wrapper {
+            display: table;
+            margin: auto;
+            line-height: 0;
+            overflow: hidden;
+        }
         svg {
             max-width: var(--hoshi-image-max-width, ${settings.imageMaxWidthFallbackCss}) !important;
             max-height: var(--hoshi-image-max-height, ${settings.imageMaxHeightFallbackCss}) !important;
@@ -191,14 +315,8 @@ internal object ReaderContentStyles {
             -webkit-user-select: none;
             user-select: none;
         }
-        ::highlight(hoshi-selection) {
-            background-color: rgba(160, 160, 160, 0.4) !important;
-            color: inherit;
-        }
-        .hoshi-sasayaki-cue.hoshi-sasayaki-active {
-            color: var(--hoshi-sasayaki-text-color) !important;
-            background-color: var(--hoshi-sasayaki-background-color) !important;
-        }
+        $selectionHighlightCss
+        $sasayakiHighlightCss
         ${HighlightColor.entries.joinToString("\n") { ".hoshi-highlight-${it.rawValue} { background-color: ${it.cssBackground} !important; }" }}
         a {
             color: rgba(66, 108, 245, 1) !important;
@@ -225,7 +343,7 @@ private fun String.cssSingleQuotedUrl(): String =
 private fun Double.cssLetterSpacingEm(): String =
     String.format(java.util.Locale.US, "%.2f", this / 100.0)
 
-private fun Long.toReaderCssColor(includeAlpha: Boolean = false): String = when {
+internal fun Long.toReaderCssColor(includeAlpha: Boolean = false): String = when {
     includeAlpha && (this ushr 24) != 0xFFL -> {
         val alpha = (this ushr 24) and 0xFF
         val rgb = this and 0xFFFFFF

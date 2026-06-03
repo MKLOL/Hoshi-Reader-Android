@@ -2,6 +2,7 @@ package moe.antimony.hoshi.dictionary
 
 import android.content.ContentResolver
 import android.net.Uri
+import de.manhhao.hoshi.LookupResult
 import java.io.File
 import java.io.InputStream
 
@@ -12,6 +13,11 @@ internal class DictionaryRepository(
     private val lookupQueryService: DictionaryLookupQueryService = DictionaryLookupQueryService(),
     private val remoteDataSource: DictionaryRemoteDataSource = UrlDictionaryRemoteDataSource(),
 ) {
+    private val lookupQueryLock = Any()
+
+    @Volatile
+    private var lookupQueryReady = false
+
     fun loadDictionaries(type: DictionaryType): List<DictionaryInfo> =
         storage.loadDictionaries(type)
 
@@ -148,11 +154,37 @@ internal class DictionaryRepository(
     }
 
     fun rebuildLookupQuery() {
+        synchronized(lookupQueryLock) {
+            rebuildLookupQueryLocked()
+        }
+    }
+
+    fun ensureLookupQueryReady() {
+        if (lookupQueryReady) return
+        synchronized(lookupQueryLock) {
+            if (!lookupQueryReady) {
+                rebuildLookupQueryLocked()
+            }
+        }
+    }
+
+    fun lookup(text: String, maxResults: Int = 16, scanLength: Int = 16): List<LookupResult> {
+        ensureLookupQueryReady()
+        return LookupEngine.lookup(text, maxResults, scanLength)
+    }
+
+    fun dictionaryStyles(): Map<String, String> {
+        ensureLookupQueryReady()
+        return LookupEngine.getStyles().associate { it.dictName to it.styles }
+    }
+
+    private fun rebuildLookupQueryLocked() {
         lookupQueryService.rebuild(
             termDictionaries = storage.enabledDictionaryPaths(DictionaryType.Term),
             frequencyDictionaries = storage.enabledDictionaryPaths(DictionaryType.Frequency),
             pitchDictionaries = storage.enabledDictionaryPaths(DictionaryType.Pitch),
         )
+        lookupQueryReady = true
     }
 
     private fun typeDirectories(): Map<DictionaryType, File> =

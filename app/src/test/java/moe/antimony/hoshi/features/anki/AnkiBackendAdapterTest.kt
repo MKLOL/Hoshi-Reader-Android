@@ -1,5 +1,6 @@
 package moe.antimony.hoshi.features.anki
 
+import android.content.Intent
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -231,6 +232,30 @@ class AnkiBackendAdapterTest {
         assertEquals(AnkiDuplicateScope.DeckRoot, api.lastDuplicateScope)
     }
 
+    @Test
+    fun adapterDelegatesSyncToAnkiContentApi() {
+        val api = FakeAnkiContentApi(syncResult = true)
+        val backend = AnkiDroidBackendAdapter(api)
+
+        assertTrue(backend.sync())
+
+        assertEquals(1, api.syncCalls)
+    }
+
+    @Test
+    fun ankiDroidSyncIntentTargetsDoSyncActivity() {
+        val spec = ankiDroidSyncIntentSpec()
+        val expectedFlags = Intent.FLAG_ACTIVITY_NEW_TASK or
+            Intent.FLAG_ACTIVITY_NO_HISTORY or
+            Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS or
+            Intent.FLAG_ACTIVITY_NO_ANIMATION
+
+        assertEquals("com.ichi2.anki.DO_SYNC", spec.action)
+        assertEquals("com.ichi2.anki", spec.packageName)
+        assertEquals(setOf(Intent.CATEGORY_DEFAULT), spec.categories)
+        assertEquals(expectedFlags, spec.flags)
+    }
+
     private class FakeAnkiContentApi(
         private val decks: Map<Long, String>? = mapOf(1L to "Default"),
         private val models: Map<Long, String>? = mapOf(7L to "Lapis"),
@@ -239,6 +264,7 @@ class AnkiBackendAdapterTest {
         private val deckFailure: AnkiFetchFailure? = null,
         private val modelFailure: AnkiFetchFailure? = null,
         private val nullFieldModelIds: Set<Long> = emptySet(),
+        private val syncResult: Boolean = false,
     ) : AnkiContentApi {
         var addedFields: Array<String>? = null
             private set
@@ -251,6 +277,8 @@ class AnkiBackendAdapterTest {
         var lastDuplicateScope: AnkiDuplicateScope? = null
             private set
         var lastDuplicateCheckAllModels: Boolean = false
+            private set
+        var syncCalls: Int = 0
             private set
 
         override fun deckList(): Map<Long, String> =
@@ -291,6 +319,11 @@ class AnkiBackendAdapterTest {
             addedFields = fields
             addedTags = tags
             return 123L
+        }
+
+        override fun sync(): Boolean {
+            syncCalls += 1
+            return syncResult
         }
     }
 
