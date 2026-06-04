@@ -29,6 +29,11 @@ data class AiChatEntry(
     val timestampSeconds: Double,
     val screenshotImage: AiChatImage? = null,
     val dictionaryLookup: AiChatDictionaryLookup? = null,
+    /**
+     * Optional one-line on-device telemetry (e.g. "⚡ 12.3 tok/s · 47 tokens · 3.8 s · on-device"),
+     * shown under offline LLM replies. `null` for ChatGPT replies.
+     */
+    val debugInfo: String? = null,
 )
 
 /** The per-manga ChatGPT history, newest entries last. */

@@ -63,6 +63,7 @@ android {
         externalNativeBuild {
             cmake {
                 targets += "hoshidicts_jni"
+                targets += "hoshi_llama_jni"
             }
         }
     }

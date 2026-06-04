@@ -47,15 +47,25 @@ sealed interface AiChatUiState {
     /** The speech-bubble OCR text the popup is about. */
     val bubbleText: String
 
-    data class Loading(override val bubbleText: String) : AiChatUiState
+    /** True when the active engine is the on-device LLM rather than the ChatGPT API. */
+    val onDevice: Boolean
 
-    data class Loaded(val entry: AiChatEntry) : AiChatUiState {
+    data class Loading(
+        override val bubbleText: String,
+        override val onDevice: Boolean = false,
+    ) : AiChatUiState
+
+    data class Loaded(
+        val entry: AiChatEntry,
+        override val onDevice: Boolean = false,
+    ) : AiChatUiState {
         override val bubbleText: String get() = entry.bubbleText
     }
 
     data class Failed(
         override val bubbleText: String,
         val message: String,
+        override val onDevice: Boolean = false,
     ) : AiChatUiState
 }
 
@@ -102,7 +112,7 @@ fun AiChatPopupView(
             Column(modifier = Modifier.padding(20.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        text = "ChatGPT",
+                        text = if (state.onDevice) "On-device translation" else "ChatGPT",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.SemiBold,
                         modifier = Modifier.weight(1f),
@@ -120,8 +130,11 @@ fun AiChatPopupView(
                 )
                 Spacer(Modifier.size(12.dp))
                 when (state) {
-                    is AiChatUiState.Loading -> LoadingBody()
-                    is AiChatUiState.Loaded -> ResponseBody(state.entry.response)
+                    is AiChatUiState.Loading -> LoadingBody(onDevice = state.onDevice)
+                    is AiChatUiState.Loaded -> ResponseBody(
+                        response = state.entry.response,
+                        debugInfo = state.entry.debugInfo,
+                    )
                     is AiChatUiState.Failed -> FailedBody(
                         message = state.message,
                         onRetry = onRetry,
@@ -134,12 +147,12 @@ fun AiChatPopupView(
 }
 
 @Composable
-private fun LoadingBody() {
+private fun LoadingBody(onDevice: Boolean) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
         Spacer(Modifier.size(12.dp))
         Text(
-            text = "Asking ChatGPT…",
+            text = if (onDevice) "Translating on-device…" else "Asking ChatGPT…",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -147,14 +160,24 @@ private fun LoadingBody() {
 }
 
 @Composable
-private fun ResponseBody(response: String) {
-    SelectionContainer {
-        MarkdownText(
-            markdown = response,
-            modifier = Modifier
-                .heightIn(max = 380.dp)
-                .verticalScroll(rememberScrollState()),
-        )
+private fun ResponseBody(response: String, debugInfo: String?) {
+    Column {
+        SelectionContainer {
+            MarkdownText(
+                markdown = response,
+                modifier = Modifier
+                    .heightIn(max = 380.dp)
+                    .verticalScroll(rememberScrollState()),
+            )
+        }
+        if (debugInfo != null) {
+            Spacer(Modifier.size(10.dp))
+            Text(
+                text = debugInfo,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
     }
 }
 

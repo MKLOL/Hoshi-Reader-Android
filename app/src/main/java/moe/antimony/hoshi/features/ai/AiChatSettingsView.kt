@@ -10,6 +10,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Visibility
 import androidx.compose.material.icons.rounded.VisibilityOff
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -38,6 +39,7 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
 import moe.antimony.hoshi.LocalHoshiAppContainer
+import moe.antimony.hoshi.features.ai.offline.OfflineTranslationSection
 import moe.antimony.hoshi.features.settings.SettingsDetailScaffold
 
 /**
@@ -202,6 +204,8 @@ private fun AiChatSettingsContent(
             minLines = 4,
             modifier = Modifier.fillMaxWidth(),
         )
+        HorizontalDivider()
+        OfflineTranslationSection()
     }
 }
 

@@ -110,6 +110,9 @@ import moe.antimony.hoshi.features.ai.AiChatSettings
 import moe.antimony.hoshi.features.ai.AiChatUiState
 import moe.antimony.hoshi.features.ai.OpenAiChatClient
 import moe.antimony.hoshi.features.ai.aiChatSettingsRepository
+import moe.antimony.hoshi.features.ai.offline.OfflineLlmManager
+import moe.antimony.hoshi.features.ai.offline.OfflineTranslationResult
+import moe.antimony.hoshi.features.ai.offline.offlineTranslationSettingsRepository
 import moe.antimony.hoshi.features.ai.buildAiChatDictionaryLookup
 import moe.antimony.hoshi.features.dictionary.DictionarySettings
 import moe.antimony.hoshi.features.dictionary.LookupPopupItem
@@ -198,6 +201,11 @@ internal fun MangaReaderScreen(
     // per-manga history store (see features/ai) — so it never touches shared/upstream files.
     val aiSettingsRepository = remember { context.applicationContext.aiChatSettingsRepository() }
     val aiSettings by aiSettingsRepository.settings.collectAsStateWithLifecycle(initialValue = null)
+    // Offline on-device translation is a separate, sync-free settings store (see features/ai/offline).
+    val offlineTranslationRepository =
+        remember { context.applicationContext.offlineTranslationSettingsRepository() }
+    val offlineTranslationSettings by offlineTranslationRepository.settings
+        .collectAsStateWithLifecycle(initialValue = null)
     val aiHistoryStore = remember { AiChatHistoryStore() }
     // The ChatGPT popup state (null = no popup), the in-flight request, this manga's chat
     // history, and whether the history / settings overlays are open.
@@ -395,44 +403,71 @@ internal fun MangaReaderScreen(
             // do nothing at all. Tell the user to retry instead of leaving a dead button.
             aiChatState = AiChatUiState.Failed(
                 bubbleText,
-                "ChatGPT is still loading — tap again in a moment.",
+                "Translation is still loading — tap again in a moment.",
             )
             return
         }
-        if (!settings.isConfigured) {
+        // Route to the on-device LLM when the user has turned it on; otherwise ChatGPT.
+        val useOnDevice = offlineTranslationSettings?.useOnDeviceTranslation == true
+        if (!useOnDevice && !settings.isConfigured) {
             aiChatState = AiChatUiState.Failed(
                 bubbleText,
-                "Set your OpenAI API key first in Settings → ChatGPT.",
+                "Set your OpenAI API key first in Settings → ChatGPT, or turn on on-device " +
+                    "translation there to work offline.",
             )
             return
         }
         aiRequestJob?.cancel()
-        aiChatState = AiChatUiState.Loading(bubbleText)
+        aiChatState = AiChatUiState.Loading(bubbleText, onDevice = useOnDevice)
         aiRequestJob = scope.launch {
             val dictionaryLookup = async(Dispatchers.IO) {
                 buildAiChatDictionaryLookup(bubbleText, dictionarySettings)
             }
+            // Both engines satisfy the same popup: produce a reply string (+ an optional debug
+            // line for the on-device path). The offline manager runs the LLM on its own
+            // background dispatcher; the OpenAI path hits the network as before.
             val result = runCatching {
-                OpenAiChatClient.complete(
-                    apiKey = settings.apiKey,
-                    model = settings.model,
-                    prompt = settings.promptText,
-                    bubbleText = bubbleText,
-                )
+                if (useOnDevice) {
+                    OfflineLlmManager.translate(
+                        appContext = context.applicationContext,
+                        instruction = settings.promptText,
+                        japaneseText = bubbleText,
+                    )
+                } else {
+                    OpenAiChatClient.complete(
+                        apiKey = settings.apiKey,
+                        model = settings.model,
+                        prompt = settings.promptText,
+                        bubbleText = bubbleText,
+                    )
+                }
             }
             // Bail without touching state if the popup was dismissed mid-request.
             if (!isActive) return@launch
             result.fold(
-                onSuccess = { response ->
+                onSuccess = { value ->
+                    val response: String
+                    val modelLabel: String
+                    val debugInfo: String?
+                    if (value is OfflineTranslationResult) {
+                        response = value.text
+                        modelLabel = value.modelId
+                        debugInfo = value.debugLine()
+                    } else {
+                        response = value as String
+                        modelLabel = settings.model
+                        debugInfo = null
+                    }
                     val entry = AiChatEntry(
                         bubbleText = bubbleText,
                         prompt = settings.promptText,
-                        model = settings.model,
+                        model = modelLabel,
                         response = response,
                         timestampSeconds = repository.currentAppleReferenceDateSeconds(),
                         dictionaryLookup = dictionaryLookup.await(),
+                        debugInfo = debugInfo,
                     )
-                    aiChatState = AiChatUiState.Loaded(entry)
+                    aiChatState = AiChatUiState.Loaded(entry, onDevice = useOnDevice)
                     // Persist into this manga's history. A disk failure here must not crash
                     // the reader — the reply is already shown — so keep the existing history
                     // on failure, while still letting cancellation propagate normally.
@@ -451,7 +486,8 @@ internal fun MangaReaderScreen(
                     dictionaryLookup.cancel()
                     aiChatState = AiChatUiState.Failed(
                         bubbleText,
-                        error.message ?: "ChatGPT request failed.",
+                        error.message ?: "Translation failed.",
+                        onDevice = useOnDevice,
                     )
                 },
             )

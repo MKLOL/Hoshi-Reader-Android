@@ -23,6 +23,11 @@
 # JNI looks up these bridge classes and constructors by their JVM names.
 -keep class de.manhhao.hoshi.** { *; }
 
+# Offline-translation llama.cpp JNI bridge: R8 must not rename the class or its native methods,
+# or the Java_moe_antimony_hoshi_features_ai_offline_LlamaBridge_* symbols in
+# libhoshi_llama_jni.so won't resolve at runtime.
+-keep class moe.antimony.hoshi.features.ai.offline.LlamaBridge { *; }
+
 # Keep JavaScript interfaces exposed to WebView content.
 -keepclassmembers class * {
     @android.webkit.JavascriptInterface <methods>;
