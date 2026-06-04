@@ -234,7 +234,9 @@ object OfflineLlmManager {
         appContext: Context,
         instruction: String,
         japaneseText: String,
-        maxTokens: Int = 256,
+        // Headroom for an explanation (translation + grammar/vocab breakdown). A translate-only
+        // model still stops at EOG after the short translation, so this doesn't slow it down.
+        maxTokens: Int = 512,
     ): OfflineTranslationResult {
         val context = appContext.applicationContext
         val model = resolveActiveModel(context)
