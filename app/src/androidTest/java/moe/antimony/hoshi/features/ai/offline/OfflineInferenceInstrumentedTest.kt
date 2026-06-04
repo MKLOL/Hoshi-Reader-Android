@@ -39,11 +39,13 @@ class OfflineInferenceInstrumentedTest {
 
         // Realistic mokuro bubbles: multi-line (\n between OCR lines), casual, full-width
         // punctuation, ellipses — what `aiText.textContent` actually hands to askAi().
-        // Two bubbles only: the x86 emulator runs a 2B Q8 model at ~0.1 tok/s, so each
-        // generation takes minutes. These cover the realistic cases (multi-line + ellipsis).
+        // REAL Yotsuba&! vol.1 OCR bubbles (extracted from the mokuro file) — the exact
+        // multi-line, casual manga strings the app feeds OfflineLlmManager.translate. Kept to a
+        // few because the x86 emulator runs a 2B Q8 model at ~0.1 tok/s (minutes per bubble).
         val bubbles = listOf(
-            "おはよう\n今日もいい天気だね",
-            "なんで\nそんなこと\n言うの…？",
+            "とーちゃん\nここ家がいっぱい\nあるな！",
+            "すげぇー！！\n人がいっぱいいる！",
+            "そういや明日から\n夏休みだなぁ",
         )
 
         runBlocking {

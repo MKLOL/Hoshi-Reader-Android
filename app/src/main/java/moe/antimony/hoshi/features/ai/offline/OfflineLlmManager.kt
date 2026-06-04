@@ -98,6 +98,43 @@ object OfflineLlmManager {
         LlmModelCatalog.ALL.filter { isDownloaded(appContext, it) }
 
     /**
+     * One-time reclaim after the models dir moved from internal [Context.getFilesDir] to external
+     * app-specific storage. A model an older build downloaded into `filesDir/offline-llm` is now
+     * dead weight (the new code never looks there). For each legacy file: delete it if the active
+     * (external) dir already has that model — reclaiming the orphaned copy — otherwise migrate it
+     * across so the user doesn't have to re-download. No-op when external storage is unavailable
+     * (active dir == legacy dir) so it never deletes the in-use model. Safe to call on every launch.
+     */
+    fun cleanupLegacyInternalModels(appContext: Context) {
+        val context = appContext.applicationContext
+        val legacyDir = File(context.filesDir, MODELS_DIR)
+        if (!legacyDir.isDirectory) return
+        val activeDir = modelsDir(context)
+        // External unavailable → modelsDir fell back to internal, so legacy IS the active dir.
+        if (legacyDir.canonicalPath == activeDir.canonicalPath) return
+        legacyDir.listFiles()?.forEach { legacyFile ->
+            if (!legacyFile.isFile) {
+                legacyFile.deleteRecursively()
+                return@forEach
+            }
+            val target = File(activeDir.apply { mkdirs() }, legacyFile.name)
+            when {
+                // Already re-downloaded to the new location → just drop the orphaned copy.
+                target.exists() -> legacyFile.delete()
+                // renameTo fails across filesystems (internal ext4 → external) → copy then delete.
+                legacyFile.renameTo(target) -> Unit
+                else -> runCatching {
+                    legacyFile.inputStream().use { input ->
+                        target.outputStream().use { output -> input.copyTo(output) }
+                    }
+                }.onSuccess { legacyFile.delete() }
+                    .onFailure { target.delete() } // keep legacy on failure; retry next launch
+            }
+        }
+        legacyDir.delete() // remove the now-empty legacy dir (no-op if anything remains)
+    }
+
+    /**
      * Starts (or resumes) downloading [model] via [ModelDownloadService] — a foreground service,
      * so the multi-GB transfer keeps running with the screen off and the app backgrounded. No-op
      * if a download is already in flight.
