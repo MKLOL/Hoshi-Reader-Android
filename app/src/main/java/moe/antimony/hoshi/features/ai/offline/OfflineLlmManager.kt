@@ -225,8 +225,14 @@ object OfflineLlmManager {
             )
     }
 
-    private fun modelsDir(appContext: Context): File =
-        File(appContext.applicationContext.filesDir, MODELS_DIR)
+    private fun modelsDir(appContext: Context): File {
+        val context = appContext.applicationContext
+        // Multi-GB model files live in app-specific EXTERNAL storage (getExternalFilesDir): no
+        // runtime permission needed, removed on uninstall, and it doesn't eat into the limited
+        // internal data partition. Falls back to internal storage if external is unavailable.
+        val base = context.getExternalFilesDir(null) ?: context.filesDir
+        return File(base, MODELS_DIR)
+    }
 
     /**
      * Streams [model] to [partFile], **resuming** from any existing bytes via an HTTP `Range`
