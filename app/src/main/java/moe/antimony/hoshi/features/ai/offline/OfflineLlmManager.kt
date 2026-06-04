@@ -1,20 +1,20 @@
 package moe.antimony.hoshi.features.ai.offline
 
 import android.content.Context
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.io.File
+import java.io.FileOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
 import kotlin.coroutines.coroutineContext
@@ -43,7 +43,10 @@ object OfflineLlmManager {
     private const val PROGRESS_INTERVAL_MS = 250L
     private const val PROGRESS_BYTES = 1_024L * 1_024L // ~1 MB
 
-    /** Long-lived scope for downloads; survives individual screens. */
+    /** HTTP 416 — a resume range past the end of the file means it's already fully downloaded. */
+    private const val HTTP_RANGE_NOT_SATISFIABLE = 416
+
+    /** Long-lived scope for short housekeeping coroutines (model delete). */
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     private val _downloadState = MutableStateFlow<ModelDownloadState>(ModelDownloadState.Idle)
@@ -56,9 +59,6 @@ object OfflineLlmManager {
      */
     private val _downloadedRevision = MutableStateFlow(0)
     val downloadedRevision: StateFlow<Int> = _downloadedRevision.asStateFlow()
-
-    /** Tracks the in-flight download so it can be cancelled. */
-    private var downloadJob: Job? = null
 
     /** The single resident model and its id, guarded by [inferenceMutex]. */
     private val inferenceMutex = Mutex()
@@ -98,50 +98,56 @@ object OfflineLlmManager {
         LlmModelCatalog.ALL.filter { isDownloaded(appContext, it) }
 
     /**
-     * Starts downloading [model] on the internal scope. No-op if a download is already running.
-     *
-     * Streams to a `<fileName>.part` temp file, emits [ModelDownloadState.Downloading] updates
-     * (throttled), then atomically renames `.part` → final on success. On any error the temp
-     * file is removed and [ModelDownloadState.Failed] is emitted with a user-facing message.
+     * Starts (or resumes) downloading [model] via [ModelDownloadService] — a foreground service,
+     * so the multi-GB transfer keeps running with the screen off and the app backgrounded. No-op
+     * if a download is already in flight.
      */
     fun startDownload(appContext: Context, model: LlmModel) {
-        // Ignore if a download is already in flight.
-        if (downloadJob?.isActive == true) return
-        val context = appContext.applicationContext
-        downloadJob = scope.launch {
-            val dir = modelsDir(context).apply { mkdirs() }
-            val partFile = File(dir, model.fileName + PART_SUFFIX)
-            val finalFile = File(dir, model.fileName)
-            try {
-                _downloadState.value = ModelDownloadState.Downloading(model, 0L, model.approxSizeBytes)
-                downloadTo(model, partFile)
-                // Atomic-ish publish: only a fully-streamed file is ever given the real name.
-                if (finalFile.exists()) finalFile.delete()
-                if (!partFile.renameTo(finalFile)) {
-                    throw IllegalStateException("Could not finalize the downloaded file.")
-                }
-                _downloadState.value = ModelDownloadState.Completed(model)
-                _downloadedRevision.value++
-            } catch (e: Exception) {
-                partFile.delete()
-                if (coroutineContext.isActive) {
-                    _downloadState.value = ModelDownloadState.Failed(model, friendlyMessage(e))
-                } else {
-                    // Cancelled via cancelDownload(): leave state as that call set it (Idle).
-                    _downloadState.value = ModelDownloadState.Idle
-                }
-            }
-        }
+        if (_downloadState.value is ModelDownloadState.Downloading) return
+        ModelDownloadService.start(appContext.applicationContext, model.id)
     }
 
     /**
-     * Cancels the in-flight download and resets to [ModelDownloadState.Idle]. The actual `.part`
-     * file is removed by the download coroutine's `catch` block when the cancellation propagates.
+     * Stops the in-flight download. The `.part` file is intentionally **kept** so the next
+     * [startDownload] resumes from where it left off instead of restarting.
      */
-    fun cancelDownload() {
-        downloadJob?.cancel()
-        downloadJob = null
+    fun cancelDownload(appContext: Context) {
+        ModelDownloadService.cancel(appContext.applicationContext)
         _downloadState.value = ModelDownloadState.Idle
+    }
+
+    /**
+     * The actual download work, driven by [ModelDownloadService] (which owns the foreground
+     * lifecycle + wake lock). Streams [model] to its `.part` file with range-resume, reporting
+     * progress through [onProgress] (notification) and [downloadState] (UI), then atomically
+     * renames to the final file on success. On error or cancellation the `.part` file is **kept**
+     * so a later attempt resumes; a network/IO error surfaces as [ModelDownloadState.Failed].
+     */
+    suspend fun runDownload(appContext: Context, model: LlmModel, onProgress: (Long, Long) -> Unit) {
+        val context = appContext.applicationContext
+        val dir = modelsDir(context).apply { mkdirs() }
+        val partFile = File(dir, model.fileName + PART_SUFFIX)
+        val finalFile = File(dir, model.fileName)
+        try {
+            val resumeFrom = if (partFile.exists()) partFile.length() else 0L
+            _downloadState.value =
+                ModelDownloadState.Downloading(model, resumeFrom, model.approxSizeBytes)
+            downloadTo(model, partFile, onProgress)
+            // Only a fully-streamed file is ever given the real name.
+            if (finalFile.exists()) finalFile.delete()
+            if (!partFile.renameTo(finalFile)) {
+                throw IllegalStateException("Could not finalize the downloaded file.")
+            }
+            _downloadState.value = ModelDownloadState.Completed(model)
+            _downloadedRevision.value++
+        } catch (e: CancellationException) {
+            // Stopped by the user: keep the .part file so the next start resumes.
+            _downloadState.value = ModelDownloadState.Idle
+            throw e
+        } catch (e: Exception) {
+            // Network/IO failure: keep the .part file so Retry resumes from here.
+            _downloadState.value = ModelDownloadState.Failed(model, friendlyMessage(e))
+        }
     }
 
     /**
@@ -223,31 +229,48 @@ object OfflineLlmManager {
         File(appContext.applicationContext.filesDir, MODELS_DIR)
 
     /**
-     * Streams [model] to [partFile] via `HttpURLConnection`, following redirects to the CDN and
-     * emitting throttled progress. Honors coroutine cancellation between chunks.
+     * Streams [model] to [partFile], **resuming** from any existing bytes via an HTTP `Range`
+     * request: 206 → append to the partial file; 200 → server ignored the range, so restart;
+     * 416 → the partial file already holds everything, so it's complete. Follows redirects to the
+     * CDN, emits throttled progress (UI + [onProgress]), and honors cancellation between chunks.
      */
-    private suspend fun downloadTo(model: LlmModel, partFile: File) {
+    private suspend fun downloadTo(model: LlmModel, partFile: File, onProgress: (Long, Long) -> Unit) {
+        val existing = if (partFile.exists()) partFile.length() else 0L
         val connection = (URL(model.downloadUrl).openConnection() as HttpURLConnection).apply {
             requestMethod = "GET"
             instanceFollowRedirects = true
             connectTimeout = 30_000
             readTimeout = 60_000
+            if (existing > 0L) setRequestProperty("Range", "bytes=$existing-")
         }
         try {
             val code = connection.responseCode
-            if (code !in 200..299) {
+            // The partial file is already the whole thing — nothing left to fetch.
+            if (existing > 0L && code == HTTP_RANGE_NOT_SATISFIABLE) {
+                onProgress(existing, existing)
+                return
+            }
+            val resuming = code == HttpURLConnection.HTTP_PARTIAL
+            if (code != HttpURLConnection.HTTP_OK && !resuming) {
                 throw IllegalStateException("Download failed (HTTP $code).")
             }
-            // Content-Length may be absent or -1 on a chunked/redirected response; fall back
-            // to the catalog's advertised size so the progress bar still has a denominator.
+            // Content-Length is the *remaining* bytes on a 206, the full size on a 200, or absent
+            // (-1) on a chunked response; fall back to the catalog's advertised size for a total.
             val reported = connection.contentLengthLong
-            val totalBytes = if (reported > 0L) reported else model.approxSizeBytes
+            val totalBytes = when {
+                resuming && reported > 0L -> existing + reported
+                reported > 0L -> reported
+                else -> model.approxSizeBytes
+            }
 
-            var downloaded = 0L
-            var lastEmitBytes = 0L
+            var downloaded = if (resuming) existing else 0L
+            var lastEmitBytes = downloaded
             var lastEmitTime = System.currentTimeMillis()
+            _downloadState.value = ModelDownloadState.Downloading(model, downloaded, totalBytes)
+            onProgress(downloaded, totalBytes)
             connection.inputStream.use { input ->
-                partFile.outputStream().use { output ->
+                // Append when resuming (206); overwrite when the server ignored the range (200).
+                FileOutputStream(partFile, /* append = */ resuming).use { output ->
                     val buffer = ByteArray(64 * 1024)
                     while (true) {
                         coroutineContext.ensureActive() // honor cancellation between chunks
@@ -262,6 +285,7 @@ object OfflineLlmManager {
                         ) {
                             _downloadState.value =
                                 ModelDownloadState.Downloading(model, downloaded, totalBytes)
+                            onProgress(downloaded, totalBytes)
                             lastEmitBytes = downloaded
                             lastEmitTime = now
                         }
@@ -270,6 +294,7 @@ object OfflineLlmManager {
             }
             // Final progress tick so the UI lands on 100% before Completed.
             _downloadState.value = ModelDownloadState.Downloading(model, downloaded, totalBytes)
+            onProgress(downloaded, totalBytes)
         } finally {
             connection.disconnect()
         }

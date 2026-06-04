@@ -124,14 +124,15 @@ fun OfflineTranslationSection(modifier: Modifier = Modifier) {
             onDownload = {
                 OfflineLlmManager.startDownload(context.applicationContext, selectedModel)
             },
-            onCancel = { OfflineLlmManager.cancelDownload() },
+            onCancel = { OfflineLlmManager.cancelDownload(context.applicationContext) },
             onDelete = {
                 OfflineLlmManager.deleteDownloadedModel(context.applicationContext, selectedModel)
             },
         )
 
         Text(
-            text = "The model downloads over the network once, then works offline.",
+            text = "Downloads once over the network — it keeps going with the screen off and " +
+                "resumes from where it left off if interrupted — then works offline.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )

@@ -74,12 +74,8 @@ jbyteArray std_string_to_jbytes(JNIEnv *env, const std::string &value) {
 
 // Wraps the user's text in the model's own chat template so instruction-tuned
 // models (Gemma, Qwen, …) see the format they were trained on. Falls back to
-// the raw text when the GGUF carries no template. Sets [applied_template] so the
-// caller knows whether the template already emitted the model's BOS/turn markers
-// (if so, tokenization must NOT add another special BOS — that would double it).
-std::string apply_chat_template(llama_model *model, const std::string &user_content,
-                                bool &applied_template) {
-    applied_template = false;
+// the raw text when the GGUF carries no template.
+std::string apply_chat_template(llama_model *model, const std::string &user_content) {
     const char *tmpl = llama_model_chat_template(model, /*name=*/nullptr);
     if (tmpl == nullptr) {
         return user_content;
@@ -96,7 +92,6 @@ std::string apply_chat_template(llama_model *model, const std::string &user_cont
     if (written <= 0) {
         return user_content;
     }
-    applied_template = true;
     return std::string(buffer.data(), static_cast<size_t>(written));
 }
 
@@ -178,8 +173,7 @@ Java_moe_antimony_hoshi_features_ai_offline_LlamaBridge_nativeTranslate(
     const llama_vocab *vocab = session->vocab;
 
     const std::string user_content = jbytes_to_std_string(env, prompt_utf8);
-    bool applied_template = false;
-    const std::string prompt = apply_chat_template(session->model, user_content, applied_template);
+    const std::string prompt = apply_chat_template(session->model, user_content);
 
     // Each translation is independent — wipe the KV cache so the previous bubble
     // never bleeds into this one. Reset perf counters for an accurate tok/s.
@@ -191,12 +185,15 @@ Java_moe_antimony_hoshi_features_ai_offline_LlamaBridge_nativeTranslate(
     // deterministic and a touch faster than full sampling.
     llama_sampler_chain_add(sampler, llama_sampler_init_greedy());
 
-    // The chat template (when present) already inserts the model's BOS/turn tokens, so only
-    // add a special BOS for the raw-text fallback. Doubling BOS measurably degrades output.
-    const bool add_special = !applied_template;
+    // Tokenize the chat-templated prompt WITHOUT letting llama add the special BOS
+    // (add_special=false); we add exactly one BOS ourselves below. Whether the template text
+    // already contains a literal <bos> varies by model and llama.cpp version, so relying on
+    // add_special risks either a MISSING BOS (Gemma then emits end-of-turn immediately → 0
+    // tokens, or rambles back in Japanese) or a DOUBLE BOS. parse_special=true turns any
+    // special tokens the template emitted as text (<bos>, <start_of_turn>, …) into real tokens.
     const int n_prompt_tokens = -llama_tokenize(vocab, prompt.c_str(),
                                                 static_cast<int32_t>(prompt.size()),
-                                                nullptr, 0, add_special,
+                                                nullptr, 0, /*add_special=*/false,
                                                 /*parse_special=*/true);
     if (n_prompt_tokens <= 0) {
         // Empty/whitespace prompt (or a tokenizer that produced nothing): nothing to translate.
@@ -206,9 +203,17 @@ Java_moe_antimony_hoshi_features_ai_offline_LlamaBridge_nativeTranslate(
     std::vector<llama_token> prompt_tokens(static_cast<size_t>(n_prompt_tokens));
     if (llama_tokenize(vocab, prompt.c_str(), static_cast<int32_t>(prompt.size()),
                        prompt_tokens.data(), static_cast<int32_t>(prompt_tokens.size()),
-                       add_special, /*parse_special=*/true) < 0) {
+                       /*add_special=*/false, /*parse_special=*/true) < 0) {
         llama_sampler_free(sampler);
         return std_string_to_jbytes(env, "");
+    }
+    // Add exactly one leading BOS for models whose vocab asks for it (Gemma: yes, Qwen: no),
+    // unless the template already put one there. This is the actual fix for the "0 tokens /
+    // Japanese output" bug on Gemma.
+    const llama_token bos_token = llama_vocab_bos(vocab);
+    if (bos_token != LLAMA_TOKEN_NULL && llama_vocab_get_add_bos(vocab) &&
+        (prompt_tokens.empty() || prompt_tokens.front() != bos_token)) {
+        prompt_tokens.insert(prompt_tokens.begin(), bos_token);
     }
 
     std::string response;
