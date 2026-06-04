@@ -16,6 +16,8 @@
 #include <jni.h>
 #include <android/log.h>
 
+#include <atomic>
+#include <chrono>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -49,6 +51,10 @@ struct HoshiLlamaSession {
     llama_context *ctx = nullptr;
     const llama_vocab *vocab = nullptr;
     int n_ctx = 0;
+    // Live generation progress, polled from Kotlin (nativeProgress) on another thread while the
+    // blocking nativeTranslate runs. Atomics so the cross-thread read is safe.
+    std::atomic<int> gen_tokens{0};
+    std::atomic<long long> gen_elapsed_ms{0};
 };
 
 std::string jbytes_to_std_string(JNIEnv *env, jbyteArray array) {
@@ -222,6 +228,9 @@ Java_moe_antimony_hoshi_features_ai_offline_LlamaBridge_nativeTranslate(
     llama_token new_token_id = 0;
     const int token_budget = max_tokens > 0 ? max_tokens : 256;
     int generated = 0;
+    session->gen_tokens.store(0);
+    session->gen_elapsed_ms.store(0);
+    const auto gen_start = std::chrono::steady_clock::now();
     while (generated < token_budget) {
         const int n_ctx_used = llama_memory_seq_pos_max(llama_get_memory(ctx), 0) + 1;
         if (n_ctx_used + batch.n_tokens > session->n_ctx) {
@@ -251,6 +260,10 @@ Java_moe_antimony_hoshi_features_ai_offline_LlamaBridge_nativeTranslate(
             response.append(piece, static_cast<size_t>(piece_len));
         }
         ++generated;
+        session->gen_tokens.store(generated);
+        session->gen_elapsed_ms.store(
+            static_cast<long long>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - gen_start).count()));
         // Feed the just-sampled token back in. `new_token_id` lives across the
         // loop so taking its address here stays valid for the next decode.
         batch = llama_batch_get_one(&new_token_id, 1);
@@ -269,4 +282,23 @@ Java_moe_antimony_hoshi_features_ai_offline_LlamaBridge_nativeTranslate(
 
     llama_sampler_free(sampler);
     return std_string_to_jbytes(env, response);
+}
+
+// Returns [tokens_generated_so_far, generation_elapsed_ms] for the in-flight nativeTranslate on
+// this handle. Safe to call concurrently with nativeTranslate (atomic reads). Used to drive a
+// live tokens/sec counter in the UI while generation runs.
+extern "C" JNIEXPORT jlongArray JNICALL
+Java_moe_antimony_hoshi_features_ai_offline_LlamaBridge_nativeProgress(
+    JNIEnv *env, jobject /*thiz*/, jlong handle) {
+    auto *session = reinterpret_cast<HoshiLlamaSession *>(handle);
+    jlong values[2] = {0, 0};
+    if (session != nullptr) {
+        values[0] = static_cast<jlong>(session->gen_tokens.load());
+        values[1] = static_cast<jlong>(session->gen_elapsed_ms.load());
+    }
+    jlongArray array = env->NewLongArray(2);
+    if (array != nullptr) {
+        env->SetLongArrayRegion(array, 0, 2, values);
+    }
+    return array;
 }

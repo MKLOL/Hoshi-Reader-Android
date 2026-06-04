@@ -60,6 +60,11 @@ object OfflineLlmManager {
     private val _downloadedRevision = MutableStateFlow(0)
     val downloadedRevision: StateFlow<Int> = _downloadedRevision.asStateFlow()
 
+    /** Live token count + tok/s of the in-flight on-device generation; null when idle. */
+    data class GenerationProgress(val tokens: Int, val tokensPerSecond: Double)
+    private val _generationProgress = MutableStateFlow<GenerationProgress?>(null)
+    val generationProgress: StateFlow<GenerationProgress?> = _generationProgress.asStateFlow()
+
     /** The single resident model and its id, guarded by [inferenceMutex]. */
     private val inferenceMutex = Mutex()
     private var loaded: LlamaInference? = null
@@ -259,7 +264,18 @@ object OfflineLlmManager {
                 )
                 loadedModelId = model.id
             }
-            loaded!!.translate(userContent, maxTokens)
+            _generationProgress.value = null
+            try {
+                loaded!!.translate(
+                    userContent,
+                    maxTokens,
+                    onProgress = { tokens, tps ->
+                        _generationProgress.value = GenerationProgress(tokens, tps)
+                    },
+                )
+            } finally {
+                _generationProgress.value = null
+            }
         }
     }
 

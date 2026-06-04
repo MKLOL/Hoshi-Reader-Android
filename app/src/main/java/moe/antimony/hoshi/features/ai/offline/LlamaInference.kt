@@ -2,6 +2,10 @@ package moe.antimony.hoshi.features.ai.offline
 
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -66,21 +70,40 @@ class LlamaInference private constructor(
         promptUtf8Text: String,
         maxTokens: Int = 256,
         dispatcher: CoroutineDispatcher = Dispatchers.Default,
+        onProgress: (tokens: Int, tokensPerSecond: Double) -> Unit = { _, _ -> },
     ): OfflineTranslationResult = withContext(dispatcher) {
         mutex.withLock {
-            if (handle == 0L) {
+            val h = handle
+            if (h == 0L) {
                 throw LlamaModelException("On-device model is already closed.")
             }
             // Filled by the native side: [0]=promptTokens, [1]=generatedTokens,
             // [2]=promptEvalMs, [3]=generationMs.
             val metrics = DoubleArray(4)
             val startNanos = System.nanoTime()
-            val resultBytes = LlamaBridge.nativeTranslate(
-                handle,
-                promptUtf8Text.toByteArray(Charsets.UTF_8),
-                maxTokens,
-                metrics,
-            )
+            val resultBytes = coroutineScope {
+                // Poll native progress on a sibling coroutine so the UI gets a live tok/s counter
+                // while the blocking nativeTranslate occupies another thread.
+                val poller = launch {
+                    while (isActive) {
+                        delay(250)
+                        val p = runCatching { LlamaBridge.nativeProgress(h) }.getOrNull()
+                        if (p != null && p.size >= 2) {
+                            val toks = p[0].toInt()
+                            val ms = p[1]
+                            onProgress(toks, if (ms > 0L) toks / (ms / 1000.0) else 0.0)
+                        }
+                    }
+                }
+                val bytes = LlamaBridge.nativeTranslate(
+                    h,
+                    promptUtf8Text.toByteArray(Charsets.UTF_8),
+                    maxTokens,
+                    metrics,
+                )
+                poller.cancel()
+                bytes
+            }
             val totalMs = (System.nanoTime() - startNanos) / 1_000_000L
 
             val generatedTokens = metrics[1].toInt()

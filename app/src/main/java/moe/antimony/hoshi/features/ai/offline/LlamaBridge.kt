@@ -47,6 +47,13 @@ internal object LlamaBridge {
         metricsOut: DoubleArray,
     ): ByteArray
 
+    /**
+     * Live progress of the in-flight [nativeTranslate] for [handle], as
+     * `[tokensGeneratedSoFar, generationElapsedMs]`. Safe to call from another thread while
+     * `nativeTranslate` runs (the native side uses atomics).
+     */
+    external fun nativeProgress(handle: Long): LongArray
+
     /** Frees the model and all native resources behind [handle]. */
     external fun nativeFreeModel(handle: Long)
 }

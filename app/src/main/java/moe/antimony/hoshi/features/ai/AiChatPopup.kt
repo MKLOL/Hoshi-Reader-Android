@@ -36,6 +36,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import moe.antimony.hoshi.features.ai.offline.OfflineLlmManager
 import moe.antimony.hoshi.features.dictionary.LookupPopupAndroidStack
 import moe.antimony.hoshi.features.dictionary.LookupPopupItem
 import moe.antimony.hoshi.features.dictionary.LookupPopupOptions
@@ -148,14 +150,30 @@ fun AiChatPopupView(
 
 @Composable
 private fun LoadingBody(onDevice: Boolean) {
+    val progress by OfflineLlmManager.generationProgress.collectAsStateWithLifecycle()
     Row(verticalAlignment = Alignment.CenterVertically) {
         CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
         Spacer(Modifier.size(12.dp))
-        Text(
-            text = if (onDevice) "Translating on-device…" else "Asking ChatGPT…",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+        Column {
+            Text(
+                text = if (onDevice) "Translating on-device…" else "Asking ChatGPT…",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            // Live tokens/sec while the on-device model generates, so a slow reply shows progress.
+            val live = progress
+            if (onDevice && live != null && live.tokens > 0) {
+                Text(
+                    text = "⚡ %.1f tok/s · %d tokens".format(
+                        java.util.Locale.US,
+                        live.tokensPerSecond,
+                        live.tokens,
+                    ),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
     }
 }
 
