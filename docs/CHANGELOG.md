@@ -7,6 +7,17 @@ Semantic Versioning.
 
 ## [Unreleased]
 
+## [v0.9.3] - 2026-06-04
+
+### Added
+- **Offline on-device translation** — translate manga speech bubbles fully on-device via a
+  downloadable model (llama.cpp), with no API key or internet, as an alternative to ChatGPT.
+  Pick a fast translate-only model or a larger model that also explains grammar/vocabulary in
+  Settings → ChatGPT; the reply popup shows a live tokens/sec counter. The model downloads in the
+  background (keeps going with the screen off and resumes from where it left off if interrupted).
+- The installed build's version + git commit are shown in Settings (the offline-translation
+  section and Advanced), so a build can be identified at a glance.
+
 ## [v0.9.2] - 2026-06-03
 
 ### Changed
