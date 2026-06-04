@@ -245,6 +245,15 @@ private fun DownloadControl(
                 }
             }
 
+            downloadState is ModelDownloadState.Downloading -> {
+                // Only one download runs at a time; a different model is currently downloading.
+                Text(
+                    text = "Another model is downloading…",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+
             isFailedThis -> {
                 Text(
                     text = failedThis.message,

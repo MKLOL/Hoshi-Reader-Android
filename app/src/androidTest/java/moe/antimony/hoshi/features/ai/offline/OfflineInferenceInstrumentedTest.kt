@@ -17,11 +17,11 @@ import org.junit.runner.RunWith
  * and realistic mokuro bubble text (multi-line, joined with `\n`, manga punctuation, no spaces —
  * see MangaPageHtml `box.lines.joinToString("\n")`).
  *
- * The model is NOT bundled. Stage the real GGUF at the manager's internal model path before
- * running (the default catalog model is the Gemma Q8 translate model):
- *   adb push model.gguf /sdcard/Android/data/moe.antimony.hoshi.debug/files/gemma-q8.gguf
- *   adb shell run-as moe.antimony.hoshi.debug sh -c \
- *     'mkdir -p files/offline-llm && cp /sdcard/Android/data/moe.antimony.hoshi.debug/files/gemma-q8.gguf files/offline-llm/<fileName>'
+ * The model is NOT bundled. Stage the real GGUF at the manager's model path before running.
+ * Models now live in app-specific EXTERNAL storage (getExternalFilesDir), so a plain adb push
+ * to that path is enough (the default catalog model is the Gemma Q8 translate model):
+ *   adb push model.gguf \
+ *     /sdcard/Android/data/moe.antimony.hoshi.debug/files/offline-llm/<fileName>
  * If the model isn't present the test is skipped.
  */
 @RunWith(AndroidJUnit4::class)

@@ -117,18 +117,33 @@ object OfflineLlmManager {
                 legacyFile.deleteRecursively()
                 return@forEach
             }
-            val target = File(activeDir.apply { mkdirs() }, legacyFile.name)
+            activeDir.mkdirs()
+            val target = File(activeDir, legacyFile.name)
+            val activePart = File(activeDir, legacyFile.name + PART_SUFFIX)
             when {
-                // Already re-downloaded to the new location → just drop the orphaned copy.
+                // A download for this model is in progress in the active dir — don't touch it.
+                activePart.exists() -> Unit
+                // Already present in the new location (e.g. re-downloaded) → drop the orphan.
                 target.exists() -> legacyFile.delete()
-                // renameTo fails across filesystems (internal ext4 → external) → copy then delete.
+                // Same-filesystem move (won't happen internal→external, but cheap to try).
                 legacyFile.renameTo(target) -> Unit
-                else -> runCatching {
-                    legacyFile.inputStream().use { input ->
-                        target.outputStream().use { output -> input.copyTo(output) }
+                // Cross-filesystem: copy to a temp file, then atomically rename into place, so a
+                // crash mid-copy can never leave a truncated file at the real model name (which a
+                // later launch would mistake for complete and delete the good legacy copy behind).
+                else -> {
+                    val tmp = File(activeDir, legacyFile.name + ".migrating")
+                    tmp.delete()
+                    val copied = runCatching {
+                        legacyFile.inputStream().use { input ->
+                            tmp.outputStream().use { output -> input.copyTo(output) }
+                        }
+                    }.isSuccess
+                    if (copied && tmp.renameTo(target)) {
+                        legacyFile.delete()
+                    } else {
+                        tmp.delete() // keep the legacy file; retry on a future launch
                     }
-                }.onSuccess { legacyFile.delete() }
-                    .onFailure { target.delete() } // keep legacy on failure; retry next launch
+                }
             }
         }
         legacyDir.delete() // remove the now-empty legacy dir (no-op if anything remains)
