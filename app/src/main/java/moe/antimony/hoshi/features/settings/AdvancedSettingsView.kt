@@ -4,6 +4,7 @@ import androidx.annotation.StringRes
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
@@ -142,6 +143,15 @@ fun AdvancedSettingsView(
                         )
                     }
                 }
+            }
+            item {
+                Text(
+                    text = "Hoshi Manga ${moe.antimony.hoshi.BuildConfig.VERSION_NAME} · " +
+                        moe.antimony.hoshi.BuildConfig.GIT_SHA,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = colorScheme.onSurfaceVariant,
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                )
             }
         }
     }

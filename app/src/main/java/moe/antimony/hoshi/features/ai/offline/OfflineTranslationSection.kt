@@ -23,6 +23,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.launch
+import moe.antimony.hoshi.BuildConfig
 import moe.antimony.hoshi.LocalHoshiAppContainer
 import moe.antimony.hoshi.features.ai.offline.OfflineLlmManager.ModelDownloadState
 import java.util.Locale
@@ -134,6 +135,12 @@ fun OfflineTranslationSection(modifier: Modifier = Modifier) {
             text = "Downloads once over the network — it keeps going with the screen off and " +
                 "resumes from where it left off if interrupted — then works offline.",
             style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        // Build identifier so you can confirm which APK is installed (commit hash).
+        Text(
+            text = "App build ${BuildConfig.VERSION_NAME} · ${BuildConfig.GIT_SHA}",
+            style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }

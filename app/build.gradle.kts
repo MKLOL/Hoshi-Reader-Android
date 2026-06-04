@@ -16,6 +16,13 @@ val releaseKeyAlias = providers.environmentVariable("ANDROID_KEY_ALIAS").orNull
 val releaseKeyPassword = providers.environmentVariable("ANDROID_KEY_PASSWORD").orNull
 val releaseVersionName = providers.gradleProperty("releaseVersionName").orNull
 val releaseVersionCode = providers.gradleProperty("releaseVersionCode").orNull?.toIntOrNull()
+// Short git commit of the build, surfaced in-app (Settings) so a build can be identified at a
+// glance — e.g. to confirm a new APK actually installed over an old one.
+val gitSha: String = runCatching {
+    providers.exec {
+        commandLine("git", "rev-parse", "--short=10", "HEAD")
+    }.standardOutput.asText.get().trim()
+}.getOrDefault("unknown")
 if (providers.gradleProperty("releaseVersionCode").isPresent && releaseVersionCode == null) {
     throw GradleException("releaseVersionCode must be an integer.")
 }
@@ -60,6 +67,7 @@ android {
         releaseVersionName?.let { versionName = it }
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        buildConfigField("String", "GIT_SHA", "\"$gitSha\"")
         externalNativeBuild {
             cmake {
                 targets += "hoshidicts_jni"
