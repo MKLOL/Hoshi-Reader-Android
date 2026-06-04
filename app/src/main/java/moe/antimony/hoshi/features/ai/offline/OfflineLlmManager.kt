@@ -259,7 +259,10 @@ object OfflineLlmManager {
                 loaded = LlamaInference.load(
                     modelPath = modelFile(context, model).path,
                     modelId = model.id,
-                    nThreads = Runtime.getRuntime().availableProcessors().coerceIn(2, 8),
+                    // Use the performance cores, not every core: on a big.LITTLE SoC dragging the
+                    // slow efficiency cores into the threadpool makes inference *slower* (the pool
+                    // waits on them). Leave ~2 out and cap at 6.
+                    nThreads = (Runtime.getRuntime().availableProcessors() - 2).coerceIn(2, 6),
                     nCtx = min(model.contextLength, 2048),
                 )
                 loadedModelId = model.id

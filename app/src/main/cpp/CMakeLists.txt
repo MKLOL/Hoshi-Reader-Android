@@ -46,6 +46,15 @@ set(LLAMA_BUILD_SERVER OFF CACHE BOOL "" FORCE)
 # static-linking OpenMP is an extra failure mode we don't need for a phone CPU.
 set(GGML_OPENMP OFF CACHE BOOL "" FORCE)
 
+# ARM-only KleidiAI int8 matmul micro-kernels — a large speedup for quantized inference on CPUs
+# with i8mm/dotprod (Snapdragon 8 Gen 5 etc.), with a runtime fallback when the features are
+# absent. Only valid for arm64; the x86_64 (emulator) ABI must keep it off.
+if(ANDROID_ABI STREQUAL "arm64-v8a")
+    set(GGML_CPU_KLEIDIAI ON CACHE BOOL "" FORCE)
+else()
+    set(GGML_CPU_KLEIDIAI OFF CACHE BOOL "" FORCE)
+endif()
+
 FetchContent_Declare(
     llama
     GIT_REPOSITORY https://github.com/ggml-org/llama.cpp.git
