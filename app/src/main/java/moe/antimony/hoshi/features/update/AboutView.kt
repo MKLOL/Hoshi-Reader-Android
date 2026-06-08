@@ -228,7 +228,7 @@ fun AboutScreen(
                 }
             }
             // ---- Attribution / credits card ----
-            // Hoshi Manga is a fork of HuangAntimony's Android EPUB reader, which is
+            // Sui Manga Reader is a fork of HuangAntimony's Android EPUB reader, which is
             // itself a recreation of Manhhao's web/iOS Hoshi Reader. Per GPLv3's
             // conspicuous-notice requirement, surface both upstreams + the license +
             // a short list of the open-source libraries the manga reading flow leans
@@ -242,7 +242,7 @@ fun AboutScreen(
                         )
                         Spacer(Modifier.height(12.dp))
                         Text(
-                            text = "Hoshi Manga is a manga-focused fork of the original " +
+                            text = "Sui Manga Reader is a manga-focused fork of the original " +
                                 "Hoshi Reader project. Huge thanks to the upstream maintainers " +
                                 "and to the open-source ecosystem this reader builds on:",
                             style = MaterialTheme.typography.bodyMedium,
@@ -305,7 +305,7 @@ fun AboutScreen(
                         )
                         Spacer(Modifier.height(4.dp))
                         Text(
-                            text = "Hoshi Manga is licensed under the GNU General Public " +
+                            text = "Sui Manga Reader is licensed under the GNU General Public " +
                                 "License, version 3. Source code, license terms, and full " +
                                 "third-party attribution are available on GitHub.",
                             style = MaterialTheme.typography.bodyMedium,

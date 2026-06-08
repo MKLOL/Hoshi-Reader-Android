@@ -90,7 +90,7 @@ android {
     buildTypes {
         debug {
             applicationIdSuffix = ".debug"
-            manifestPlaceholders["appLabel"] = "Hoshi Manga Debug"
+            manifestPlaceholders["appLabel"] = "Sui Manga Reader Debug"
             ndk {
                 abiFilters += listOf("arm64-v8a", "x86_64")
             }
@@ -98,7 +98,7 @@ android {
         release {
             isMinifyEnabled = true
             isShrinkResources = true
-            manifestPlaceholders["appLabel"] = "Hoshi Manga"
+            manifestPlaceholders["appLabel"] = "Sui Manga Reader"
             ndk {
                 abiFilters += listOf("arm64-v8a")
             }

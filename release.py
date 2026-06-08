@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Cut a Hoshi Reader release.
+"""Cut a Sui Manga Reader release.
 
 Bumps the version, builds the debug-signed release APK, commits, tags, pushes,
 and publishes a GitHub Release with the APK attached — every step that was

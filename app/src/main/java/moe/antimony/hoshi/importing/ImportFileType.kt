@@ -75,7 +75,7 @@ data class ImportFileType(
         )
 
         val HoshiBackup = ImportFileType(
-            description = "Hoshi backup",
+            description = "backup",
             extensions = listOf("hoshi"),
             mimeTypes = arrayOf("application/octet-stream", "application/zip", "*/*"),
             unsupportedMessageRes = R.string.import_select_hoshi_backup,

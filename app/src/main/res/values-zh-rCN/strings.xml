@@ -1,5 +1,5 @@
 <resources>
-    <string name="app_name">Hoshi Manga</string>
+    <string name="app_name">Sui Manga Reader</string>
     <string name="action_ok">确定</string>
     <string name="action_cancel">取消</string>
     <string name="action_confirm">确认</string>
@@ -41,7 +41,7 @@
     <string name="import_select_audiobook">请选择 .mp3 或 .m4b 有声书文件。</string>
     <string name="import_select_audio_database">请选择 .db 音频数据库文件。</string>
     <string name="import_select_dictionary_archive">请选择 .zip 辞典压缩包文件。</string>
-    <string name="import_select_hoshi_backup">请选择 .hoshi Hoshi 备份文件。</string>
+    <string name="import_select_hoshi_backup">请选择 .hoshi 备份文件。</string>
     <string name="import_select_font">请选择 .ttf、.otf、.woff 或 .woff2 字体文件。</string>
     <string name="main_tab_books" comment="Main navigation tab label, intentionally matching the backup Books section.">书库</string>
     <string name="main_tab_dictionary">查词</string>
@@ -186,7 +186,7 @@
     <string name="reader_jump_back">返回上一个跳转位置</string>
     <string name="reader_jump_forward">返回后一个跳转位置</string>
     <string name="reader_menu">阅读器菜单</string>
-    <string name="reader_image_clip_label">Hoshi 阅读器图片</string>
+    <string name="reader_image_clip_label">Sui Manga Reader 图片</string>
     <string name="reader_image_copied">已复制图片。</string>
     <string name="reader_image_saved">已保存图片。</string>
     <string name="reader_image_save_failed">无法保存图片。</string>
@@ -303,21 +303,21 @@
         <item>在 Google Cloud Console 中打开 Google Auth Platform -&gt; Clients，点击 CREATE CLIENT，并选择“电视和输入受限设备”应用类型。如果你的控制台仍显示旧导航，请使用 APIs &amp; Services -&gt; Credentials -&gt; Create Credentials -&gt; OAuth client ID。</item>
         <item>在此粘贴客户端 ID 和客户端密钥。此流程不要创建 Android OAuth 客户端。</item>
         <item>点击连接 Google Drive，打开验证 URL，并输入显示的设备代码。</item>
-        <item>如果 Hoshi 在后台时授权遇到问题，请在另一台手机或电脑上打开 Google device page，并输入这里显示的设备代码。</item>
+        <item>如果 Sui Manga Reader 在后台时授权遇到问题，请在另一台手机或电脑上打开 Google device page，并输入这里显示的设备代码。</item>
         <item>授权同一个 Google 账号，该账号的 Drive 中包含 ッツ 同步文件夹。</item>
     </string-array>
     <string name="sync_google_drive_authorization_failed">Google Drive 授权失败。</string>
     <string name="sync_google_drive_authorization_expired">Google Drive 授权代码已过期。</string>
     <string name="sync_google_drive_open_link_prompt">在此设备或另一台手机/电脑上打开此链接：</string>
     <string name="sync_google_drive_open_code_format">在此设备或另一台手机/电脑上打开 %1$s 并输入 %2$s。</string>
-    <string name="sync_google_drive_transient_network_format">Hoshi 当前无法从此设备连接到 Google。请保持此屏幕打开，或在另一台手机/电脑上打开 %1$s 并输入 %2$s。</string>
+    <string name="sync_google_drive_transient_network_format">Sui Manga Reader 当前无法从此设备连接到 Google。请保持此屏幕打开，或在另一台手机/电脑上打开 %1$s 并输入 %2$s。</string>
     <string name="sync_status_connected" comment="Sync connection state, intentionally matching AnkiConnect connection state.">已连接</string>
     <string name="sync_status_not_connected" comment="Sync connection state, intentionally matching AnkiConnect connection state.">未连接</string>
     <string name="sync_status_missing_configuration">尚未配置 OAuth 客户端</string>
     <string name="update_downloaded_title">更新已下载</string>
     <string name="update_downloaded_message_format" comment="Downloaded update prompt message, intentionally matching About update status.">更新 %1$s 已下载。</string>
     <string name="update_available_title">有可用更新</string>
-    <string name="update_available_message_format">Hoshi Manga %1$s 已可用。</string>
+    <string name="update_available_message_format">Sui Manga Reader %1$s 已可用。</string>
     <string name="backup_books" comment="Backup section label, intentionally matching the Books tab label.">书籍</string>
     <string name="backup_dictionaries" comment="Backup section label, intentionally matching the Dictionaries settings label.">辞典</string>
     <string name="backup_books_saved">书籍备份已保存。</string>
@@ -356,7 +356,7 @@
     <string name="audio_import_failed">导入失败</string>
     <string name="audio_import_android_db_failed">无法导入 android.db。</string>
     <string name="audio_android_db_size_format">android.db（%1$s）</string>
-    <string name="audio_local_audio_hint">1. 导入会把 android.db 复制到 Hoshi 的私有存储中，因此导入前请确保有足够空间容纳额外副本。\n2. 导入完成后，可以安全删除原始外部文件以释放空间。</string>
+    <string name="audio_local_audio_hint">1. 导入会把 android.db 复制到 Sui Manga Reader 的私有存储中，因此导入前请确保有足够空间容纳额外副本。\n2. 导入完成后，可以安全删除原始外部文件以释放空间。</string>
     <string name="audio_copying_android_db">正在复制 android.db</string>
     <string name="audio_copied_size_format">%1$s / %2$s</string>
     <string name="audio_move_source_up">上移来源</string>
@@ -413,7 +413,7 @@
     <string name="diagnostics_save_failed">无法保存诊断信息。</string>
     <string name="diagnostics_save">保存诊断信息</string>
     <string name="diagnostics_share">分享诊断信息</string>
-    <string name="diagnostics_share_subject">Hoshi 诊断信息</string>
+    <string name="diagnostics_share_subject">Sui Manga Reader 诊断信息</string>
     <string name="about_version_format">版本 %1$s（%2$d）</string>
     <string name="about_github_body">如果你喜欢这个应用，可以考虑在 GitHub 上给项目点星。</string>
     <string name="about_storage_cleanup">存储清理</string>
@@ -447,7 +447,7 @@
     <string name="about_update_downloading">正在下载更新。</string>
     <string name="about_update_downloaded_format" comment="About update status, intentionally matching downloaded update prompt message.">更新 %1$s 已下载。</string>
     <string name="about_update_last_download_failed">上次更新下载失败。</string>
-    <string name="about_update_check_github">检查 GitHub Releases 是否有新版 Hoshi Manga APK。</string>
+    <string name="about_update_check_github">检查 GitHub Releases 是否有新版 Sui Manga Reader APK。</string>
     <string name="about_update_checking_github">正在检查 GitHub Releases...</string>
     <string name="about_update_latest">当前已是最新版本。</string>
     <string name="about_update_no_matching_apk">发现新版发布，但没有单个匹配的 APK。</string>

@@ -16,7 +16,7 @@ internal object GoogleCloudOAuthConfiguration {
         "Open Google Auth Platform -> Clients in the $googleCloudConsoleLinkLabel, click CREATE CLIENT, and select application type TVs and Limited Input devices. If your console still shows the older navigation, use APIs & Services -> Credentials -> Create Credentials -> OAuth client ID.",
         "Paste that client ID and client secret here. Do not create an Android OAuth client for this flow.",
         "Press Connect Google Drive, open the verification URL, and enter the displayed device code.",
-        "If authorization has trouble while Hoshi is in the background, open the $googleDeviceLinkLabel on another phone or computer and enter the device code shown here.",
+        "If authorization has trouble while Sui Manga Reader is in the background, open the $googleDeviceLinkLabel on another phone or computer and enter the device code shown here.",
         "Authorize the same Google Account whose Drive contains the ッツ sync folder.",
     )
 

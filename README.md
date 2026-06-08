@@ -1,6 +1,6 @@
 <div align="center">
 
-# Hoshi Manga
+# Sui Manga Reader
 
 ![Platform](https://img.shields.io/badge/platform-Android-lightgrey)
 ![License](https://img.shields.io/badge/license-GPLv3-blue)
@@ -17,7 +17,7 @@ translation, and an e-ink reading mode.
 
 ## Fork &amp; attribution
 
-**Hoshi Manga is a fork** of [HuangAntimony / Hoshi-Reader-Android](https://github.com/HuangAntimony/Hoshi-Reader-Android),
+**Sui Manga Reader is a fork** of [HuangAntimony / Hoshi-Reader-Android](https://github.com/HuangAntimony/Hoshi-Reader-Android),
 which is itself a native Android recreation of [Manhhao / Hoshi-Reader](https://github.com/Manhhao/Hoshi-Reader)
 (the original Hoshi Reader web + iOS project).
 
@@ -100,7 +100,7 @@ your own signing key, set `ANDROID_KEYSTORE_FILE`, `ANDROID_KEYSTORE_PASSWORD`,
 
 ## Privacy
 
-Hoshi Manga stores imported manga, dictionaries, fonts, reading progress, ChatGPT
+Sui Manga Reader stores imported manga, dictionaries, fonts, reading progress, ChatGPT
 history, and settings **locally in app storage**. No telemetry, no analytics.
 
 - **ChatGPT integration** is opt-in: you provide your own OpenAI API key, and the app
@@ -114,7 +114,7 @@ history, and settings **locally in app storage**. No telemetry, no analytics.
 
 Distributed under the **GNU General Public License v3.0**. See [LICENSE](LICENSE).
 
-Hoshi Manga, like the upstream Hoshi Reader projects it forks from, is free software.
+Sui Manga Reader, like the upstream Hoshi Reader projects it forks from, is free software.
 Source code, license terms, and full third-party attribution are available in this repo
 and in **Settings → About** inside the app.
 

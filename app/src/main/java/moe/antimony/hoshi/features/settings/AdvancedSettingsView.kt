@@ -146,7 +146,7 @@ fun AdvancedSettingsView(
             }
             item {
                 Text(
-                    text = "Hoshi Manga ${moe.antimony.hoshi.BuildConfig.VERSION_NAME} · " +
+                    text = "Sui Manga Reader ${moe.antimony.hoshi.BuildConfig.VERSION_NAME} · " +
                         moe.antimony.hoshi.BuildConfig.GIT_SHA,
                     style = MaterialTheme.typography.bodySmall,
                     color = colorScheme.onSurfaceVariant,

@@ -312,7 +312,7 @@ private fun saveReaderImage(context: Context, image: ReaderFullscreenImage) {
         put(MediaStore.Images.Media.DISPLAY_NAME, name)
         put(MediaStore.Images.Media.MIME_TYPE, image.resource.mediaType)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            put(MediaStore.Images.Media.RELATIVE_PATH, "${Environment.DIRECTORY_PICTURES}/Hoshi Reader")
+            put(MediaStore.Images.Media.RELATIVE_PATH, "${Environment.DIRECTORY_PICTURES}/Sui Manga Reader")
             put(MediaStore.Images.Media.IS_PENDING, 1)
         }
     }

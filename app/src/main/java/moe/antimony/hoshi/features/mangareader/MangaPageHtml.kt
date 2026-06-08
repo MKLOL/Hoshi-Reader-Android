@@ -321,6 +321,16 @@ internal object MangaPageHtml {
         .ocr-box.revealed .ocr-actions {
           display: flex;
         }
+        /* When a revealed bubble sits high enough that the action row would be clipped past
+           the top of the viewport (and so be unreachable), the tap handler adds
+           `.actions-below`, which drops the row just *below* the bubble's bottom-right corner
+           instead of floating it above the top-right. See `updateActionPlacement`. */
+        .ocr-box.actions-below .ocr-actions {
+          top: 100%;
+          bottom: auto;
+          margin-top: 3px;
+          margin-bottom: 0;
+        }
         .ocr-action-btn {
           box-sizing: border-box;
           width: 1.7em;
@@ -528,6 +538,34 @@ internal object MangaPageHtml {
                 window.hoshiSelection.clearSelection();
               }
             },
+            // The action row (ChatGPT + copy) normally floats just *above* the bubble's
+            // top-right corner. For a bubble near the top of the *visible* area that row
+            // would be clipped off the top and be impossible to tap, so flip it to sit just
+            // *below* the bubble instead. Measures after reveal (the read forces a reflow)
+            // and toggles `.actions-below`.
+            //
+            // The page itself never scrolls (html/body are overflow:hidden), so a box's
+            // layout rect is fixed; panning a pinch-zoomed page moves the *visual* viewport,
+            // not the layout. What decides whether the row-above is on-screen is therefore the
+            // visual viewport's top edge, not layout y=0. getBoundingClientRect().top and
+            // visualViewport.offsetTop are both in layout CSS px, so they compare directly;
+            // when unzoomed offsetTop is 0 and this reduces to "is the bubble within a row's
+            // height of the top".
+            updateActionPlacement: function(box) {
+              if (!box) return;
+              var actions = box.querySelector('.ocr-actions');
+              if (!actions) return;
+              var actionsHeight = actions.offsetHeight || 26;
+              var margin = 3;
+              var vv = window.visualViewport;
+              var viewTop = vv && typeof vv.offsetTop === 'number' ? vv.offsetTop : 0;
+              var boxTop = box.getBoundingClientRect().top;
+              if (boxTop - actionsHeight - margin < viewTop) {
+                box.classList.add('actions-below');
+              } else {
+                box.classList.remove('actions-below');
+              }
+            },
             // Two artwork glyphs of the same drawn size must reveal at the same OCR
             // text size — independent of how many characters fit beside them in the
             // bubble. The parser's clamp gives that property: it uses mokuro's
@@ -670,6 +708,7 @@ internal object MangaPageHtml {
                   window.hoshiManga.tryWrapFallback(box);
                   box.classList.add('revealed');
                   box.setAttribute('aria-pressed', 'true');
+                  window.hoshiManga.updateActionPlacement(box);
                 }
                 // Default two-tap mode: first tap on an unrevealed bubble just reveals
                 // (so the action buttons surface without the dictionary popup covering

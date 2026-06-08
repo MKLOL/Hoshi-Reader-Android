@@ -53,7 +53,7 @@ data class ProcessExitDiagnosticsReport(
     val records: List<ProcessExitRecord>,
 ) {
     fun toShareText(): String = buildString {
-        appendLine("Hoshi Diagnostics")
+        appendLine("Sui Manga Reader Diagnostics")
         appendLine("Package: $packageName")
         appendLine("Version: $versionName ($versionCode)")
         appendLine("Android SDK: $sdkInt")
@@ -186,7 +186,7 @@ internal fun saveCapturedCrashDiagnostic(
     val file = File(diagnosticsDir, "crash-$timestampMillis.txt")
     file.writeText(
         buildString {
-            appendLine("Captured Hoshi crash")
+            appendLine("Captured Sui Manga Reader crash")
             appendLine("Time: ${Instant.ofEpochMilli(timestampMillis)}")
             appendLine("Package: $packageName")
             appendLine("Version: $versionName ($versionCode)")

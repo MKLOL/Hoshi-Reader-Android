@@ -1,11 +1,17 @@
 # Changelog
 
-All notable user-visible changes to Hoshi Manga (a manga-only fork of
+All notable user-visible changes to Sui Manga Reader (a manga-only fork of
 [HuangAntimony / Hoshi-Reader-Android](https://github.com/HuangAntimony/Hoshi-Reader-Android))
 are documented here. The format follows Keep a Changelog and release sections use
 Semantic Versioning.
 
 ## [Unreleased]
+
+### Changed
+- Renamed the app to **Sui Manga Reader** (kanji: 彗漫画) with a new launcher icon. The
+  application id, `.hoshi` backup format, FileProvider authority, and in-app updater asset
+  naming are all unchanged, so existing installs upgrade in place and keep their data.
+  Credit to the upstream Hoshi Reader projects (HuangAntimony, Manhhao) is unchanged.
 
 ## [v0.9.3] - 2026-06-04
 
