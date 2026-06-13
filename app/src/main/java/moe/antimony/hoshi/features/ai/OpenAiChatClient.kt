@@ -29,8 +29,12 @@ class OpenAiException(message: String) : Exception(message)
  * network call; [complete] is the thin suspending wrapper that performs the HTTP request.
  */
 object OpenAiChatClient {
-    private const val ENDPOINT = "https://api.openai.com/v1/chat/completions"
+    private const val DEFAULT_BASE_URL = "https://api.openai.com/v1"
     private val json = Json { ignoreUnknownKeys = true }
+
+    /** Endpoint for a provider base URL; `/chat/completions` is appended. */
+    private fun endpointFor(baseUrl: String): String =
+        baseUrl.trim().trimEnd('/') + "/chat/completions"
 
     /**
      * Sends [prompt] followed by [bubbleText] to [model] and returns the assistant's reply.
@@ -43,13 +47,14 @@ object OpenAiChatClient {
         model: String,
         prompt: String,
         bubbleText: String,
+        baseUrl: String = DEFAULT_BASE_URL,
         dispatcher: CoroutineDispatcher = Dispatchers.IO,
     ): String = withContext(dispatcher) {
         if (apiKey.isBlank()) {
-            throw OpenAiException("Set your OpenAI API key in Settings → ChatGPT.")
+            throw OpenAiException("Set your API key in Settings → Translation model.")
         }
         val requestBody = buildRequestBody(model, prompt, bubbleText)
-        completeRequest(apiKey, requestBody)
+        completeRequest(apiKey, requestBody, baseUrl)
     }
 
     /**
@@ -65,10 +70,11 @@ object OpenAiChatClient {
         prompt: String,
         imageBase64: String,
         imageMimeType: String,
+        baseUrl: String = DEFAULT_BASE_URL,
         dispatcher: CoroutineDispatcher = Dispatchers.IO,
     ): String = withContext(dispatcher) {
         if (apiKey.isBlank()) {
-            throw OpenAiException("Set your OpenAI API key in Settings → ChatGPT.")
+            throw OpenAiException("Set your API key in Settings → Translation model.")
         }
         val requestBody = buildImageRequestBody(
             model = model,
@@ -76,11 +82,11 @@ object OpenAiChatClient {
             imageBase64 = imageBase64,
             imageMimeType = imageMimeType,
         )
-        completeRequest(apiKey, requestBody)
+        completeRequest(apiKey, requestBody, baseUrl)
     }
 
-    private fun completeRequest(apiKey: String, requestBody: String): String {
-        val connection = (URL(ENDPOINT).openConnection() as HttpURLConnection).apply {
+    private fun completeRequest(apiKey: String, requestBody: String, baseUrl: String): String {
+        val connection = (URL(endpointFor(baseUrl)).openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
             doOutput = true
             connectTimeout = 30_000

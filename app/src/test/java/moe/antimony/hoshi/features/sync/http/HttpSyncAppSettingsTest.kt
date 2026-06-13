@@ -213,7 +213,10 @@ class HttpSyncAppSettingsTest {
     @Test
     fun apiKeyIsNeverTouchedBySync() = runBlocking {
         val repo = newAiSettingsRepo()
-        repo.update { it.copy(apiKey = "sk-local-secret", model = "old", promptText = "old prompt") }
+        repo.update { it.copy(model = "old", promptText = "old prompt") }
+        // Keys are per-provider and written outside the synced path; the default/fallback provider
+        // for these unknown model ids is OpenAI.
+        repo.setApiKey(moe.antimony.hoshi.features.ai.ChatModelCatalog.openAI, "sk-local-secret")
 
         val transport = FakeKvTransport()
         val remoteStamp = "2099-01-01T00:00:00Z"
@@ -339,7 +342,7 @@ class HttpSyncAppSettingsTest {
     fun userEditBumpsLastEditedAtButApiKeyEditAlone() = runBlocking {
         val repo = newAiSettingsRepo()
         assertNull(repo.settings.first().lastEditedAt)
-        repo.update { it.copy(apiKey = "secret") }
+        repo.setApiKey(moe.antimony.hoshi.features.ai.ChatModelCatalog.openAI, "secret")
         assertNull("API-key-only change must not stamp lastEditedAt", repo.settings.first().lastEditedAt)
         repo.update { it.copy(model = "new") }
         assertNotNull("model change must stamp lastEditedAt", repo.settings.first().lastEditedAt)

@@ -31,7 +31,9 @@ class AiChatSettingsRepositoryTest {
     @Test
     fun editingApiKeyOnlyDoesNotBumpLastEditedAt() = runBlocking {
         val repo = newRepo()
-        repo.update { it.copy(apiKey = "sk-deadbeef") }
+        // Keys are now per-provider and written outside the synced `update` path; the default model
+        // is an OpenAI one, so `snapshot.apiKey` reflects the OpenAI provider's key.
+        repo.setApiKey(ChatModelCatalog.openAI, "sk-deadbeef")
 
         val snapshot = repo.settings.first()
         assertEquals("sk-deadbeef", snapshot.apiKey)
@@ -115,7 +117,7 @@ class AiChatSettingsRepositoryTest {
     @Test
     fun applyFromSyncAcceptsNewerStampAndPreservesLocalApiKey() = runBlocking {
         val repo = newRepo()
-        repo.update { it.copy(apiKey = "sk-local") } // local key
+        repo.setApiKey(ChatModelCatalog.openAI, "sk-local") // local, per-provider key
         val now = Instant.now().toString()
         val applied = repo.applyFromSync(
             model = "synced-model",

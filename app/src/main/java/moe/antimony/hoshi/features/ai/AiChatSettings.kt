@@ -7,6 +7,7 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import java.time.Instant
 
@@ -153,8 +154,22 @@ class AiChatSettingsRepository(
      */
     private fun compareRfc3339String(a: String, b: String): Int = a.compareTo(b)
 
+    /**
+     * Reads the API key for [provider] from its own DataStore slot. Keys are per-provider and never
+     * synced (mirrors iOS reading the per-provider Keychain slot on demand). OpenAI reuses the
+     * legacy "apiKey" slot so existing users keep their key.
+     */
+    suspend fun apiKey(provider: ChatProvider): String =
+        dataStore.data.map { it[stringPreferencesKey(provider.prefsKey)] ?: "" }.first()
+
+    /** Writes the API key for [provider]. Does not touch synced fields or stamp `lastEditedAt`. */
+    suspend fun setApiKey(provider: ChatProvider, value: String) {
+        dataStore.edit { it[stringPreferencesKey(provider.prefsKey)] = value }
+    }
+
     private fun writeAll(preferences: androidx.datastore.preferences.core.MutablePreferences, settings: AiChatSettings) {
-        preferences[KEY_API_KEY] = settings.apiKey
+        // API keys are per-provider and written separately (see setApiKey) — never through this
+        // synced update path, which would clobber another provider's key with the current one.
         preferences[KEY_PROMPT] = settings.promptText
         preferences[KEY_IMAGE_PROMPT] = settings.imagePromptText
         preferences[KEY_MODEL] = settings.model
@@ -166,17 +181,21 @@ class AiChatSettingsRepository(
         }
     }
 
-    private fun Preferences.toAiChatSettings(): AiChatSettings =
-        AiChatSettings(
-            apiKey = this[KEY_API_KEY] ?: "",
+    private fun Preferences.toAiChatSettings(): AiChatSettings {
+        val model = this[KEY_MODEL]?.takeIf { it.isNotBlank() } ?: AiChatSettings.DEFAULT_MODEL
+        // `apiKey` carries the key for the CURRENT model's provider, so `isConfigured` and the
+        // reader call sites resolve the right per-provider key with no extra plumbing.
+        val provider = ChatModelCatalog.providerForModelId(model)
+        return AiChatSettings(
+            apiKey = this[stringPreferencesKey(provider.prefsKey)] ?: "",
             promptText = this[KEY_PROMPT] ?: AiChatSettings.DEFAULT_PROMPT,
             imagePromptText = this[KEY_IMAGE_PROMPT] ?: AiChatSettings.DEFAULT_IMAGE_PROMPT,
-            model = this[KEY_MODEL]?.takeIf { it.isNotBlank() } ?: AiChatSettings.DEFAULT_MODEL,
+            model = model,
             lastEditedAt = this[KEY_LAST_EDITED_AT],
         )
+    }
 
     private companion object {
-        val KEY_API_KEY = stringPreferencesKey("apiKey")
         val KEY_PROMPT = stringPreferencesKey("promptText")
         val KEY_IMAGE_PROMPT = stringPreferencesKey("imagePromptText")
         val KEY_MODEL = stringPreferencesKey("model")

@@ -108,7 +108,8 @@ import moe.antimony.hoshi.features.ai.AiChatHistoryView
 import moe.antimony.hoshi.features.ai.AiChatPopupView
 import moe.antimony.hoshi.features.ai.AiChatSettings
 import moe.antimony.hoshi.features.ai.AiChatUiState
-import moe.antimony.hoshi.features.ai.OpenAiChatClient
+import moe.antimony.hoshi.features.ai.ChatModelCatalog
+import moe.antimony.hoshi.features.ai.CloudChat
 import moe.antimony.hoshi.features.ai.aiChatSettingsRepository
 import moe.antimony.hoshi.features.ai.offline.OfflineLlmManager
 import moe.antimony.hoshi.features.ai.offline.OfflineTranslationResult
@@ -434,7 +435,8 @@ internal fun MangaReaderScreen(
                         japaneseText = bubbleText,
                     )
                 } else {
-                    OpenAiChatClient.complete(
+                    CloudChat.complete(
+                        provider = ChatModelCatalog.providerForModelId(settings.model),
                         apiKey = settings.apiKey,
                         model = settings.model,
                         prompt = settings.promptText,
@@ -515,7 +517,8 @@ internal fun MangaReaderScreen(
         aiChatState = AiChatUiState.Loading(MANGA_SCREENSHOT_TRANSLATION_LABEL)
         aiRequestJob = scope.launch {
             val result = runCatching {
-                OpenAiChatClient.completeImage(
+                CloudChat.completeImage(
+                    provider = ChatModelCatalog.providerForModelId(retrySettings.model),
                     apiKey = retrySettings.apiKey,
                     model = retrySettings.model,
                     prompt = prompt,
@@ -624,7 +627,8 @@ internal fun MangaReaderScreen(
             aiRetryAction = { retryScreenshotTranslation(imageBase64, prompt) }
             aiChatState = AiChatUiState.Loading(MANGA_SCREENSHOT_TRANSLATION_LABEL)
             val result = runCatching {
-                OpenAiChatClient.completeImage(
+                CloudChat.completeImage(
+                    provider = ChatModelCatalog.providerForModelId(settings.model),
                     apiKey = settings.apiKey,
                     model = settings.model,
                     prompt = prompt,

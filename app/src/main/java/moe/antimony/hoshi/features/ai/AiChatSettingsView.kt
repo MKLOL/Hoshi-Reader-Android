@@ -1,6 +1,7 @@
 package moe.antimony.hoshi.features.ai
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -8,12 +9,16 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.ArrowDropDown
 import androidx.compose.material.icons.rounded.Visibility
 import androidx.compose.material.icons.rounded.VisibilityOff
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -43,12 +48,11 @@ import moe.antimony.hoshi.features.ai.offline.OfflineTranslationSection
 import moe.antimony.hoshi.features.settings.SettingsDetailScaffold
 
 /**
- * Settings for the manga ChatGPT features: OpenAI API key, model, speech-bubble prompt, and
- * screenshot prompt.
- *
- * This is a fork addition. It is reachable from the main Settings tab (the ChatGPT row, see
- * [moe.antimony.hoshi.navigation.SettingsDetailSection.ChatGpt]) so the key and prompts can be
- * edited without opening a manga. The values persist app-wide through [AiChatSettingsRepository].
+ * Settings for the manga translation feature: pick a model from a dropdown spanning multiple
+ * providers (OpenAI, Anthropic, and cheaper / Chinese OpenAI-compatible providers — DeepSeek, Qwen,
+ * Moonshot/Kimi), or enter a custom id. The API key is stored per provider (never synced). Only the
+ * model-id string syncs (the provider is derived from it), so the sync wire shape is unchanged from
+ * the original free-text model field.
  */
 @Composable
 fun AiChatSettingsScreen(
@@ -57,18 +61,15 @@ fun AiChatSettingsScreen(
 ) {
     val context = LocalContext.current
     val repository = remember { context.applicationContext.aiChatSettingsRepository() }
-    // App-wide scope (not rememberCoroutineScope) so the debounced write + dispose-time
-    // flush survive the screen leaving composition. A rapid Back press inside the debounce
-    // window otherwise drops the user's last edit, e.g. silently losing an API key.
     val appScope = LocalHoshiAppContainer.current.appScope
     val settings by repository.settings.collectAsStateWithLifecycle(initialValue = null)
 
-    SettingsDetailScaffold(title = "ChatGPT", onClose = onClose, modifier = modifier) { innerPadding ->
+    SettingsDetailScaffold(title = "Translation model", onClose = onClose, modifier = modifier) { innerPadding ->
         val loaded = settings ?: return@SettingsDetailScaffold
         AiChatSettingsContent(
             settings = loaded,
+            repository = repository,
             writeScope = appScope,
-            onUpdate = { transform -> appScope.launch { repository.update(transform) } },
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding),
@@ -76,64 +77,75 @@ fun AiChatSettingsScreen(
     }
 }
 
+private const val CUSTOM_MODEL_TAG = "__custom__"
+
 @OptIn(FlowPreview::class)
 @Composable
 private fun AiChatSettingsContent(
     settings: AiChatSettings,
+    repository: AiChatSettingsRepository,
     writeScope: CoroutineScope,
-    onUpdate: ((AiChatSettings) -> AiChatSettings) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    // Seeded once from the first loaded settings; this screen is the only editor of these
-    // values, so the local state never needs to re-sync after a save.
+    // Picker selection: a known model id, or CUSTOM_MODEL_TAG when entering a custom id.
+    var selectedModelId by rememberSaveable {
+        mutableStateOf(
+            if (ChatModelCatalog.isKnownModel(settings.model)) settings.model else CUSTOM_MODEL_TAG,
+        )
+    }
+    var customModel by rememberSaveable {
+        mutableStateOf(if (ChatModelCatalog.isKnownModel(settings.model)) "" else settings.model)
+    }
     var apiKey by rememberSaveable { mutableStateOf(settings.apiKey) }
-    var model by rememberSaveable { mutableStateOf(settings.model) }
     var promptText by rememberSaveable { mutableStateOf(settings.promptText) }
     var imagePromptText by rememberSaveable { mutableStateOf(settings.imagePromptText) }
     var apiKeyVisible by rememberSaveable { mutableStateOf(false) }
+    var modelMenuExpanded by remember { mutableStateOf(false) }
 
-    // Track what's actually been written so the dispose-flush can detect pending edits.
-    val seed = remember {
-        EditedAiChatFields(settings.apiKey, settings.model, settings.promptText, settings.imagePromptText)
+    val effectiveModel = if (selectedModelId == CUSTOM_MODEL_TAG) customModel else selectedModelId
+    val provider = ChatModelCatalog.providerForModelId(effectiveModel)
+
+    // Reload the key field whenever the provider changes (model switched to a different provider),
+    // so each provider shows its own stored key. Does NOT run on every keystroke — only when the
+    // provider id changes — so an in-progress key edit isn't clobbered.
+    LaunchedEffect(provider.id) {
+        apiKey = repository.apiKey(provider)
     }
-    var lastFlushed by remember { mutableStateOf(seed) }
 
-    // Debounce DataStore writes: writing on every keystroke fires one disk write and one
-    // HTTP-sync push (via lastEditedAt) per character. Collect the four edited fields, wait
-    // ~400 ms of quiet, then commit once. drop(1) skips the seed emission so the just-loaded
-    // value isn't re-written; distinctUntilChanged elides no-ops if the user types-then-undoes.
+    // Debounce the SYNCED fields (model + prompts). API keys are written separately (below) so a
+    // per-keystroke key edit never triggers a sync push.
+    val syncedSeed = remember {
+        EditedSyncedFields(settings.model, settings.promptText, settings.imagePromptText)
+    }
+    var lastFlushedSynced by remember { mutableStateOf(syncedSeed) }
     LaunchedEffect(Unit) {
-        snapshotFlow { EditedAiChatFields(apiKey, model, promptText, imagePromptText) }
+        snapshotFlow { EditedSyncedFields(effectiveModel, promptText, imagePromptText) }
             .drop(1)
             .debounce(400)
             .distinctUntilChanged()
             .collect { fields ->
-                onUpdate {
-                    it.copy(
-                        apiKey = fields.apiKey,
-                        model = fields.model,
-                        promptText = fields.promptText,
-                        imagePromptText = fields.imagePromptText,
-                    )
+                if (fields.model.isBlank()) return@collect // don't persist an empty custom id
+                writeScope.launch {
+                    repository.update {
+                        it.copy(
+                            model = fields.model,
+                            promptText = fields.promptText,
+                            imagePromptText = fields.imagePromptText,
+                        )
+                    }
                 }
-                lastFlushed = fields
+                lastFlushedSynced = fields
             }
     }
-
-    // Flush on dispose so a rapid Back press inside the 400 ms debounce window doesn't drop
-    // the last edit. rememberUpdatedState captures the latest values at dispose time; the
-    // write is launched on the app-wide [writeScope] so it survives the screen's coroutine
-    // scope being cancelled.
-    val currentFields by rememberUpdatedState(EditedAiChatFields(apiKey, model, promptText, imagePromptText))
-    val latestFlushed by rememberUpdatedState(lastFlushed)
+    val currentSynced by rememberUpdatedState(EditedSyncedFields(effectiveModel, promptText, imagePromptText))
+    val latestFlushedSynced by rememberUpdatedState(lastFlushedSynced)
     DisposableEffect(Unit) {
         onDispose {
-            val current = currentFields
-            if (current != latestFlushed) {
+            val current = currentSynced
+            if (current != latestFlushedSynced && current.model.isNotBlank()) {
                 writeScope.launch {
-                    onUpdate {
+                    repository.update {
                         it.copy(
-                            apiKey = current.apiKey,
                             model = current.model,
                             promptText = current.promptText,
                             imagePromptText = current.imagePromptText,
@@ -144,6 +156,21 @@ private fun AiChatSettingsContent(
         }
     }
 
+    // Debounce the per-provider API key. Writes to the provider in effect at emit time; the
+    // reload-on-provider-change above means a model switch never carries the old provider's key
+    // into the new provider's slot.
+    val providerState by rememberUpdatedState(provider)
+    LaunchedEffect(Unit) {
+        snapshotFlow { apiKey }
+            .drop(1)
+            .debounce(400)
+            .distinctUntilChanged()
+            .collect { key ->
+                val p = providerState
+                writeScope.launch { repository.setApiKey(p, key) }
+            }
+    }
+
     Column(
         modifier = modifier
             .verticalScroll(rememberScrollState())
@@ -151,16 +178,80 @@ private fun AiChatSettingsContent(
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         Text(
-            text = "Powers manga ChatGPT actions. Speech bubbles send OCR text; screenshot " +
-                "translation sends the cropped image.",
+            text = "Pick a model. Cheaper and Chinese providers (DeepSeek, Qwen, Kimi) and Anthropic " +
+                "(Claude) are included alongside OpenAI.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+
+        // Model picker
+        Box {
+            OutlinedButton(
+                onClick = { modelMenuExpanded = true },
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(
+                    text = currentModelLabel(selectedModelId, customModel),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Icon(Icons.Rounded.ArrowDropDown, contentDescription = null)
+            }
+            DropdownMenu(
+                expanded = modelMenuExpanded,
+                onDismissRequest = { modelMenuExpanded = false },
+            ) {
+                ChatModelCatalog.providers.forEach { p ->
+                    DropdownMenuItem(
+                        text = {
+                            Text(
+                                p.displayName,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        },
+                        onClick = {},
+                        enabled = false,
+                    )
+                    ChatModelCatalog.models.filter { it.provider == p }.forEach { m ->
+                        DropdownMenuItem(
+                            text = { Text(modelOptionLabel(m)) },
+                            onClick = {
+                                modelMenuExpanded = false
+                                selectedModelId = m.id
+                            },
+                        )
+                    }
+                }
+                DropdownMenuItem(
+                    text = { Text("Custom…") },
+                    onClick = {
+                        modelMenuExpanded = false
+                        selectedModelId = CUSTOM_MODEL_TAG
+                    },
+                )
+            }
+        }
+
+        if (selectedModelId == CUSTOM_MODEL_TAG) {
+            OutlinedTextField(
+                value = customModel,
+                onValueChange = { customModel = it },
+                label = { Text("Custom model id") },
+                singleLine = true,
+                supportingText = { Text("A custom id is treated as an OpenAI model.") },
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+
         OutlinedTextField(
             value = apiKey,
             onValueChange = { value -> apiKey = value },
-            label = { Text("OpenAI API key") },
+            label = { Text("${provider.displayName} API key") },
             singleLine = true,
+            supportingText = {
+                Text("Stored only on this device, never synced. Each provider keeps its own key. " +
+                    "Get a key at ${provider.keysUrl}")
+            },
             visualTransformation = if (apiKeyVisible) {
                 VisualTransformation.None
             } else {
@@ -178,14 +269,6 @@ private fun AiChatSettingsContent(
                     )
                 }
             },
-            modifier = Modifier.fillMaxWidth(),
-        )
-        OutlinedTextField(
-            value = model,
-            onValueChange = { value -> model = value },
-            label = { Text("Model") },
-            singleLine = true,
-            supportingText = { Text("The OpenAI model id, e.g. ${AiChatSettings.DEFAULT_MODEL}.") },
             modifier = Modifier.fillMaxWidth(),
         )
         OutlinedTextField(
@@ -209,8 +292,17 @@ private fun AiChatSettingsContent(
     }
 }
 
-private data class EditedAiChatFields(
-    val apiKey: String,
+private fun currentModelLabel(selectedModelId: String, customModel: String): String =
+    if (selectedModelId == CUSTOM_MODEL_TAG) {
+        if (customModel.isBlank()) "Custom…" else customModel
+    } else {
+        ChatModelCatalog.optionForModelId(selectedModelId)?.displayName ?: selectedModelId
+    }
+
+private fun modelOptionLabel(option: ChatModelOption): String =
+    option.note?.let { "${option.displayName} · $it" } ?: option.displayName
+
+private data class EditedSyncedFields(
     val model: String,
     val promptText: String,
     val imagePromptText: String,
