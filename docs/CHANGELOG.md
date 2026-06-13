@@ -7,6 +7,8 @@ Semantic Versioning.
 
 ## [Unreleased]
 
+## [v0.9.4] - 2026-06-13
+
 ### Changed
 - Renamed the app to **Sui Manga Reader** (kanji: 彗漫画) with a new launcher icon. The
   application id, `.hoshi` backup format, FileProvider authority, and in-app updater asset
