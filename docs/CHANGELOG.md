@@ -12,6 +12,9 @@ Semantic Versioning.
   application id, `.hoshi` backup format, FileProvider authority, and in-app updater asset
   naming are all unchanged, so existing installs upgrade in place and keep their data.
   Credit to the upstream Hoshi Reader projects (HuangAntimony, Manhhao) is unchanged.
+- HTTP Sync now pushes bookshelf imports, shelf moves, deletes, reading progress, and
+  ChatGPT prompt changes sooner, and protects bookmark/metadata conflicts with per-item
+  edit revisions so stale devices are less likely to overwrite newer sync state.
 
 ## [v0.9.3] - 2026-06-04
 

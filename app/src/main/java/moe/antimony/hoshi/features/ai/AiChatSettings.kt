@@ -59,6 +59,15 @@ class AiChatSettingsRepository(
     val settings: Flow<AiChatSettings> = dataStore.data.map { it.toAiChatSettings() }
 
     /**
+     * Invoked (outside the DataStore transaction) after a user-driven [update] changed any
+     * sync-relevant field. Wired by the app container to the HTTP-sync auto-push hook so
+     * settings edits sync immediately (debounced inside the hook; no-op when sync is off).
+     * Not invoked by [applyFromSync] — sync-applied writes must not re-trigger a push.
+     * Mirrors iOS `AiChatSettingsStore` calling `HttpSyncManager.onAiSettingsChanged()`.
+     */
+    var onSyncRelevantEdit: (() -> Unit)? = null
+
+    /**
      * User-driven update. Auto-stamps [AiChatSettings.lastEditedAt] iff the sync-relevant
      * fields (`model` / `promptText` / `imagePromptText`) actually changed. API-key-only
      * edits don't bump the stamp because the API key doesn't sync.
@@ -73,6 +82,7 @@ class AiChatSettingsRepository(
      * gets pushed, and from then on the user owns the settings again.
      */
     suspend fun update(transform: (AiChatSettings) -> AiChatSettings) {
+        var changedSyncRelevantFields = false
         dataStore.edit { preferences ->
             val current = preferences.toAiChatSettings()
             val next = transform(current)
@@ -84,8 +94,10 @@ class AiChatSettingsRepository(
             } else {
                 next
             }
+            changedSyncRelevantFields = syncRelevantChanged
             writeAll(preferences, stamped)
         }
+        if (changedSyncRelevantFields) onSyncRelevantEdit?.invoke()
     }
 
     /** Returns an RFC 3339 stamp strictly later than [previous]. Defaults to "now". */

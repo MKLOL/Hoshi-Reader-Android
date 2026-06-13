@@ -12,10 +12,65 @@ data class HttpSyncShelfPlacementRecord(
     val updatedAt: String,
 )
 
+/**
+ * Stores the per-book shelf-placement sidecar (`.http_sync_shelf_state.json`).
+ *
+ * Concurrency: the sidecar is mutated from several in-process call sites — both sync
+ * engines (the v2 reconciler and the v3 executor) do a whole-map load at the start of a
+ * (potentially long) sync and save at the end, while
+ * [HttpSyncAutoPush.onShelfPlacementChanged] records single placements the moment the user
+ * moves a book. Same shape as the deleted-book sidecar's Bug 3: an unlocked
+ * load-modify-save in any one of them can clobber a concurrent write from another.
+ *
+ * Two-part fix (mirrors iOS `HttpSyncShelfStateStore`):
+ *  - every read/write is serialized under a process-wide [lock], and single-key mutations
+ *    go through the atomic [recordPlacement] helper (same pattern as
+ *    [HttpSyncDeletedBookStateStore.recordDeletedBook]);
+ *  - [save] merges per key against the latest disk state — see its doc — so the engines'
+ *    end-of-sync whole-map saves can't silently lose a shelf move recorded mid-sync.
+ */
 class HttpSyncShelfStateStore(
     private val json: Json,
 ) {
-    fun load(booksRoot: File?): Map<String, HttpSyncShelfPlacementRecord> {
+    fun load(booksRoot: File?): Map<String, HttpSyncShelfPlacementRecord> =
+        synchronized(lock) { loadLocked(booksRoot) }
+
+    /**
+     * Merge-on-save: a fire-and-forget shelf hook can write a fresher record while a long
+     * sync holds an in-memory copy of the whole map — a blind overwrite here would silently
+     * lose that move (and the stale snapshot could then revert it via LWW). Per key, the
+     * newer `updatedAt` wins ([compareRfc3339]); disk-only keys are kept (a hook may have
+     * created them mid-sync). The cost is that records removed for tombstoned books can
+     * linger as harmless orphans until the book's syncId is reused. Mirrors iOS
+     * `HttpSyncShelfStateStore.save`.
+     */
+    fun save(booksRoot: File?, state: Map<String, HttpSyncShelfPlacementRecord>) {
+        synchronized(lock) {
+            val merged = state.toMutableMap()
+            for ((key, diskRecord) in loadLocked(booksRoot)) {
+                val memory = merged[key]
+                if (memory == null || compareRfc3339(diskRecord.updatedAt, memory.updatedAt) > 0) {
+                    merged[key] = diskRecord
+                }
+            }
+            saveLocked(booksRoot, merged)
+        }
+    }
+
+    /**
+     * Atomically add (or replace) the placement record for [syncId]. Re-reads the latest
+     * disk state under the lock before writing, so a concurrent whole-map [save] or
+     * another `recordPlacement` cannot lose either side's update.
+     */
+    fun recordPlacement(booksRoot: File?, syncId: String, record: HttpSyncShelfPlacementRecord) {
+        synchronized(lock) {
+            val updated = loadLocked(booksRoot).toMutableMap()
+            updated[syncId] = record
+            saveLocked(booksRoot, updated)
+        }
+    }
+
+    private fun loadLocked(booksRoot: File?): Map<String, HttpSyncShelfPlacementRecord> {
         val file = stateFile(booksRoot) ?: return emptyMap()
         if (!file.isFile) return emptyMap()
         return runCatching {
@@ -23,10 +78,10 @@ class HttpSyncShelfStateStore(
         }.getOrDefault(emptyMap())
     }
 
-    fun save(booksRoot: File?, state: Map<String, HttpSyncShelfPlacementRecord>) {
+    private fun saveLocked(booksRoot: File?, state: Map<String, HttpSyncShelfPlacementRecord>) {
         val file = stateFile(booksRoot) ?: return
         file.parentFile?.mkdirs()
-        file.writeText(json.encodeToString(serializer, state.toSortedMap()))
+        writeSidecarAtomically(file, json.encodeToString(serializer, state.toSortedMap()))
     }
 
     private fun stateFile(booksRoot: File?): File? =
@@ -35,6 +90,34 @@ class HttpSyncShelfStateStore(
     private companion object {
         const val STATE_FILE_NAME = ".http_sync_shelf_state.json"
         val serializer = MapSerializer(String.serializer(), HttpSyncShelfPlacementRecord.serializer())
+
+        /**
+         * Process-wide lock — multiple store instances (auto-push hooks, v2 reconciler,
+         * v3 executor/local-state) operate on the same file, so an instance-level lock
+         * would not serialize them. See [HttpSyncDeletedBookStateStore.lock].
+         */
+        val lock = Any()
+    }
+}
+
+/**
+ * Atomic sidecar write: write to a `.tmp` sibling, then rename over the target. A bare
+ * `writeText` truncates the file before writing, so a crash mid-write leaves a torn (or
+ * empty) sidecar — for the revision sidecar that silently resets every rev to 0, for the
+ * shelf sidecar it wipes every placement record. POSIX `rename` within one directory is
+ * atomic; mirrors iOS's `Data.write(options: .atomic)`.
+ */
+internal fun writeSidecarAtomically(file: File, text: String) {
+    val tmp = File(file.parentFile, "${file.name}.tmp")
+    tmp.writeText(text)
+    if (!tmp.renameTo(file)) {
+        // Rename can fail on exotic filesystems; fall back to delete + rename, then to a
+        // plain write (no worse than the previous behavior) as the last resort.
+        file.delete()
+        if (!tmp.renameTo(file)) {
+            tmp.delete()
+            file.writeText(text)
+        }
     }
 }
 

@@ -17,10 +17,12 @@ import moe.antimony.hoshi.features.sync.http.HttpSyncKvTransport
 import moe.antimony.hoshi.features.sync.http.HttpSyncKvWriteResponse
 import moe.antimony.hoshi.features.sync.http.HttpSyncMetadataBlob
 import moe.antimony.hoshi.features.sync.http.HttpSyncPayloadCodec
+import moe.antimony.hoshi.features.sync.http.HttpSyncRevisionStore
 import moe.antimony.hoshi.features.sync.http.AI_CHAT_SETTINGS_KEY
+import moe.antimony.hoshi.features.sync.http.SyncComparison
 import moe.antimony.hoshi.features.sync.http.appleSecondsToRfc3339
 import moe.antimony.hoshi.features.sync.http.bookmarkKey
-import moe.antimony.hoshi.features.sync.http.compareRfc3339
+import moe.antimony.hoshi.features.sync.http.compareRevisioned
 import moe.antimony.hoshi.features.sync.http.metadataKey
 import moe.antimony.hoshi.features.sync.http.rfc3339ToAppleSeconds
 import moe.antimony.hoshi.features.sync.http.toBlob
@@ -46,6 +48,7 @@ class V3PushOps(
         ignoreUnknownKeys = true
         encodeDefaults = true
     }
+    private val revisionStore = HttpSyncRevisionStore(json)
     internal companion object {
         const val JSON_CONTENT_TYPE = "application/json; charset=utf-8"
     }
@@ -53,6 +56,11 @@ class V3PushOps(
     /**
      * Conditional bookmark PUT. Holds the per-book lock for the read-then-write so a
      * concurrent reader-hook push cannot interleave with apply or push.
+     *
+     * Winner selection is edit-depth first (`rev`, via [compareRevisioned]); timestamps
+     * only break rev ties. Uploads are stamped with the revision store's current localRev
+     * — a sync is a merge, not an edit, so nothing is bumped here (only the deliberate-edit
+     * hooks bump). Same rules as the v2 reconciler's `pushBookmarkIfLocalNewer`.
      */
     suspend fun pushBookmarkConditional(
         transport: HttpSyncKvTransport,
@@ -61,6 +69,8 @@ class V3PushOps(
         localBookmark: Bookmark,
     ): PushBookmarkOutcome = bookLocks.withBookLock(bookRoot) {
         val key = bookmarkKey(syncId)
+        val booksRoot = bookRepository.booksDirectory
+        val localRev = revisionStore.current(booksRoot, key).localRev
         val remote = transport.get(key)
         if (remote != null) {
             val remoteBlob = runCatching {
@@ -71,10 +81,14 @@ class V3PushOps(
             }.getOrNull()
             if (remoteBlob != null) {
                 val localStamp = localBookmark.lastModified?.let(::appleSecondsToRfc3339)
-                val cmp = compareRfc3339(remoteBlob.lastModified, localStamp)
-                when {
-                    cmp > 0 -> {
-                        // Remote strictly newer — apply locally instead of pushing.
+                when (compareRevisioned(
+                    localRev = localRev,
+                    remoteRev = remoteBlob.rev,
+                    localStamp = localStamp,
+                    remoteStamp = remoteBlob.lastModified,
+                )) {
+                    SyncComparison.REMOTE_WINS -> {
+                        // Remote out-revisions us — apply locally instead of pushing.
                         bookRepository.saveBookmark(
                             bookRoot,
                             Bookmark(
@@ -84,19 +98,26 @@ class V3PushOps(
                                 lastModified = rfc3339ToAppleSeconds(remoteBlob.lastModified),
                             ),
                         )
+                        revisionStore.noteRemote(booksRoot, key, remoteBlob.rev, appliedLocally = true)
                         return@withBookLock PushBookmarkOutcome.AppliedRemote
                     }
-                    cmp == 0 -> return@withBookLock PushBookmarkOutcome.NoOp
-                    else -> Unit // local strictly newer → fall through to PUT
+                    SyncComparison.TIE -> {
+                        revisionStore.noteRemote(booksRoot, key, remoteBlob.rev, appliedLocally = true)
+                        return@withBookLock PushBookmarkOutcome.NoOp
+                    }
+                    SyncComparison.LOCAL_WINS -> Unit // fall through to PUT
                 }
             }
         }
         transport.put(
             key = key,
             contentType = JSON_CONTENT_TYPE,
-            body = json.encodeToString(HttpSyncBookmarkBlob.serializer(), localBookmark.toBlob())
-                .toByteArray(),
+            body = json.encodeToString(
+                HttpSyncBookmarkBlob.serializer(),
+                localBookmark.toBlob().copy(rev = localRev),
+            ).toByteArray(),
         )
+        revisionStore.noteRemote(booksRoot, key, localRev, appliedLocally = true)
         PushBookmarkOutcome.Pushed
     }
 
@@ -122,15 +143,50 @@ class V3PushOps(
         return true
     }
 
+    /**
+     * Metadata PUT. When [expectedRemote] (the blob the planner saw on the server) equals
+     * [blob] ignoring `rev`, the PUT is skipped — identical bytes would only churn the
+     * server's lastModified — but the revision store still fast-forwards so a later local
+     * edit out-revisions the remote chain. Mirrors the v2 reconciler's content-equality
+     * skip.
+     *
+     * Stale-rev recheck (under the per-key lock, like [pushBookmarkConditional]'s
+     * recheck-under-lock): [blob]'s `rev` was computed from a snapshot taken at the start
+     * of the sync. A deliberate local edit (shelf-move / delete hook bumping localRev) or
+     * an observed deeper remote write (baseRev) may have advanced the key mid-sync;
+     * PUTting the plan-time blob then would overwrite the newer state on the
+     * content-blind, last-write-wins server. Re-read the revision store immediately
+     * before the PUT and skip when it out-revisions the plan.
+     */
     suspend fun pushMetadata(
         transport: HttpSyncKvTransport,
         syncId: String,
         blob: HttpSyncMetadataBlob,
-    ): HttpSyncKvWriteResponse = transport.put(
-        key = metadataKey(syncId),
-        contentType = JSON_CONTENT_TYPE,
-        body = json.encodeToString(HttpSyncMetadataBlob.serializer(), blob).toByteArray(),
-    )
+        expectedRemote: HttpSyncMetadataBlob? = null,
+    ): PushMetadataOutcome {
+        val key = metadataKey(syncId)
+        return bookLocks.withKeyLock(key) {
+            val booksRoot = bookRepository.booksDirectory
+            if (expectedRemote != null && expectedRemote.copy(rev = blob.rev) == blob) {
+                revisionStore.noteRemote(booksRoot, key, blob.rev, appliedLocally = true)
+                return@withKeyLock PushMetadataOutcome.SkippedIdentical
+            }
+            val current = revisionStore.current(booksRoot, key)
+            val planRev = blob.rev ?: 0
+            if (current.localRev > planRev || current.baseRev > planRev) {
+                // Superseded mid-sync — the newer edit's own push (or the next sync's
+                // plan) carries the deeper rev; pushing now would regress it.
+                return@withKeyLock PushMetadataOutcome.SkippedStale
+            }
+            val response = transport.put(
+                key = key,
+                contentType = JSON_CONTENT_TYPE,
+                body = json.encodeToString(HttpSyncMetadataBlob.serializer(), blob).toByteArray(),
+            )
+            revisionStore.noteRemote(booksRoot, key, blob.rev, appliedLocally = true)
+            PushMetadataOutcome.Pushed(response)
+        }
+    }
 
     /**
      * Payload upload. Widened to allow EPUBs as well as Mokuro (the v3 gate); v2's
@@ -162,23 +218,33 @@ class V3PushOps(
         )
     }
 
-    /** Tombstone push: writes a metadata blob with `deletedAt` set. */
+    /** Tombstone push: writes a revisioned metadata blob with `deletedAt` set. */
     suspend fun pushTombstone(
         transport: HttpSyncKvTransport,
         syncId: String,
         record: HttpSyncDeletedBookRecord,
-    ): HttpSyncKvWriteResponse = transport.put(
-        key = metadataKey(syncId),
-        contentType = JSON_CONTENT_TYPE,
-        body = json.encodeToString(
-            HttpSyncMetadataBlob.serializer(),
-            HttpSyncMetadataBlob(
-                title = record.title,
-                contentType = record.contentType,
-                deletedAt = record.deletedAt,
-            ),
-        ).toByteArray(),
-    )
+    ): HttpSyncKvWriteResponse {
+        val key = metadataKey(syncId)
+        return bookLocks.withKeyLock(key) {
+            val booksRoot = bookRepository.booksDirectory
+            val localRev = revisionStore.current(booksRoot, key).localRev
+            val response = transport.put(
+                key = key,
+                contentType = JSON_CONTENT_TYPE,
+                body = json.encodeToString(
+                    HttpSyncMetadataBlob.serializer(),
+                    HttpSyncMetadataBlob(
+                        title = record.title,
+                        contentType = record.contentType,
+                        deletedAt = record.deletedAt,
+                        rev = localRev,
+                    ),
+                ).toByteArray(),
+            )
+            revisionStore.noteRemote(booksRoot, key, localRev, appliedLocally = true)
+            response
+        }
+    }
 
     /** Global ChatGPT settings PUT. */
     suspend fun pushAiSettings(

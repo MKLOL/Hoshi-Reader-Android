@@ -6,6 +6,7 @@ import androidx.compose.runtime.staticCompositionLocalOf
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.first
 import moe.antimony.hoshi.dictionary.DictionaryRepository
 import moe.antimony.hoshi.epub.BookRepository
 import moe.antimony.hoshi.features.ai.AiChatSettingsRepository
@@ -41,6 +42,7 @@ import moe.antimony.hoshi.features.sync.GoogleDriveClient
 import moe.antimony.hoshi.features.sync.SyncManager
 import moe.antimony.hoshi.features.sync.SyncSettingsRepository
 import moe.antimony.hoshi.features.sync.syncSettingsRepository
+import moe.antimony.hoshi.features.sync.http.HttpSyncAutoPush
 import moe.antimony.hoshi.features.sync.http.HttpSyncPusher
 import moe.antimony.hoshi.features.sync.http.HttpSyncReconciler
 import moe.antimony.hoshi.features.sync.http.HttpSyncSettingsRepository
@@ -104,6 +106,23 @@ internal class HoshiAppContainer(context: Context) {
         aiSettingsRepository = aiChatSettingsRepository,
         bookLocks = httpSyncBookLocks,
     )
+    // Fire-and-forget auto-push for metadata-class edits (shelf moves, deletes, imports,
+    // AI-settings edits). One instance so its circuit breaker is shared by every hook;
+    // a successful manual Sync now resets it via the same signal the reader hooks use.
+    val httpSyncAutoPush: HttpSyncAutoPush = HttpSyncAutoPush(
+        bookRepository = bookRepository,
+        pusher = httpSyncPusher,
+        reconciler = httpSyncReconciler,
+        currentSettings = { httpSyncSettingsRepository.settings.first() },
+        scope = appScope,
+        breakerResetSignal = { httpSyncManualSyncSuccessAt.value },
+    )
+
+    init {
+        // AI chat settings edits sync immediately (debounced inside the hook; no-op when
+        // sync is off). Mirrors iOS AiChatSettingsStore → HttpSyncManager.onAiSettingsChanged.
+        aiChatSettingsRepository.onSyncRelevantEdit = { httpSyncAutoPush.onAiSettingsChanged() }
+    }
     // v3 engine ships side-by-side with v2 (HttpSyncReconciler). The "Sync now" UI
     // dispatches between them based on the HttpSyncSettings.useV3Sync flag (default v2).
     // Both write the same on-disk + remote state, so flipping mid-life is safe. See
@@ -140,6 +159,7 @@ internal class HoshiAppContainer(context: Context) {
             settingsRepository = bookshelfSettingsRepository,
             syncManager = syncManager,
             mokuroParser = mokuroParser,
+            httpSyncAutoPush = httpSyncAutoPush,
         )
 
     fun dictionaryViewModelRepository(contentResolver: ContentResolver): DictionaryViewModelRepository =

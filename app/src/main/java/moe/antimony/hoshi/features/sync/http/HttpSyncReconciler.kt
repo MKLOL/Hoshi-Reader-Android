@@ -69,6 +69,7 @@ class HttpSyncReconciler(
     }
     private val shelfStateStore = HttpSyncShelfStateStore(json)
     private val deletedBookStateStore = HttpSyncDeletedBookStateStore(json)
+    private val revisionStore = HttpSyncRevisionStore(json)
 
     /**
      * One reconciliation pass. Inbound first so a newer server bookmark is not stomped
@@ -281,6 +282,17 @@ class HttpSyncReconciler(
             }
             else -> AppSettingsResult(false, false, null, errors)
         }
+    }
+
+    /**
+     * Runs ONLY the bidirectional app-settings (ChatGPT model + prompts) LWW sync — used by
+     * [HttpSyncAutoPush.onAiSettingsChanged] after its debounce. Returns the error strings
+     * (empty = success). Mirrors iOS, where `HttpSyncManager.onAiSettingsChanged` calls
+     * `HttpSyncReconciler.syncAppSettings` directly.
+     */
+    suspend fun syncAppSettingsOnly(settings: HttpSyncSettings): List<String> = withContext(ioDispatcher) {
+        require(settings.isConfigured) { "HTTP sync is not configured." }
+        syncAppSettings(transportFactory(settings)) { }.errors
     }
 
     private fun remoteImagePromptText(
@@ -706,8 +718,17 @@ class HttpSyncReconciler(
             }
             val local = bookRepository.loadBookmark(bookRoot)
             val localModified = local?.lastModified?.let(::appleSecondsToRfc3339)
-            if (compareRfc3339(blob.lastModified, localModified) <= 0) {
-                // Local is at least as fresh — don't downgrade.
+            val localRev = revisionStore.current(bookRepository.booksDirectory, meta.key).localRev
+            // Don't downgrade: apply only when the remote edit chain is deeper (timestamps
+            // break ties; legacy blobs without rev keep the old pure-timestamp behavior).
+            if (compareRevisioned(
+                    localRev = localRev,
+                    remoteRev = blob.rev,
+                    localStamp = localModified,
+                    remoteStamp = blob.lastModified,
+                ) != SyncComparison.REMOTE_WINS
+            ) {
+                revisionStore.noteRemote(bookRepository.booksDirectory, meta.key, blob.rev, appliedLocally = false)
                 return@withBookLock false
             }
             bookRepository.saveBookmark(
@@ -719,6 +740,7 @@ class HttpSyncReconciler(
                     lastModified = rfc3339ToAppleSeconds(blob.lastModified),
                 ),
             )
+            revisionStore.noteRemote(bookRepository.booksDirectory, meta.key, blob.rev, appliedLocally = true)
             true
         }
     }
@@ -820,14 +842,8 @@ class HttpSyncReconciler(
         return null
     }
 
-    private fun shouldApplyRemoteShelfPlacement(
-        remoteShelfUpdatedAt: String?,
-        localShelvesUpdatedAt: String?,
-    ): Boolean {
-        if (localShelvesUpdatedAt == null) return true
-        if (remoteShelfUpdatedAt == null) return false
-        return compareRfc3339(remoteShelfUpdatedAt, localShelvesUpdatedAt) >= 0
-    }
+    // shouldApplyRemoteShelfPlacement moved to HttpSyncBlobs.kt (shared spec function,
+    // also used by the v3 planner and the fire-and-forget pushMetadata; mirrors iOS SyncCore).
 
     private suspend fun fetchRemoteMetadata(
         transport: HttpSyncKvTransport,
@@ -978,18 +994,25 @@ class HttpSyncReconciler(
                         detail = deleted.title,
                     ),
                 )
-                val response = transport.put(
-                    key = metadataKey(syncId),
-                    contentType = HttpSyncPusher.JSON_CONTENT_TYPE,
-                    body = json.encodeToString(
-                        HttpSyncMetadataBlob.serializer(),
-                        HttpSyncMetadataBlob(
-                            title = deleted.title,
-                            contentType = deleted.contentType,
-                            deletedAt = deleted.deletedAt,
-                        ),
-                    ).toByteArray(),
-                )
+                val mKey = metadataKey(syncId)
+                val response = bookLocks.withKeyLock(mKey) {
+                    val localRev = revisionStore.current(bookRepository.booksDirectory, mKey).localRev
+                    val written = transport.put(
+                        key = mKey,
+                        contentType = HttpSyncPusher.JSON_CONTENT_TYPE,
+                        body = json.encodeToString(
+                            HttpSyncMetadataBlob.serializer(),
+                            HttpSyncMetadataBlob(
+                                title = deleted.title,
+                                contentType = deleted.contentType,
+                                deletedAt = deleted.deletedAt,
+                                rev = localRev,
+                            ),
+                        ).toByteArray(),
+                    )
+                    revisionStore.noteRemote(bookRepository.booksDirectory, mKey, localRev, appliedLocally = true)
+                    written
+                }
                 uploadedMetadata += 1
                 maxLastModified = maxRfc(maxLastModified, response.lastModified)
                 // Atomic per-key clear: re-reads disk under the store's lock so
@@ -1070,23 +1093,44 @@ class HttpSyncReconciler(
                     maxRfc(remoteMetadata?.blob?.importedAt, book.importedAt)
                 }
                 val uploadDeletedAt = if (tombstoneOverridden) null else remoteMetadata?.blob?.deletedAt
-                val metadataResponse = transport.put(
-                    key = metadataKey(syncId),
-                    contentType = HttpSyncPusher.JSON_CONTENT_TYPE,
-                    body = json.encodeToString(
-                        HttpSyncMetadataBlob.serializer(),
-                        HttpSyncMetadataBlob(
-                            title = title,
-                            contentType = HttpSyncContentType.fromLocal(contentType),
-                            shelfName = uploadShelfName,
-                            shelfUpdatedAt = uploadShelfUpdatedAt,
-                            importedAt = uploadImportedAt,
-                            deletedAt = uploadDeletedAt,
-                        ),
-                    ).toByteArray(),
+                val mKey = metadataKey(syncId)
+                val localRev = revisionStore.current(bookRepository.booksDirectory, mKey).localRev
+                // Reconcile pushes merged state, not a new edit: carry the max of both revs
+                // forward without bumping (only deliberate edits bump, via the hooks).
+                val uploadRev = maxOf(localRev, remoteMetadata?.blob?.rev ?: 0)
+                val metaBlob = HttpSyncMetadataBlob(
+                    title = title,
+                    contentType = HttpSyncContentType.fromLocal(contentType),
+                    shelfName = uploadShelfName,
+                    shelfUpdatedAt = uploadShelfUpdatedAt,
+                    importedAt = uploadImportedAt,
+                    deletedAt = uploadDeletedAt,
+                    rev = uploadRev,
                 )
-                uploadedMetadata += 1
-                maxLastModified = maxRfc(maxLastModified, metadataResponse.lastModified)
+                val metadataResponse = bookLocks.withKeyLock(mKey) {
+                    if (remoteMetadata?.blob?.copy(rev = metaBlob.rev) == metaBlob) {
+                        // Content identical to the server's — skip the PUT entirely.
+                        revisionStore.noteRemote(bookRepository.booksDirectory, mKey, uploadRev, appliedLocally = true)
+                        null
+                    } else {
+                        val current = revisionStore.current(bookRepository.booksDirectory, mKey)
+                        if (current.localRev > uploadRev || current.baseRev > uploadRev) {
+                            null
+                        } else {
+                            val written = transport.put(
+                                key = mKey,
+                                contentType = HttpSyncPusher.JSON_CONTENT_TYPE,
+                                body = json.encodeToString(HttpSyncMetadataBlob.serializer(), metaBlob).toByteArray(),
+                            )
+                            revisionStore.noteRemote(bookRepository.booksDirectory, mKey, uploadRev, appliedLocally = true)
+                            written
+                        }
+                    }
+                }
+                if (metadataResponse != null) {
+                    uploadedMetadata += 1
+                    maxLastModified = maxRfc(maxLastModified, metadataResponse.lastModified)
+                }
                 if (uploadShelfUpdatedAt != null) {
                     updatedShelfState[syncId] = HttpSyncShelfPlacementRecord(
                         shelfName = uploadShelfName,
@@ -1209,6 +1253,7 @@ class HttpSyncReconciler(
         bookRoot: File,
     ): HttpSyncKvWriteResponse? = bookLocks.withBookLock(bookRoot) {
         val key = bookmarkKey(syncId)
+        val localRev = revisionStore.current(bookRepository.booksDirectory, key).localRev
         val remote = transport.get(key)
         if (remote != null) {
             val remoteBlob = runCatching {
@@ -1219,29 +1264,49 @@ class HttpSyncReconciler(
             }.getOrNull()
             if (remoteBlob != null) {
                 val localStamp = local.lastModified?.let(::appleSecondsToRfc3339)
-                if (compareRfc3339(remoteBlob.lastModified, localStamp) > 0) {
-                    // Remote is newer. Inbound normally already applied this exact key, but
-                    // a concurrent push from another device can appear between inbound and
-                    // outbound. Apply it here before refusing to upload, so this sync pass
-                    // converges locally instead of waiting for another manual sync.
-                    bookRepository.saveBookmark(
-                        bookRoot,
-                        Bookmark(
-                            chapterIndex = remoteBlob.chapterIndex,
-                            progress = remoteBlob.progress,
-                            characterCount = remoteBlob.characterCount,
-                            lastModified = rfc3339ToAppleSeconds(remoteBlob.lastModified),
-                        ),
-                    )
-                    return@withBookLock null
+                // Edit depth first; timestamps only break rev ties (legacy blobs are rev 0).
+                when (compareRevisioned(
+                    localRev = localRev,
+                    remoteRev = remoteBlob.rev,
+                    localStamp = localStamp,
+                    remoteStamp = remoteBlob.lastModified,
+                )) {
+                    SyncComparison.REMOTE_WINS -> {
+                        // Remote is newer. Inbound normally already applied this exact key, but
+                        // a concurrent push from another device can appear between inbound and
+                        // outbound. Apply it here before refusing to upload, so this sync pass
+                        // converges locally instead of waiting for another manual sync.
+                        bookRepository.saveBookmark(
+                            bookRoot,
+                            Bookmark(
+                                chapterIndex = remoteBlob.chapterIndex,
+                                progress = remoteBlob.progress,
+                                characterCount = remoteBlob.characterCount,
+                                lastModified = rfc3339ToAppleSeconds(remoteBlob.lastModified),
+                            ),
+                        )
+                        revisionStore.noteRemote(bookRepository.booksDirectory, key, remoteBlob.rev, appliedLocally = true)
+                        return@withBookLock null
+                    }
+                    SyncComparison.TIE -> {
+                        // Same depth, same stamp: nothing to push (avoids ping-pong PUTs).
+                        revisionStore.noteRemote(bookRepository.booksDirectory, key, remoteBlob.rev, appliedLocally = true)
+                        return@withBookLock null
+                    }
+                    SyncComparison.LOCAL_WINS -> Unit
                 }
             }
         }
-        transport.put(
+        val response = transport.put(
             key = key,
             contentType = HttpSyncPusher.JSON_CONTENT_TYPE,
-            body = json.encodeToString(HttpSyncBookmarkBlob.serializer(), local.toBlob()).toByteArray(),
+            body = json.encodeToString(
+                HttpSyncBookmarkBlob.serializer(),
+                local.toBlob().copy(rev = localRev),
+            ).toByteArray(),
         )
+        revisionStore.noteRemote(bookRepository.booksDirectory, key, localRev, appliedLocally = true)
+        response
     }
 
     /**

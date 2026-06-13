@@ -31,4 +31,15 @@ class HttpSyncBookLocks {
 
     suspend fun <T> withBookLock(bookRoot: File, block: suspend () -> T): T =
         mutexFor(bookRoot).withLock { block() }
+
+    /**
+     * Same per-key serialization for writers that have no on-disk root to lock on — e.g.
+     * the v3 metadata PUT, whose action carries only a syncId. Namespaced with a `key:`
+     * prefix so a KV key can never collide with a book root's canonical path.
+     */
+    fun mutexForKey(key: String): Mutex =
+        mutexes.computeIfAbsent("key:$key") { Mutex() }
+
+    suspend fun <T> withKeyLock(key: String, block: suspend () -> T): T =
+        mutexForKey(key).withLock { block() }
 }

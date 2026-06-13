@@ -15,6 +15,7 @@ import moe.antimony.hoshi.features.sync.http.HttpSyncContentType
 import moe.antimony.hoshi.features.sync.http.HttpSyncDeletedBookRecord
 import moe.antimony.hoshi.features.sync.http.HttpSyncMetadataBlob
 import moe.antimony.hoshi.features.sync.http.HttpSyncPayloadCodec
+import moe.antimony.hoshi.features.sync.http.HttpSyncRevisionStore
 import moe.antimony.hoshi.features.sync.http.bookmarkKey
 import moe.antimony.hoshi.features.sync.http.chatEntryKeySuffix
 import moe.antimony.hoshi.features.sync.http.chatKey
@@ -324,6 +325,7 @@ class V3PushOpsTest {
         val repo = newRepo()
         val transport = FakeKvTransport()
         val pushOps = newPushOps(repo)
+        HttpSyncRevisionStore(json).bumpForLocalEdit(repo.booksDirectory, metadataKey("tombed"))
 
         pushOps.pushTombstone(
             transport = transport,
@@ -342,6 +344,7 @@ class V3PushOpsTest {
         )
         assertEquals("2030-06-01T00:00:00Z", blob.deletedAt)
         assertEquals("Tombed", blob.title)
+        assertEquals("tombstone push must preserve the local metadata rev", 1, blob.rev)
     }
 
     // --- AI settings ----------------------------------------------------------

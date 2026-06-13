@@ -43,7 +43,7 @@ class ProcessExitDiagnosticsTest {
 
         val text = report.toShareText()
 
-        assertTrue(text.contains("Hoshi Diagnostics"))
+        assertTrue(text.contains("Sui Manga Reader Diagnostics"))
         assertTrue(text.contains("Package: moe.antimony.hoshi.debug"))
         assertTrue(text.contains("Version: 0.1.5 (105)"))
         assertTrue(text.contains("Android SDK: 35"))

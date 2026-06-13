@@ -26,6 +26,7 @@ import moe.antimony.hoshi.features.sync.StatisticsSyncMode
 import moe.antimony.hoshi.features.sync.SyncDirection
 import moe.antimony.hoshi.features.sync.SyncManager
 import moe.antimony.hoshi.features.sync.SyncResult
+import moe.antimony.hoshi.features.sync.http.HttpSyncAutoPush
 import moe.antimony.hoshi.features.sync.http.HttpSyncContentType
 import moe.antimony.hoshi.features.sync.http.HttpSyncDeletedBookRecord
 import moe.antimony.hoshi.features.sync.http.HttpSyncDeletedBookStateStore
@@ -71,6 +72,11 @@ internal class AndroidBookshelfRepository(
     private val bookParser: EpubBookParser = EpubBookParser(),
     private val mokuroParser: MokuroBookParser = MokuroBookParser(),
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
+    /**
+     * Fire-and-forget HTTP-sync hooks for metadata-class edits (shelf moves, deletes,
+     * imports). Optional so tests that don't exercise sync can omit it.
+     */
+    private val httpSyncAutoPush: HttpSyncAutoPush? = null,
 ) : BookshelfRepository {
     private val contentResolver = context.contentResolver
     private val httpSyncDeletedBookStateStore = HttpSyncDeletedBookStateStore(
@@ -127,6 +133,8 @@ internal class AndroidBookshelfRepository(
             }
             ContentType.Mokuro -> writeMokuroSidecars(root)
         }
+        // Publish the new book's metadata immediately (payload still uploads on manual sync).
+        notifyBookImported(root)
         readerBookId(root)
     }
 
@@ -135,18 +143,24 @@ internal class AndroidBookshelfRepository(
             ?: throw MokuroImportException("Unable to open the selected folder.")
         val root = bookRepository.importMokuroFolder(tree, contentResolver::openInputStream)
         writeMokuroSidecars(root)
+        // Publish the new book's metadata immediately (payload still uploads on manual sync).
+        notifyBookImported(root)
         readerBookId(root)
     }
 
     override suspend fun deleteBook(entry: BookEntry) = withContext(ioDispatcher) {
-        recordHttpSyncTombstone(entry)
+        val tombstone = recordHttpSyncTombstone(entry)
         bookRepository.deleteBook(entry.root, ::releasePersistedSasayakiAudioUri)
+        // Push the tombstone immediately; the staged record above stays as the retry
+        // path for the next manual sync.
+        notifyBookDeleted(tombstone)
     }
 
     override suspend fun deleteBooks(entries: Collection<BookEntry>) = withContext(ioDispatcher) {
         entries.forEach { entry ->
-            recordHttpSyncTombstone(entry)
+            val tombstone = recordHttpSyncTombstone(entry)
             bookRepository.deleteBook(entry.root, ::releasePersistedSasayakiAudioUri)
+            notifyBookDeleted(tombstone)
         }
     }
 
@@ -161,6 +175,8 @@ internal class AndroidBookshelfRepository(
                 }
             }
         bookRepository.saveShelves(shelves)
+        // Metadata edits sync immediately (fire-and-forget; no-op when sync is off).
+        notifyShelfPlacementChanged(bookIds, shelfName)
     }
 
     override suspend fun createShelf(name: String) = withContext(ioDispatcher) {
@@ -173,7 +189,11 @@ internal class AndroidBookshelfRepository(
     }
 
     override suspend fun deleteShelf(name: String) = withContext(ioDispatcher) {
-        bookRepository.saveShelves(bookRepository.loadShelves().filterNot { it.name == name })
+        val shelves = bookRepository.loadShelves()
+        // Books on the deleted shelf become unshelved — a placement change for each of them.
+        val orphanedIds = shelves.firstOrNull { it.name == name }?.bookIds.orEmpty().toSet()
+        bookRepository.saveShelves(shelves.filterNot { it.name == name })
+        notifyShelfPlacementChanged(orphanedIds, shelfName = null)
     }
 
     override suspend fun moveShelf(fromIndex: Int, toIndex: Int) = withContext(ioDispatcher) {
@@ -220,6 +240,10 @@ internal class AndroidBookshelfRepository(
                 )
             }
         }
+        // "Mark read" is a deliberate bookmark edit just like a page turn: route it through
+        // the same rev bump + fire-and-forget push path the reader hooks use, so the fresh
+        // end-of-book bookmark out-revisions (instead of losing to) an older remote position.
+        notifyBookmarkEdited(entry)
     }
 
     override suspend fun renameBook(entry: BookEntry, title: String?) = withContext(ioDispatcher) {
@@ -309,18 +333,67 @@ internal class AndroidBookshelfRepository(
     private suspend fun readerBookId(root: File): String =
         bookRepository.loadMetadata(root)?.id ?: root.name
 
-    private fun recordHttpSyncTombstone(entry: BookEntry) {
-        val title = entry.metadata.title?.takeIf { it.isNotBlank() } ?: return
-        val syncId = deriveSyncId(title) ?: return
+    private fun recordHttpSyncTombstone(entry: BookEntry): StagedTombstone? {
+        val title = entry.metadata.title?.takeIf { it.isNotBlank() } ?: return null
+        val syncId = deriveSyncId(title) ?: return null
+        val record = HttpSyncDeletedBookRecord(
+            title = title,
+            contentType = HttpSyncContentType.fromLocal(bookContentType(entry.root)),
+            deletedAt = Instant.now().toString(),
+        )
         httpSyncDeletedBookStateStore.recordDeletedBook(
             booksRoot = bookRepository.booksDirectory,
             syncId = syncId,
-            record = HttpSyncDeletedBookRecord(
-                title = title,
-                contentType = HttpSyncContentType.fromLocal(bookContentType(entry.root)),
-                deletedAt = Instant.now().toString(),
-            ),
+            record = record,
         )
+        return StagedTombstone(syncId = syncId, record = record)
+    }
+
+    private data class StagedTombstone(
+        val syncId: String,
+        val record: HttpSyncDeletedBookRecord,
+    )
+
+    // ----- Fire-and-forget HTTP-sync notifications (mirror iOS BookshelfViewModel hooks) ---
+
+    private suspend fun notifyBookImported(root: File) {
+        val autoPush = httpSyncAutoPush ?: return
+        val metadata = bookRepository.loadMetadata(root) ?: return
+        autoPush.onBookImported(
+            title = metadata.title,
+            contentType = bookContentType(root),
+            importedAt = metadata.importedAt,
+        )
+    }
+
+    private suspend fun notifyBookDeleted(tombstone: StagedTombstone?) {
+        val autoPush = httpSyncAutoPush ?: return
+        val staged = tombstone ?: return
+        autoPush.onBookDeleted(
+            syncId = staged.syncId,
+            title = staged.record.title,
+            contentType = staged.record.contentType,
+            deletedAt = staged.record.deletedAt,
+        )
+    }
+
+    private suspend fun notifyBookmarkEdited(entry: BookEntry) {
+        httpSyncAutoPush?.onBookmarkEdited(entry.root, entry.metadata.title)
+    }
+
+    private suspend fun notifyShelfPlacementChanged(bookIds: Set<String>, shelfName: String?) {
+        val autoPush = httpSyncAutoPush ?: return
+        if (bookIds.isEmpty()) return
+        val entriesById = bookRepository.loadBookEntries().associateBy { it.metadata.id }
+        for (bookId in bookIds) {
+            val entry = entriesById[bookId] ?: continue
+            autoPush.onShelfPlacementChanged(
+                title = entry.metadata.title,
+                contentType = bookContentType(entry.root),
+                importedAt = entry.metadata.importedAt,
+                shelfName = shelfName,
+            )
+        }
     }
 
     private fun releasePersistedSasayakiAudioUri(uriString: String) {

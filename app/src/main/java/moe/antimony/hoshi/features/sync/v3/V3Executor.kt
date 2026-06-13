@@ -16,11 +16,14 @@ import moe.antimony.hoshi.features.sync.http.HttpSyncChatEntryBlob
 import moe.antimony.hoshi.features.sync.http.HttpSyncDeletedBookStateStore
 import moe.antimony.hoshi.features.sync.http.HttpSyncKvTransport
 import moe.antimony.hoshi.features.sync.http.HttpSyncPayloadCodec
+import moe.antimony.hoshi.features.sync.http.HttpSyncRevisionStore
 import moe.antimony.hoshi.features.sync.http.HttpSyncShelfPlacementRecord
 import moe.antimony.hoshi.features.sync.http.resolveSyncImportedCoverPath
 import moe.antimony.hoshi.features.sync.http.HttpSyncShelfStateStore
+import moe.antimony.hoshi.features.sync.http.SyncComparison
 import moe.antimony.hoshi.features.sync.http.appleSecondsToRfc3339
-import moe.antimony.hoshi.features.sync.http.compareRfc3339
+import moe.antimony.hoshi.features.sync.http.bookmarkKey
+import moe.antimony.hoshi.features.sync.http.compareRevisioned
 import moe.antimony.hoshi.features.sync.http.rfc3339ToAppleSeconds
 import java.io.File
 import java.util.UUID
@@ -49,6 +52,7 @@ class V3Executor(
     }
     private val shelfStateStore = HttpSyncShelfStateStore(json)
     private val deletedBookStateStore = HttpSyncDeletedBookStateStore(json)
+    private val revisionStore = HttpSyncRevisionStore(json)
 
     suspend fun run(
         plan: V3Plan,
@@ -174,12 +178,22 @@ class V3Executor(
                         // clobber the newer local with an older remote. Mirrors the
                         // recheck-under-lock pattern in V3PushOps.pushBookmarkConditional.
                         val applied = bookLocks.withBookLock(targetRoot) {
+                            val key = bookmarkKey(action.syncId)
+                            val booksRoot = bookRepository.booksDirectory
                             val currentLocal = runCatching { bookRepository.loadBookmark(targetRoot) }
                                 .getOrNull()
                             val localStamp = currentLocal?.lastModified?.let(::appleSecondsToRfc3339)
-                            // compareRfc3339 returns positive when remote is strictly newer.
-                            val cmp = compareRfc3339(action.blob.lastModified, localStamp)
-                            if (cmp > 0) {
+                            // Edit depth first (re-read from the revision store under the
+                            // lock — a reader-hook push may have bumped it mid-sync);
+                            // timestamps only break rev ties.
+                            val localRev = revisionStore.current(booksRoot, key).localRev
+                            if (compareRevisioned(
+                                    localRev = localRev,
+                                    remoteRev = action.blob.rev,
+                                    localStamp = localStamp,
+                                    remoteStamp = action.blob.lastModified,
+                                ) == SyncComparison.REMOTE_WINS
+                            ) {
                                 bookRepository.saveBookmark(
                                     targetRoot,
                                     Bookmark(
@@ -189,11 +203,13 @@ class V3Executor(
                                         lastModified = rfc3339ToAppleSeconds(action.blob.lastModified),
                                     ),
                                 )
+                                revisionStore.noteRemote(booksRoot, key, action.blob.rev, appliedLocally = true)
                                 true
                             } else {
-                                // Local is newer (or equal) than the remote blob this plan
+                                // Local out-revisions (or ties) the remote blob this plan
                                 // was computed against — drop the apply. The next sync's
                                 // push phase will reconcile via pushBookmarkConditional.
+                                revisionStore.noteRemote(booksRoot, key, action.blob.rev, appliedLocally = false)
                                 false
                             }
                         }
@@ -241,8 +257,13 @@ class V3Executor(
                         }
                     }
                     is V3Action.PushMetadata -> {
-                        pushOps.pushMetadata(transport, action.syncId, action.blob)
-                        pushedMetadata += 1
+                        // SkippedIdentical = content matched the server's copy ignoring rev
+                        // (revision store still advanced); SkippedStale = a deliberate local
+                        // edit / deeper remote write superseded the plan-time blob mid-sync.
+                        val outcome = pushOps.pushMetadata(
+                            transport, action.syncId, action.blob, action.expectedRemote,
+                        )
+                        if (outcome is PushMetadataOutcome.Pushed) pushedMetadata += 1
                         if (action.blob.shelfUpdatedAt != null) {
                             existingShelfState[action.syncId] = HttpSyncShelfPlacementRecord(
                                 shelfName = action.blob.shelfName,

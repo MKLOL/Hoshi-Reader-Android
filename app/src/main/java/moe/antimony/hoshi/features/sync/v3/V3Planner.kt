@@ -1,12 +1,15 @@
 package moe.antimony.hoshi.features.sync.v3
 
 import moe.antimony.hoshi.features.sync.http.HttpSyncContentType
+import moe.antimony.hoshi.features.sync.http.SyncComparison
 import moe.antimony.hoshi.features.sync.http.appleSecondsToRfc3339
 import moe.antimony.hoshi.features.sync.http.chatEntryKeySuffix
 import moe.antimony.hoshi.features.sync.http.chatKey
+import moe.antimony.hoshi.features.sync.http.compareRevisioned
 import moe.antimony.hoshi.features.sync.http.compareRfc3339
 import moe.antimony.hoshi.features.sync.http.localImportedAtOverridesRemoteDeletion
 import moe.antimony.hoshi.features.sync.http.maxRfc
+import moe.antimony.hoshi.features.sync.http.shouldApplyRemoteShelfPlacement
 
 /**
  * Step 3 of the v3 algorithm — **PURE**. Given a snapshot of local and remote
@@ -165,20 +168,28 @@ class V3Planner {
                 } else if (r?.bookmark != null) {
                     val localBookmark = l.bookmark
                     val localStampRfc = localBookmark?.lastModified?.let(::appleSecondsToRfc3339)
-                    val cmp = compareRfc3339(r.bookmark.lastModified, localStampRfc)
-                    when {
-                        cmp > 0 -> applyRemoteBookmarks += V3Action.ApplyRemoteBookmark(
+                    // Edit depth (rev) first; timestamps only break rev ties. Legacy blobs
+                    // without rev keep the old pure-timestamp LWW behavior.
+                    when (compareRevisioned(
+                        localRev = l.bookmarkLocalRev,
+                        remoteRev = r.bookmark.rev,
+                        localStamp = localStampRfc,
+                        remoteStamp = r.bookmark.lastModified,
+                    )) {
+                        SyncComparison.REMOTE_WINS -> applyRemoteBookmarks += V3Action.ApplyRemoteBookmark(
                             root = l.root,
                             syncId = syncId,
                             blob = r.bookmark,
                         )
-                        cmp < 0 && localBookmark != null -> pushBookmarks += V3Action.PushBookmark(
-                            root = l.root,
-                            syncId = syncId,
-                            bookmark = localBookmark,
-                            expectedRemote = r.bookmark,
-                        )
-                        else -> Unit // tie or both null
+                        SyncComparison.LOCAL_WINS -> if (localBookmark != null) {
+                            pushBookmarks += V3Action.PushBookmark(
+                                root = l.root,
+                                syncId = syncId,
+                                bookmark = localBookmark,
+                                expectedRemote = r.bookmark,
+                            )
+                        }
+                        SyncComparison.TIE -> Unit // tie or both null
                     }
                 } else if (l.bookmark != null) {
                     pushBookmarks += V3Action.PushBookmark(
@@ -193,7 +204,7 @@ class V3Planner {
                 if (r?.metadata != null) {
                     if (shouldApplyRemoteShelfPlacement(
                             remoteShelfUpdatedAt = r.metadata.shelfUpdatedAt,
-                            localShelfUpdatedAt = l.shelfUpdatedAt,
+                            localShelvesUpdatedAt = l.shelfUpdatedAt,
                         ) && r.metadata.shelfName != l.shelfName
                     ) {
                         // When the local importedAt overrode a stale remote tombstone, scrub
@@ -229,12 +240,12 @@ class V3Planner {
                 } else if (l.bookId.isNotEmpty()) {
                     val uploadShelfName = if (r?.metadata != null && shouldApplyRemoteShelfPlacement(
                             remoteShelfUpdatedAt = r.metadata.shelfUpdatedAt,
-                            localShelfUpdatedAt = l.shelfUpdatedAt,
+                            localShelvesUpdatedAt = l.shelfUpdatedAt,
                         )
                     ) r.metadata.shelfName else l.shelfName
                     val uploadShelfUpdatedAt = if (r?.metadata != null && shouldApplyRemoteShelfPlacement(
                             remoteShelfUpdatedAt = r.metadata.shelfUpdatedAt,
-                            localShelfUpdatedAt = l.shelfUpdatedAt,
+                            localShelvesUpdatedAt = l.shelfUpdatedAt,
                         )
                     ) (r.metadata.shelfUpdatedAt ?: r.metadataLastModified) else l.shelfUpdatedAt
                     // importedAt write-out:
@@ -250,6 +261,10 @@ class V3Planner {
                     } else {
                         maxRfc(r?.metadata?.importedAt, l.importedAt)
                     }
+                    // A sync pushes merged state, not a new edit: carry the max of both revs
+                    // forward without bumping (only the deliberate-edit hooks bump). Same
+                    // rule as the v2 reconciler's outbound metadata pass.
+                    val uploadRev = maxOf(l.metadataLocalRev, r?.metadata?.rev ?: 0)
                     pushMetadatas += V3Action.PushMetadata(
                         syncId = syncId,
                         title = l.title,
@@ -260,7 +275,9 @@ class V3Planner {
                             shelfUpdatedAt = uploadShelfUpdatedAt,
                             importedAt = uploadImportedAt,
                             deletedAt = null,
+                            rev = uploadRev,
                         ),
+                        expectedRemote = r?.metadata,
                     )
                 }
 
@@ -385,19 +402,8 @@ class V3Planner {
         )
     }
 
-    /**
-     * Mirrors v2's `HttpSyncReconciler.shouldApplyRemoteShelfPlacement`. Both sides
-     * track an RFC-3339 `shelfUpdatedAt`; the newer one wins, with the same tie-break
-     * (remote >= local) v2 uses to converge.
-     */
-    private fun shouldApplyRemoteShelfPlacement(
-        remoteShelfUpdatedAt: String?,
-        localShelfUpdatedAt: String?,
-    ): Boolean {
-        if (localShelfUpdatedAt == null) return true
-        if (remoteShelfUpdatedAt == null) return false
-        return compareRfc3339(remoteShelfUpdatedAt, localShelfUpdatedAt) >= 0
-    }
+    // shouldApplyRemoteShelfPlacement lives in HttpSyncBlobs.kt — one shared spec function
+    // for v2, v3, and the fire-and-forget metadata push (mirrors iOS SyncCore).
 
     /**
      * For actions that reference a not-yet-imported book, we need *some* `File` to put

@@ -1,6 +1,6 @@
 # Hoshi Android Agent TODO
 
-Last updated: 2026-06-03
+Last updated: 2026-06-13
 
 This file is the short operational handoff for future agents.
 
@@ -97,7 +97,7 @@ This file is the short operational handoff for future agents.
 - Keep HTTP Sync `payload.zip` upload/download file-backed; large Mokuro manga must not be materialized as a single `ByteArray` in production sync paths.
 - Keep HTTP Sync large `payload.zip` uploads on the multipart KV API with Cloudflare-safe part sizes; do not fall back to one oversized HTTP request.
 - Preserve HTTP Sync manual-progress callbacks when adding reconciliation phases; long-running work should update the Settings screen with a real phase and item counter.
-- Preserve HTTP Sync shelf/folder placement in book metadata with per-book `shelfUpdatedAt`; legacy metadata without `shelfName` must not unshelve local books.
+- Preserve HTTP Sync per-key revision sidecars for bookmark/metadata edits; manual sync and auto-push paths must keep tombstones, shelf placement, imports, and bookmark writes revisioned so stale devices cannot overwrite newer remote state.
 - Harden the HTTP Sync KV server with mutation-safe pagination and conditional bookmark PUTs so concurrent writes cannot be missed or overwritten between Android reconciliation passes.
 - Device-validate the first Android Google Drive sync slice with `testdata/test.epub` on a user-configured Device Code OAuth client from the same project as iOS/ッツ: connect/sign-out state, transient network backoff and another-device authorization guidance, long-press manual import/export result dialogs, reader-open import-only, iOS-aligned paginated/continuous auto-export timing, close/background flush export, statistics Merge/Replace, and Sasayaki last-position sync.
 

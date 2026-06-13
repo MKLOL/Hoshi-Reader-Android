@@ -52,6 +52,13 @@ data class HttpSyncMetadataBlob(
     val importedAt: String? = null,
     /** RFC 3339 UTC — set when the user deletes the book; other devices honour it. */
     val deletedAt: String? = null,
+    /**
+     * Edit-depth revision (Lamport counter). Each deliberate local edit sets
+     * `rev = max(localRev, lastSeenRemoteRev) + 1`; the deeper edit chain wins regardless of
+     * wall clocks. `null` (legacy blobs) is treated as 0; timestamps remain the tiebreaker.
+     * See [compareRevisioned] and [HttpSyncRevisionStore].
+     */
+    val rev: Int? = null,
 )
 
 @Serializable
@@ -59,8 +66,10 @@ data class HttpSyncBookmarkBlob(
     val chapterIndex: Int,
     val progress: Double,
     val characterCount: Int,
-    /** RFC 3339 UTC — used by the client to last-write-wins when pulling from the server. */
+    /** RFC 3339 UTC — LWW tiebreaker when pulling (used when `rev`s tie or are absent). */
     val lastModified: String,
+    /** Edit-depth revision — see [HttpSyncMetadataBlob.rev]. `null` (legacy) == 0. */
+    val rev: Int? = null,
 )
 
 @Serializable
@@ -89,6 +98,8 @@ data class HttpSyncAiChatSettingsBlob(
     val promptText: String,
     val imagePromptText: String = AiChatSettings.DEFAULT_IMAGE_PROMPT,
     val lastModified: String,
+    /** Edit-depth revision — see [HttpSyncMetadataBlob.rev]. `null` (legacy) == 0. */
+    val rev: Int? = null,
 )
 
 @Serializable
@@ -210,6 +221,55 @@ internal fun maxRfc(left: String?, right: String?): String? = when {
     right == null -> left
     compareRfc3339(left, right) >= 0 -> left
     else -> right
+}
+
+// ----- Edit-depth revision comparison (cross-device-critical; mirror of iOS SyncCore) -----
+
+/** Which side of a sync comparison should win for a revisioned blob. */
+enum class SyncComparison { LOCAL_WINS, REMOTE_WINS, TIE }
+
+/**
+ * Compares two revisioned blob states: edit-depth (`rev`, a per-key Lamport counter) first,
+ * RFC 3339 timestamps as the tiebreaker. `null` revs (legacy blobs) count as 0, which preserves
+ * the old pure-timestamp LWW ordering until both sides have written a revisioned blob.
+ *
+ * This is the rule that stops a stale device from clobbering: a device that last synced a month
+ * ago carries low revs for every key it did NOT touch (so it can never overwrite fresher remote
+ * state), while the one key it deliberately edited gets `max(localRev, lastSeenRemoteRev) + 1`
+ * and wins exactly that key.
+ *
+ * Mirror of iOS `SyncCore.compareRevisioned` — both platforms must agree byte-for-byte on the
+ * decision table (see SyncConformanceTest).
+ */
+internal fun compareRevisioned(
+    localRev: Int?,
+    remoteRev: Int?,
+    localStamp: String?,
+    remoteStamp: String?,
+): SyncComparison {
+    val lr = localRev ?: 0
+    val rr = remoteRev ?: 0
+    if (lr != rr) return if (lr > rr) SyncComparison.LOCAL_WINS else SyncComparison.REMOTE_WINS
+    val cmp = compareRfc3339(localStamp, remoteStamp)
+    return when {
+        cmp > 0 -> SyncComparison.LOCAL_WINS
+        cmp < 0 -> SyncComparison.REMOTE_WINS
+        else -> SyncComparison.TIE
+    }
+}
+
+/**
+ * Shelf-placement LWW: apply the remote placement iff it is at least as fresh as the local
+ * one (ties go to remote). Shared by the v2 reconciler, the v3 planner, and the
+ * fire-and-forget metadata push. Mirror of iOS `SyncCore.shouldApplyRemoteShelfPlacement`.
+ */
+internal fun shouldApplyRemoteShelfPlacement(
+    remoteShelfUpdatedAt: String?,
+    localShelvesUpdatedAt: String?,
+): Boolean {
+    if (localShelvesUpdatedAt == null) return true
+    if (remoteShelfUpdatedAt == null) return false
+    return compareRfc3339(remoteShelfUpdatedAt, localShelvesUpdatedAt) >= 0
 }
 
 /**

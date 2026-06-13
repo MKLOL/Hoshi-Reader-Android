@@ -7,8 +7,11 @@ import moe.antimony.hoshi.epub.bookContentType
 import moe.antimony.hoshi.features.ai.AiChatHistoryStore
 import moe.antimony.hoshi.features.ai.AiChatSettingsRepository
 import moe.antimony.hoshi.features.sync.http.HttpSyncDeletedBookStateStore
+import moe.antimony.hoshi.features.sync.http.HttpSyncRevisionStore
 import moe.antimony.hoshi.features.sync.http.HttpSyncShelfStateStore
+import moe.antimony.hoshi.features.sync.http.bookmarkKey
 import moe.antimony.hoshi.features.sync.http.deriveSyncId
+import moe.antimony.hoshi.features.sync.http.metadataKey
 import java.time.Instant
 
 /**
@@ -36,10 +39,14 @@ class V3LocalState(
     }
     private val shelfStateStore = HttpSyncShelfStateStore(json)
     private val deletedBookStateStore = HttpSyncDeletedBookStateStore(json)
+    private val revisionStore = HttpSyncRevisionStore(json)
 
     suspend fun read(): V3LocalSnapshot {
         val entries = bookRepository.loadBookEntries()
         val shelfRecords = shelfStateStore.load(bookRepository.booksDirectory)
+        // Edit-depth revisions for every key this device has revisioned. Read once per
+        // snapshot (the store re-reads the sidecar file on each call).
+        val revisionRecords = revisionStore.load(bookRepository.booksDirectory)
         val deletedRecords = deletedBookStateStore.load(bookRepository.booksDirectory)
             .let { records ->
                 // Bug 1: a live local book with the same syncId as a recorded
@@ -128,6 +135,8 @@ class V3LocalState(
                 chatEntries = chatEntries,
                 pendingDeletion = pendingDeletion,
                 importedAt = entry.metadata.importedAt,
+                bookmarkLocalRev = revisionRecords[bookmarkKey(syncId)]?.localRev ?: 0,
+                metadataLocalRev = revisionRecords[metadataKey(syncId)]?.localRev ?: 0,
             )
         }
 

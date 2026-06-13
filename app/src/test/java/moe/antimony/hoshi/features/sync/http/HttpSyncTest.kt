@@ -224,14 +224,21 @@ class HttpSyncTest {
     }
 
     @Test
-    fun pushBookmarkThrowsWhenNoLocalBookmark() = runBlocking {
+    fun pushBookmarkIsQuietSuccessWhenNoLocalBookmark() = runBlocking {
         val repo = newBookRepository()
         val (_, _) = importMokuroBook(repo, "No Bookmark Yet")
-        val manager = managerFor(repo, FakeKvTransport())
-        val ex = assertThrows(HttpSyncException::class.java) {
-            runBlocking { manager.pushBookmark(repo.loadBookEntries().first().root, "No Bookmark Yet", configured) }
-        }
-        assertTrue(ex.message!!.contains("No local bookmark"))
+        val transport = FakeKvTransport()
+        val manager = managerFor(repo, transport)
+        // Missing local bookmark = nothing to push. Must NOT throw (mirrors iOS, which
+        // returns success): a throw would feed the reader hooks' circuit breaker and
+        // suppress real pushes over a book the user simply hasn't opened yet.
+        manager.pushBookmark(repo.loadBookEntries().first().root, "No Bookmark Yet", configured)
+        assertTrue("no PUT should happen without a local bookmark", transport.kv.isEmpty())
+        assertEquals(
+            "no local bookmark means no deliberate bookmark edit, so rev must not bump",
+            0,
+            HttpSyncRevisionStore(json).current(repo.booksDirectory, bookmarkKey("no_bookmark_yet")).localRev,
+        )
     }
 
     @Test
@@ -1246,20 +1253,22 @@ class HttpSyncTest {
 
     @Test
     fun pushBookmarkDoesNotOverwriteNewerServerBookmark() = runBlocking {
-        // Device A is stale on page 50 (T1); server has page 100 (T2 > T1) from device B.
-        // The fix: pushBookmark must fetch + compare, refuse to clobber, pull instead.
+        // Device A is stale on page 50; the server has page 100 from device B with a DEEPER
+        // edit chain (rev 5). pushBookmark bumps A's rev to 1 for this one local edit, but
+        // B's rev out-revisions it: refuse to clobber, pull instead. Edit depth decides;
+        // timestamps only break rev ties (same rule as iOS compareRevisioned).
         val repo = newBookRepository()
         val (root, _) = importMokuroBook(repo, "Stale Push")
         val staleApple = 800_000_000.0
         repo.saveBookmark(root, Bookmark(chapterIndex = 50, progress = 0.0, characterCount = 50, lastModified = staleApple))
 
         val transport = FakeKvTransport()
-        // Server has a NEWER bookmark (lexicographically > the stale one's RFC).
+        // Server has a NEWER bookmark that out-revisions the single local edit.
         val serverStamp = "2099-01-01T00:00:00Z"
         transport.putJson(
             key = bookmarkKey("stale_push"),
             serializer = HttpSyncBookmarkBlob.serializer(),
-            value = HttpSyncBookmarkBlob(chapterIndex = 100, progress = 0.0, characterCount = 100, lastModified = serverStamp),
+            value = HttpSyncBookmarkBlob(chapterIndex = 100, progress = 0.0, characterCount = 100, lastModified = serverStamp, rev = 5),
             json = json,
             lastModified = serverStamp,
         )
@@ -1431,6 +1440,7 @@ class HttpSyncTest {
     @Test
     fun syncOnceUploadsPendingLocalDeletionTombstoneAndClearsIt() = runBlocking {
         val repo = newBookRepository()
+        HttpSyncRevisionStore(json).bumpForLocalEdit(repo.booksDirectory, metadataKey("locally_deleted"))
         HttpSyncDeletedBookStateStore(json).recordDeletedBook(
             booksRoot = repo.booksDirectory,
             syncId = "locally_deleted",
@@ -1452,6 +1462,7 @@ class HttpSyncTest {
             transport.kv[metadataKey("locally_deleted")]!!.body.toString(Charsets.UTF_8),
         )
         assertEquals("2030-06-01T00:00:00Z", uploaded.deletedAt)
+        assertEquals("pending tombstone push must preserve the local metadata rev", 1, uploaded.rev)
         assertTrue(HttpSyncDeletedBookStateStore(json).load(repo.booksDirectory).isEmpty())
     }
 

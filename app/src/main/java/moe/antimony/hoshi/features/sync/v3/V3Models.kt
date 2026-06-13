@@ -58,6 +58,15 @@ data class V3LocalBook(
      * wins" path.
      */
     val importedAt: String? = null,
+    /**
+     * Edit-depth revision of the local bookmark / metadata keys, read from
+     * `.http_sync_revisions.json` ([moe.antimony.hoshi.features.sync.http.HttpSyncRevisionStore]).
+     * The planner compares these against the remote blobs' `rev` (edit depth first,
+     * timestamps as the tiebreaker — `compareRevisioned`) so a stale device can't clobber
+     * a deeper remote edit chain. 0 when the key was never revisioned (legacy state).
+     */
+    val bookmarkLocalRev: Int = 0,
+    val metadataLocalRev: Int = 0,
 )
 
 /**
@@ -122,7 +131,19 @@ sealed interface V3Action {
     data class ApplyRemoteMetadata(val root: File?, override val syncId: String, val blob: HttpSyncMetadataBlob) : V3Action
     data class ImportChat(val root: File, override val syncId: String, val key: String) : V3Action
     data class PushBookmark(val root: File, override val syncId: String, val bookmark: Bookmark, val expectedRemote: HttpSyncBookmarkBlob?) : V3Action
-    data class PushMetadata(override val syncId: String, val title: String, val blob: HttpSyncMetadataBlob) : V3Action
+    /**
+     * [expectedRemote] is the metadata blob the planner saw on the server (null when the
+     * key was absent). The executor skips the PUT when the upload's content equals it
+     * ignoring `rev` — pushing identical bytes would only inflate the revision counter —
+     * while still fast-forwarding the local revision store. Mirrors the v2 reconciler's
+     * content-equality skip.
+     */
+    data class PushMetadata(
+        override val syncId: String,
+        val title: String,
+        val blob: HttpSyncMetadataBlob,
+        val expectedRemote: HttpSyncMetadataBlob? = null,
+    ) : V3Action
     data class PushChat(val root: File, override val syncId: String, val entry: AiChatEntry, val key: String) : V3Action
     data class PushPayload(val root: File, override val syncId: String, val title: String, val format: HttpSyncContentType) : V3Action
     data class PushTombstone(override val syncId: String, val record: HttpSyncDeletedBookRecord) : V3Action
@@ -220,4 +241,27 @@ sealed interface PushBookmarkOutcome {
 
     /** Tie / no-op. */
     data object NoOp : PushBookmarkOutcome
+}
+
+/** Outcome of [V3PushOps.pushMetadata]. */
+sealed interface PushMetadataOutcome {
+    /** The blob was PUT to the server. */
+    data class Pushed(
+        val response: moe.antimony.hoshi.features.sync.http.HttpSyncKvWriteResponse,
+    ) : PushMetadataOutcome
+
+    /**
+     * PUT skipped: the upload's content equals the planner-seen remote blob ignoring
+     * `rev` (pushing identical bytes would only inflate the revision counter). The
+     * revision store was still fast-forwarded.
+     */
+    data object SkippedIdentical : PushMetadataOutcome
+
+    /**
+     * PUT skipped: the revision store's localRev or baseRev for the key now exceeds the
+     * plan-time `blob.rev` — a deliberate local edit (shelf move / delete hook) or an
+     * observed deeper remote write superseded this plan entry mid-sync. PUTting the
+     * stale blob would clobber the newer state on the content-blind server.
+     */
+    data object SkippedStale : PushMetadataOutcome
 }
