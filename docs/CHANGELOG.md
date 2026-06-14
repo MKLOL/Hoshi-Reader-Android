@@ -7,6 +7,14 @@ Semantic Versioning.
 
 ## [Unreleased]
 
+## [v0.9.5] - 2026-06-13
+
+### Added
+- **More cloud AI providers** — alongside ChatGPT/OpenAI you can now pick Anthropic (Claude),
+  Google Gemini, DeepSeek, Qwen, and Kimi (Moonshot) for chat and bubble translation. Each
+  provider keeps its own API key and model list, and you can still enter a custom
+  OpenAI-style model id. The AI settings screen is now labelled "Translation model".
+
 ## [v0.9.4] - 2026-06-13
 
 ### Changed
