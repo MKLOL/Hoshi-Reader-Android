@@ -207,4 +207,25 @@ class MokuroImporterTest {
         val empty = newDir("hoshi-mokuro-find-empty")
         assertNull(empty.findMokuroFile())
     }
+
+    @Test
+    fun ambiguousImagePathTailResolvesDeterministicallyToLexicographicallyFirstMatch() = runBlocking {
+        val filesDir = newDir("hoshi-det-files")
+        val staging = newDir("hoshi-det-staging")
+        // Sidecar at the staging root, so step-1 resolveWithin looks for
+        // staging/images/p.jpg — which does NOT exist. Two files match the img_path
+        // tail (step 2 is ambiguous). Before the fix, walkTopDown().firstOrNull picked
+        // one based on unspecified filesystem order; now minByOrNull(path) is stable.
+        staging.resolve("vol.mokuro").writeText(mokuroJson("images/p.jpg"))
+        staging.resolve("A/images").mkdirs()
+        staging.resolve("A/images/p.jpg").writeBytes(byteArrayOf(1))
+        staging.resolve("B/images").mkdirs()
+        staging.resolve("B/images/p.jpg").writeBytes(byteArrayOf(2))
+
+        val target = filesDir.resolve("Books/det").apply { mkdirs() }
+        importer(filesDir).assembleMokuroBook(staging) { target }
+
+        // "A/images/p.jpg" < "B/images/p.jpg" lexicographically → the A copy (bytes [1]).
+        assertArrayEquals(byteArrayOf(1), target.resolve("images/p.jpg").readBytes())
+    }
 }

@@ -7,6 +7,14 @@ Semantic Versioning.
 
 ## [Unreleased]
 
+### Fixed
+- **Dictionary popup no longer covers the top of a very tall or zoomed-in bubble.**
+  0.9.6's popup min-size change could push the popup to the side with *less* room and
+  clamp it onto the top of a screen-filling bubble; it now always opens on the side
+  with more room.
+- **Full-width dictionary popup no longer sits under the navigation bar** on screens
+  with a bottom system inset.
+
 ## [v0.9.6] - 2026-07-13
 
 ### Fixed

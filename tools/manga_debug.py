@@ -251,20 +251,22 @@ def _popup_frame(rect, screenW, screenH, maxW=320.0, maxH=250.0, isVertical=Fals
     def clamp(v, lo, hi):
         return max(lo, min(v, hi))
 
+    MIN = 120.0  # minPopupWidth == minPopupHeight in LookupPopupLayout.kt
     if isFullWidth:
         width = screenW - BORDER * 2
     elif isVertical:
-        width = min(max(spaceLeft, spaceRight) - BORDER, maxW)
+        width = min(max(max(spaceLeft, spaceRight) - BORDER, MIN), maxW)
     else:
         width = min(screenW - BORDER * 2, maxW)
     if isVertical or isFullWidth:
         height = maxH
     else:
-        height = min(max(spaceAbove, spaceBelow) - BORDER, maxH)
+        height = min(max(max(spaceAbove, spaceBelow) - BORDER, MIN), maxH)
 
     if isFullWidth:
         cx = width / 2 + BORDER
-        cy = screenH - height / 2 - BORDER
+        anchor = screenH - bottomInset - height / 2 - BORDER
+        cy = clamp(anchor, height / 2 + topInset + BORDER, anchor)
     elif isVertical:
         raw = (maxX + PAD + width / 2) if showOnRight else (minX - PAD - width / 2)
         cx = clamp(raw, width / 2, screenW - width / 2)
@@ -272,7 +274,7 @@ def _popup_frame(rect, screenW, screenH, maxW=320.0, maxH=250.0, isVertical=Fals
                    screenH - bottomInset - height / 2 - BORDER)
     else:
         cx = clamp(minX + width / 2, width / 2 + BORDER, screenW - width / 2 - BORDER)
-        showBelow = spaceBelow >= height
+        showBelow = spaceBelow >= spaceAbove or spaceBelow >= maxH
         raw = (maxY + PAD + height / 2) if showBelow else (minY - PAD - height / 2)
         cy = clamp(raw, height / 2 + topInset + BORDER,
                    screenH - bottomInset - height / 2 - BORDER)

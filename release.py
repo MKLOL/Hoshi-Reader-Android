@@ -258,11 +258,14 @@ def main() -> None:
     step("Publishing the GitHub Release")
     notes_file = Path(tempfile.gettempdir()) / f"hoshi-notes-{tag}.md"
     notes_file.write_text((notes or f"Release {new_name}") + "\n")
-    # APK asset name must match what the in-app updater expects in
-    # `GitHubReleaseUpdateRepository.availableUpdateOrNull` so installed users get
-    # automatic in-place upgrades. Keep this string in lockstep with the Kotlin
-    # `expectedManga` constant.
-    assets = [f"{RELEASE_APK}#Hoshi-Manga-{tag}.apk"]
+    # The uploaded asset's FILENAME must be `Hoshi-Manga-<tag>.apk` — that's the
+    # `name` the in-app updater matches in `GitHubReleaseUpdateRepository`
+    # (`expectedManga`). gh's `<file>#<label>` syntax only sets the display *label*,
+    # leaving the asset name as the file's basename (`app-release.apk`), which the
+    # updater ignores — so upload a copy that is literally named correctly.
+    named_apk = Path(tempfile.gettempdir()) / f"Hoshi-Manga-{tag}.apk"
+    shutil.copyfile(RELEASE_APK, named_apk)
+    assets = [str(named_apk)]
     if (REPO / "LICENSE").exists():
         assets.append("LICENSE")
     try:
@@ -270,6 +273,7 @@ def main() -> None:
              "--notes-file", str(notes_file), *assets])
     finally:
         notes_file.unlink(missing_ok=True)
+        named_apk.unlink(missing_ok=True)
 
     print(f"\n✓ Released {tag}  ->  https://github.com/{repo}/releases/tag/{tag}")
 

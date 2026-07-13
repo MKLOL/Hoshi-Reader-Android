@@ -71,14 +71,12 @@ data class LookupPopupLayout(
 
     private fun centerY(height: Double): Double {
         if (isFullWidth) {
-            // Bottom-anchored, but keep the top on screen if a configured popup
-            // height exceeds a short (split-screen / e-ink) viewport, rather than
-            // letting the sheet hang off the top edge.
-            return clampLikeIos(
-                screenHeight - height / 2 - screenBorderPadding,
-                height / 2 + screenBorderPadding,
-                screenHeight - height / 2 - screenBorderPadding,
-            )
+            // Bottom-anchored ABOVE the bottom inset (nav/gesture bar), like every
+            // other branch, but keep the top on screen if a configured popup height
+            // exceeds a short (split-screen / e-ink) viewport rather than letting the
+            // sheet hang off the top edge.
+            val anchor = screenHeight - bottomInset - height / 2 - screenBorderPadding
+            return clampLikeIos(anchor, height / 2 + topInset + screenBorderPadding, anchor)
         }
         if (isVertical) {
             val raw = selectionRect.y + height / 2
@@ -88,7 +86,7 @@ data class LookupPopupLayout(
                 screenHeight - bottomInset - height / 2 - screenBorderPadding,
             )
         }
-        val raw = if (showBelow(height)) {
+        val raw = if (showBelow()) {
             selectionRect.y + selectionRect.height + popupPadding + height / 2
         } else {
             selectionRect.y - popupPadding - height / 2
@@ -105,7 +103,12 @@ data class LookupPopupLayout(
     private fun spaceAbove(): Double = selectionRect.y - topInset - popupPadding
     private fun spaceBelow(): Double = screenHeight - bottomInset - selectionRect.y - selectionRect.height - popupPadding
     private fun showOnRight(): Boolean = spaceRight() >= spaceLeft() || spaceRight() >= maxWidth
-    private fun showBelow(height: Double): Boolean = spaceBelow() >= height
+    // Choose the side with MORE room (mirrors showOnRight), preferring below when it
+    // fully fits. Comparing against the popup HEIGHT would be wrong once height is
+    // floored: a bubble whose larger gap is below but under the floor would be thrown
+    // to the smaller (above) side, and the clamp would then shove the popup onto the
+    // bubble's top — covering the text even though there was more room below.
+    private fun showBelow(): Boolean = spaceBelow() >= spaceAbove() || spaceBelow() >= maxHeight
 
     private fun clampLikeIos(value: Double, minimum: Double, maximum: Double): Double =
         maxOf(minimum, minOf(value, maximum))

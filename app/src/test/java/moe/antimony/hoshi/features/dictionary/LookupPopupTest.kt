@@ -1014,6 +1014,159 @@ class LookupPopupTest {
         )
     }
 
+    // ---- edge cases: the popup must never cover the tapped word ----------------
+
+    @Test
+    fun tallBubbleWithMoreRoomBelowPlacesPopupBelowNotOverTheTop() {
+        // Regression (would fail before the showBelow fix): the height floor must not
+        // make showBelow pick the SMALLER (above) side and clamp the popup onto the
+        // bubble's top. Box y=44 h=752: spaceAbove=40, spaceBelow=115 (below is larger
+        // but < the 120 floor). Pre-fix this covered ~82dp of the top; now it goes below.
+        val f = frame(ReaderSelectionRect(180.0, 44.0, 70.0, 752.0), 412.0, 915.0)
+        val popupTop = f.centerY - f.height / 2
+        assertTrue("popup covers the bubble top (popupTop=$popupTop, boxTop=44)", popupTop >= 44.0)
+        assertTrue("popup not on the roomier (below) side", popupTop >= (44.0 + 796.0) / 2)
+    }
+
+    @Test
+    fun fullWidthSheetSitsAboveTheBottomInsetNotUnderTheNavBar() {
+        // Regression: the full-width bottom sheet must clear the bottom inset like every
+        // other branch. bottomInset=200 → the sheet's bottom must be <= screenH - inset.
+        val f = frame(ReaderSelectionRect(0.0, 0.0, 1.0, 1.0), 400.0, 800.0, fullWidth = true, bottomInset = 200.0)
+        assertEquals(469.0, f.centerY, 0.0)
+        assertTrue("sheet overlaps the bottom inset", f.centerY + f.height / 2 <= 600.0)
+    }
+
+    @Test
+    fun popupCoverNeverExceedsTheUnavoidableFloorOverlapAcrossAFineGrid() {
+        // The core invariant: whenever there is room for the popup beside/above/below the
+        // selection, it must NOT cover it. The only permitted cover is the small,
+        // unavoidable amount when a viewport-filling box leaves less than the 120dp floor
+        // of room on its roomier side. Fine grid so borders/corners/thresholds are hit.
+        val pad = 4.0
+        val floor = 120.0
+        val screens = listOf(412.0 to 915.0, 915.0 to 412.0, 360.0 to 640.0)
+        for ((sw, sh) in screens) {
+            for (vertical in listOf(false, true)) {
+                for (bw in listOf(20.0, 60.0, 200.0, 340.0)) {
+                    for (bh in listOf(20.0, 60.0, 200.0, 400.0, 720.0, 880.0)) {
+                        var y = -60.0
+                        while (y <= sh + 20) {
+                            var x = -60.0
+                            while (x <= sw + 20) {
+                                val f = frame(ReaderSelectionRect(x, y, bw, bh), sw, sh, vertical = vertical)
+                                val pl = f.centerX - f.width / 2
+                                val pr = f.centerX + f.width / 2
+                                val pt = f.centerY - f.height / 2
+                                val pb = f.centerY + f.height / 2
+                                assertTrue(
+                                    "off-screen top-left sw=$sw sh=$sh v=$vertical x=$x y=$y bh=$bh -> ($pl,$pt)",
+                                    pl >= -0.5 && pt >= -0.5,
+                                )
+                                val ox = maxOf(0.0, minOf(pr, x + bw) - maxOf(pl, x))
+                                val oy = maxOf(0.0, minOf(pb, y + bh) - maxOf(pt, y))
+                                if (vertical) {
+                                    val room = maxOf(x - pad, sw - x - bw - pad)
+                                    val allowed = maxOf(0.0, floor - room) + 3.0
+                                    assertTrue("vertical cover ${ox}px > $allowed at x=$x bw=$bw sw=$sw", ox <= allowed)
+                                } else {
+                                    val room = maxOf(y - pad, sh - y - bh - pad)
+                                    val allowed = maxOf(0.0, floor - room) + 3.0
+                                    assertTrue("horizontal cover ${oy}px > $allowed at y=$y bh=$bh sh=$sh", oy <= allowed)
+                                }
+                                x += 43.0
+                            }
+                            y += 43.0
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Threshold anchors — the exact `showOnRight` boundaries (vertical path).
+    @Test fun verticalShowOnRightTieChoosesRight() {
+        val f = frame(ReaderSelectionRect(196.0, 400.0, 20.0, 30.0), 412.0, 915.0, vertical = true)
+        assertEquals(186.0, f.width, 0.0); assertEquals(313.0, f.centerX, 0.0); assertEquals(525.0, f.centerY, 0.0)
+    }
+    @Test fun verticalShowOnRightJustUnderTieFlipsLeft() {
+        val f = frame(ReaderSelectionRect(197.0, 400.0, 20.0, 30.0), 412.0, 915.0, vertical = true)
+        assertEquals(187.0, f.width, 0.0); assertEquals(99.5, f.centerX, 0.0)
+    }
+    @Test fun verticalSpaceRightEqualsMaxWidthForcesRight() {
+        val f = frame(ReaderSelectionRect(456.0, 200.0, 20.0, 30.0), 800.0, 800.0, vertical = true)
+        assertEquals(320.0, f.width, 0.0); assertEquals(640.0, f.centerX, 0.0)
+    }
+    @Test fun verticalSpaceRightJustUnderMaxWidthFlipsLeft() {
+        val f = frame(ReaderSelectionRect(457.0, 200.0, 20.0, 30.0), 800.0, 800.0, vertical = true)
+        assertEquals(293.0, f.centerX, 0.0)
+    }
+
+    // Vertical border-flush — popup goes to the roomy side with a gap (never covers).
+    @Test fun verticalFlushLeftPlacesPopupRightWithGap() {
+        val f = frame(ReaderSelectionRect(0.0, 400.0, 20.0, 30.0), 412.0, 915.0, vertical = true)
+        assertEquals(320.0, f.width, 0.0); assertEquals(184.0, f.centerX, 0.0)
+        assertTrue("covers box", f.centerX - f.width / 2 >= 20.0)
+    }
+    @Test fun verticalFlushRightPlacesPopupLeftOnScreen() {
+        val f = frame(ReaderSelectionRect(392.0, 400.0, 20.0, 30.0), 412.0, 915.0, vertical = true)
+        assertEquals(228.0, f.centerX, 0.0)
+        assertTrue("off left", f.centerX - f.width / 2 >= 0.0)
+        assertTrue("covers box", f.centerX + f.width / 2 <= 392.0)
+    }
+    @Test fun verticalFlushTopClampsTopOnScreen() {
+        val f = frame(ReaderSelectionRect(100.0, 0.0, 20.0, 30.0), 412.0, 915.0, vertical = true)
+        assertEquals(131.0, f.centerY, 0.0); assertEquals(6.0, f.centerY - f.height / 2, 0.0)
+    }
+    @Test fun verticalFlushBottomClampsBottomOnScreen() {
+        val f = frame(ReaderSelectionRect(100.0, 885.0, 20.0, 30.0), 412.0, 915.0, vertical = true)
+        assertEquals(784.0, f.centerY, 0.0); assertEquals(909.0, f.centerY + f.height / 2, 0.0)
+    }
+    @Test fun verticalNegativeXClampsLeftEdgeToZero() {
+        val f = frame(ReaderSelectionRect(-30.0, 400.0, 20.0, 30.0), 412.0, 915.0, vertical = true)
+        assertEquals(160.0, f.centerX, 0.0); assertEquals(0.0, f.centerX - f.width / 2, 0.0)
+    }
+
+    // Horizontal border-flush / corners — popup goes above/below and stays on screen.
+    @Test fun horizontalFlushTopPlacesBelow() {
+        val f = frame(ReaderSelectionRect(100.0, 0.0, 60.0, 40.0), 412.0, 915.0)
+        assertEquals(246.0, f.centerX, 0.0); assertEquals(169.0, f.centerY, 0.0)
+        assertTrue("above box top", f.centerY - f.height / 2 >= 40.0)
+    }
+    @Test fun horizontalFlushBottomPlacesAbove() {
+        val f = frame(ReaderSelectionRect(100.0, 875.0, 60.0, 40.0), 412.0, 915.0)
+        assertEquals(746.0, f.centerY, 0.0)
+        assertTrue("below box bottom", f.centerY + f.height / 2 <= 875.0)
+    }
+    @Test fun horizontalTopLeftCornerClampsBothAxes() {
+        val f = frame(ReaderSelectionRect(0.0, 0.0, 60.0, 40.0), 412.0, 915.0)
+        assertEquals(166.0, f.centerX, 0.0); assertEquals(169.0, f.centerY, 0.0)
+    }
+    @Test fun horizontalBottomRightCornerClampsBothAxes() {
+        val f = frame(ReaderSelectionRect(352.0, 875.0, 60.0, 40.0), 412.0, 915.0)
+        assertEquals(246.0, f.centerX, 0.0); assertEquals(746.0, f.centerY, 0.0)
+    }
+
+    // Degenerate / off-screen / small-screen boxes.
+    @Test fun zeroSizeBoxesDoNotBreakLayout() {
+        val zw = frame(ReaderSelectionRect(200.0, 400.0, 0.0, 40.0), 412.0, 915.0)
+        assertEquals(246.0, zw.centerX, 0.0); assertEquals(569.0, zw.centerY, 0.0)
+        val zh = frame(ReaderSelectionRect(200.0, 400.0, 40.0, 0.0), 412.0, 915.0)
+        assertEquals(529.0, zh.centerY, 0.0)
+    }
+    @Test fun boxFullyBelowScreenKeepsPopupOnScreen() {
+        val f = frame(ReaderSelectionRect(100.0, 1000.0, 20.0, 30.0), 412.0, 915.0)
+        assertEquals(784.0, f.centerY, 0.0); assertTrue(f.centerY + f.height / 2 <= 915.0)
+    }
+    @Test fun boxFullyAboveScreenKeepsPopupOnScreen() {
+        val f = frame(ReaderSelectionRect(100.0, -200.0, 20.0, 30.0), 412.0, 915.0)
+        assertEquals(131.0, f.centerY, 0.0); assertTrue(f.centerY - f.height / 2 >= 0.0)
+    }
+    @Test fun landscapeShortViewportHeightTracksAvailableSpace() {
+        val f = frame(ReaderSelectionRect(250.0, 180.0, 40.0, 40.0), 600.0, 400.0)
+        assertEquals(170.0, f.height, 0.0); assertEquals(309.0, f.centerY, 0.0)
+    }
+
     private fun lookupResult(
         expression: String,
         reading: String,
