@@ -125,9 +125,37 @@ internal object MangaPageHtml {
               // Place the dictionary popup clear of the whole OCR text box (the sentence
               // being read), not just the tapped character. The shared selection script
               // reports the tapped character's tiny rect; here HoshiTextSelection.postMessage
-              // is wrapped so the containing .ocr-box's rect is substituted before the
-              // payload reaches the bridge, and LookupPopupLayout then positions the popup
-              // above or below the entire bubble.
+              // is wrapped so the containing .ocr-box's PAINTED extent is substituted before
+              // the payload reaches the bridge, and LookupPopupLayout then positions the
+              // popup above or below the entire bubble.
+              //
+              // The extent is taken from a Range over the box contents, NOT
+              // box.getBoundingClientRect(): the OCR box has a FIXED height (needed for
+              // wrap-fallback overflow detection) but revealed OCR text can render taller
+              // than mokuro's detected region, so trailing glyphs (e.g. ！？) overflow past
+              // the box edge with overflow:visible. getBoundingClientRect() measures only
+              // the border-box, so the popup would clear the box yet still cover the spilled
+              // ！？. The Range captures the true painted extent (text overflow + the action
+              // buttons); union with the box rect so we never shrink below the box itself.
+              // Exposed on window so it can be exercised directly in the instrumented
+              // WebView test (a real layout engine is the only way to reproduce the
+              // text-overflow this guards against).
+              window.hoshiOcrBoxExtent = function(box) {
+                var r = box.getBoundingClientRect();
+                var left = r.left, top = r.top, right = r.right, bottom = r.bottom;
+                try {
+                  var range = document.createRange();
+                  range.selectNodeContents(box);
+                  var cr = range.getBoundingClientRect();
+                  if (cr && (cr.width > 0 || cr.height > 0)) {
+                    left = Math.min(left, cr.left);
+                    top = Math.min(top, cr.top);
+                    right = Math.max(right, cr.right);
+                    bottom = Math.max(bottom, cr.bottom);
+                  }
+                } catch (e) {}
+                return { x: left, y: top, width: right - left, height: bottom - top };
+              }
               var native = window.HoshiTextSelection;
               if (native) {
                 window.HoshiTextSelection = {
@@ -138,7 +166,7 @@ internal object MangaPageHtml {
                       var el = node && (node.nodeType === 1 ? node : node.parentElement);
                       var box = el && el.closest && el.closest('.ocr-box');
                       if (box) {
-                        var r = box.getBoundingClientRect();
+                        var r = window.hoshiOcrBoxExtent(box);
                         var data = JSON.parse(json);
                         var hostRect = window.hoshiManga && window.hoshiManga.hostRectFromViewportRect
                           ? window.hoshiManga.hostRectFromViewportRect(r)

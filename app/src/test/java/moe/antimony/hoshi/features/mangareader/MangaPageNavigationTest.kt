@@ -162,4 +162,33 @@ class MangaPageNavigationTest {
             ),
         )
     }
+
+    @Test
+    fun negativeCurrentIndexClampsForwardToFirstPageAndBlocksBackward() {
+        // A stale/uninitialised bookmark can land off the range.
+        assertEquals(
+            0,
+            MangaPageNavigation.targetIndex(currentIndex = -1, pageCount = 10, direction = ReaderNavigationDirection.Forward),
+        )
+        assertNull(
+            MangaPageNavigation.targetIndex(currentIndex = -1, pageCount = 10, direction = ReaderNavigationDirection.Backward),
+        )
+    }
+
+    @Test
+    fun currentIndexPastEndClampsBackwardToLastPageAndBlocksForward() {
+        assertEquals(
+            9,
+            MangaPageNavigation.targetIndex(currentIndex = 10, pageCount = 10, direction = ReaderNavigationDirection.Backward),
+        )
+        assertNull(
+            MangaPageNavigation.targetIndex(currentIndex = 10, pageCount = 10, direction = ReaderNavigationDirection.Forward),
+        )
+    }
+
+    @Test
+    fun zeroPageCountNeverNavigates() {
+        assertNull(MangaPageNavigation.targetIndex(currentIndex = 0, pageCount = 0, direction = ReaderNavigationDirection.Forward))
+        assertNull(MangaPageNavigation.targetIndex(currentIndex = 0, pageCount = 0, direction = ReaderNavigationDirection.Backward))
+    }
 }

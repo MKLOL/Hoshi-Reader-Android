@@ -273,8 +273,12 @@ private fun locatePageImage(staging: File, sourceRoot: File, imgPath: String): F
     val normalized = imgPath.replace('\\', '/').trim().trimStart('/')
     if (normalized.isEmpty()) return null
     // 2. Common mokuro layout: images in a sibling folder — match the img_path tail.
+    // Sort candidates so an ambiguous tail (e.g. the same basename under two
+    // volumes) resolves to the SAME file every run — walkTopDown()'s order depends
+    // on File.listFiles(), which the JVM/OS leaves unspecified.
     staging.walkTopDown()
-        .firstOrNull { it.isFile && it.invariantSeparatorsPath.endsWith("/$normalized") }
+        .filter { it.isFile && it.invariantSeparatorsPath.endsWith("/$normalized") }
+        .minByOrNull { it.invariantSeparatorsPath }
         ?.let { return it }
     // 3. Last resort: a single unambiguous basename match anywhere in the tree.
     val basename = normalized.substringAfterLast('/')

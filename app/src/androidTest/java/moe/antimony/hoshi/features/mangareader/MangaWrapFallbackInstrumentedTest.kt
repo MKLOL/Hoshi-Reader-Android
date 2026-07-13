@@ -125,6 +125,81 @@ class MangaWrapFallbackInstrumentedTest {
     }
 
     /**
+     * Regression for the "dictionary popup covers the tapped word" bug: mokuro's OCR box
+     * has a FIXED height with `overflow: visible`, so when the revealed OCR text renders
+     * taller than the box (trailing glyphs like ！？ spilling below), the popup — which is
+     * positioned clear of the box — used to sit on top of the spill. The fix substitutes
+     * the box's true painted extent (`window.hoshiOcrBoxExtent`, a Range over the box
+     * contents) instead of `getBoundingClientRect()`. This can only be reproduced in a
+     * real layout engine, so it lives here.
+     */
+    @Test
+    fun ocrBoxExtentCapturesTextThatOverflowsTheFixedHeightBox() {
+        // A deliberately short box (6px in image coords) with a normal font forces the
+        // rendered text to overflow well past the border-box bottom.
+        val overflowingBox = MokuroTextBox(
+            left = 100, top = 100,
+            width = 300, height = 6,
+            fontSize = 40,
+            vertical = false,
+            lines = listOf("テストのテキストがはみ出る"),
+        )
+        val page = MokuroPage(
+            index = 0,
+            imagePath = "test.png",
+            imageWidth = 1000,
+            imageHeight = 1000,
+            textBoxes = listOf(overflowingBox),
+        )
+        val html = MangaPageHtml.build(
+            page = page,
+            backgroundCssColor = "#ffffff",
+            selectionScript = "",
+            scanNonJapaneseText = false,
+            eInkMode = false,
+            viewportCssWidth = 411,
+            viewportCssHeight = 844,
+        )
+
+        val state = runInWebView(html) { webView, done ->
+            webView.evaluateJavascript(
+                """
+                (function() {
+                  var box = document.querySelector('.ocr-box');
+                  if (!box) return JSON.stringify({error: 'no box'});
+                  box.classList.add('revealed');
+                  var border = box.getBoundingClientRect();
+                  var extent = window.hoshiOcrBoxExtent(box);
+                  return JSON.stringify({
+                    clientH: box.clientHeight,
+                    scrollH: box.scrollHeight,
+                    borderBottom: border.bottom,
+                    extentBottom: extent.y + extent.height,
+                  });
+                })();
+                """.trimIndent(),
+            ) { result -> done(result.trim('"').replace("\\\"", "\"")) }
+        }
+
+        val stateText = state ?: error("evaluateJavascript returned null")
+        val clientH = Regex("\"clientH\":(\\d+)").find(stateText)?.groupValues?.get(1)?.toInt()
+        val scrollH = Regex("\"scrollH\":(\\d+)").find(stateText)?.groupValues?.get(1)?.toInt()
+        val borderBottom = Regex("\"borderBottom\":([0-9.]+)").find(stateText)?.groupValues?.get(1)?.toFloat()
+        val extentBottom = Regex("\"extentBottom\":([0-9.]+)").find(stateText)?.groupValues?.get(1)?.toFloat()
+
+        assertNotNull("state missing fields: $stateText", clientH)
+        assertNotNull(scrollH); assertNotNull(borderBottom); assertNotNull(extentBottom)
+
+        // Precondition: the text really does overflow the fixed-height box.
+        assertTrue("text did not overflow (scrollH=$scrollH clientH=$clientH)", scrollH!! > clientH!!)
+        // The fix: the extent reaches past the border-box bottom to include the spill.
+        assertTrue(
+            "extent ($extentBottom) did not clear the overflow past the border box ($borderBottom)",
+            extentBottom!! > borderBottom!! + 3f,
+        )
+    }
+
+    /**
      * Boilerplate to load HTML into a WebView on the main thread and run an arbitrary
      * post-load block (typically `evaluateJavascript`). Mirrors the helper in
      * [MangaScreenshotCaptureInstrumentedTest] but parameterised on the JS payload so

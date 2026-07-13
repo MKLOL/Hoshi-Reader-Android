@@ -7,6 +7,22 @@ Semantic Versioning.
 
 ## [Unreleased]
 
+### Fixed
+- **Dictionary popup no longer covers the tapped word.** For bubbles whose revealed
+  OCR text renders slightly taller than mokuro's detected box, trailing characters
+  (e.g. ！？) spill just past the box edge; the popup positions itself clear of the
+  box, so it used to sit on top of those spilled characters. It now clears the full
+  painted text of the bubble.
+- **Dictionary popup no longer collapses to an invisible sliver on bubbles that fill
+  the screen.** A bubble tall enough to leave no room above/below (or wide enough, for
+  vertical text, to leave no room beside it) — or any bubble zoomed until it fills the
+  screen — used to shrink the popup to a 1px, effectively invisible strip. The popup now
+  keeps a usable minimum size.
+- **Importing a manga is more reliable when page images share a filename.** A mokuro
+  archive whose pages reference the same image basename across folders could bind a page
+  to an arbitrary image (the match depended on unspecified filesystem ordering); the
+  resolution is now deterministic.
+
 ## [v0.9.5] - 2026-06-13
 
 ### Added

@@ -223,4 +223,58 @@ class MokuroBookParserTest {
         assertTrue(book.pages.single().textBoxes.isEmpty())
         assertNull(book.pages.single().textBoxes.firstOrNull())
     }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun parseFailsWhenSidecarHasNoPages() {
+        val root = Files.createTempDirectory("hoshi-mokuro-empty").toFile()
+        root.resolve("mokuro.json").writeText("""{"version":"0.2.2","title":"T","pages":[]}""")
+        MokuroBookParser().parse(root)
+    }
+
+    @Test
+    fun blankVolumeFallsThroughToTitleNotDirectoryName() {
+        // A whitespace-only volume (common in scraped metadata) must not become the
+        // title, and must not skip a valid `title`.
+        val root = Files.createTempDirectory("hoshi-mokuro-blankvol").toFile()
+        root.resolve("mokuro.json").writeText(
+            """
+            {"version":"0.2.2","volume":"   ","title":"Real Title",
+             "pages":[{"img_width":100,"img_height":100,"img_path":"p.jpg","blocks":[]}]}
+            """.trimIndent(),
+        )
+        assertEquals("Real Title", MokuroBookParser().parse(root).title)
+    }
+
+    @Test
+    fun fractionalBoxCoordinatesTruncateToIntegerGeometry() {
+        // mokuro emits Double coords; the parser truncates (toInt), it does not round.
+        val root = Files.createTempDirectory("hoshi-mokuro-frac").toFile()
+        root.resolve("mokuro.json").writeText(
+            """
+            {"version":"0.2.2","volume":"V",
+             "pages":[{"img_width":1000,"img_height":1500,"img_path":"p.jpg",
+               "blocks":[{"box":[10.9,20.1,110.9,80.4],"vertical":false,"font_size":20,"lines":["x"]}]}]}
+            """.trimIndent(),
+        )
+        val box = MokuroBookParser().parse(root).pages[0].textBoxes.single()
+        assertEquals(10, box.left)
+        assertEquals(20, box.top)
+        assertEquals(100, box.width) // (110.9 - 10.9).toInt()
+        assertEquals(60, box.height) // (80.4 - 20.1).toInt()
+    }
+
+    @Test
+    fun degenerateBoxWhereMaxIsBeforeMinCoercesToZeroSizeNotNegative() {
+        val root = Files.createTempDirectory("hoshi-mokuro-degen").toFile()
+        root.resolve("mokuro.json").writeText(
+            """
+            {"version":"0.2.2","volume":"V",
+             "pages":[{"img_width":1000,"img_height":1500,"img_path":"p.jpg",
+               "blocks":[{"box":[100,100,50,50],"vertical":false,"font_size":20,"lines":["x"]}]}]}
+            """.trimIndent(),
+        )
+        val box = MokuroBookParser().parse(root).pages[0].textBoxes.single()
+        assertEquals(0, box.width)
+        assertEquals(0, box.height)
+    }
 }

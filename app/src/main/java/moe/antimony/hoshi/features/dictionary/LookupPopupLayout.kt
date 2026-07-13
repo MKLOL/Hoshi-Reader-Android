@@ -33,13 +33,26 @@ data class LookupPopupLayout(
 
     private fun width(): Double {
         if (isFullWidth) return screenWidth - screenBorderPadding * 2
-        if (isVertical) return minOf(maxOf(spaceLeft(), spaceRight()) - screenBorderPadding, maxWidth)
+        if (isVertical) {
+            // Floor the width for the same reason height() is floored: a
+            // vertical-writing selection that fills the screen width (wide bubble,
+            // or heavy pinch-zoom) drives the available side space to ~0 and would
+            // otherwise collapse the popup to a 1px, invisible sliver.
+            val available = maxOf(spaceLeft(), spaceRight()) - screenBorderPadding
+            return minOf(maxOf(available, minPopupWidth), maxWidth)
+        }
         return minOf(screenWidth - screenBorderPadding * 2, maxWidth)
     }
 
     private fun height(): Double {
         if (isVertical || isFullWidth) return maxHeight
-        return minOf(maxOf(spaceAbove(), spaceBelow()) - screenBorderPadding, maxHeight)
+        val available = maxOf(spaceAbove(), spaceBelow()) - screenBorderPadding
+        // Floor the height so a selection that fills the viewport — a tall vertical
+        // manga bubble, or any bubble under heavy pinch-zoom — can't drive `available`
+        // to zero/negative and collapse the popup to a 1px, effectively invisible
+        // strip (the dp→px conversion coerces to >=1). A visible popup that overlaps a
+        // viewport-filling bubble is far better than a popup you can't see at all.
+        return minOf(maxOf(available, minPopupHeight), maxHeight)
     }
 
     private fun centerX(width: Double): Double {
@@ -57,7 +70,16 @@ data class LookupPopupLayout(
     }
 
     private fun centerY(height: Double): Double {
-        if (isFullWidth) return screenHeight - height / 2 - screenBorderPadding
+        if (isFullWidth) {
+            // Bottom-anchored, but keep the top on screen if a configured popup
+            // height exceeds a short (split-screen / e-ink) viewport, rather than
+            // letting the sheet hang off the top edge.
+            return clampLikeIos(
+                screenHeight - height / 2 - screenBorderPadding,
+                height / 2 + screenBorderPadding,
+                screenHeight - height / 2 - screenBorderPadding,
+            )
+        }
         if (isVertical) {
             val raw = selectionRect.y + height / 2
             return clampLikeIos(
@@ -91,5 +113,9 @@ data class LookupPopupLayout(
     private companion object {
         const val popupPadding = 4.0
         const val screenBorderPadding = 6.0
+        // Minimum usable popup height/width (dp) — each capped by maxHeight/maxWidth
+        // — so a viewport-filling selection can never collapse the popup to a sliver.
+        const val minPopupHeight = 120.0
+        const val minPopupWidth = 120.0
     }
 }
