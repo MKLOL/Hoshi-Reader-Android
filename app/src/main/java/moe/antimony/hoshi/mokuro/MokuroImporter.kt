@@ -264,22 +264,25 @@ internal fun File.findMokuroFile(): File? =
  * Mokuro's standard output keeps the `.mokuro` file as a *sibling* of the image folder, so
  * `img_path` is relative to that folder rather than to the `.mokuro` file's own directory.
  * Resolution therefore falls back from the strict interpretation to matching the `img_path`
- * tail, then a unique basename, anywhere under the extracted [staging] tree. Every candidate
- * comes from `walkTopDown()` over [staging], so results are always inside it (no traversal).
+ * tail, then a unique basename, anywhere under the extracted [staging] tree. Fallbacks only
+ * succeed when they identify one file; silently choosing between volumes can bind the wrong
+ * page to the imported sidecar. Every candidate comes from `walkTopDown()` over [staging], so
+ * results are always inside it (no traversal).
  */
 private fun locatePageImage(staging: File, sourceRoot: File, imgPath: String): File? {
     // 1. Strict: img_path relative to the .mokuro file's own directory.
     sourceRoot.resolveWithin(imgPath)?.takeIf { it.isFile }?.let { return it }
     val normalized = imgPath.replace('\\', '/').trim().trimStart('/')
     if (normalized.isEmpty()) return null
-    // 2. Common mokuro layout: images in a sibling folder — match the img_path tail.
-    // Sort candidates so an ambiguous tail (e.g. the same basename under two
-    // volumes) resolves to the SAME file every run — walkTopDown()'s order depends
-    // on File.listFiles(), which the JVM/OS leaves unspecified.
-    staging.walkTopDown()
+    // 2. Common mokuro layout: images in a sibling folder — require a unique
+    // img_path-tail match. Stop after two because any additional match is already
+    // ambiguous and must not be bound to the sidecar arbitrarily.
+    val tailMatches = staging.walkTopDown()
         .filter { it.isFile && it.invariantSeparatorsPath.endsWith("/$normalized") }
-        .minByOrNull { it.invariantSeparatorsPath }
-        ?.let { return it }
+        .take(2)
+        .toList()
+    if (tailMatches.size == 1) return tailMatches.single()
+    if (tailMatches.size > 1) return null
     // 3. Last resort: a single unambiguous basename match anywhere in the tree.
     val basename = normalized.substringAfterLast('/')
     return staging.walkTopDown()

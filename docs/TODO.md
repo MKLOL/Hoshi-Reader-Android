@@ -1,6 +1,6 @@
 # Hoshi Android Agent TODO
 
-Last updated: 2026-06-13
+Last updated: 2026-07-13
 
 This file is the short operational handoff for future agents.
 
@@ -117,7 +117,8 @@ page images) that reuses the bookshelf, dictionary lookup, and Anki mining.
   the shared dictionary lookup, right-to-left navigation, volume-key paging, per-page
   resume. Content type is derived from disk (`mokuro.json` sidecar), never stored in the
   iOS-shared `metadata.json`; `Bookmark.chapterIndex` carries the page index. Accepted
-  manga archive layout is documented in `docs/MOKURO_ZIP_FORMAT.md`.
+  manga archive layout is documented in `docs/MOKURO_ZIP_FORMAT.md`; ambiguous fallback
+  image paths are rejected instead of silently binding a page from another volume.
 - Architecture invariants for future work: keep using the shared `ReaderSelectionScripts`
   / `ReaderSelectionBridge` / `LookupPopupStackView` for lookup; the manga page WebView is
   sized from the host-provided viewport dimensions (CSS `vw`/`vh` resolve to 0 in this
@@ -151,7 +152,8 @@ page images) that reuses the bookshelf, dictionary lookup, and Anki mining.
   a device keeps a system bar visible then page artwork must be inset below it.
 - Not yet done: reader appearance/settings sheet for manga and two-page spreads. Manual
   validation should cover import of both source layouts, RTL paging boundaries, rapid page
-  turns, OCR bubble lookup, and ChatGPT history rendering on slow devices.
+  turns, tall/zoomed OCR bubble popup placement, short-landscape full-width popups, and
+  ChatGPT history rendering on slow devices.
 
 ## Required Validation
 

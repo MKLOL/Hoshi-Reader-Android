@@ -7,6 +7,15 @@ Semantic Versioning.
 
 ## [Unreleased]
 
+### Fixed
+- **Dictionary popups stay clear of text whenever a usable gap is available.** Tall or
+  zoomed bubbles no longer have the 120dp minimum forced into a smaller-but-usable gap,
+  vertical-writing popups follow the same rule, and oversized full-width popups are capped
+  to the inset-safe viewport instead of clipping off-screen.
+- **Ambiguous mokuro page-image paths no longer import an arbitrary volume.** If a fallback
+  path matches images in multiple folders, import now stops instead of silently choosing the
+  lexicographically first file and potentially showing the wrong page or cover.
+
 ## [v0.9.7] - 2026-07-13
 
 ### Fixed

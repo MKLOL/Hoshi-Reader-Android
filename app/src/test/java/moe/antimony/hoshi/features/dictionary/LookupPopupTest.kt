@@ -837,12 +837,12 @@ class LookupPopupTest {
     }
 
     @Test
-    fun horizontalHeightAlwaysWithinFloorToMaxBand() {
+    fun horizontalHeightAlwaysStaysPositiveAndWithinTheConfiguredMaximum() {
         var y = -100.0
         while (y <= 915.0) {
             for (h in listOf(20.0, 200.0, 800.0)) {
                 val f = frame(ReaderSelectionRect(100.0, y, 30.0, h), 412.0, 915.0, maxH = 250.0)
-                assertTrue("height ${f.height} below floor at y=$y h=$h", f.height >= minOf(120.0, 250.0))
+                assertTrue("height ${f.height} is not visible at y=$y h=$h", f.height > 0.0)
                 assertTrue("height ${f.height} above max at y=$y h=$h", f.height <= 250.0)
                 assertTrue("width ${f.width} above max", f.width <= 320.0)
             }
@@ -1029,12 +1029,54 @@ class LookupPopupTest {
     }
 
     @Test
+    fun positiveSpaceBelowIsUsedInsteadOfForcingTheMinimumHeightIntoTheSelection() {
+        val selection = ReaderSelectionRect(180.0, 44.0, 70.0, 752.0)
+        val f = frame(selection, 412.0, 915.0)
+        val popupTop = f.centerY - f.height / 2
+
+        assertEquals(109.0, f.height, 0.0)
+        assertTrue(
+            "popup overlaps the selection despite 109dp of usable space below",
+            popupTop >= selection.y + selection.height + 4.0,
+        )
+    }
+
+    @Test
+    fun positiveSpaceRightIsUsedInsteadOfForcingTheMinimumWidthIntoTheSelection() {
+        val selection = ReaderSelectionRect(44.0, 180.0, 252.0, 70.0)
+        val f = frame(selection, 412.0, 915.0, vertical = true)
+        val popupLeft = f.centerX - f.width / 2
+
+        assertEquals(106.0, f.width, 0.0)
+        assertTrue(
+            "popup overlaps the selection despite 106dp of usable space on the right",
+            popupLeft >= selection.x + selection.width + 4.0,
+        )
+    }
+
+    @Test
     fun fullWidthSheetSitsAboveTheBottomInsetNotUnderTheNavBar() {
         // Regression: the full-width bottom sheet must clear the bottom inset like every
         // other branch. bottomInset=200 → the sheet's bottom must be <= screenH - inset.
         val f = frame(ReaderSelectionRect(0.0, 0.0, 1.0, 1.0), 400.0, 800.0, fullWidth = true, bottomInset = 200.0)
         assertEquals(469.0, f.centerY, 0.0)
         assertTrue("sheet overlaps the bottom inset", f.centerY + f.height / 2 <= 600.0)
+    }
+
+    @Test
+    fun fullWidthHeightIsCappedToTheSafeViewport() {
+        val f = frame(
+            rect = ReaderSelectionRect(0.0, 0.0, 1.0, 1.0),
+            screenW = 400.0,
+            screenH = 200.0,
+            fullWidth = true,
+            topInset = 10.0,
+            bottomInset = 20.0,
+        )
+
+        assertEquals(158.0, f.height, 0.0)
+        assertEquals(16.0, f.centerY - f.height / 2, 0.0)
+        assertEquals(174.0, f.centerY + f.height / 2, 0.0)
     }
 
     @Test
@@ -1067,11 +1109,13 @@ class LookupPopupTest {
                                 val oy = maxOf(0.0, minOf(pb, y + bh) - maxOf(pt, y))
                                 if (vertical) {
                                     val room = maxOf(x - pad, sw - x - bw - pad)
-                                    val allowed = maxOf(0.0, floor - room) + 3.0
+                                    val available = room - 6.0
+                                    val allowed = if (available >= 48.0) 3.0 else maxOf(0.0, floor - room) + 3.0
                                     assertTrue("vertical cover ${ox}px > $allowed at x=$x bw=$bw sw=$sw", ox <= allowed)
                                 } else {
                                     val room = maxOf(y - pad, sh - y - bh - pad)
-                                    val allowed = maxOf(0.0, floor - room) + 3.0
+                                    val available = room - 6.0
+                                    val allowed = if (available >= 48.0) 3.0 else maxOf(0.0, floor - room) + 3.0
                                     assertTrue("horizontal cover ${oy}px > $allowed at y=$y bh=$bh sh=$sh", oy <= allowed)
                                 }
                                 x += 43.0

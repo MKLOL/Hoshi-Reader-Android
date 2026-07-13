@@ -34,25 +34,21 @@ data class LookupPopupLayout(
     private fun width(): Double {
         if (isFullWidth) return screenWidth - screenBorderPadding * 2
         if (isVertical) {
-            // Floor the width for the same reason height() is floored: a
-            // vertical-writing selection that fills the screen width (wide bubble,
-            // or heavy pinch-zoom) drives the available side space to ~0 and would
-            // otherwise collapse the popup to a 1px, invisible sliver.
             val available = maxOf(spaceLeft(), spaceRight()) - screenBorderPadding
-            return minOf(maxOf(available, minPopupWidth), maxWidth)
+            return popupSize(available, maxWidth, minPopupWidth)
         }
         return minOf(screenWidth - screenBorderPadding * 2, maxWidth)
     }
 
     private fun height(): Double {
-        if (isVertical || isFullWidth) return maxHeight
+        if (isFullWidth) {
+            val safeViewportHeight =
+                (screenHeight - topInset - bottomInset - screenBorderPadding * 2).coerceAtLeast(1.0)
+            return minOf(maxHeight, safeViewportHeight)
+        }
+        if (isVertical) return maxHeight
         val available = maxOf(spaceAbove(), spaceBelow()) - screenBorderPadding
-        // Floor the height so a selection that fills the viewport — a tall vertical
-        // manga bubble, or any bubble under heavy pinch-zoom — can't drive `available`
-        // to zero/negative and collapse the popup to a 1px, effectively invisible
-        // strip (the dp→px conversion coerces to >=1). A visible popup that overlaps a
-        // viewport-filling bubble is far better than a popup you can't see at all.
-        return minOf(maxOf(available, minPopupHeight), maxHeight)
+        return popupSize(available, maxHeight, minPopupHeight)
     }
 
     private fun centerX(width: Double): Double {
@@ -113,6 +109,17 @@ data class LookupPopupLayout(
     private fun clampLikeIos(value: Double, minimum: Double, maximum: Double): Double =
         maxOf(minimum, minOf(value, maximum))
 
+    /**
+     * Preserve space that can hold a minimally usable popup without covering the selection.
+     * Only use the visibility floor when the remaining gap is itself a sliver, where some
+     * overlap is unavoidable and a visible popup is preferable to an unusable strip.
+     */
+    private fun popupSize(available: Double, maximum: Double, minimumVisible: Double): Double =
+        minOf(
+            if (available >= minimumUsableNonOverlappingSize) available else minimumVisible,
+            maximum,
+        )
+
     private companion object {
         const val popupPadding = 4.0
         const val screenBorderPadding = 6.0
@@ -120,5 +127,7 @@ data class LookupPopupLayout(
         // — so a viewport-filling selection can never collapse the popup to a sliver.
         const val minPopupHeight = 120.0
         const val minPopupWidth = 120.0
+        // Smaller gaps cannot present a meaningful dictionary result without overlapping.
+        const val minimumUsableNonOverlappingSize = 48.0
     }
 }

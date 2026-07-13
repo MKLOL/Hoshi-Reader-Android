@@ -252,16 +252,21 @@ def _popup_frame(rect, screenW, screenH, maxW=320.0, maxH=250.0, isVertical=Fals
         return max(lo, min(v, hi))
 
     MIN = 120.0  # minPopupWidth == minPopupHeight in LookupPopupLayout.kt
+    MIN_USABLE = 48.0
     if isFullWidth:
         width = screenW - BORDER * 2
     elif isVertical:
-        width = min(max(max(spaceLeft, spaceRight) - BORDER, MIN), maxW)
+        available = max(spaceLeft, spaceRight) - BORDER
+        width = min(available if available >= MIN_USABLE else MIN, maxW)
     else:
         width = min(screenW - BORDER * 2, maxW)
-    if isVertical or isFullWidth:
+    if isFullWidth:
+        height = min(maxH, max(screenH - topInset - bottomInset - BORDER * 2, 1.0))
+    elif isVertical:
         height = maxH
     else:
-        height = min(max(max(spaceAbove, spaceBelow) - BORDER, MIN), maxH)
+        available = max(spaceAbove, spaceBelow) - BORDER
+        height = min(available if available >= MIN_USABLE else MIN, maxH)
 
     if isFullWidth:
         cx = width / 2 + BORDER
