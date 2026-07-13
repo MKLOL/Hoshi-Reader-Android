@@ -7,6 +7,8 @@ Semantic Versioning.
 
 ## [Unreleased]
 
+## [v0.9.6] - 2026-07-13
+
 ### Fixed
 - **Dictionary popup no longer covers the tapped word.** For bubbles whose revealed
   OCR text renders slightly taller than mokuro's detected box, trailing characters
