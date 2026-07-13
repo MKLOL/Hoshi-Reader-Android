@@ -7,6 +7,8 @@ Semantic Versioning.
 
 ## [Unreleased]
 
+## [v0.9.7] - 2026-07-13
+
 ### Fixed
 - **Dictionary popup no longer covers the top of a very tall or zoomed-in bubble.**
   0.9.6's popup min-size change could push the popup to the side with *less* room and
