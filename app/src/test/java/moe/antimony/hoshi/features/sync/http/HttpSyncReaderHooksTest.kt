@@ -25,9 +25,8 @@ class HttpSyncReaderHooksTest {
 
     private lateinit var spy: RecordingPusher
     private lateinit var scope: CoroutineScope
-    private val configured = HttpSyncSettings(baseUrl = "https://x", bearerToken = "t", enabled = true)
+    private val configured = HttpSyncSettings(baseUrl = "https://x", bearerToken = "t")
     private val unconfigured = HttpSyncSettings(baseUrl = "", bearerToken = "")
-    private val disabled = HttpSyncSettings(baseUrl = "https://x", bearerToken = "t", enabled = false)
     private var fakeNowMs: Long = 1_700_000_000_000L
 
     @Before fun setUp() {
@@ -131,16 +130,6 @@ class HttpSyncReaderHooksTest {
         val (gotTitle, gotEntry, _) = spy.chatCalls.single()
         assertEquals(title, gotTitle)
         assertEquals(entry, gotEntry)
-    }
-
-    @Test
-    fun hooksNoOpWhenEnabledFalse() = runBlocking {
-        val hooks = newHooks(settings = disabled)
-        repeat(HttpSyncReaderHooks.PAGE_TURN_PUSH_THRESHOLD) { hooks.onPageTurnPersisted() }
-        hooks.onLeave()
-        hooks.onChatEntryPersisted(AiChatEntry("x", "p", "m", "r", 0.0))
-        assertEquals("disabled = no pushes, even if URL+token configured", 0, spy.bookmarkCount)
-        assertEquals(0, spy.chatCount)
     }
 
     @Test

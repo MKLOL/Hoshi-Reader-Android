@@ -43,7 +43,7 @@ import java.util.concurrent.atomic.AtomicReference
  * Usage:
  * ```
  * StubKvServer().use { server ->
- *     val settings = HttpSyncSettings(baseUrl = server.baseUrl, bearerToken = server.token, enabled = true)
+ *     val settings = HttpSyncSettings(baseUrl = server.baseUrl, bearerToken = server.token)
  *     val engine = V3SyncEngine(...)
  *     engine.syncOnce(settings)
  * }

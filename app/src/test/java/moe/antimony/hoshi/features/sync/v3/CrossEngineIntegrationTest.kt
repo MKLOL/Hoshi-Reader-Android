@@ -64,7 +64,7 @@ class CrossEngineIntegrationTest {
     @get:Rule val tempFolder = TemporaryFolder()
 
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
-    private val configured = HttpSyncSettings("https://x", "t", enabled = true)
+    private val configured = HttpSyncSettings("https://x", "t")
 
     private fun newRepo(name: String): BookRepository =
         BookRepository(tempFolder.newFolder(name))

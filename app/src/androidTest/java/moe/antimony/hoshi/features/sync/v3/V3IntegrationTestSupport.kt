@@ -260,7 +260,6 @@ internal fun freshDevice(
 internal fun stubSettings(server: StubKvServer): HttpSyncSettings = HttpSyncSettings(
     baseUrl = server.baseUrl,
     bearerToken = server.token,
-    enabled = true,
 )
 
 /**

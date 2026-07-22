@@ -611,7 +611,7 @@ class HttpSyncPayloadTest {
             ioDispatcher = Dispatchers.Unconfined,
         )
         val result = reconciler.syncOnce(
-            HttpSyncSettings(baseUrl = "https://x", bearerToken = "t", enabled = true),
+            HttpSyncSettings(baseUrl = "https://x", bearerToken = "t"),
         )
         assertEquals(1, result.uploadedPayloads)
         assertNotNull(transport.kv[payloadZipKey("mokuro_with_payload")])

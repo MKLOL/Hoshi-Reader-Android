@@ -31,7 +31,7 @@ class HttpSyncReconcilerRaceTest {
     @get:Rule val tempFolder = TemporaryFolder()
 
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
-    private val configured = HttpSyncSettings("https://x", "t", enabled = true)
+    private val configured = HttpSyncSettings("https://x", "t")
 
     private fun newBookRepository(): BookRepository =
         BookRepository(tempFolder.newFolder())

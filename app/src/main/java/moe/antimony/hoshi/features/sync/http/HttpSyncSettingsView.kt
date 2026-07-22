@@ -2,7 +2,6 @@ package moe.antimony.hoshi.features.sync.http
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -20,7 +19,6 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -30,7 +28,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
@@ -42,9 +39,10 @@ import moe.antimony.hoshi.LocalHoshiAppContainer
 import moe.antimony.hoshi.features.settings.SettingsDetailScaffold
 
 /**
- * Settings screen for the Android-only HTTP sync — base URL, bearer token, enabled toggle,
- * and a manual "Sync now" button. Lives under Settings → Advanced → HTTP Sync alongside
- * (but independent of) the iOS-shared Google Drive sync.
+ * Settings screen for the Android-only HTTP sync — base URL, bearer token, and a manual
+ * "Sync now" button. Sync (including auto-push) is active whenever both fields are set.
+ * Lives under Settings → Advanced → HTTP Sync alongside (but independent of) the
+ * iOS-shared Google Drive sync.
  */
 @Composable
 fun HttpSyncSettingsView(
@@ -124,13 +122,6 @@ fun HttpSyncSettingsView(
                 supportingText = { Text("Sent as `Authorization: Bearer …` on every request.") },
                 modifier = Modifier.fillMaxWidth(),
             )
-            EnabledRow(
-                enabled = loaded.enabled,
-                isConfigured = loaded.isConfigured,
-                onChange = { enabled ->
-                    scope.launch { repository.update { it.copy(enabled = enabled) } }
-                },
-            )
             SyncNowButton(
                 enabled = loaded.isConfigured && status !is SyncStatus.Running,
                 running = status is SyncStatus.Running,
@@ -178,36 +169,6 @@ fun HttpSyncSettingsView(
                 },
             )
             StatusLine(status)
-        }
-    }
-}
-
-@Composable
-private fun EnabledRow(
-    enabled: Boolean,
-    isConfigured: Boolean,
-    onChange: (Boolean) -> Unit,
-) {
-    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text("Enabled", style = MaterialTheme.typography.bodyLarge)
-                Text(
-                    text = if (isConfigured) {
-                        "On: page-turn and chat-entry auto-push run silently in the background. " +
-                            "Off: only the Sync now button below pushes anything. Useful on " +
-                            "cellular data or when you don't want the chatter."
-                    } else {
-                        "Fill in the base URL and bearer token first."
-                    },
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            Switch(checked = enabled, onCheckedChange = onChange, enabled = isConfigured)
         }
     }
 }

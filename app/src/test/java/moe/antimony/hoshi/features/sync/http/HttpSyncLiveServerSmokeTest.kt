@@ -305,7 +305,7 @@ class HttpSyncLiveServerSmokeTest {
                 aiSettingsRepository = aiRepo,
                 transportFactory = { client },
             )
-            val settings = HttpSyncSettings(baseUrl = baseUrl, bearerToken = token, enabled = true)
+            val settings = HttpSyncSettings(baseUrl = baseUrl, bearerToken = token)
             val result = reconciler.syncOnce(settings)
 
             // ── Assertions ────────────────────────────────────────────────────────────

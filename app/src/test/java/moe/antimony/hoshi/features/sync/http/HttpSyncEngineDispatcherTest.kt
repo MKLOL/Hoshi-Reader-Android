@@ -30,7 +30,6 @@ class HttpSyncEngineDispatcherTest {
     private val configured = HttpSyncSettings(
         baseUrl = "https://x",
         bearerToken = "t",
-        enabled = true,
     )
 
     @Test

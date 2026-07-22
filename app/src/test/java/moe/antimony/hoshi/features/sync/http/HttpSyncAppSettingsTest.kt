@@ -36,7 +36,7 @@ class HttpSyncAppSettingsTest {
     @get:Rule val tempFolder = TemporaryFolder()
 
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
-    private val configured = HttpSyncSettings("https://x", "t", enabled = true)
+    private val configured = HttpSyncSettings("https://x", "t")
 
     @Test
     fun localEditedSettingsArePushedWhenServerIsEmpty() = runBlocking {

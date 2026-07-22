@@ -27,8 +27,8 @@ private const val TAG = "HttpSync"
  *  - On every new ChatGPT response that gets persisted: PUT that one chat entry at its
  *    content-addressable key (write-once on the server; safe to retry).
  *
- * Gated by both [HttpSyncSettings.isConfigured] and [HttpSyncSettings.enabled]. Network
- * errors are swallowed — the next manual "Sync now" tap will reconcile.
+ * Gated by [HttpSyncSettings.isConfigured]. Network errors are swallowed — the next
+ * manual "Sync now" tap will reconcile.
  *
  * **Offline circuit breaker:** after [CONSECUTIVE_FAILURE_THRESHOLD] consecutive failed
  * pushes we suppress new pushes for [BACKOFF_MS] milliseconds. This keeps the IO thread
@@ -97,11 +97,10 @@ class HttpSyncReaderHooks internal constructor(
         }
     }
 
-    /** Returns the current settings iff sync is configured AND the user hasn't disabled auto-push. */
+    /** Returns the current settings iff sync is configured (base URL + bearer token set). */
     private fun activeSettings(): HttpSyncSettings? {
         val s = currentSettings() ?: return null
         if (!s.isConfigured) return null
-        if (!s.enabled) return null
         return s
     }
 

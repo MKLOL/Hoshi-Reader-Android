@@ -207,10 +207,10 @@ class HttpSyncAutoPush(
         }
     }
 
-    /** The current settings iff sync is enabled + configured and the breaker is closed. */
+    /** The current settings iff sync is configured and the breaker is closed. */
     private suspend fun activeSettings(): HttpSyncSettings? {
         val settings = runCatching { currentSettings() }.getOrNull() ?: return null
-        if (!settings.isConfigured || !settings.enabled) return null
+        if (!settings.isConfigured) return null
         if (breakerOpen()) return null
         return settings
     }

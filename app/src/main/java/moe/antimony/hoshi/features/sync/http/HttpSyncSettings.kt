@@ -14,10 +14,8 @@ import kotlinx.coroutines.flow.map
  * Settings + runtime cursor for the v2 KV HTTP sync (see [HttpSyncReconciler] and
  * `docs/HTTP_SYNC_KV.md`):
  *
- *  - [baseUrl] and [bearerToken] — what the user pastes once.
- *  - [enabled] — gates the reader-side auto-push hooks ([HttpSyncReaderHooks]). When
- *    off, page turns and chat entries still save locally and the manual "Sync now"
- *    button still works; only the silent fire-and-forget pushes are suppressed.
+ *  - [baseUrl] and [bearerToken] — what the user pastes once. Sync (including the
+ *    reader-side auto-push hooks, [HttpSyncReaderHooks]) is active whenever both are set.
  *  - [lastSyncedAt] — RFC 3339 cursor for the inbound `list?since=` filter. Managed by
  *    [HttpSyncReconciler], not the UI; lives in the same DataStore so it survives
  *    uninstalls / clears the way the rest of the settings do.
@@ -27,8 +25,6 @@ data class HttpSyncSettings(
     val baseUrl: String = DEFAULT_BASE_URL,
     /** Bearer token sent in the `Authorization` header on every request. */
     val bearerToken: String = "",
-    /** Whether HTTP sync is wired up. The Sync Now button works regardless; this gates auto-sync hooks. */
-    val enabled: Boolean = false,
     /**
      * Highest `lastModified` (RFC 3339 UTC) the client has observed from the server. The
      * inbound `GET /v1/kv?since=...` filter uses this so we never re-fetch unchanged keys.
@@ -80,7 +76,6 @@ class HttpSyncSettingsRepository(
             val next = transform(preferences.toHttpSyncSettings())
             preferences[KEY_BASE_URL] = next.baseUrl.trim().trimEnd('/')
             preferences[KEY_TOKEN] = next.bearerToken.trim()
-            preferences[KEY_ENABLED] = next.enabled
             preferences[KEY_USE_V3_SYNC] = next.useV3Sync
             val cursor = next.lastSyncedAt?.trim()
             if (cursor.isNullOrEmpty()) {
@@ -97,7 +92,6 @@ class HttpSyncSettingsRepository(
             // user has typed (even cleared the field to ""), that explicit value wins.
             baseUrl = this[KEY_BASE_URL] ?: HttpSyncSettings.DEFAULT_BASE_URL,
             bearerToken = this[KEY_TOKEN].orEmpty(),
-            enabled = this[KEY_ENABLED] ?: false,
             lastSyncedAt = this[KEY_LAST_SYNCED_AT],
             // Default = v3 (the production engine). Devices that pinned v2 will keep that
             // setting; everyone else gets v3 on next launch. Flip back to v2 only as a
@@ -108,7 +102,6 @@ class HttpSyncSettingsRepository(
     private companion object {
         val KEY_BASE_URL = stringPreferencesKey("baseUrl")
         val KEY_TOKEN = stringPreferencesKey("bearerToken")
-        val KEY_ENABLED = booleanPreferencesKey("enabled")
         val KEY_LAST_SYNCED_AT = stringPreferencesKey("lastSyncedAt")
         val KEY_USE_V3_SYNC = booleanPreferencesKey("useV3Sync")
     }

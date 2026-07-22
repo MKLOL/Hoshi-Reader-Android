@@ -31,7 +31,7 @@ import java.util.UUID
 class V3RaceTest {
     @get:Rule val tempFolder = TemporaryFolder()
 
-    private val configured = HttpSyncSettings("https://x", "t", enabled = true)
+    private val configured = HttpSyncSettings("https://x", "t")
 
     private fun newRepo(): BookRepository = BookRepository(tempFolder.newFolder())
 
