@@ -99,6 +99,18 @@ fun ReaderBehaviorScreen(
                             onSettingsChange(settings.copy(keepScreenOnWhileReading = it))
                         },
                     )
+                    // E-ink Mode used to live on the Appearance screen, which the manga
+                    // fork hides (its other settings are EPUB-text-reader specific) — so
+                    // the toggle surfaces here instead.
+                    BehaviorDivider()
+                    BehaviorSwitchRow(
+                        label = stringResource(ReaderBehaviorRow.EInkMode.labelRes),
+                        checked = settings.eInkMode,
+                        onCheckedChange = {
+                            onSettingsChange(settings.copy(eInkMode = it))
+                        },
+                        description = stringResource(R.string.reader_behavior_eink_mode_desc),
+                    )
                     // Manga-only behavior toggles. These used to live in the manga
                     // reader's overflow (⋯) menu, but they're stable preferences not
                     // per-session knobs — so they belong here in Settings.
@@ -155,6 +167,7 @@ private enum class ReaderBehaviorRow(val labelRes: Int) {
     VolumeKeysSeekSasayaki(R.string.reader_behavior_volume_keys_seek_sasayaki),
     ReverseVolumeKeyDirection(R.string.reader_behavior_reverse_volume_key_direction),
     KeepScreenOn(R.string.reader_behavior_keep_screen_on),
+    EInkMode(R.string.reader_appearance_eink_mode),
     MangaSingleTapLookup(R.string.reader_behavior_manga_single_tap_lookup),
     MangaUseNotoSansJp(R.string.reader_behavior_manga_use_noto_sans_jp),
     AutomaticallyCheckForUpdates(R.string.reader_behavior_auto_check_updates),

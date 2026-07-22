@@ -15,6 +15,9 @@ class ReaderBehaviorSasayakiTest {
                 R.string.reader_behavior_volume_keys_seek_sasayaki,
                 R.string.reader_behavior_reverse_volume_key_direction,
                 R.string.reader_behavior_keep_screen_on,
+                // E-ink Mode surfaces here because the manga fork hides the
+                // Appearance screen it used to live on.
+                R.string.reader_appearance_eink_mode,
                 // Manga-specific toggles, moved here from the reader's overflow (⋯)
                 // menu so they live with the other durable reader preferences.
                 R.string.reader_behavior_manga_single_tap_lookup,

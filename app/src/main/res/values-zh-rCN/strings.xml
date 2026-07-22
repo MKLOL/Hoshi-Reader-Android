@@ -176,6 +176,7 @@
     <string name="reader_behavior_volume_keys_seek_sasayaki">音量键跳转有声书</string>
     <string name="reader_behavior_reverse_volume_key_direction">反转音量键方向</string>
     <string name="reader_behavior_keep_screen_on">保持屏幕常亮</string>
+    <string name="reader_behavior_eink_mode_desc">针对墨水屏优化：纯黑白显示、无翻页动画。应用无法自动检测墨水屏，请手动开启。</string>
     <string name="reader_behavior_auto_check_updates">自动检查更新</string>
     <string name="reader_behavior_manga_single_tap_lookup">漫画：单击查词</string>
     <string name="reader_behavior_manga_single_tap_lookup_desc">第一次点击对话气泡时同时显示文字并查词。默认行为是先显示文字，第二次点击才查词，这样查词弹窗不会遮挡气泡上的操作按钮。</string>

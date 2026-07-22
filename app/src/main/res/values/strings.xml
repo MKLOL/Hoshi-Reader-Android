@@ -181,6 +181,7 @@
     <string name="reader_behavior_volume_keys_seek_sasayaki">Volume Keys Seek Sasayaki</string>
     <string name="reader_behavior_reverse_volume_key_direction">Reverse Volume Key Direction</string>
     <string name="reader_behavior_keep_screen_on">Keep Screen On</string>
+    <string name="reader_behavior_eink_mode_desc">Optimizes the app for e-ink screens: pure black &amp; white, no page-turn animation. Enable it yourself — the app can\'t detect an e-ink display on its own.</string>
     <string name="reader_behavior_auto_check_updates">Automatically Check for Updates</string>
     <string name="reader_behavior_manga_single_tap_lookup">Manga: Single-Tap to Look Up</string>
     <string name="reader_behavior_manga_single_tap_lookup_desc">First tap on a speech bubble reveals AND looks the word up. Default reveals first; the second tap looks up so the dictionary popup doesn\'t cover the bubble\'s action buttons.</string>
