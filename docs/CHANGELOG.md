@@ -7,6 +7,18 @@ Semantic Versioning.
 
 ## [Unreleased]
 
+## [v0.9.8] - 2026-07-21
+
+### Added
+- **E-ink Mode toggle is back**, now under Settings → Behavior. It had been unreachable
+  since the Appearance screen (its old home) was hidden in the manga fork, even though
+  the mode still drives the black-&-white theme and disables the page-turn animation.
+
+### Changed
+- **HTTP sync auto-push is always on once configured.** The separate "Enabled" switch is
+  gone — filling in the base URL and bearer token is all it takes. The offline circuit
+  breaker still applies.
+
 ### Fixed
 - **Dictionary popups stay clear of text whenever a usable gap is available.** Tall or
   zoomed bubbles no longer have the 120dp minimum forced into a smaller-but-usable gap,
