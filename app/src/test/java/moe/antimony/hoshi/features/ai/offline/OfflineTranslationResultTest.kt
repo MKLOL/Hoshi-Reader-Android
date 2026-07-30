@@ -14,7 +14,7 @@ class OfflineTranslationResultTest {
     fun debugLineFormatsMetricsWithOneDecimal() {
         val line = OfflineTranslationResult(
             text = "Hello",
-            modelId = "qwen2.5-0.5b-instruct-q4km",
+            modelId = "qwen3.5-0.8b-q4km",
             promptTokens = 20,
             generatedTokens = 47,
             tokensPerSecond = 12.34,
@@ -32,7 +32,7 @@ class OfflineTranslationResultTest {
         // A zero-throughput result (e.g. generationMs was 0) must render 0.0 tok/s, not crash.
         val line = OfflineTranslationResult(
             text = "",
-            modelId = "qwen2.5-0.5b-instruct-q4km",
+            modelId = "qwen3.5-0.8b-q4km",
             promptTokens = 0,
             generatedTokens = 0,
             tokensPerSecond = 0.0,

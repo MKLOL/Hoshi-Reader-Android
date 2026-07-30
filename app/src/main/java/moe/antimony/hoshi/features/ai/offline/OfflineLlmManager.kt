@@ -239,9 +239,12 @@ object OfflineLlmManager {
         appContext: Context,
         instruction: String,
         japaneseText: String,
-        // Headroom for an explanation (translation + grammar/vocab breakdown). A translate-only
-        // model still stops at EOG after the short translation, so this doesn't slow it down.
-        maxTokens: Int = 512,
+        // Headroom for an explanation (translation + grammar/vocab breakdown) AND for a reasoning
+        // model (Qwen3.5) to spend tokens on its <think> monologue before the answer — that block
+        // is stripped out in LlamaInference, but the budget must cover it or the real answer never
+        // gets generated. A translate-only / non-reasoning model still stops at EOG after the short
+        // translation, so this larger cap doesn't slow it down.
+        maxTokens: Int = 1024,
     ): OfflineTranslationResult {
         val context = appContext.applicationContext
         val model = resolveActiveModel(context)

@@ -119,7 +119,7 @@ class LlamaInference private constructor(
             }
 
             OfflineTranslationResult(
-                text = resultBytes.toString(Charsets.UTF_8).trim(),
+                text = stripReasoning(resultBytes.toString(Charsets.UTF_8)),
                 modelId = modelId,
                 promptTokens = metrics[0].toInt(),
                 generatedTokens = generatedTokens,
@@ -162,4 +162,21 @@ class LlamaInference private constructor(
             LlamaInference(handle, modelId)
         }
     }
+}
+
+/**
+ * Drops a reasoning model's chain-of-thought, returning just the user-facing answer.
+ *
+ * Reasoning models (Qwen3.5, etc.) emit a `<think>…</think>` monologue before their answer — and
+ * some chat templates pre-open the `<think>` tag in the assistant prefix, so the generated text can
+ * start *inside* the reasoning with only the closing `</think>` present. We therefore key off the
+ * LAST `</think>`: everything after it is the real answer. Models that don't reason (Gemma, the
+ * purpose-built translator) carry no tags, so their output is just trimmed and passed through. If a
+ * closing tag is somehow missing (e.g. the token budget was exhausted mid-reasoning) we return the
+ * raw text rather than nothing, so a truncated reply still shows *something*.
+ */
+internal fun stripReasoning(raw: String): String {
+    val close = "</think>"
+    val end = raw.lastIndexOf(close)
+    return if (end >= 0) raw.substring(end + close.length).trim() else raw.trim()
 }
