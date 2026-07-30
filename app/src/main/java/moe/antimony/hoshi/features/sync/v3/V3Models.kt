@@ -94,6 +94,10 @@ data class V3RemoteBook(
     val bookmarkLastModified: String? = null,
     /** All `books/{syncId}/chat/...` keys observed on the server. */
     val chatKeys: Set<String> = emptySet(),
+    /** `books/{syncId}/pretranslations`, when the server has offline translations for this book. */
+    val pretranslationsKey: String? = null,
+    /** Its size, used to skip re-downloading an unchanged blob. */
+    val pretranslationsSize: Int? = null,
     /**
      * Bug 5: per-field "remote returned bytes but they didn't decode" markers. The
      * decoded field (e.g. [metadata]) is left null on decode failure, but the planner
@@ -130,6 +134,18 @@ sealed interface V3Action {
     data class ApplyRemoteBookmark(val root: File, override val syncId: String, val blob: HttpSyncBookmarkBlob) : V3Action
     data class ApplyRemoteMetadata(val root: File?, override val syncId: String, val blob: HttpSyncMetadataBlob) : V3Action
     data class ImportChat(val root: File, override val syncId: String, val key: String) : V3Action
+
+    /**
+     * Download this book's pre-computed offline translations into `pretranslations.json`.
+     *
+     * Download-only: the desktop pipeline is the sole writer, so there is no push side and the
+     * server copy always wins.
+     */
+    data class ImportPretranslations(
+        val root: File,
+        override val syncId: String,
+        val key: String,
+    ) : V3Action
     data class PushBookmark(val root: File, override val syncId: String, val bookmark: Bookmark, val expectedRemote: HttpSyncBookmarkBlob?) : V3Action
     /**
      * [expectedRemote] is the metadata blob the planner saw on the server (null when the

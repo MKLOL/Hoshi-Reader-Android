@@ -9,10 +9,13 @@ import moe.antimony.hoshi.epub.BookRepository
 import moe.antimony.hoshi.epub.BookShelf
 import moe.antimony.hoshi.epub.Bookmark
 import moe.antimony.hoshi.features.ai.AiChatEntry
+import moe.antimony.hoshi.features.ai.PretranslationStore
+import moe.antimony.hoshi.features.ai.PRETRANSLATIONS_FILENAME
 import moe.antimony.hoshi.features.ai.AiChatHistoryStore
 import moe.antimony.hoshi.features.sync.http.HttpSyncBookLocks
 import moe.antimony.hoshi.features.sync.http.HttpSyncBookmarkBlob
 import moe.antimony.hoshi.features.sync.http.HttpSyncChatEntryBlob
+import moe.antimony.hoshi.features.sync.http.PretranslationsBlob
 import moe.antimony.hoshi.features.sync.http.HttpSyncDeletedBookStateStore
 import moe.antimony.hoshi.features.sync.http.HttpSyncKvTransport
 import moe.antimony.hoshi.features.sync.http.HttpSyncPayloadCodec
@@ -61,6 +64,7 @@ class V3Executor(
     ): V3SyncResult {
         var appliedBookmarks = 0
         var appliedChatEntries = 0
+        var appliedPretranslations = 0
         var appliedPayloads = 0
         var appliedMetadataDeletes = 0
         var appliedShelfPlacements = 0
@@ -214,6 +218,34 @@ class V3Executor(
                             }
                         }
                         if (applied) appliedBookmarks += 1
+                    }
+                    is V3Action.ImportPretranslations -> {
+                        val targetRoot = resolveRoot(action.root, action.syncId, rootBySyncId)
+                            ?: continue
+                        val fetched = transport.get(action.key) ?: continue
+                        val body = fetched.body.toString(Charsets.UTF_8)
+                        val blob = json.decodeFromString(
+                            PretranslationsBlob.serializer(),
+                            body,
+                        )
+                        // Every field decodes leniently, so "valid JSON" alone is too weak a
+                        // check: an empty object or a proxy error page would wipe a good cache.
+                        if (blob.version > PretranslationStore.SUPPORTED_BLOB_VERSION ||
+                            blob.entries.isEmpty()
+                        ) {
+                            continue
+                        }
+                        // Temp + rename: a truncated write would silently lose every offline
+                        // translation for this book.
+                        val target = File(targetRoot, PRETRANSLATIONS_FILENAME)
+                        val temp = File(targetRoot, "$PRETRANSLATIONS_FILENAME.tmp")
+                        temp.writeText(body, Charsets.UTF_8)
+                        if (temp.renameTo(target)) {
+                            PretranslationStore.invalidate(targetRoot)
+                            appliedPretranslations += 1
+                        } else {
+                            temp.delete()
+                        }
                     }
                     is V3Action.ImportChat -> {
                         val targetRoot = resolveRoot(action.root, action.syncId, rootBySyncId)
@@ -521,6 +553,7 @@ class V3Executor(
         is V3Action.ImportRemoteBook -> V3Phase.ImportingPayloads
         is V3Action.ApplyRemoteBookmark,
         is V3Action.ImportChat,
+        is V3Action.ImportPretranslations,
         is V3Action.ApplyAiSettings -> V3Phase.ApplyingRemoteState
         is V3Action.PushBookmark,
         is V3Action.PushChat,

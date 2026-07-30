@@ -1,5 +1,6 @@
 package moe.antimony.hoshi.features.sync.v3
 
+import moe.antimony.hoshi.features.ai.PRETRANSLATIONS_FILENAME
 import moe.antimony.hoshi.features.sync.http.HttpSyncContentType
 import moe.antimony.hoshi.features.sync.http.SyncComparison
 import moe.antimony.hoshi.features.sync.http.appleSecondsToRfc3339
@@ -10,6 +11,7 @@ import moe.antimony.hoshi.features.sync.http.compareRfc3339
 import moe.antimony.hoshi.features.sync.http.localImportedAtOverridesRemoteDeletion
 import moe.antimony.hoshi.features.sync.http.maxRfc
 import moe.antimony.hoshi.features.sync.http.shouldApplyRemoteShelfPlacement
+import java.io.File
 
 /**
  * Step 3 of the v3 algorithm — **PURE**. Given a snapshot of local and remote
@@ -35,6 +37,7 @@ class V3Planner {
         val importRemoteBooks = mutableListOf<V3Action.ImportRemoteBook>()
         val applyRemoteBookmarks = mutableListOf<V3Action.ApplyRemoteBookmark>()
         val importChats = mutableListOf<V3Action.ImportChat>()
+        val importPretranslations = mutableListOf<V3Action.ImportPretranslations>()
         val applyAiSettings = mutableListOf<V3Action.ApplyAiSettings>()
         val pushBookmarks = mutableListOf<V3Action.PushBookmark>()
         val pushChats = mutableListOf<V3Action.PushChat>()
@@ -121,6 +124,13 @@ class V3Planner {
                             root = sentinelRoot(syncId),
                             syncId = syncId,
                             key = chatKey,
+                        )
+                    }
+                    r.pretranslationsKey?.let { key ->
+                        importPretranslations += V3Action.ImportPretranslations(
+                            root = sentinelRoot(syncId),
+                            syncId = syncId,
+                            key = key,
                         )
                     }
                 } else {
@@ -302,6 +312,23 @@ class V3Planner {
                             )
                         }
                     }
+                    // Offline translations are download-only, so the only question is whether the
+                    // local copy is already the same bytes the server lists.
+                    val pretranslationsKey = r?.pretranslationsKey
+                    if (pretranslationsKey != null) {
+                        val local = File(l.root, PRETRANSLATIONS_FILENAME)
+                        val remoteSize = r.pretranslationsSize
+                        val unchanged = remoteSize != null &&
+                            local.isFile &&
+                            local.length() == remoteSize.toLong()
+                        if (!unchanged) {
+                            importPretranslations += V3Action.ImportPretranslations(
+                                root = l.root,
+                                syncId = syncId,
+                                key = pretranslationsKey,
+                            )
+                        }
+                    }
                     // Local-only chat → PushChat.
                     for ((key, entry) in localChatByKey.toSortedMap()) {
                         if (key !in remoteChatKeys) {
@@ -386,6 +413,7 @@ class V3Planner {
             // ai settings at the end of the apply group.
             addAll(applyRemoteBookmarks.sortedBy { it.syncId })
             addAll(importChats.sortedWith(compareBy({ it.syncId }, { it.key })))
+            addAll(importPretranslations.sortedBy { it.syncId })
             addAll(applyAiSettings)
             // Push bucket: bookmark, chat, payload, metadata, ai settings.
             addAll(pushBookmarks.sortedBy { it.syncId })

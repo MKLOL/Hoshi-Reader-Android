@@ -37,6 +37,8 @@ class V3RemoteState {
             val kind: BookKind,
             val key: String,
             val lastModified: String,
+            /** Byte size from the listing; lets the planner skip an unchanged blob download. */
+            val size: Int,
         )
         val keys = mutableListOf<RemoteKey>()
         var cursor: String? = null
@@ -57,7 +59,7 @@ class V3RemoteState {
             pages += 1
             for (meta in page.keys) {
                 val parsed = parseBookKey(meta.key) ?: continue
-                keys += RemoteKey(parsed.first, parsed.second, meta.key, meta.lastModified)
+                keys += RemoteKey(parsed.first, parsed.second, meta.key, meta.lastModified, meta.size)
             }
             cursor = page.nextCursor
         } while (cursor != null && page.truncated)
@@ -88,6 +90,8 @@ class V3RemoteState {
             var bookmarkLastModified: String? = null
             var bookmarkMalformed = false
             val chatKeys = mutableSetOf<String>()
+            var pretranslationsKey: String? = null
+            var pretranslationsSize: Int? = null
             for (k in grouped.getValue(syncId)) {
                 when (k.kind) {
                     BookKind.Metadata -> {
@@ -151,6 +155,12 @@ class V3RemoteState {
                         }
                     }
                     BookKind.Chat -> chatKeys += k.key
+                    BookKind.Pretranslations -> {
+                        // Body is NOT fetched here: it is ~750 KB per book and only
+                        // needed when the planner decides it actually changed.
+                        pretranslationsKey = k.key
+                        pretranslationsSize = k.size
+                    }
                     BookKind.PayloadZip -> Unit // body not fetched here
                 }
             }
@@ -163,6 +173,8 @@ class V3RemoteState {
                 bookmark = bookmark,
                 bookmarkLastModified = bookmarkLastModified,
                 chatKeys = chatKeys,
+                pretranslationsKey = pretranslationsKey,
+                pretranslationsSize = pretranslationsSize,
                 metadataMalformed = metadataMalformed,
                 manifestMalformed = manifestMalformed,
                 bookmarkMalformed = bookmarkMalformed,
@@ -205,7 +217,7 @@ class V3RemoteState {
         )
     }
 
-    private enum class BookKind { Metadata, Manifest, Bookmark, Chat, PayloadZip }
+    private enum class BookKind { Metadata, Manifest, Bookmark, Chat, PayloadZip, Pretranslations }
 
     /**
      * Parses a `books/{syncId}/{...}` key into `(syncId, kind)`. Returns null for keys
@@ -220,6 +232,7 @@ class V3RemoteState {
         val suffix = rest.substring(firstSlash + 1)
         val kind = when {
             suffix == "bookmark" -> BookKind.Bookmark
+            suffix == "pretranslations" -> BookKind.Pretranslations
             suffix == "metadata" -> BookKind.Metadata
             suffix == "payload.manifest" -> BookKind.Manifest
             suffix == "payload.zip" -> BookKind.PayloadZip
