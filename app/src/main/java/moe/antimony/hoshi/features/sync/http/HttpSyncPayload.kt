@@ -73,6 +73,7 @@ internal val PAYLOAD_EXCLUDED_FILES: Set<String> = setOf(
     "statistics.json",
     "sasayaki_match.json",
     "sasayaki_playback.json",
+    "pretranslations.json",     // synced as …/pretranslations
     PAYLOAD_SHA_CACHE_FILENAME,
 )
 

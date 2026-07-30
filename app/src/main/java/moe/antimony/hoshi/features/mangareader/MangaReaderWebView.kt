@@ -60,7 +60,8 @@ internal fun MangaReaderWebView(
     onNavigate: (ReaderNavigationDirection) -> Unit,
     onTextSelected: (ReaderSelectionData, WebView) -> Unit,
     onSelectionCleared: () -> Unit,
-    onAskAi: (String) -> Unit,
+    /** Bubble OCR text plus its mokuro address (`p{page}b{block}`), null when unknown. */
+    onAskAi: (String, String?) -> Unit,
     onPageReady: (Int) -> Unit,
     onWebViewReady: (WebView) -> Unit,
     modifier: Modifier = Modifier,
@@ -129,7 +130,7 @@ internal fun MangaReaderWebView(
                 addJavascriptInterface(
                     // Lets a revealed bubble's ChatGPT button send the bubble text for a
                     // lookup; MangaReaderScreen turns it into the ChatGPT popup.
-                    MangaAiBridge { bubbleText -> currentOnAskAi.value(bubbleText) },
+                    MangaAiBridge { bubbleText, blockId -> currentOnAskAi.value(bubbleText, blockId) },
                     "HoshiMangaAi",
                 )
                 addJavascriptInterface(

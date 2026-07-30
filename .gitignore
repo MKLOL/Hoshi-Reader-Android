@@ -23,3 +23,4 @@ local.properties
 # keeps the cert matching every previously-released fork APK.
 /signing/
 tools/__pycache__/
+app/src/androidTest/assets/

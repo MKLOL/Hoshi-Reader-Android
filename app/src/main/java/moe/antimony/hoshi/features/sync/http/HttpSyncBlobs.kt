@@ -23,6 +23,7 @@ import java.time.Instant
  *   books/{syncId}/metadata          → [HttpSyncMetadataBlob]    JSON, overwrite
  *   books/{syncId}/bookmark          → [HttpSyncBookmarkBlob]    JSON, overwrite per page-turn batch
  *   books/{syncId}/chat/{ts}-{hash}  → [HttpSyncChatEntryBlob]   JSON, write-once
+ *   books/{syncId}/pretranslations   → [PretranslationsBlob]    JSON, one per book, download-only
  *   books/{syncId}/payload.zip       → bytes                    application/zip, follow-up scope
  *   books/{syncId}/payload.manifest  → JSON                     follow-up scope
  *
@@ -165,6 +166,13 @@ internal fun bookmarkKey(syncId: String): String = "books/$syncId/bookmark"
 internal fun metadataKey(syncId: String): String = "books/$syncId/metadata"
 internal fun chatPrefixForBook(syncId: String): String = "books/$syncId/chat/"
 internal fun chatKey(syncId: String, suffix: String): String = "books/$syncId/chat/$suffix"
+
+/**
+ * One blob per book holding every bubble's pre-computed offline translation. Deliberately a
+ * single key rather than one per bubble: a volume has thousands of bubbles and the server is
+ * rate-limited, so per-bubble keys would take minutes per book to pull.
+ */
+internal fun pretranslationsKey(syncId: String): String = "books/$syncId/pretranslations"
 internal const val ALL_BOOKS_PREFIX: String = "books/"
 
 /** Single key for the cross-device ChatGPT settings (model + prompts). */
@@ -327,3 +335,42 @@ internal fun AiChatEntry.matchesEntry(other: AiChatEntry): Boolean =
     bubbleText == other.bubbleText &&
         timestampSeconds == other.timestampSeconds &&
         response == other.response
+
+
+/**
+ * One pre-computed translation + explanation for a single speech bubble.
+ *
+ * [hash] is a short sha256 of the source Japanese. The reader compares it against the bubble it
+ * actually tapped, so a re-OCR that shifted the text is detected instead of silently serving the
+ * wrong line.
+ */
+@Serializable
+internal data class PretranslationEntryBlob(
+    val text: String = "",
+    val hash: String = "",
+    val translation: String = "",
+    val explanation: String = "",
+)
+
+/**
+ * Every bubble's offline translation for one volume, produced by the desktop pre-translation tool
+ * (tools/pretranslate in the iOS repo) and stored at `books/{syncId}/pretranslations`.
+ *
+ * [entries] is keyed by the bubble's mokuro address, `p{pageIndex}b{blockIndex}` — derived from the
+ * OCR file itself, so it is identical on every device and survives re-imports. A flat map keeps a
+ * lookup to one hash-map hit.
+ *
+ * Field names MUST match the iOS `HttpSyncPretranslationsBlob` and the Python writer in
+ * tools/pretranslate/hoshi_pretranslate/blob.py.
+ */
+@Serializable
+internal data class PretranslationsBlob(
+    val version: Int = 1,
+    val syncId: String = "",
+    val title: String = "",
+    /** Which model produced these, surfaced in the popup and used to invalidate after a re-run. */
+    val model: String = "",
+    val promptId: String = "",
+    val generatedAt: String = "",
+    val entries: Map<String, PretranslationEntryBlob> = emptyMap(),
+)

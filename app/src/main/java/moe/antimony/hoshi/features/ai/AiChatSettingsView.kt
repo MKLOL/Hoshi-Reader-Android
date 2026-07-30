@@ -100,6 +100,10 @@ private fun AiChatSettingsContent(
     var promptText by rememberSaveable { mutableStateOf(settings.promptText) }
     var imagePromptText by rememberSaveable { mutableStateOf(settings.imagePromptText) }
     var apiKeyVisible by rememberSaveable { mutableStateOf(false) }
+    // The model field is now free-text, so `provider` changes on every KEYSTROKE. Reloading the
+    // stored key on each provider flip would silently discard a key the user is midway through
+    // pasting, so the reload is suppressed once the field has been touched.
+    var apiKeyEdited by rememberSaveable { mutableStateOf(false) }
     var modelMenuExpanded by remember { mutableStateOf(false) }
 
     val effectiveModel = if (selectedModelId == CUSTOM_MODEL_TAG) customModel else selectedModelId
@@ -109,7 +113,7 @@ private fun AiChatSettingsContent(
     // so each provider shows its own stored key. Does NOT run on every keystroke — only when the
     // provider id changes — so an in-progress key edit isn't clobbered.
     LaunchedEffect(provider.id) {
-        apiKey = repository.apiKey(provider)
+        if (!apiKeyEdited) apiKey = repository.apiKey(provider)
     }
 
     // Debounce the SYNCED fields (model + prompts). API keys are written separately (below) so a
@@ -124,11 +128,15 @@ private fun AiChatSettingsContent(
             .debounce(400)
             .distinctUntilChanged()
             .collect { fields ->
-                if (fields.model.isBlank()) return@collect // don't persist an empty custom id
+                // A blank model field must not veto the whole record: the prompts are written
+                // alongside it, and clearing the field to retype a model id would otherwise throw
+                // away an in-progress prompt edit. Fall back to the last persisted model instead.
+                val modelToPersist = fields.model.trim().ifBlank { settings.model }
+                if (modelToPersist.isBlank()) return@collect
                 writeScope.launch {
                     repository.update {
                         it.copy(
-                            model = fields.model,
+                            model = modelToPersist,
                             promptText = fields.promptText,
                             imagePromptText = fields.imagePromptText,
                         )
@@ -142,11 +150,12 @@ private fun AiChatSettingsContent(
     DisposableEffect(Unit) {
         onDispose {
             val current = currentSynced
-            if (current != latestFlushedSynced && current.model.isNotBlank()) {
+            val finalModel = current.model.trim().ifBlank { settings.model }
+            if (current != latestFlushedSynced && finalModel.isNotBlank()) {
                 writeScope.launch {
                     repository.update {
                         it.copy(
-                            model = current.model,
+                            model = finalModel,
                             promptText = current.promptText,
                             imagePromptText = current.imagePromptText,
                         )
@@ -222,30 +231,44 @@ private fun AiChatSettingsContent(
                         )
                     }
                 }
-                DropdownMenuItem(
-                    text = { Text("Custom…") },
-                    onClick = {
-                        modelMenuExpanded = false
-                        selectedModelId = CUSTOM_MODEL_TAG
-                    },
-                )
+                // No "Custom…" entry: the model id field below is always editable, so picking a
+                // pseudo-entry that blanks it would only lose the current value.
             }
         }
 
-        if (selectedModelId == CUSTOM_MODEL_TAG) {
-            OutlinedTextField(
-                value = customModel,
-                onValueChange = { customModel = it },
-                label = { Text("Custom model id") },
-                singleLine = true,
-                supportingText = { Text("A custom id is treated as an OpenAI model.") },
-                modifier = Modifier.fillMaxWidth(),
-            )
-        }
+        // Always editable, not just after choosing "Custom…": the catalog is a shortcut, not a
+        // restriction. Providers ship new model ids faster than this list is updated, so typing
+        // one in must never require a new app build.
+        OutlinedTextField(
+            value = effectiveModel,
+            onValueChange = { typed ->
+                customModel = typed
+                // A typed id that happens to be in the catalog snaps back to the catalog entry so
+                // the dropdown label and the provider stay in agreement.
+                selectedModelId = if (ChatModelCatalog.isKnownModel(typed)) typed else CUSTOM_MODEL_TAG
+            },
+            label = { Text("Model id") },
+            singleLine = true,
+            supportingText = {
+                Text(
+                    if (ChatModelCatalog.isKnownModel(effectiveModel)) {
+                        "Routes to ${provider.displayName}."
+                    } else if (provider.id == ChatModelCatalog.openAI.id) {
+                        "Any model id works. Unrecognised ids are sent to OpenAI."
+                    } else {
+                        "Any model id works. Routes to ${provider.displayName}."
+                    },
+                )
+            },
+            modifier = Modifier.fillMaxWidth(),
+        )
 
         OutlinedTextField(
             value = apiKey,
-            onValueChange = { value -> apiKey = value },
+            onValueChange = { value ->
+                apiKey = value
+                apiKeyEdited = true
+            },
             label = { Text("${provider.displayName} API key") },
             singleLine = true,
             supportingText = {

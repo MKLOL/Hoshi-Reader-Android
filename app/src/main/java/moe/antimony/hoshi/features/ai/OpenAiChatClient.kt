@@ -15,7 +15,7 @@ import java.net.HttpURLConnection
 import java.net.URL
 
 /** Thrown when an OpenAI chat-completions request fails; [message] is safe to show the user. */
-class OpenAiException(message: String) : Exception(message)
+class OpenAiException(message: String, cause: Throwable? = null) : Exception(message, cause)
 
 /**
  * Minimal OpenAI Chat Completions client for the manga speech-bubble ChatGPT feature.
@@ -107,7 +107,9 @@ object OpenAiChatClient {
         } catch (e: OpenAiException) {
             throw e
         } catch (e: Exception) {
-            throw OpenAiException(e.message ?: "OpenAI request failed.")
+            // Keep the cause: NetworkReachability.isNetworkFailure walks the chain for an
+            // IOException to decide whether to serve the offline pre-translation.
+            throw OpenAiException(e.message ?: "OpenAI request failed.", e)
         } finally {
             connection.disconnect()
         }

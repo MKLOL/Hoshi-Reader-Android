@@ -17,6 +17,8 @@ import moe.antimony.hoshi.features.ai.AiChatEntry
 import moe.antimony.hoshi.features.ai.AiChatHistoryStore
 import moe.antimony.hoshi.features.ai.AiChatSettings
 import moe.antimony.hoshi.features.ai.AiChatSettingsRepository
+import moe.antimony.hoshi.features.ai.PRETRANSLATIONS_FILENAME
+import moe.antimony.hoshi.features.ai.PretranslationStore
 import moe.antimony.hoshi.epub.BookMetadata
 import kotlinx.coroutines.flow.first
 import java.io.File
@@ -100,6 +102,7 @@ class HttpSyncReconciler(
             downloadedBookmarks = inbound.downloadedBookmarks,
             downloadedChatEntries = inbound.downloadedChatEntries,
             downloadedPayloads = inbound.downloadedPayloads,
+            downloadedPretranslations = inbound.downloadedPretranslations,
             downloadedAppSettings = appSettings.downloaded,
             remoteOnlyBooks = inbound.remoteOnlyBooks,
             errors = inbound.errors + outbound.errors + appSettings.errors,
@@ -336,6 +339,8 @@ class HttpSyncReconciler(
     private data class InboundResult(
         val downloadedBookmarks: Int,
         val downloadedChatEntries: Int,
+        /** Books whose offline pre-translation blob was pulled this pass. */
+        val downloadedPretranslations: Int,
         val downloadedPayloads: Int,
         val remoteOnlyBooks: Int,
         val maxHandledLastModified: String?,
@@ -369,6 +374,7 @@ class HttpSyncReconciler(
     ): InboundResult {
         var downloadedBookmarks = 0
         var downloadedChatEntries = 0
+        var downloadedPretranslations = 0
         var downloadedPayloads = 0
         var maxHandledLastModified: String? = null
         var minUnhandledLastModified: String? = null
@@ -458,7 +464,8 @@ class HttpSyncReconciler(
                 remoteSyncIds += parsed.syncId
                 when (parsed.kind) {
                     BookKeyKind.PayloadManifest -> payloadManifests += meta
-                    BookKeyKind.Bookmark, BookKeyKind.Chat -> bookmarksAndChats += parsed to meta
+                    BookKeyKind.Bookmark, BookKeyKind.Chat, BookKeyKind.Pretranslations ->
+                        bookmarksAndChats += parsed to meta
                     BookKeyKind.PayloadZip -> markHandled(meta) // followed via the manifest
                     BookKeyKind.Metadata -> metadataKeys += parsed to meta
                 }
@@ -611,6 +618,10 @@ class HttpSyncReconciler(
                         if (applyBookmarkFromRemote(transport, root, meta)) downloadedBookmarks += 1
                     BookKeyKind.Chat ->
                         if (applyChatEntryFromRemote(transport, root, meta)) downloadedChatEntries += 1
+                    BookKeyKind.Pretranslations ->
+                        if (applyPretranslationsFromRemote(transport, root, meta)) {
+                            downloadedPretranslations += 1
+                        }
                     else -> Unit
                 }
                 markHandled(meta)
@@ -691,6 +702,7 @@ class HttpSyncReconciler(
         return InboundResult(
             downloadedBookmarks = downloadedBookmarks,
             downloadedChatEntries = downloadedChatEntries,
+            downloadedPretranslations = downloadedPretranslations,
             downloadedPayloads = downloadedPayloads,
             remoteOnlyBooks = remoteOnly,
             maxHandledLastModified = maxHandledLastModified,
@@ -743,6 +755,58 @@ class HttpSyncReconciler(
             revisionStore.noteRemote(bookRepository.booksDirectory, meta.key, blob.rev, appliedLocally = true)
             true
         }
+    }
+
+    /**
+     * Pulls a volume's offline pre-translation blob to `pretranslations.json` in the book dir.
+     *
+     * Download-only by design: these are produced by the desktop tool and never edited on device,
+     * so there is no push side and no conflict resolution — the server copy always wins. The bytes
+     * are validated by decoding them first, so a truncated download cannot replace a good local
+     * cache, then written verbatim to avoid re-encoding a file with thousands of entries.
+     */
+    private suspend fun applyPretranslationsFromRemote(
+        transport: HttpSyncKvTransport,
+        bookRoot: File,
+        meta: HttpSyncKvKeyMeta,
+    ): Boolean {
+        if (bookContentType(bookRoot) != ContentType.Mokuro) return false
+        val target = File(bookRoot, PRETRANSLATIONS_FILENAME)
+        // Skip the transfer when the local copy already matches what the server lists. A manual
+        // sync lists every key with no cursor, so without this a 30-volume shelf would re-download
+        // and rewrite every blob on every sync and report them all as freshly downloaded.
+        val remoteSize = meta.size
+        if (remoteSize != null && target.isFile && target.length() == remoteSize.toLong()) {
+            return false
+        }
+        val fetched = transport.get(meta.key) ?: return false
+        val body = fetched.body.toString(Charsets.UTF_8)
+        val blob = runCatching {
+            json.decodeFromString(PretranslationsBlob.serializer(), body)
+        }.getOrElse { error ->
+            throw HttpSyncException(
+                "Offline translations at ${meta.key}: malformed JSON " +
+                    "(${error.message ?: error.javaClass.simpleName})",
+            )
+        }
+        // "Valid JSON" alone is far too weak: every field decodes leniently, so `{}` or a proxy
+        // error page returned with HTTP 200 would decode to an empty blob and wipe a good cache.
+        if (blob.version > PretranslationStore.SUPPORTED_BLOB_VERSION) {
+            throw HttpSyncException("Offline translations at ${meta.key}: unsupported version ${blob.version}.")
+        }
+        if (blob.entries.isEmpty()) {
+            throw HttpSyncException("Offline translations at ${meta.key}: no entries.")
+        }
+        // Temp + rename, matching AiChatHistoryStore: a direct writeText would leave a truncated
+        // file behind if the process died mid-write, silently losing every offline translation.
+        val temp = File(bookRoot, "$PRETRANSLATIONS_FILENAME.tmp")
+        temp.writeText(body, Charsets.UTF_8)
+        if (!temp.renameTo(target)) {
+            temp.delete()
+            throw HttpSyncException("Offline translations at ${meta.key}: could not replace $target.")
+        }
+        PretranslationStore.invalidate(bookRoot)
+        return true
     }
 
     private suspend fun applyChatEntryFromRemote(
@@ -1375,7 +1439,7 @@ class HttpSyncReconciler(
 
     // ----- Key parsing --------------------------------------------------------------------
 
-    private enum class BookKeyKind { Bookmark, Chat, Metadata, PayloadManifest, PayloadZip }
+    private enum class BookKeyKind { Bookmark, Chat, Metadata, PayloadManifest, PayloadZip, Pretranslations }
 
     private data class ParsedBookKey(val syncId: String, val kind: BookKeyKind)
 
@@ -1397,6 +1461,7 @@ class HttpSyncReconciler(
             suffix == "metadata" -> BookKeyKind.Metadata
             suffix == "payload.manifest" -> BookKeyKind.PayloadManifest
             suffix == "payload.zip" -> BookKeyKind.PayloadZip
+            suffix == "pretranslations" -> BookKeyKind.Pretranslations
             suffix.startsWith("chat/") -> BookKeyKind.Chat
             else -> return null
         }
@@ -1484,6 +1549,8 @@ data class HttpSyncResult(
     val downloadedBookmarks: Int,
     val downloadedChatEntries: Int,
     val downloadedPayloads: Int = 0,
+    /** Books whose offline pre-translation blob was pulled this pass. */
+    val downloadedPretranslations: Int = 0,
     val downloadedAppSettings: Boolean = false,
     val remoteOnlyBooks: Int,
     val errors: List<String>,
@@ -1503,6 +1570,9 @@ data class HttpSyncResult(
         if (downloadedBookmarks > 0) parts += "$downloadedBookmarks bookmark${plural(downloadedBookmarks)} down"
         if (downloadedChatEntries > 0) parts += "$downloadedChatEntries chat${plural(downloadedChatEntries)} down"
         if (downloadedPayloads > 0) parts += "$downloadedPayloads book payload${plural(downloadedPayloads)} down"
+        if (downloadedPretranslations > 0) {
+            parts += "$downloadedPretranslations offline translation set${plural(downloadedPretranslations)} down"
+        }
         if (downloadedAppSettings) parts += "ChatGPT settings down"
         if (remoteOnlyBooks > 0) parts += "$remoteOnlyBooks remote-only book${plural(remoteOnlyBooks)}"
         if (parts.isEmpty()) parts += "nothing to sync"

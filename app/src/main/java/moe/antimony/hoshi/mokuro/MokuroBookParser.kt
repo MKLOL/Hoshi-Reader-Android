@@ -63,10 +63,15 @@ private fun RawMokuroPage.toMokuroPage(index: Int): MokuroPage =
         imagePath = imgPath,
         imageWidth = imgWidth,
         imageHeight = imgHeight,
-        textBoxes = blocks.mapNotNull { it.toMokuroTextBox() },
+        // mapIndexed so each box remembers its ORIGINAL mokuro block index; mapNotNull drops
+        // unusable blocks, which would otherwise silently renumber every later bubble and break
+        // the offline pre-translation addresses (`p{page}b{block}`).
+        textBoxes = blocks.mapIndexedNotNull { blockIndex, block ->
+            block.toMokuroTextBox(blockIndex)
+        },
     )
 
-private fun RawMokuroBlock.toMokuroTextBox(): MokuroTextBox? {
+private fun RawMokuroBlock.toMokuroTextBox(blockIndex: Int = 0): MokuroTextBox? {
     if (box.size < 4) return null
     // mokuro stores box as [xMin, yMin, xMax, yMax] in image-pixel coordinates.
     val xMin = box[0]
@@ -89,6 +94,7 @@ private fun RawMokuroBlock.toMokuroTextBox(): MokuroTextBox? {
         ),
         vertical = vertical,
         lines = lines,
+        blockIndex = blockIndex,
     )
 }
 

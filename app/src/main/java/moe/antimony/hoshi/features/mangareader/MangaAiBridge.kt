@@ -13,14 +13,20 @@ import android.webkit.JavascriptInterface
  * dispatched to the main thread before it reaches Compose state in [MangaReaderScreen].
  */
 internal class MangaAiBridge(
-    private val onAskAboutBubble: (String) -> Unit,
+    private val onAskAboutBubble: (String, String?) -> Unit,
 ) {
+    /**
+     * @param blockId the bubble's mokuro address (`p{page}b{block}`), or empty when the page
+     *   render predates block ids. It resolves the bubble's pre-computed offline translation.
+     */
     @JavascriptInterface
-    fun askAboutBubble(text: String) {
+    fun askAboutBubble(text: String, blockId: String) {
         val trimmed = text.trim()
         if (trimmed.isEmpty()) return
-        mainHandler.post { onAskAboutBubble(trimmed) }
+        val resolvedBlockId = blockId.ifEmpty { null }
+        mainHandler.post { onAskAboutBubble(trimmed, resolvedBlockId) }
     }
+
 
     private companion object {
         val mainHandler = Handler(Looper.getMainLooper())

@@ -24,6 +24,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -83,6 +84,8 @@ fun AiChatPopupView(
     state: AiChatUiState,
     onDismiss: () -> Unit,
     onRetry: () -> Unit,
+    /** Non-null when the reply came from the pre-translation cache. */
+    onAskLive: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     Box(
@@ -136,6 +139,7 @@ fun AiChatPopupView(
                     is AiChatUiState.Loaded -> ResponseBody(
                         response = state.entry.response,
                         debugInfo = state.entry.debugInfo,
+                        onAskLive = onAskLive,
                     )
                     is AiChatUiState.Failed -> FailedBody(
                         message = state.message,
@@ -178,7 +182,7 @@ private fun LoadingBody(onDevice: Boolean) {
 }
 
 @Composable
-private fun ResponseBody(response: String, debugInfo: String?) {
+private fun ResponseBody(response: String, debugInfo: String?, onAskLive: (() -> Unit)? = null) {
     Column {
         SelectionContainer {
             MarkdownText(
@@ -187,6 +191,12 @@ private fun ResponseBody(response: String, debugInfo: String?) {
                     .heightIn(max = 380.dp)
                     .verticalScroll(rememberScrollState()),
             )
+        }
+        if (onAskLive != null) {
+            Spacer(Modifier.size(8.dp))
+            // A pre-translated reply is instant and free, so it is what a tap shows. Offer the
+            // live model for the times it isn't enough.
+            OutlinedButton(onClick = onAskLive) { Text("Ask ChatGPT instead") }
         }
         if (debugInfo != null) {
             Spacer(Modifier.size(10.dp))

@@ -1,12 +1,20 @@
 package moe.antimony.hoshi.features.ai
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -21,18 +29,48 @@ import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
+import org.commonmark.ext.gfm.strikethrough.Strikethrough
+import org.commonmark.ext.gfm.strikethrough.StrikethroughExtension
+import org.commonmark.ext.gfm.tables.TableBlock
+import org.commonmark.ext.gfm.tables.TableBody
+import org.commonmark.ext.gfm.tables.TableCell
+import org.commonmark.ext.gfm.tables.TableHead
+import org.commonmark.ext.gfm.tables.TableRow
+import org.commonmark.ext.gfm.tables.TablesExtension
+import org.commonmark.node.BlockQuote
+import org.commonmark.node.BulletList
+import org.commonmark.node.Code
+import org.commonmark.node.Document
+import org.commonmark.node.Emphasis
+import org.commonmark.node.FencedCodeBlock
+import org.commonmark.node.HardLineBreak
+import org.commonmark.node.Heading
+import org.commonmark.node.IndentedCodeBlock
+import org.commonmark.node.Link
+import org.commonmark.node.ListItem
+import org.commonmark.node.Node
+import org.commonmark.node.OrderedList
+import org.commonmark.node.Paragraph
+import org.commonmark.node.SoftLineBreak
+import org.commonmark.node.StrongEmphasis
+import org.commonmark.node.Text as MdText
+import org.commonmark.node.ThematicBreak
+import org.commonmark.parser.Parser
 
 /**
- * A minimal CommonMark-ish renderer for ChatGPT replies.
+ * Renders a ChatGPT reply written in Markdown.
  *
- * ChatGPT replies arrive as Markdown, which looks wrong rendered as plain text (literal `**`,
- * `- `, `#`). This handles the small subset OpenAI actually emits for the manga tutor prompt:
- * ATX headings, bullet / numbered lists, fenced code blocks, and the inline spans `**bold**`,
- * `*italic*` and `` `code` ``. Anything fancier (tables, links, blockquotes) just falls through
- * as paragraph text — acceptable for this use, and it keeps the feature dependency-free so it
- * stays easy to merge alongside upstream.
+ * Parsing is done by commonmark-java (the reference CommonMark implementation) with the GFM
+ * tables and strikethrough extensions, matching what iOS gets from Textual. The previous
+ * hand-written parser here understood only headings, lists, code and a few inline spans, so the
+ * vocabulary/grammar **tables** the tutor prompt asks for fell through as paragraphs and rendered
+ * as literal `|` pipes.
+ *
+ * Only the AST -> Compose rendering below is ours; no Markdown syntax is interpreted by hand.
  */
 @Composable
 fun MarkdownText(
@@ -40,193 +78,318 @@ fun MarkdownText(
     modifier: Modifier = Modifier,
     color: Color = Color.Unspecified,
 ) {
-    val blocks = remember(markdown) { parseMarkdownBlocks(markdown) }
+    val document = remember(markdown) { parseMarkdown(markdown) }
     val codeBackground = MaterialTheme.colorScheme.surfaceVariant
+    val borderColor = MaterialTheme.colorScheme.outlineVariant
     Column(modifier = modifier) {
-        blocks.forEach { block -> MarkdownBlock(block, color, codeBackground) }
+        RenderBlocks(document, color, codeBackground, borderColor)
+    }
+}
+
+internal val MARKDOWN_EXTENSIONS = listOf(TablesExtension.create(), StrikethroughExtension.create())
+
+private val PARSER: Parser = Parser.builder()
+    .extensions(MARKDOWN_EXTENSIONS)
+    .build()
+
+/**
+ * A GFM table delimiter row, e.g. `| --- | :--: |` or `---|---`.
+ *
+ * Used only to decide where a blank line is missing — the table itself is still parsed entirely by
+ * commonmark. See [normalizeTables].
+ */
+private val TABLE_DELIMITER = Regex("""^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$""")
+
+/**
+ * Inserts the blank line GFM requires before a table.
+ *
+ * commonmark-java only starts a table when the paragraph directly above the delimiter row is
+ * exactly one line — the header row. A tutor reply almost always reads
+ *
+ * ```
+ * Here's the vocabulary:
+ * | Word | Meaning |
+ * | --- | --- |
+ * ```
+ *
+ * and that lead-in line makes the whole thing parse as one paragraph, which is exactly the
+ * "renders as literal pipes" bug this is meant to fix. Separating the lead-in with a blank line is
+ * a whitespace normalisation, not Markdown parsing — commonmark still owns every token.
+ */
+internal fun normalizeTables(markdown: String): String {
+    val lines = markdown.replace("\r\n", "\n").split("\n")
+    val out = ArrayList<String>(lines.size + 4)
+    var inFence = false
+    for ((index, line) in lines.withIndex()) {
+        if (line.trimStart().startsWith("```")) inFence = !inFence
+        // A delimiter row needs a header row above it and a non-blank line above THAT for the
+        // ambiguity to arise; fenced code is left completely untouched.
+        if (!inFence && index >= 2 && TABLE_DELIMITER.matches(line)) {
+            val header = lines[index - 1]
+            val before = lines[index - 2]
+            if (header.contains('|') && before.isNotBlank() && out.size >= 2) {
+                out.add(out.size - 1, "")
+            }
+        }
+        out += line
+    }
+    return out.joinToString("\n")
+}
+
+internal fun parseMarkdown(markdown: String): Document =
+    PARSER.parse(normalizeTables(markdown)) as Document
+
+/** Walks the children of [parent], emitting one composable per block-level node. */
+@Composable
+private fun RenderBlocks(parent: Node, color: Color, codeBackground: Color, borderColor: Color) {
+    var child = parent.firstChild
+    while (child != null) {
+        RenderBlock(child, color, codeBackground, borderColor)
+        child = child.next
     }
 }
 
 @Composable
-private fun MarkdownBlock(block: MdBlock, baseColor: Color, codeBackground: Color) {
-    when (block) {
-        MdBlock.Blank -> Spacer(Modifier.height(6.dp))
-        is MdBlock.Heading -> Text(
-            text = buildInline(block.text, codeBackground),
-            style = when (block.level) {
+private fun RenderBlock(node: Node, color: Color, codeBackground: Color, borderColor: Color) {
+    when (node) {
+        is Heading -> Text(
+            text = inlineText(node, codeBackground),
+            style = when (node.level) {
                 1 -> MaterialTheme.typography.titleMedium
                 2 -> MaterialTheme.typography.titleSmall
                 else -> MaterialTheme.typography.bodyLarge
             },
             fontWeight = FontWeight.Bold,
-            color = baseColor,
-            modifier = Modifier.padding(top = 4.dp, bottom = 2.dp),
+            color = color,
+            modifier = Modifier.padding(top = 6.dp, bottom = 2.dp),
         )
-        is MdBlock.Paragraph -> Text(
-            text = buildInline(block.text, codeBackground),
+
+        is Paragraph -> Text(
+            text = inlineText(node, codeBackground),
             style = MaterialTheme.typography.bodyMedium,
-            color = baseColor,
+            color = color,
+            modifier = Modifier.padding(vertical = 2.dp),
         )
-        is MdBlock.ListItem -> Row(
-            modifier = Modifier.padding(start = (block.indent * 6).dp, top = 1.dp, bottom = 1.dp),
+
+        is BulletList -> ListBlock(node, ordered = false, start = 1, color, codeBackground, borderColor)
+        is OrderedList -> ListBlock(node, ordered = true, node.markerStartNumber ?: 1, color, codeBackground, borderColor)
+
+        is FencedCodeBlock -> CodeBlock(node.literal, color, codeBackground)
+        is IndentedCodeBlock -> CodeBlock(node.literal, color, codeBackground)
+
+        is BlockQuote -> Row(
+            modifier = Modifier
+                .padding(vertical = 3.dp)
+                // The intrinsic height must be measured on the ROW (against its content); putting
+                // it on the empty Box below resolved to 0 and the rule never drew.
+                .height(IntrinsicSize.Min),
         ) {
-            Text(
-                text = if (block.ordered) "${block.number}." else "•",
-                style = MaterialTheme.typography.bodyMedium,
-                color = baseColor,
-                modifier = Modifier.widthIn(min = 22.dp),
+            Box(
+                Modifier
+                    .width(3.dp)
+                    .fillMaxHeight()
+                    .background(borderColor),
             )
-            Text(
-                text = buildInline(block.text, codeBackground),
-                style = MaterialTheme.typography.bodyMedium,
-                color = baseColor,
-            )
-        }
-        is MdBlock.Code -> Surface(
-            color = codeBackground,
-            shape = RoundedCornerShape(8.dp),
-            modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp),
-        ) {
-            Text(
-                text = block.text,
-                style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
-                color = baseColor,
-                modifier = Modifier.padding(10.dp),
-            )
-        }
-    }
-}
-
-internal sealed interface MdBlock {
-    data class Heading(val level: Int, val text: String) : MdBlock
-    data class Paragraph(val text: String) : MdBlock
-    data class ListItem(
-        val indent: Int,
-        val text: String,
-        val ordered: Boolean,
-        val number: Int,
-    ) : MdBlock
-    data class Code(val text: String) : MdBlock
-    object Blank : MdBlock
-}
-
-private val HEADING = Regex("""^(#{1,6})\s+(.*)$""")
-private val BULLET = Regex("""^[-*+]\s+(.*)$""")
-private val ORDERED = Regex("""^(\d+)[.)]\s+(.*)$""")
-
-/** Splits Markdown into block-level pieces. Collapses runs of blank lines into a single gap. */
-internal fun parseMarkdownBlocks(markdown: String): List<MdBlock> {
-    val blocks = mutableListOf<MdBlock>()
-    var inCode = false
-    val codeBuffer = StringBuilder()
-    for (raw in markdown.replace("\r\n", "\n").split("\n")) {
-        val trimmed = raw.trimStart()
-        if (trimmed.startsWith("```")) {
-            if (inCode) {
-                blocks += MdBlock.Code(codeBuffer.toString().trimEnd('\n'))
-                codeBuffer.clear()
+            Column(Modifier.padding(start = 8.dp)) {
+                RenderBlocks(node, color, codeBackground, borderColor)
             }
-            inCode = !inCode
-            continue
         }
-        if (inCode) {
-            codeBuffer.append(raw).append('\n')
-            continue
-        }
-        if (raw.isBlank()) {
-            if (blocks.isNotEmpty() && blocks.last() != MdBlock.Blank) blocks += MdBlock.Blank
-            continue
-        }
-        val heading = HEADING.find(trimmed)
-        val bullet = BULLET.find(trimmed)
-        val ordered = ORDERED.find(trimmed)
-        val indent = (raw.length - trimmed.length).coerceAtMost(8)
-        blocks += when {
-            heading != null ->
-                MdBlock.Heading(heading.groupValues[1].length, heading.groupValues[2].trim())
-            bullet != null ->
-                MdBlock.ListItem(indent, bullet.groupValues[1].trim(), ordered = false, number = 0)
-            ordered != null ->
-                MdBlock.ListItem(
-                    indent = indent,
-                    text = ordered.groupValues[2].trim(),
-                    ordered = true,
-                    number = ordered.groupValues[1].toIntOrNull() ?: 1,
-                )
-            else -> MdBlock.Paragraph(raw.trim())
-        }
+
+        is ThematicBreak -> Box(
+            Modifier
+                .fillMaxWidth()
+                .padding(vertical = 6.dp)
+                .height(1.dp)
+                .background(borderColor),
+        )
+
+        is TableBlock -> TableBlockView(node, color, codeBackground, borderColor)
+
+        // Anything else (HTML blocks, link reference definitions) contributes no visible output.
+        else -> Spacer(Modifier.height(0.dp))
     }
-    if (inCode && codeBuffer.isNotEmpty()) {
-        blocks += MdBlock.Code(codeBuffer.toString().trimEnd('\n'))
-    }
-    return blocks.dropLastWhile { it == MdBlock.Blank }
 }
 
-/** Renders the inline spans `**bold**`, `*italic*` and `` `code` `` into an [AnnotatedString]. */
-internal fun buildInline(text: String, codeBackground: Color): AnnotatedString =
-    buildAnnotatedString { appendInline(text, codeBackground) }
+@Composable
+private fun CodeBlock(literal: String, color: Color, codeBackground: Color) {
+    Surface(
+        color = codeBackground,
+        shape = RoundedCornerShape(8.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 3.dp),
+    ) {
+        Text(
+            text = literal.trimEnd('\n'),
+            style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+            color = color,
+            modifier = Modifier.padding(10.dp),
+        )
+    }
+}
 
-private fun AnnotatedString.Builder.appendInline(text: String, codeBackground: Color) {
-    var i = 0
-    while (i < text.length) {
-        when {
-            text.startsWith("**", i) -> {
-                // Emphasis marker only — not a `*` used as prose punctuation. Require the
-                // span to be "tight": non-whitespace right after the opening `**` and right
-                // before the closing one, so `a ** b ** c` stays literal.
-                val end = if (i + 2 < text.length && !text[i + 2].isWhitespace()) {
-                    text.indexOf("**", i + 2)
-                } else {
-                    -1
-                }
-                if (end < 0 || text[end - 1].isWhitespace()) {
-                    append("**"); i += 2
-                } else {
-                    withStyle(SpanStyle(fontWeight = FontWeight.Bold)) {
-                        appendInline(text.substring(i + 2, end), codeBackground)
+@Composable
+private fun ListBlock(
+    list: Node,
+    ordered: Boolean,
+    start: Int,
+    color: Color,
+    codeBackground: Color,
+    borderColor: Color,
+) {
+    Column(modifier = Modifier.padding(vertical = 2.dp)) {
+        var item = list.firstChild
+        var number = start
+        while (item != null) {
+            if (item is ListItem) {
+                Row(modifier = Modifier.padding(vertical = 1.dp)) {
+                    Text(
+                        text = if (ordered) "$number." else "•",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = color,
+                        modifier = Modifier.widthIn(min = 22.dp),
+                    )
+                    Column {
+                        // A list item holds blocks (usually one paragraph, sometimes a nested
+                        // list), so recurse rather than assuming a single line of text.
+                        RenderBlocks(item, color, codeBackground, borderColor)
                     }
-                    i = end + 2
                 }
+                number++
             }
-            text.startsWith("*", i) -> {
-                val end = if (i + 1 < text.length && !text[i + 1].isWhitespace()) {
-                    text.indexOf("*", i + 1)
-                } else {
-                    -1
-                }
-                if (end < 0 || text[end - 1].isWhitespace()) {
-                    append("*"); i += 1
-                } else {
-                    withStyle(SpanStyle(fontStyle = FontStyle.Italic)) {
-                        appendInline(text.substring(i + 1, end), codeBackground)
-                    }
-                    i = end + 1
-                }
-            }
-            text.startsWith("`", i) -> {
-                val end = text.indexOf("`", i + 1)
-                if (end < 0) {
-                    append("`"); i += 1
-                } else {
-                    withStyle(
-                        SpanStyle(fontFamily = FontFamily.Monospace, background = codeBackground),
+            item = item.next
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Tables
+// ---------------------------------------------------------------------------------------------
+
+@Composable
+private fun TableBlockView(table: TableBlock, color: Color, codeBackground: Color, borderColor: Color) {
+    val rows = remember(table, codeBackground) { tableRows(table, codeBackground) }
+    if (rows.isEmpty()) return
+    val columnCount = rows.maxOf { it.cells.size }
+
+    // A vocab table can be wider than a phone; let it scroll horizontally instead of squeezing
+    // every column into an unreadable sliver.
+    Column(
+        modifier = Modifier
+            .padding(vertical = 4.dp)
+            .horizontalScroll(rememberScrollState()),
+    ) {
+        rows.forEachIndexed { index, row ->
+            Row(horizontalArrangement = Arrangement.Start) {
+                for (columnIndex in 0 until columnCount) {
+                    val cell = row.cells.getOrNull(columnIndex)
+                    Box(
+                        modifier = Modifier
+                            .width(160.dp)
+                            .padding(horizontal = 6.dp, vertical = 5.dp),
                     ) {
-                        append(text.substring(i + 1, end))
+                        Text(
+                            text = cell?.text ?: AnnotatedString(""),
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = if (row.isHeader) FontWeight.Bold else FontWeight.Normal,
+                            color = color,
+                            textAlign = cell?.alignment,
+                        )
                     }
-                    i = end + 1
                 }
             }
-            else -> {
-                // Plain run: append up to the next inline marker (always strictly past i,
-                // since a marker at i would have matched a branch above).
-                var next = text.length
-                for (marker in listOf("**", "*", "`")) {
-                    val idx = text.indexOf(marker, i)
-                    if (idx in i until next) next = idx
-                }
-                append(text.substring(i, next))
-                i = next
+            if (index == 0 || row.isHeader) {
+                Box(
+                    Modifier
+                        .width((160.dp * columnCount))
+                        .height(1.dp)
+                        .background(borderColor),
+                )
             }
         }
+    }
+}
+
+private class RenderedCell(val text: AnnotatedString, val alignment: TextAlign?)
+
+private class RenderedRow(val cells: List<RenderedCell>, val isHeader: Boolean)
+
+/**
+ * Flattens a [TableBlock] into rows of pre-rendered cells.
+ *
+ * Not a @Composable so it can be memoised with `remember`: the inline spans in a cell never change
+ * once the reply has arrived.
+ */
+private fun tableRows(table: TableBlock, codeBackground: Color): List<RenderedRow> {
+    val out = mutableListOf<RenderedRow>()
+    var section = table.firstChild
+    while (section != null) {
+        val isHeader = section is TableHead
+        if (section is TableHead || section is TableBody) {
+            var row = section.firstChild
+            while (row != null) {
+                if (row is TableRow) {
+                    val cells = mutableListOf<RenderedCell>()
+                    var cell = row.firstChild
+                    while (cell != null) {
+                        if (cell is TableCell) {
+                            cells += RenderedCell(
+                                text = buildAnnotatedString { appendInline(cell, codeBackground) },
+                                alignment = when (cell.alignment) {
+                                    TableCell.Alignment.CENTER -> TextAlign.Center
+                                    TableCell.Alignment.RIGHT -> TextAlign.End
+                                    TableCell.Alignment.LEFT -> TextAlign.Start
+                                    else -> null
+                                },
+                            )
+                        }
+                        cell = cell.next
+                    }
+                    out += RenderedRow(cells, isHeader)
+                }
+                row = row.next
+            }
+        }
+        section = section.next
+    }
+    return out
+}
+
+// ---------------------------------------------------------------------------------------------
+// Inline spans
+// ---------------------------------------------------------------------------------------------
+
+@Composable
+private fun inlineText(node: Node, codeBackground: Color): AnnotatedString =
+    remember(node, codeBackground) { buildAnnotatedString { appendInline(node, codeBackground) } }
+
+/** Appends every inline child of [parent] with its emphasis/code/link styling applied. */
+internal fun AnnotatedString.Builder.appendInline(parent: Node, codeBackground: Color) {
+    var child = parent.firstChild
+    while (child != null) {
+        when (val n = child) {
+            is MdText -> append(n.literal)
+            is StrongEmphasis -> withStyle(SpanStyle(fontWeight = FontWeight.Bold)) {
+                appendInline(n, codeBackground)
+            }
+            is Emphasis -> withStyle(SpanStyle(fontStyle = FontStyle.Italic)) {
+                appendInline(n, codeBackground)
+            }
+            is Strikethrough -> withStyle(SpanStyle(textDecoration = TextDecoration.LineThrough)) {
+                appendInline(n, codeBackground)
+            }
+            is Code -> withStyle(
+                SpanStyle(fontFamily = FontFamily.Monospace, background = codeBackground),
+            ) {
+                append(n.literal)
+            }
+            is Link -> withStyle(SpanStyle(textDecoration = TextDecoration.Underline)) {
+                appendInline(n, codeBackground)
+            }
+            is SoftLineBreak -> append(" ")
+            is HardLineBreak -> append("\n")
+            else -> appendInline(n, codeBackground)
+        }
+        child = child.next
     }
 }

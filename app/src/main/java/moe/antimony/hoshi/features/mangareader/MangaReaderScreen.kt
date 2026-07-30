@@ -102,6 +102,8 @@ import moe.antimony.hoshi.LocalHoshiAppContainer
 import moe.antimony.hoshi.epub.BookRepository
 import moe.antimony.hoshi.epub.ReadingStatistics
 import moe.antimony.hoshi.features.ai.AiChatEntry
+import moe.antimony.hoshi.features.ai.NetworkReachability
+import moe.antimony.hoshi.features.ai.PretranslationStore
 import moe.antimony.hoshi.features.ai.AiChatHistoryStore
 import moe.antimony.hoshi.features.ai.AiChatImage
 import moe.antimony.hoshi.features.ai.AiChatHistoryView
@@ -213,6 +215,10 @@ internal fun MangaReaderScreen(
     var aiChatState by remember(book) { mutableStateOf<AiChatUiState?>(null) }
     var aiRequestJob by remember(book) { mutableStateOf<Job?>(null) }
     var aiRetryAction by remember(book) { mutableStateOf<(() -> Unit)?>(null) }
+    /// Re-asks the live model for the bubble on screen, bypassing the pre-translation cache.
+    var aiAskLiveAction by remember(book) { mutableStateOf<(() -> Unit)?>(null) }
+    /// True when the reply on screen came from the cache, so the popup can offer the live model.
+    var aiShowingPretranslation by remember(book) { mutableStateOf(false) }
     var aiHistory by remember(book) { mutableStateOf<List<AiChatEntry>>(emptyList()) }
     var showAiHistory by remember(book) { mutableStateOf(false) }
     var showStatistics by remember(book) { mutableStateOf(false) }
@@ -235,6 +241,13 @@ internal fun MangaReaderScreen(
     val pageRenderCache = remember(book) { MangaPageRenderCache() }
 
     var persistedStatistics by remember(bookRoot) { mutableStateOf<List<ReadingStatistics>?>(null) }
+    // Parse the offline translation blob off the main thread. `serveOfflinePretranslation` is
+    // called synchronously from the bubble-tap handler, and a multi-MB blob parsed there would
+    // freeze the reader on the first tap of a book.
+    LaunchedEffect(bookRoot) {
+        withContext(Dispatchers.IO) { PretranslationStore.preload(bookRoot) }
+    }
+
     LaunchedEffect(bookRoot, readerSettings.enableStatistics) {
         persistedStatistics = null
     }
@@ -392,12 +405,50 @@ internal fun MangaReaderScreen(
     }
 
     /**
+     * Serves this bubble's pre-computed translation, if the desktop tool produced one.
+     *
+     * Returns `false` when there is nothing cached, so the caller continues to the normal request
+     * path (and ends up showing a real error).
+     *
+     * The result is deliberately NOT persisted: a cache hit is not an exchange the user had, and
+     * writing it would push a synthetic entry into `ai_chat_log.json` and out to every other
+     * device via the chat sync keys. That is why this never touches [aiHistoryStore].
+     */
+    fun serveOfflinePretranslation(bubbleText: String, blockId: String?): Boolean {
+        val cached = PretranslationStore.lookup(bookRoot, blockId, bubbleText) ?: return false
+        aiRequestJob?.cancel()
+        aiShowingPretranslation = true
+        aiChatState = AiChatUiState.Loaded(
+            AiChatEntry(
+                bubbleText = bubbleText,
+                prompt = aiSettings?.promptText.orEmpty(),
+                model = cached.model,
+                response = cached.markdownResponse,
+                timestampSeconds = repository.currentAppleReferenceDateSeconds(),
+                debugInfo = "offline pre-translation",
+            ),
+            // Not the on-device LLM: this was produced ahead of time by the desktop tool, and
+            // labelling it "On-device translation" would misattribute it. The entry's `model`
+            // field carries which model actually wrote it.
+            onDevice = false,
+        )
+        return true
+    }
+
+    /**
      * Sends a tapped speech bubble to ChatGPT, shows the popup, and on success appends the
      * exchange to this manga's history. Dismissing the popup cancels an in-flight request,
      * and the coroutine bails without touching state once cancelled.
      */
-    fun askAi(bubbleText: String) {
-        aiRetryAction = { askAi(bubbleText) }
+    fun askAi(bubbleText: String, blockId: String? = null, forceLive: Boolean = false) {
+        aiRetryAction = { askAi(bubbleText, blockId, forceLive) }
+        // Lets the popup offer "Ask ChatGPT" on a cached reply.
+        aiAskLiveAction = { askAi(bubbleText, blockId, forceLive = true) }
+
+        // A pre-translated bubble is served immediately, online or not — same tutor format,
+        // already paid for, instant. A live request happens only when the user asks for one.
+        if (!forceLive && serveOfflinePretranslation(bubbleText, blockId)) return
+
         val settings = aiSettings
         if (settings == null) {
             // DataStore's first emission is async; a tap in that brief window would otherwise
@@ -410,6 +461,7 @@ internal fun MangaReaderScreen(
         }
         // Route to the on-device LLM when the user has turned it on; otherwise ChatGPT.
         val useOnDevice = offlineTranslationSettings?.useOnDeviceTranslation == true
+
         if (!useOnDevice && !settings.isConfigured) {
             aiChatState = AiChatUiState.Failed(
                 bubbleText,
@@ -419,6 +471,7 @@ internal fun MangaReaderScreen(
             return
         }
         aiRequestJob?.cancel()
+        aiShowingPretranslation = false
         aiChatState = AiChatUiState.Loading(bubbleText, onDevice = useOnDevice)
         aiRequestJob = scope.launch {
             val dictionaryLookup = async(Dispatchers.IO) {
@@ -486,6 +539,9 @@ internal fun MangaReaderScreen(
                 },
                 onFailure = { error ->
                     dictionaryLookup.cancel()
+                    // A reachability check can say "online" and the request still fail because
+                    // the uplink is dead or behind a captive portal. Treat that like being
+                    // offline rather than showing an error over a perfectly good cached answer.
                     aiChatState = AiChatUiState.Failed(
                         bubbleText,
                         error.message ?: "Translation failed.",
@@ -959,7 +1015,7 @@ internal fun MangaReaderScreen(
                     lookupSelectionRequest += 1
                     lookupPopups = emptyList()
                 },
-                onAskAi = { bubbleText -> askAi(bubbleText) },
+                onAskAi = { bubbleText, blockId -> askAi(bubbleText, blockId) },
                 onPageReady = { readyPageIndex ->
                     if (pageTransition != null && readyPageIndex == pageIndex) {
                         readyTransition = pageTransition
@@ -1132,6 +1188,7 @@ internal fun MangaReaderScreen(
                 state = activeAiChat,
                 onDismiss = { dismissAiChat() },
                 onRetry = { aiRetryAction?.invoke() },
+                onAskLive = if (aiShowingPretranslation) ({ aiAskLiveAction?.invoke() }) else null,
                 modifier = Modifier.zIndex(3f),
             )
         }

@@ -14,7 +14,7 @@ import java.net.HttpURLConnection
 import java.net.URL
 
 /** Thrown when an Anthropic request fails; [message] is safe to show the user. */
-class AnthropicException(message: String) : Exception(message)
+class AnthropicException(message: String, cause: Throwable? = null) : Exception(message, cause)
 
 /**
  * Minimal Anthropic Messages API client for the manga translation feature, mirroring the surface
@@ -82,7 +82,9 @@ object AnthropicChatClient {
         } catch (e: AnthropicException) {
             throw e
         } catch (e: Exception) {
-            throw AnthropicException(e.message ?: "Anthropic request failed.")
+            // Keep the cause: NetworkReachability.isNetworkFailure walks the chain for an
+            // IOException to decide whether to serve the offline pre-translation.
+            throw AnthropicException(e.message ?: "Anthropic request failed.", e)
         } finally {
             connection.disconnect()
         }

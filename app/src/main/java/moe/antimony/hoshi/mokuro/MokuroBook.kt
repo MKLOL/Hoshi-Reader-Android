@@ -44,4 +44,11 @@ data class MokuroTextBox(
     val vertical: Boolean,
     /** OCR lines; for vertical text each entry is one column, ordered right-to-left. */
     val lines: List<String>,
+    /**
+     * This block's index in the source `mokuro.json` page, NOT its position in [textBoxes].
+     * Blocks with an unusable box are dropped during parsing, so the two diverge — and the offline
+     * pre-translation cache addresses bubbles by the mokuro index, which every platform and the
+     * desktop tool agree on.
+     */
+    val blockIndex: Int = 0,
 )

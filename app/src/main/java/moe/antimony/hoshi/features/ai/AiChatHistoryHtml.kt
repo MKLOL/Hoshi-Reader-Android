@@ -1,5 +1,7 @@
 package moe.antimony.hoshi.features.ai
 
+import org.commonmark.parser.Parser
+import org.commonmark.renderer.html.HtmlRenderer
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -138,6 +140,40 @@ internal object AiChatHistoryHtml {
           background: transparent;
           padding: 0;
         }
+        /* Vocabulary/grammar tables from the tutor prompt. A wide table scrolls inside its own
+           box rather than forcing the whole page sideways. */
+        .response table {
+          border-collapse: collapse;
+          margin: 8px 0;
+          display: block;
+          overflow-x: auto;
+          max-width: 100%;
+        }
+        .response th, .response td {
+          border: 1px solid rgba(128, 128, 128, 0.45);
+          padding: 6px 9px;
+          text-align: left;
+          vertical-align: top;
+        }
+        .response th { font-weight: 600; }
+        /* commonmark emits node types the old renderer never produced; the global margin reset
+           would otherwise leave them indistinguishable from body text. */
+        .response h4, .response h5, .response h6 {
+          font-size: 14px;
+          font-weight: 600;
+          margin: 10px 0 4px;
+        }
+        .response blockquote {
+          margin: 6px 0;
+          padding-left: 10px;
+          border-left: 3px solid rgba(128, 128, 128, 0.45);
+        }
+        .response hr {
+          border: 0;
+          border-top: 1px solid rgba(128, 128, 128, 0.45);
+          margin: 10px 0;
+        }
+        .response img { max-width: 100%; height: auto; }
         ::selection { background: rgba(70, 130, 220, 0.45); }
         ::highlight(hoshi-selection) { background: #ffd400; color: #000; }
     """.trimIndent()
@@ -187,118 +223,31 @@ private fun escapeHtml(value: String): String = buildString(value.length) {
 }
 
 /**
- * Renders the same Markdown subset [MarkdownText] supports to inline HTML. ChatGPT
- * replies use ATX headings, bullet/numbered lists, fenced code, and the inline spans
- * `**bold**`, `*italic*`, `` `code` ``; anything else falls through as paragraph text.
+ * Renders a ChatGPT reply's Markdown to HTML for the history WebView.
  *
- * Splitting the parser per surface (Compose vs WebView) would mean keeping two
- * Markdown implementations in lockstep — instead we reuse [parseMarkdownBlocks] from
- * `MarkdownText.kt` and only emit different output here. The inline transform is its
- * own pass below since [MarkdownText]'s `buildInline` builds an AnnotatedString and
- * can't be reused directly.
+ * commonmark-java does both the parsing and the HTML emission, with the GFM tables and
+ * strikethrough extensions enabled so the tutor prompt's vocabulary tables render as real
+ * `<table>` markup instead of literal pipe characters. [MarkdownText] parses with the same
+ * parser configuration, so the Compose popup and this WebView cannot drift apart.
  */
-internal fun renderMarkdownToHtml(markdown: String): String {
-    val blocks = parseMarkdownBlocks(markdown)
-    val out = StringBuilder()
-    var i = 0
-    while (i < blocks.size) {
-        val block = blocks[i]
-        when (block) {
-            MdBlock.Blank -> {
-                /* CSS margins on adjacent blocks already provide spacing; explicit blanks
-                   would otherwise stack with the margins and visibly double-space. */
-            }
-            is MdBlock.Heading -> {
-                val level = block.level.coerceIn(1, 3)
-                out.append("<h").append(level).append(">")
-                    .append(renderInlineToHtml(block.text))
-                    .append("</h").append(level).append(">\n")
-            }
-            is MdBlock.Paragraph -> {
-                out.append("<p>").append(renderInlineToHtml(block.text)).append("</p>\n")
-            }
-            is MdBlock.Code -> {
-                out.append("<pre><code>").append(escapeHtml(block.text)).append("</code></pre>\n")
-            }
-            is MdBlock.ListItem -> {
-                // Group a run of list items at the same indent + same ordered flag
-                // under a single <ul>/<ol> so the WebView renders proper list semantics
-                // (bullet/number on the first line, hanging indent on wraps).
-                val ordered = block.ordered
-                val tag = if (ordered) "ol" else "ul"
-                out.append("<").append(tag).append(">\n")
-                while (i < blocks.size && blocks[i] is MdBlock.ListItem &&
-                    (blocks[i] as MdBlock.ListItem).ordered == ordered
-                ) {
-                    val item = blocks[i] as MdBlock.ListItem
-                    out.append("  <li>").append(renderInlineToHtml(item.text)).append("</li>\n")
-                    i++
-                }
-                out.append("</").append(tag).append(">\n")
-                continue
-            }
-        }
-        i++
-    }
-    return out.toString()
-}
+internal fun renderMarkdownToHtml(markdown: String): String =
+    // normalizeTables for the same reason the Compose popup applies it: commonmark will not start
+    // a table when a lead-in line sits directly above the header row, which is how a tutor reply
+    // is normally written. Both surfaces must normalise identically or they drift apart.
+    HTML_RENDERER.render(MARKDOWN_PARSER.parse(normalizeTables(markdown)))
 
-private fun renderInlineToHtml(text: String): String {
-    val out = StringBuilder(text.length)
-    var i = 0
-    while (i < text.length) {
-        when {
-            text.startsWith("**", i) -> {
-                val end = if (i + 2 < text.length && !text[i + 2].isWhitespace()) {
-                    text.indexOf("**", i + 2)
-                } else {
-                    -1
-                }
-                if (end < 0 || text[end - 1].isWhitespace()) {
-                    out.append("**"); i += 2
-                } else {
-                    out.append("<strong>")
-                        .append(renderInlineToHtml(text.substring(i + 2, end)))
-                        .append("</strong>")
-                    i = end + 2
-                }
-            }
-            text.startsWith("*", i) -> {
-                val end = if (i + 1 < text.length && !text[i + 1].isWhitespace()) {
-                    text.indexOf("*", i + 1)
-                } else {
-                    -1
-                }
-                if (end < 0 || text[end - 1].isWhitespace()) {
-                    out.append("*"); i += 1
-                } else {
-                    out.append("<em>")
-                        .append(renderInlineToHtml(text.substring(i + 1, end)))
-                        .append("</em>")
-                    i = end + 1
-                }
-            }
-            text.startsWith("`", i) -> {
-                val end = text.indexOf("`", i + 1)
-                if (end < 0) {
-                    out.append("`"); i += 1
-                } else {
-                    out.append("<code>")
-                        .append(escapeHtml(text.substring(i + 1, end)))
-                        .append("</code>")
-                    i = end + 1
-                }
-            }
-            else -> {
-                var next = text.length
-                for (marker in listOf("**", "*", "`")) {
-                    val idx = text.indexOf(marker, i)
-                    if (idx in i until next) next = idx
-                }
-                out.append(escapeHtml(text.substring(i, next)))
-                i = next
-            }
-        }
-    }
-    return out.toString()
-}
+private val MARKDOWN_PARSER: Parser = Parser.builder()
+    .extensions(MARKDOWN_EXTENSIONS)
+    .build()
+
+private val HTML_RENDERER: HtmlRenderer = HtmlRenderer.builder()
+    .extensions(MARKDOWN_EXTENSIONS)
+    // Replies are model output rendered in a local WebView that has JavaScript enabled and a
+    // @JavascriptInterface bridge attached, so both halves matter:
+    //   escapeHtml  - a raw <script> block in a reply stays text.
+    //   sanitizeUrls - escaping does NOT cover Markdown-generated links, so without this a
+    //                  `[x](javascript:...)` link would execute in-page when tapped, and an
+    //                  `![](https://...)` image would make an outbound request on open.
+    .escapeHtml(true)
+    .sanitizeUrls(true)
+    .build()

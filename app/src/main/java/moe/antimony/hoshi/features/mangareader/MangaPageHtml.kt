@@ -98,7 +98,7 @@ internal object MangaPageHtml {
         val frameWidthCss = formatNumber(imageWidth * fitScale)
         val frameHeightCss = formatNumber(imageHeight * fitScale)
         val boxes = page.textBoxes.joinToString("\n") { box ->
-            textBoxHtml(box, imageWidth, imageHeight)
+            textBoxHtml(box, imageWidth, imageHeight, page.index)
         }
         return """
             <!DOCTYPE html>
@@ -397,6 +397,7 @@ internal object MangaPageHtml {
         box: MokuroTextBox,
         imageWidth: Int,
         imageHeight: Int,
+        pageIndex: Int? = null,
     ): String {
         val leftPct = percent(box.left, imageWidth)
         val topPct = percent(box.top, imageHeight)
@@ -422,7 +423,14 @@ internal object MangaPageHtml {
         // role/aria/tabindex expose the bubble to TalkBack as a toggleable button. The text
         // inside the <p> is announced as the button's accessible name; aria-pressed flips
         // when the .revealed class is added/removed (see handleTap + clearRevealed below).
-        return """    <div class="ocr-box$verticalClass" role="button" tabindex="0" """ +
+        // The bubble's mokuro address, used to look up its pre-computed offline translation.
+        // Same form on every platform and in the desktop tool: `p{pageIndex}b{blockIndex}`.
+        val blockAttribute = if (pageIndex != null) {
+            """ data-hoshi-block="p${pageIndex}b${box.blockIndex}""""
+        } else {
+            ""
+        }
+        return """    <div class="ocr-box$verticalClass"$blockAttribute role="button" tabindex="0" """ +
             """aria-pressed="false" style="left: $leftPct%; top: $topPct%; """ +
             """width: $widthPct%; height: $heightPct%; font-size: ${fontCqw}cqw;">""" +
             """<p>$text</p>$ACTION_BUTTONS_HTML</div>"""
@@ -712,7 +720,8 @@ internal object MangaPageHtml {
                 var aiBox = aiBtn.closest('.ocr-box');
                 var aiText = aiBox && aiBox.querySelector('p');
                 if (aiText && window.HoshiMangaAi) {
-                  window.HoshiMangaAi.askAboutBubble(aiText.textContent || '');
+                  var aiBlockId = (aiBox && aiBox.dataset && aiBox.dataset.hoshiBlock) || '';
+                  window.HoshiMangaAi.askAboutBubble(aiText.textContent || '', aiBlockId);
                 }
                 return '__ai__';
               }
