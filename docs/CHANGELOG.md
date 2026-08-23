@@ -7,6 +7,8 @@ Semantic Versioning.
 
 ## [Unreleased]
 
+## [v0.11.0] - 2026-08-23
+
 ### Added
 - **EPUB reading is available alongside mokuro manga again.** Import one or more EPUBs,
   recursively import an EPUB folder, or open an EPUB from Android's Open-with menu, then
