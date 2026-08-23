@@ -68,7 +68,6 @@
     <string name="language_english" translatable="false">English</string>
     <string name="language_simplified_chinese" translatable="false">简体中文</string>
     <string name="bookshelf_import_files">Import files</string>
-    <string name="bookshelf_import_folder">Import folder</string>
     <string name="bookshelf_import_books">Import books</string>
     <string name="bookshelf_import_epub_or_manga_files">EPUB or manga files</string>
     <string name="bookshelf_import_epub_folder">EPUB folder</string>
@@ -99,7 +98,6 @@
     <string name="bookshelf_no_shelf" comment="Shelf picker empty value, intentionally matching generic none.">None</string>
     <string name="bookshelf_delete_selected_books">Delete selected books</string>
     <string name="bookshelf_manage_shelves">Manage Shelves</string>
-    <string name="bookshelf_import_manga">Import manga</string>
     <string name="bookshelf_sync">Sync</string>
     <string name="bookshelf_move">Move</string>
     <string name="bookshelf_match_sasayaki">Match Sasayaki</string>

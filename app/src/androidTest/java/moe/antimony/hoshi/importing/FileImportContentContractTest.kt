@@ -72,12 +72,13 @@ class FileImportContentContractTest {
     }
 
     @Test
-    fun directoryImportUsesOpenDocumentTreeWithoutOpenableCategory() {
+    fun directoryImportUsesPersistableOpenDocumentTreeWithoutOpenableCategory() {
         val intent = DirectoryImportContent().createIntent(context, Unit)
 
         assertEquals(Intent.ACTION_OPEN_DOCUMENT_TREE, intent.action)
         assertFalse(intent.categories.orEmpty().contains(Intent.CATEGORY_OPENABLE))
         assertTrue(intent.flags.toInt() and Intent.FLAG_GRANT_READ_URI_PERMISSION != 0)
+        assertTrue(intent.flags.toInt() and Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION != 0)
     }
 
     @Test

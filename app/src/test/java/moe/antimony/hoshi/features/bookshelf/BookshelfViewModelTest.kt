@@ -348,6 +348,40 @@ class BookshelfViewModelTest {
     }
 
     @Test
+    fun importingSingleBookFolderKeepsBlockingProgressUntilImportCompletes() {
+        val repository = FakeBookshelfRepository()
+        val viewModel = BookshelfViewModel(repository, testScope())
+        val importStarted = CompletableDeferred<Unit>()
+        val continueImport = CompletableDeferred<Unit>()
+
+        viewModel.importBookFolder {
+            listOf(
+                PendingBookImport(
+                    importKey = "content://books/folder/only.epub",
+                    displayName = "Series/only.epub",
+                ) {
+                    importStarted.complete(Unit)
+                    continueImport.await()
+                    "only-book"
+                },
+            )
+        }
+
+        assertTrue(importStarted.isCompleted)
+        assertTrue(viewModel.uiState.value.isLoading)
+        assertEquals(
+            "Importing Series/only.epub...",
+            viewModel.uiState.value.blockingProgressMessage.testString(),
+        )
+
+        continueImport.complete(Unit)
+
+        assertFalse(viewModel.uiState.value.isLoading)
+        assertNull(viewModel.uiState.value.blockingProgressMessage)
+        assertEquals(listOf(BookSortOption.Recent), repository.loadRequests)
+    }
+
+    @Test
     fun importingBookFolderScansThenUsesBatchImportFlow() {
         val repository = FakeBookshelfRepository()
         val viewModel = BookshelfViewModel(repository, testScope())

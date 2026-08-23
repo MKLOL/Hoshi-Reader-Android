@@ -66,7 +66,6 @@
     <string name="settings_language">语言</string>
     <string name="language_follow_system">跟随系统</string>
     <string name="bookshelf_import_files">导入文件</string>
-    <string name="bookshelf_import_folder">导入文件夹</string>
     <string name="bookshelf_import_books">导入书籍</string>
     <string name="bookshelf_import_epub_or_manga_files">EPUB 或漫画文件</string>
     <string name="bookshelf_import_epub_folder">EPUB 文件夹</string>
@@ -97,7 +96,6 @@
     <string name="bookshelf_no_shelf" comment="Shelf picker empty value, intentionally matching generic none.">无</string>
     <string name="bookshelf_delete_selected_books">删除所选书籍</string>
     <string name="bookshelf_manage_shelves">管理书架</string>
-    <string name="bookshelf_import_manga">导入漫画</string>
     <string name="bookshelf_sync">同步</string>
     <string name="bookshelf_move">移动</string>
     <string name="bookshelf_match_sasayaki">匹配有声书</string>

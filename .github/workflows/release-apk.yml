@@ -221,12 +221,17 @@ jobs:
           changelog="docs/CHANGELOG.md"
 
           changelog_section="$(awk -v v="${version_name}" '
-            $0 ~ "^## \\[(v?" v ")\\]" { found = 1; next }
+            index($0, "## [" v "]") == 1 || index($0, "## [v" v "]") == 1 { found = 1; next }
             found && $0 ~ "^## \\[" { exit }
             found { print }
           ' "${changelog}")"
 
-          if [[ -z "${changelog_section//[[:space:]]/}" ]]; then
+          has_version_section="$(awk -v v="${version_name}" '
+            index($0, "## [" v "]") == 1 || index($0, "## [v" v "]") == 1 { print "true"; exit }
+          ' "${changelog}")"
+
+          if [[ "${has_version_section}" != "true" \
+            && -z "${changelog_section//[[:space:]]/}" ]]; then
             changelog_section="$(awk '
               $0 ~ "^## \\[Unreleased\\]" { found = 1; next }
               found && $0 ~ "^## \\[" { exit }

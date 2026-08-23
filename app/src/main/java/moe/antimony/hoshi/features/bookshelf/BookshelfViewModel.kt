@@ -125,9 +125,9 @@ internal class BookshelfViewModel(
         importKey: String,
         displayName: String? = null,
         importOperation: suspend () -> String,
-    ) {
+    ): Boolean {
         if (!importGate.tryStart(importKey)) {
-            return
+            return false
         }
         runLoading(
             errorPrefix = UiText.Resource(R.string.bookshelf_import_failed),
@@ -141,6 +141,7 @@ internal class BookshelfViewModel(
                 reloadBookEntriesSync()
             },
         )
+        return true
     }
 
     internal fun importBooks(imports: List<PendingBookImport>) {
@@ -178,6 +179,7 @@ internal class BookshelfViewModel(
 
     internal fun importBookFolder(importsProvider: suspend () -> List<PendingBookImport>) {
         workScope.launch {
+            var loadingHandedOff = false
             _uiState.update {
                 it.copy(
                     isLoading = true,
@@ -195,9 +197,12 @@ internal class BookshelfViewModel(
                     return@launch
                 }
                 if (imports.size == 1) {
-                    _uiState.update { it.copy(isLoading = false, blockingProgressMessage = null) }
                     val import = imports.single()
-                    importBook(import.importKey, import.displayName, import.importOperation)
+                    loadingHandedOff = importBook(
+                        import.importKey,
+                        import.displayName,
+                        import.importOperation,
+                    )
                     return@launch
                 }
                 val importKey = imports.joinToString(separator = "\n") { it.importKey }
@@ -214,7 +219,9 @@ internal class BookshelfViewModel(
                     )
                 }
             } finally {
-                _uiState.update { it.copy(isLoading = false, blockingProgressMessage = null) }
+                if (!loadingHandedOff) {
+                    _uiState.update { it.copy(isLoading = false, blockingProgressMessage = null) }
+                }
             }
         }
     }

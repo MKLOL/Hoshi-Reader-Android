@@ -87,13 +87,9 @@ internal class AndroidBookshelfRepository(
     )
 
     override suspend fun loadBooks(sortOption: BookSortOption): BookshelfLoadResult = withContext(ioDispatcher) {
-        val entries = bookRepository.loadBookEntries(sortOption)
-        val shelves = bookRepository.loadShelves()
-        BookshelfLoadResult(
-            entries = entries,
-            progressById = loadBookProgressById(entries, bookRepository),
-            coverSourcesById = loadBookCoverSourcesById(entries, bookRepository),
-            shelves = shelves,
+        loadBookshelfResult(
+            bookRepository = bookRepository,
+            sortOption = sortOption,
             settings = settingsRepository.settings.first(),
         )
     }
@@ -397,6 +393,21 @@ internal class AndroidBookshelfRepository(
             Intent.FLAG_GRANT_READ_URI_PERMISSION,
         )
     }
+}
+
+internal suspend fun loadBookshelfResult(
+    bookRepository: BookRepository,
+    sortOption: BookSortOption,
+    settings: BookshelfSettings,
+): BookshelfLoadResult {
+    val entries = bookRepository.loadBookEntries(sortOption)
+    return BookshelfLoadResult(
+        entries = entries,
+        progressById = loadBookProgressById(entries, bookRepository),
+        coverSourcesById = loadBookCoverSourcesById(entries, bookRepository),
+        shelves = bookRepository.loadShelves(),
+        settings = settings,
+    )
 }
 
 internal suspend fun loadBookCoverSourcesById(

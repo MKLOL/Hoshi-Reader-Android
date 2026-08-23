@@ -54,13 +54,17 @@ class MainActivityConfigurationTest {
     }
 
     @Test
-    fun mainActivityAcceptsContentBackedEpubOpenWithIntents() {
+    fun mainActivityRestoresHistoricalEpubOpenWithCoverage() {
         assertTrue(
-            "MainActivity must accept content-backed EPUB files shared through Android's document providers.",
+            "MainActivity must accept content/file EPUB opens, including browser-dispatched intents.",
             mainActivityManifestElement().hasIntentFilter(
                 actionName = "android.intent.action.VIEW",
                 mimeType = "application/epub+zip",
-                scheme = "content",
+                requiredSchemes = setOf("content", "file"),
+                requiredCategories = setOf(
+                    "android.intent.category.DEFAULT",
+                    "android.intent.category.BROWSABLE",
+                ),
             ),
         )
     }
@@ -127,7 +131,8 @@ class MainActivityConfigurationTest {
     private fun Element.hasIntentFilter(
         actionName: String,
         mimeType: String? = null,
-        scheme: String? = null,
+        requiredSchemes: Set<String> = emptySet(),
+        requiredCategories: Set<String> = emptySet(),
     ): Boolean {
         val filters = getElementsByTagName("intent-filter")
         for (filterIndex in 0 until filters.length) {
@@ -138,6 +143,11 @@ class MainActivityConfigurationTest {
                 val action = actions.item(index) as Element
                 action.getAttribute("android:name")
             }
+            val categories = filter.getElementsByTagName("category")
+            val categoryNames = (0 until categories.length).map { index ->
+                val category = categories.item(index) as Element
+                category.getAttribute("android:name")
+            }.toSet()
             val mimeTypes = (0 until data.length).map { index ->
                 val item = data.item(index) as Element
                 item.getAttribute("android:mimeType")
@@ -149,7 +159,8 @@ class MainActivityConfigurationTest {
             if (actionNames != listOf(actionName)) continue
             if (mimeType == null && mimeTypes.isNotEmpty()) continue
             if (mimeType != null && mimeType !in mimeTypes) continue
-            if (scheme != null && scheme !in schemes) continue
+            if (!schemes.containsAll(requiredSchemes)) continue
+            if (!categoryNames.containsAll(requiredCategories)) continue
             return true
         }
         return false

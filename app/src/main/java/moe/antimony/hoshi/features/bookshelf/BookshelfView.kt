@@ -216,6 +216,12 @@ fun BookshelfView(
 
     val epubFolderImporter = rememberLauncherForActivityResult(DirectoryImportContent()) { treeUri: Uri? ->
         if (treeUri == null) return@rememberLauncherForActivityResult
+        runCatching {
+            context.contentResolver.takePersistableUriPermission(
+                treeUri,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION,
+            )
+        }
         booksViewModel.importBookFolderItems {
             withContext(Dispatchers.IO) {
                 epubFolderScanner.scan(treeUri, ImportFileType.Epub).map { file ->
