@@ -161,7 +161,7 @@ internal fun bookshelfFileImportMimeTypes(): Array<String> =
 fun BookshelfView(
     pendingImportUri: Uri? = null,
     onPendingImportConsumed: () -> Unit = {},
-    onOpenReader: (String) -> Unit,
+    onOpenReader: (bookId: String, contentType: ContentType) -> Unit,
     onOpenSasayakiMatch: (SasayakiMatchRequest) -> Unit,
     refreshKey: Int = 0,
     layoutSpec: MainShellLayoutSpec,
@@ -271,9 +271,9 @@ fun BookshelfView(
         booksViewModel.importBook(uri)
     }
 
-    LaunchedEffect(uiState.openReaderBookId) {
-        val bookId = uiState.openReaderBookId ?: return@LaunchedEffect
-        onOpenReader(bookId)
+    LaunchedEffect(uiState.openReaderRequest) {
+        val request = uiState.openReaderRequest ?: return@LaunchedEffect
+        onOpenReader(request.bookId, request.contentType)
         booksViewModel.consumeOpenReaderEvent()
     }
 

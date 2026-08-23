@@ -13,9 +13,11 @@ import kotlinx.coroutines.launch
 import moe.antimony.hoshi.R
 import moe.antimony.hoshi.epub.BookEntry
 import moe.antimony.hoshi.epub.BookSortOption
+import moe.antimony.hoshi.epub.bookContentType
 import moe.antimony.hoshi.features.sync.StatisticsSyncMode
 import moe.antimony.hoshi.features.sync.SyncDirection
 import moe.antimony.hoshi.features.sync.SyncResult
+import moe.antimony.hoshi.importing.UnsupportedImportFileTypeException
 import moe.antimony.hoshi.ui.UiText
 
 internal data class BookImportItem(
@@ -65,7 +67,14 @@ internal class BookshelfViewModel(
             _uiState.update { it.copy(errorMessage = null) }
             try {
                 val bookId = repository.openBook(entry)
-                _uiState.update { it.copy(openReaderBookId = bookId) }
+                _uiState.update {
+                    it.copy(
+                        openReaderRequest = OpenReaderRequest(
+                            bookId = bookId,
+                            contentType = bookContentType(entry.root),
+                        ),
+                    )
+                }
             } catch (error: Throwable) {
                 _uiState.update {
                     it.copy(
@@ -199,8 +208,9 @@ internal class BookshelfViewModel(
             } catch (error: Throwable) {
                 _uiState.update {
                     it.copy(
-                        errorMessage = error.localizedMessage?.let(UiText::Literal)
-                            ?: UiText.Resource(R.string.bookshelf_import_failed),
+                        errorMessage = error.importErrorMessage(
+                            UiText.Resource(R.string.bookshelf_import_failed),
+                        ),
                     )
                 }
             } finally {
@@ -249,8 +259,9 @@ internal class BookshelfViewModel(
         } catch (error: Throwable) {
             _uiState.update {
                 it.copy(
-                    errorMessage = error.localizedMessage?.let(UiText::Literal)
-                        ?: UiText.Resource(R.string.bookshelf_import_failed),
+                    errorMessage = error.importErrorMessage(
+                        UiText.Resource(R.string.bookshelf_import_failed),
+                    ),
                 )
             }
         } finally {
@@ -407,7 +418,7 @@ internal class BookshelfViewModel(
     }
 
     fun consumeOpenReaderEvent() {
-        _uiState.update { it.copy(openReaderBookId = null) }
+        _uiState.update { it.copy(openReaderRequest = null) }
     }
 
     fun consumeStatusMessage() {
@@ -477,7 +488,7 @@ internal class BookshelfViewModel(
             } catch (error: Throwable) {
                 _uiState.update {
                     it.copy(
-                        errorMessage = error.localizedMessage?.let(UiText::Literal) ?: errorPrefix,
+                        errorMessage = error.importErrorMessage(errorPrefix),
                     )
                 }
             } finally {
@@ -491,6 +502,13 @@ internal class BookshelfViewModel(
         ownedScope?.cancel()
     }
 }
+
+private fun Throwable.importErrorMessage(fallback: UiText): UiText =
+    if (this is UnsupportedImportFileTypeException) {
+        UiText.Resource(messageRes)
+    } else {
+        localizedMessage?.let(UiText::Literal) ?: fallback
+    }
 
 private fun PendingBookImport.failureDisplayName(): String =
     displayName?.takeIf { it.isNotBlank() }

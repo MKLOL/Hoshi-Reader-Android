@@ -8,9 +8,12 @@ import moe.antimony.hoshi.epub.BookEntry
 import moe.antimony.hoshi.epub.BookMetadata
 import moe.antimony.hoshi.epub.BookShelf
 import moe.antimony.hoshi.epub.BookSortOption
+import moe.antimony.hoshi.epub.ContentType
+import moe.antimony.hoshi.epub.MOKURO_SIDECAR_FILE
 import moe.antimony.hoshi.features.sync.StatisticsSyncMode
 import moe.antimony.hoshi.features.sync.SyncDirection
 import moe.antimony.hoshi.features.sync.SyncResult
+import moe.antimony.hoshi.importing.ImportFileType
 import moe.antimony.hoshi.ui.UiText
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -18,6 +21,7 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
+import java.nio.file.Files
 
 class BookshelfViewModelTest {
     @Test
@@ -93,14 +97,35 @@ class BookshelfViewModelTest {
 
         viewModel.openBook(entry)
 
-        assertEquals("book-a", viewModel.uiState.value.openReaderBookId)
+        assertEquals(
+            OpenReaderRequest("book-a", ContentType.Epub),
+            viewModel.uiState.value.openReaderRequest,
+        )
         assertEquals(emptyList<BookEntry>(), viewModel.uiState.value.bookEntries)
         assertEquals(emptyList<BookSortOption>(), repository.loadRequests)
         assertFalse(viewModel.uiState.value.isLoading)
 
         viewModel.consumeOpenReaderEvent()
 
-        assertNull(viewModel.uiState.value.openReaderBookId)
+        assertNull(viewModel.uiState.value.openReaderRequest)
+    }
+
+    @Test
+    fun openingMokuroBookCarriesContentTypeWithoutNavigationRediscovery() {
+        val root = Files.createTempDirectory("hoshi-bookshelf-open-mokuro").toFile()
+        root.resolve(MOKURO_SIDECAR_FILE).writeText("{}")
+        val entry = bookEntry("manga-a", root)
+        val viewModel = BookshelfViewModel(
+            FakeBookshelfRepository(entries = listOf(entry), openBookId = "manga-a"),
+            testScope(),
+        )
+
+        viewModel.openBook(entry)
+
+        assertEquals(
+            OpenReaderRequest("manga-a", ContentType.Mokuro),
+            viewModel.uiState.value.openReaderRequest,
+        )
     }
 
     @Test
@@ -115,7 +140,7 @@ class BookshelfViewModelTest {
             repository.importBookId
         }
 
-        assertNull(viewModel.uiState.value.openReaderBookId)
+        assertNull(viewModel.uiState.value.openReaderRequest)
         assertEquals(listOf(BookSortOption.Recent), repository.loadRequests)
         assertFalse(viewModel.uiState.value.isLoading)
         assertNull(viewModel.uiState.value.blockingProgressMessage.testString())
@@ -140,7 +165,7 @@ class BookshelfViewModelTest {
 
         continueImport.complete(Unit)
 
-        assertNull(viewModel.uiState.value.openReaderBookId)
+        assertNull(viewModel.uiState.value.openReaderRequest)
         assertNull(viewModel.uiState.value.blockingProgressMessage.testString())
         assertFalse(viewModel.uiState.value.isLoading)
     }
@@ -168,8 +193,27 @@ class BookshelfViewModelTest {
             "retry-book"
         }
 
-        assertNull(viewModel.uiState.value.openReaderBookId)
+        assertNull(viewModel.uiState.value.openReaderRequest)
         assertNull(viewModel.uiState.value.errorMessage.testString())
+    }
+
+    @Test
+    fun importingUnsupportedFileKeepsResourceBackedLocalizedError() {
+        val viewModel = BookshelfViewModel(FakeBookshelfRepository(), testScope())
+
+        viewModel.importBook(
+            importKey = "content://books/not-a-book.pdf",
+            displayName = "not-a-book.pdf",
+        ) {
+            throw ImportFileType.Epub.unsupportedFileError("not-a-book.pdf")
+        }
+
+        assertEquals(
+            UiText.Resource(R.string.import_select_epub_book),
+            viewModel.uiState.value.errorMessage,
+        )
+        assertFalse(viewModel.uiState.value.isLoading)
+        assertNull(viewModel.uiState.value.blockingProgressMessage)
     }
 
     @Test
@@ -201,7 +245,7 @@ class BookshelfViewModelTest {
 
         continueImport.complete(Unit)
 
-        assertNull(viewModel.uiState.value.openReaderBookId)
+        assertNull(viewModel.uiState.value.openReaderRequest)
         assertEquals(1, importCount)
         assertNull(viewModel.uiState.value.blockingProgressMessage.testString())
     }
@@ -248,7 +292,7 @@ class BookshelfViewModelTest {
 
         secondImport.complete(Unit)
 
-        assertNull(viewModel.uiState.value.openReaderBookId)
+        assertNull(viewModel.uiState.value.openReaderRequest)
         assertEquals(listOf(BookSortOption.Recent), repository.loadRequests)
         assertFalse(viewModel.uiState.value.isLoading)
         assertNull(viewModel.uiState.value.blockingProgressMessage.testString())
@@ -282,7 +326,7 @@ class BookshelfViewModelTest {
 
         assertEquals(listOf("bad", "good"), importedKeys)
         assertEquals("Failed to import:\nbad.epub", viewModel.uiState.value.errorMessage.testString())
-        assertNull(viewModel.uiState.value.openReaderBookId)
+        assertNull(viewModel.uiState.value.openReaderRequest)
         assertEquals(listOf(BookSortOption.Recent), repository.loadRequests)
         assertFalse(viewModel.uiState.value.isLoading)
         assertNull(viewModel.uiState.value.blockingProgressMessage.testString())
@@ -480,9 +524,9 @@ class BookshelfViewModelTest {
 
     private fun testScope(): CoroutineScope = CoroutineScope(Dispatchers.Unconfined)
 
-    private fun bookEntry(id: String): BookEntry =
+    private fun bookEntry(id: String, root: File = File(id)): BookEntry =
         BookEntry(
-            root = File(id),
+            root = root,
             metadata = BookMetadata(
                 id = id,
                 title = id,

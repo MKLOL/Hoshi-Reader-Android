@@ -36,7 +36,6 @@ import moe.antimony.hoshi.features.bookshelf.SasayakiMatchRequest
 import moe.antimony.hoshi.features.bookshelf.SettingsDestination
 import moe.antimony.hoshi.features.bookshelf.SettingsTab
 import moe.antimony.hoshi.epub.ContentType
-import moe.antimony.hoshi.epub.bookContentType
 import moe.antimony.hoshi.features.diagnostics.DiagnosticsView
 import moe.antimony.hoshi.features.dictionary.DictionarySearchView
 import moe.antimony.hoshi.features.dictionary.DictionaryView
@@ -133,13 +132,8 @@ fun AppShell(
         backStack.add(AppRoute.SettingsDetailRoute(section))
     }
 
-    fun openReader(bookId: String) {
-        scope.launch {
-            val contentType = bookRepository.loadBookEntry(bookId)
-                ?.let { entry -> bookContentType(entry.root) }
-                ?: ContentType.Epub
-            backStack.openBookRoute(bookId, contentType)
-        }
+    fun openReader(bookId: String, contentType: ContentType) {
+        backStack.openBookRoute(bookId, contentType)
     }
 
     fun openSasayakiMatch(request: SasayakiMatchRequest) {
@@ -305,7 +299,7 @@ private fun TopLevelRouteContent(
     onPendingImportConsumed: () -> Unit,
     readerSettings: ReaderSettings,
     onReaderSettingsChange: (ReaderSettings) -> Unit,
-    onOpenReader: (String) -> Unit,
+    onOpenReader: (bookId: String, contentType: ContentType) -> Unit,
     onOpenSasayakiMatch: (SasayakiMatchRequest) -> Unit,
     bookshelfRefreshKey: Int,
     onSelectedTabChange: (MainTab) -> Unit,

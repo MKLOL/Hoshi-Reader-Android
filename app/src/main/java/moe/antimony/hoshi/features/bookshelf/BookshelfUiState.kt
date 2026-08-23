@@ -3,7 +3,13 @@ package moe.antimony.hoshi.features.bookshelf
 import moe.antimony.hoshi.epub.BookEntry
 import moe.antimony.hoshi.epub.BookShelf
 import moe.antimony.hoshi.epub.BookSortOption
+import moe.antimony.hoshi.epub.ContentType
 import moe.antimony.hoshi.ui.UiText
+
+data class OpenReaderRequest(
+    val bookId: String,
+    val contentType: ContentType,
+)
 
 data class BookshelfUiState(
     val bookEntries: List<BookEntry> = emptyList(),
@@ -22,7 +28,7 @@ data class BookshelfUiState(
     val blockingProgressMessage: UiText? = null,
     val statusMessage: UiText? = null,
     val errorMessage: UiText? = null,
-    val openReaderBookId: String? = null,
+    val openReaderRequest: OpenReaderRequest? = null,
 )
 
 data class BookCoverSource(
