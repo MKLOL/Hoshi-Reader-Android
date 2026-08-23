@@ -59,14 +59,18 @@
     <string name="settings_about">关于</string>
     <string name="settings_backup" comment="Advanced settings row label, intentionally matching the Backup action noun.">备份</string>
     <string name="settings_title" comment="Shared label for settings page titles distinct from the main tab key.">设置</string>
-    <string name="bookshelf_open_failed">无法打开漫画。</string>
-    <string name="bookshelf_import_failed">无法导入漫画。</string>
+    <string name="bookshelf_open_failed">无法打开书籍。</string>
+    <string name="bookshelf_import_failed">无法导入书籍。</string>
     <string name="bookshelf_import_failed_list_format">导入失败：\n%1$s</string>
-    <string name="bookshelf_importing_epub">正在导入漫画...</string>
+    <string name="bookshelf_importing_epub">正在导入书籍...</string>
     <string name="settings_language">语言</string>
     <string name="language_follow_system">跟随系统</string>
     <string name="bookshelf_import_files">导入文件</string>
     <string name="bookshelf_import_folder">导入文件夹</string>
+    <string name="bookshelf_import_books">导入书籍</string>
+    <string name="bookshelf_import_epub_or_manga_files">EPUB 或漫画文件</string>
+    <string name="bookshelf_import_epub_folder">EPUB 文件夹</string>
+    <string name="bookshelf_import_manga_folder">漫画文件夹</string>
     <string name="bookshelf_scanning_folder">正在扫描文件夹...</string>
     <string name="bookshelf_no_epub_files_found">未找到 EPUB 文件。</string>
     <string name="bookshelf_importing_named_format">正在导入 %1$s...</string>
@@ -108,7 +112,7 @@
     <string name="bookshelf_shelf_name">书架名称</string>
     <string name="bookshelf_add_shelf">添加书架</string>
     <string name="bookshelf_empty_title">没有书籍</string>
-    <string name="bookshelf_empty_message">使用 + 按钮导入 mokuro 漫画开始阅读。</string>
+    <string name="bookshelf_empty_message">使用 + 按钮导入 EPUB 或 mokuro 漫画开始阅读。</string>
     <string name="bookshelf_selected">已选择</string>
     <string name="bookshelf_not_selected">未选择</string>
     <string name="bookshelf_read">已读</string>
@@ -339,8 +343,9 @@
     <string name="advanced_statistics_subtitle">跟踪每本书的阅读时间、速度和已读字符数</string>
     <string name="advanced_sasayaki_audiobooks">有声书</string>
     <string name="advanced_sasayaki_subtitle">配合已匹配的有声书字幕阅读</string>
+    <string name="advanced_ttu_sync">ッツ 同步</string>
     <string name="advanced_http_sync">HTTP 同步</string>
-    <string name="advanced_http_sync_subtitle">将书签和 ChatGPT 历史同步到你自己的服务器</string>
+    <string name="advanced_http_sync_subtitle">将书籍、阅读进度、书架和阅读器数据同步到你自己的服务器</string>
     <string name="audio_sources">来源</string>
     <string name="audio_add_source">添加来源</string>
     <string name="audio_name">名称</string>
@@ -429,7 +434,7 @@
     <string name="about_storage_no_leftovers">未找到可清理的应用存储残留。</string>
     <string name="about_storage_category_format">%1$s：%2$s（%3$s）</string>
     <string name="about_storage_category_anki_media_cache">Anki 媒体缓存</string>
-    <string name="about_storage_category_epub_import_residue">中断的漫画导入</string>
+    <string name="about_storage_category_epub_import_residue">中断的书籍导入</string>
     <string name="about_storage_category_backup_restore_residue">中断的备份恢复</string>
     <string name="about_storage_category_dictionary_import_residue">中断的辞典导入</string>
     <string name="about_storage_category_local_audio_import_residue">中断的本地音频导入</string>

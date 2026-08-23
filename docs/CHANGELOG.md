@@ -1,11 +1,18 @@
 # Changelog
 
-All notable user-visible changes to Sui Manga Reader (a manga-only fork of
+All notable user-visible changes to Sui Manga Reader (an EPUB and manga fork of
 [HuangAntimony / Hoshi-Reader-Android](https://github.com/HuangAntimony/Hoshi-Reader-Android))
 are documented here. The format follows Keep a Changelog and release sections use
 Semantic Versioning.
 
 ## [Unreleased]
+
+### Added
+- **EPUB reading is available alongside mokuro manga again.** Import one or more EPUBs,
+  recursively import an EPUB folder, or open an EPUB from Android's Open-with menu, then
+  use the full text reader with dictionary lookup, highlights, Appearance controls,
+  Sasayaki audiobook matching, ッツ-compatible Google Drive sync, and HTTP sync. Existing
+  manga translation and manga reading remain available.
 
 ## [v0.10.0] - 2026-07-30
 

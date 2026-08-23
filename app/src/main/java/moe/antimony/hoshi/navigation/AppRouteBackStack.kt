@@ -1,6 +1,7 @@
 package moe.antimony.hoshi.navigation
 
 import androidx.navigation3.runtime.NavKey
+import moe.antimony.hoshi.epub.ContentType
 
 internal fun MutableList<NavKey>.popAppRoute() {
     if (size > 1) {
@@ -24,6 +25,13 @@ internal fun MutableList<NavKey>.openReaderRoute(bookId: String) {
 internal fun MutableList<NavKey>.openMangaReaderRoute(bookId: String) {
     selectTopLevelRoute(AppRoute.BooksRoute)
     add(AppRoute.MangaReaderRoute(bookId))
+}
+
+internal fun MutableList<NavKey>.openBookRoute(bookId: String, contentType: ContentType) {
+    when (contentType) {
+        ContentType.Epub -> openReaderRoute(bookId)
+        ContentType.Mokuro -> openMangaReaderRoute(bookId)
+    }
 }
 
 internal fun MutableList<NavKey>.openSasayakiMatchRoute(bookId: String) {

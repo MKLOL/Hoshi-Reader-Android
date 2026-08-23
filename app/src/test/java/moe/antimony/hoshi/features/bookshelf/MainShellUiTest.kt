@@ -9,6 +9,7 @@ import moe.antimony.hoshi.epub.BookRepository
 import moe.antimony.hoshi.epub.Bookmark
 import moe.antimony.hoshi.epub.BookShelf
 import moe.antimony.hoshi.epub.BookSortOption
+import moe.antimony.hoshi.importing.ImportFileType
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -26,12 +27,8 @@ class MainShellUiTest {
         )
     }
 
-    // Appearance is still hidden in the manga-only fork (the existing entries are
-    // EPUB-text-reader specific). Behavior is surfaced because it now also hosts
-    // the manga-specific single-tap-lookup and Noto-Sans-JP-font toggles that used
-    // to live in the manga reader's overflow (⋯) menu. See settingsGroups().
     @Test
-    fun settingsGroupsExposeMangaTopLevelEntries() {
+    fun settingsGroupsExposeDualFormatTopLevelEntries() {
         val groups = settingsGroups()
 
         assertEquals(
@@ -39,6 +36,7 @@ class MainShellUiTest {
                 R.string.settings_dictionaries,
                 R.string.settings_anki,
                 R.string.settings_chatgpt,
+                R.string.settings_appearance,
                 R.string.settings_behavior,
                 R.string.settings_advanced,
             ),
@@ -48,6 +46,15 @@ class MainShellUiTest {
             listOf(R.string.settings_report_issue, R.string.settings_diagnostics, R.string.settings_about),
             groups.last().map { it.labelRes },
         )
+    }
+
+    @Test
+    fun bookshelfFilePickerAcceptsEpubAndMokuroArchives() {
+        val mimeTypes = bookshelfFileImportMimeTypes().toSet()
+
+        assertTrue(ImportFileType.Epub.mimeTypes.all { it in mimeTypes })
+        assertTrue(ImportFileType.Mokuro.mimeTypes.all { it in mimeTypes })
+        assertEquals(mimeTypes.size, bookshelfFileImportMimeTypes().size)
     }
 
     @Test

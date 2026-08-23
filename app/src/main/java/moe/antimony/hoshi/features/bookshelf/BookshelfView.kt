@@ -129,8 +129,10 @@ import moe.antimony.hoshi.features.reader.ReaderSettings
 import moe.antimony.hoshi.features.sync.SyncDirection
 import moe.antimony.hoshi.features.sync.SyncMode
 import moe.antimony.hoshi.features.sync.SyncSettings
+import moe.antimony.hoshi.importing.DirectoryImportContent
 import moe.antimony.hoshi.importing.ImportFileType
 import moe.antimony.hoshi.importing.MultipleFileImportContent
+import moe.antimony.hoshi.importing.SafImportDirectoryScanner
 import moe.antimony.hoshi.importing.importDisplayName
 import moe.antimony.hoshi.ui.HoshiBlockingProgressOverlay
 import moe.antimony.hoshi.ui.UiText
@@ -148,6 +150,11 @@ data class SasayakiMatchRequest(
     val bookId: String,
     val bookEntry: BookEntry,
 )
+
+internal fun bookshelfFileImportMimeTypes(): Array<String> =
+    (ImportFileType.Epub.mimeTypes + ImportFileType.Mokuro.mimeTypes)
+        .distinct()
+        .toTypedArray()
 
 @OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
 @Composable
@@ -179,6 +186,7 @@ fun BookshelfView(
         },
     )
     val uiState by booksViewModel.uiState.collectAsState()
+    val epubFolderScanner = remember(context) { SafImportDirectoryScanner(context.contentResolver) }
     var sortMenuExpanded by remember { mutableStateOf(false) }
     var contextMenuTarget by remember { mutableStateOf<BookContextMenuTarget?>(null) }
     var deleteCandidate by remember { mutableStateOf<BookEntry?>(null) }
@@ -206,6 +214,20 @@ fun BookshelfView(
         booksViewModel.importBooks(imports)
     }
 
+    val epubFolderImporter = rememberLauncherForActivityResult(DirectoryImportContent()) { treeUri: Uri? ->
+        if (treeUri == null) return@rememberLauncherForActivityResult
+        booksViewModel.importBookFolderItems {
+            withContext(Dispatchers.IO) {
+                epubFolderScanner.scan(treeUri, ImportFileType.Epub).map { file ->
+                    BookImportItem(
+                        uri = file.key,
+                        displayName = file.displayName,
+                    )
+                }
+            }
+        }
+    }
+
     val mangaFolderImporter = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocumentTree(),
     ) { treeUri: Uri? ->
@@ -220,10 +242,11 @@ fun BookshelfView(
     }
 
     fun launchBookImporter() {
-        // Manga-only file picker: mokuro bundles (.zip/.cbz). EPUB support is hidden from
-        // the UI for now but the parser/import plumbing in BookRepository still exists,
-        // so adding `ImportFileType.Epub.mimeTypes` here would re-enable it.
-        importer.launch(ImportFileType.Mokuro.mimeTypes)
+        importer.launch(bookshelfFileImportMimeTypes())
+    }
+
+    fun launchEpubFolderImporter() {
+        epubFolderImporter.launch(Unit)
     }
 
     fun launchMangaFolderImporter() {
@@ -283,6 +306,7 @@ fun BookshelfView(
         onDeleteSelectedBooks = { showBulkDeleteConfirmation = true },
         onManageShelves = { showShelfManagement = true },
         onImport = ::launchBookImporter,
+        onImportEpubFolder = ::launchEpubFolderImporter,
         onImportMangaFolder = ::launchMangaFolderImporter,
         onOpenBook = booksViewModel::openBook,
         contextMenuTarget = contextMenuTarget,
@@ -641,6 +665,7 @@ private fun BooksTab(
     onDeleteSelectedBooks: () -> Unit,
     onManageShelves: () -> Unit,
     onImport: () -> Unit,
+    onImportEpubFolder: () -> Unit,
     onImportMangaFolder: () -> Unit,
     onOpenBook: (BookEntry) -> Unit,
     contextMenuTarget: BookContextMenuTarget?,
@@ -678,6 +703,7 @@ private fun BooksTab(
                 onDeleteSelectedBooks = onDeleteSelectedBooks,
                 onManageShelves = onManageShelves,
                 onImport = onImport,
+                onImportEpubFolder = onImportEpubFolder,
                 onImportMangaFolder = onImportMangaFolder,
             )
         },
@@ -851,6 +877,7 @@ private fun BooksTopAppBar(
     onDeleteSelectedBooks: () -> Unit,
     onManageShelves: () -> Unit,
     onImport: () -> Unit,
+    onImportEpubFolder: () -> Unit,
     onImportMangaFolder: () -> Unit,
 ) {
     var moveMenuExpanded by remember { mutableStateOf(false) }
@@ -965,28 +992,31 @@ private fun BooksTopAppBar(
                     IconButton(onClick = { importMenuExpanded = true }, enabled = enabled) {
                         Icon(
                             imageVector = Icons.Rounded.Add,
-                            contentDescription = stringResource(R.string.bookshelf_import_manga),
+                            contentDescription = stringResource(R.string.bookshelf_import_books),
                         )
                     }
-                    // Two import paths: a file picker (mokuro `.zip`/`.cbz` bundle) and a
-                    // directory picker (a pre-extracted mokuro folder). EPUB support has
-                    // been hidden from the UI but its parser/import path still exists in
-                    // BookRepository; re-adding the dropdown item would re-enable it.
                     DropdownMenu(
                         expanded = importMenuExpanded,
                         onDismissRequest = { importMenuExpanded = false },
                     ) {
-                        SortMenuHeader(text = "Import")
+                        SortMenuHeader(text = stringResource(R.string.action_import))
                         HorizontalDivider()
                         DropdownMenuItem(
-                            text = { Text("Manga file") },
+                            text = { Text(stringResource(R.string.bookshelf_import_epub_or_manga_files)) },
                             onClick = {
                                 importMenuExpanded = false
                                 onImport()
                             },
                         )
                         DropdownMenuItem(
-                            text = { Text("Manga folder") },
+                            text = { Text(stringResource(R.string.bookshelf_import_epub_folder)) },
+                            onClick = {
+                                importMenuExpanded = false
+                                onImportEpubFolder()
+                            },
+                        )
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.bookshelf_import_manga_folder)) },
                             onClick = {
                                 importMenuExpanded = false
                                 onImportMangaFolder()
@@ -1757,10 +1787,10 @@ private fun EmptyBooksView(
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             Button(onClick = onImport, enabled = enabled) {
-                Text("Import file")
+                Text(stringResource(R.string.bookshelf_import_files))
             }
             Button(onClick = onImportMangaFolder, enabled = enabled) {
-                Text("Import manga folder")
+                Text(stringResource(R.string.bookshelf_import_manga_folder))
             }
         }
     }

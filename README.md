@@ -7,9 +7,9 @@
 [![Download](https://img.shields.io/github/downloads/MKLOL/Hoshi-Reader-Android/total?label=download)](https://github.com/MKLOL/Hoshi-Reader-Android/releases)
 [![Latest download](https://img.shields.io/github/downloads/MKLOL/Hoshi-Reader-Android/latest/total?label=latest%20download)](https://github.com/MKLOL/Hoshi-Reader-Android/releases/latest)
 
-A native Android **mokuro manga reader** for Japanese learners, with tap-to-reveal OCR
-speech bubbles, Yomitan dictionary lookup, AnkiDroid card mining, in-bubble ChatGPT
-translation, and an e-ink reading mode.
+A native Android **EPUB and mokuro manga reader** for Japanese learners, with text and
+OCR dictionary lookup, AnkiDroid card mining, manga translation, audiobook read-along,
+sync, and an e-ink reading mode.
 
 </div>
 
@@ -21,11 +21,9 @@ translation, and an e-ink reading mode.
 which is itself a native Android recreation of [Manhhao / Hoshi-Reader](https://github.com/Manhhao/Hoshi-Reader)
 (the original Hoshi Reader web + iOS project).
 
-This fork narrows the app's focus from "Japanese EPUB + manga reader" to **manga-only**.
-The original Hoshi Reader supports EPUBs, audiobook read-along, highlights, vertical-text
-appearance settings, and Google Drive sync — if you want any of that, install upstream
-instead. This fork strips the EPUB-flavored UI to keep the manga reading flow tight, and
-adds:
+This fork keeps Hoshi Reader's EPUB reading, audiobook, highlights, appearance, and sync
+features while extending the same bookshelf, dictionary, and Anki workflow to mokuro
+manga. Its manga-specific additions include:
 
 - A Gnathonic-style OCR shrink-to-fit + word-wrap fallback for mis-detected horizontal bubbles
 - An adaptive font-size clamp tuned to mokuro's tendency to overshoot character heights
@@ -39,6 +37,10 @@ to **Manhhao** for the original Hoshi Reader. Both are GPLv3, as is this fork.
 
 ## Features
 
+- **EPUB reading.** Imports one or more EPUB files, recursively imports EPUB folders, and
+  accepts EPUBs from Android's Open-with menu. Read vertical or horizontal text in paged
+  or continuous mode with highlights, appearance controls, dictionary lookup, Sasayaki
+  audiobook read-along, and ッツ-compatible Google Drive progress sync.
 - **Mokuro manga reading.** Imports a mokuro `.zip` / `.cbz` bundle and renders each page
   with selectable OCR text overlaid on the artwork. Tap a bubble to reveal it (white plate
   + black text); tap again to look the word up in your dictionaries.
@@ -55,15 +57,17 @@ to **Manhhao** for the original Hoshi Reader. Both are GPLv3, as is this fork.
   [Lapis](https://github.com/donkuri/lapis)-style configurations and duplicate checks.
 - **E-ink mode.** Pure black-and-white rendering, immersive system bars, no
   page-turn animation, high-contrast matched-word highlight via the CSS Custom Highlight API.
-- **HTTP sync.** Optional self-hosted key/value blob server keeps reading progress and
-  ChatGPT history in sync across devices. See [docs/HTTP_SYNC.md](docs/HTTP_SYNC.md).
+- **HTTP sync.** Optional self-hosted key/value blob server keeps books, reading progress,
+  shelves, reader data, and manga ChatGPT history in sync across devices. See
+  [docs/HTTP_SYNC.md](docs/HTTP_SYNC.md).
 - **Right-to-left manga reading**, configurable single-tap-to-lookup, optional Noto Sans
   JP font for the OCR overlay, and a "Go to page…" jump dialog under the overflow menu.
 
 ## Requirements
 
 - Android 9 (API 28) or later
-- ~150 MB free storage per typical manga volume (mokuro images)
+- Enough app storage for imported EPUBs or extracted mokuro page images (a typical manga
+  volume can use about 150 MB)
 - A Yomitan dictionary `.zip` — the official JMdict from
   [yomidevs/jmdict-yomitan](https://github.com/yomidevs/jmdict-yomitan) is a good start
 
@@ -100,8 +104,8 @@ your own signing key, set `ANDROID_KEYSTORE_FILE`, `ANDROID_KEYSTORE_PASSWORD`,
 
 ## Privacy
 
-Sui Manga Reader stores imported manga, dictionaries, fonts, reading progress, ChatGPT
-history, and settings **locally in app storage**. No telemetry, no analytics.
+Sui Manga Reader stores imported EPUBs and manga, dictionaries, fonts, reading progress,
+ChatGPT history, and settings **locally in app storage**. No telemetry, no analytics.
 
 - **ChatGPT integration** is opt-in: you provide your own OpenAI API key, and the app
   posts directly to `api.openai.com`.
@@ -128,4 +132,4 @@ In addition to the two upstream projects called out above, this app stands on:
 - [mokuro-reader (Gnathonic fork)](https://github.com/Gnathonic/mokuro-reader) — the reference web reader whose OCR shrink-to-fit + word-wrap algorithm this app ports
 - [AnkiDroid](https://github.com/ankidroid/Anki-Android) — host for the Anki card mining integration
 - [AnkiConnect Android](https://github.com/KamWithK/AnkiconnectAndroid) — local-audio behavior + duplicate-scope query references
-- [ッツ Ebook Reader](https://github.com/ttu-ttu/ebook-reader) — sync compatibility reference (upstream EPUB-only feature, still wired in the data layer of this fork)
+- [ッツ Ebook Reader](https://github.com/ttu-ttu/ebook-reader) — EPUB progress-sync compatibility reference

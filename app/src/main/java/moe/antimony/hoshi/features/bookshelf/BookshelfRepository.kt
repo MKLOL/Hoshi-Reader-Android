@@ -87,12 +87,7 @@ internal class AndroidBookshelfRepository(
     )
 
     override suspend fun loadBooks(sortOption: BookSortOption): BookshelfLoadResult = withContext(ioDispatcher) {
-        // Hide any non-Mokuro (i.e. EPUB) book from the bookshelf UI. The disk entries,
-        // sync state, parser plumbing, and EPUB reader code all remain — this filter just
-        // keeps the user-facing list manga-only while the rest of the EPUB-removal work
-        // continues. If we ever re-enable EPUB, drop this filter and it lights back up.
         val entries = bookRepository.loadBookEntries(sortOption)
-            .filter { bookContentType(it.root) == ContentType.Mokuro }
         val shelves = bookRepository.loadShelves()
         BookshelfLoadResult(
             entries = entries,

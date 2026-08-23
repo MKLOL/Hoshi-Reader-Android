@@ -35,6 +35,8 @@ import moe.antimony.hoshi.features.bookshelf.MainTab
 import moe.antimony.hoshi.features.bookshelf.SasayakiMatchRequest
 import moe.antimony.hoshi.features.bookshelf.SettingsDestination
 import moe.antimony.hoshi.features.bookshelf.SettingsTab
+import moe.antimony.hoshi.epub.ContentType
+import moe.antimony.hoshi.epub.bookContentType
 import moe.antimony.hoshi.features.diagnostics.DiagnosticsView
 import moe.antimony.hoshi.features.dictionary.DictionarySearchView
 import moe.antimony.hoshi.features.dictionary.DictionaryView
@@ -132,13 +134,12 @@ fun AppShell(
     }
 
     fun openReader(bookId: String) {
-        // EPUB reader is hidden from the UI for now; route every book open to the manga
-        // reader. The bookshelf filter (BookshelfRepository.loadBooks) already prevents
-        // EPUB books from appearing in the list, so any non-Mokuro book reaching this
-        // path would be a deep link from elsewhere — sending those to the manga reader
-        // just means they fail to render (the manga reader requires mokuro sidecars),
-        // which is the right behaviour while EPUB support is dormant.
-        backStack.openMangaReaderRoute(bookId)
+        scope.launch {
+            val contentType = bookRepository.loadBookEntry(bookId)
+                ?.let { entry -> bookContentType(entry.root) }
+                ?: ContentType.Epub
+            backStack.openBookRoute(bookId, contentType)
+        }
     }
 
     fun openSasayakiMatch(request: SasayakiMatchRequest) {

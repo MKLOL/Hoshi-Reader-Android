@@ -36,9 +36,6 @@
     <string name="none" comment="Generic empty value label, intentionally matching bookshelf_no_shelf.">None</string>
     <string name="dialog_error_title">Error</string>
     <string name="import_select_mokuro_manga">Select a .zip or .cbz mokuro manga file.</string>
-    <!-- Retained for the dormant EPUB plumbing in ImportFileType.Epub; never shown
-         while EPUB import is hidden from the UI, but the type constant still needs a
-         valid unsupportedMessageRes. -->
     <string name="import_select_epub_book">Select a .epub EPUB book file.</string>
     <string name="import_select_srt_subtitle">Select a .srt subtitle file.</string>
     <string name="import_select_audiobook">Select a .mp3 or .m4b audiobook file.</string>
@@ -46,7 +43,7 @@
     <string name="import_select_dictionary_archive">Select a .zip dictionary archive file.</string>
     <string name="import_select_hoshi_backup">Select a .hoshi backup file.</string>
     <string name="import_select_font">Select a .ttf, .otf, .woff, or .woff2 font file.</string>
-    <string name="main_tab_books" comment="Main navigation tab label, intentionally matching the backup Books section.">Manga</string>
+    <string name="main_tab_books" comment="Main navigation tab label, intentionally matching the backup Books section.">Books</string>
     <string name="main_tab_dictionary">Dictionary</string>
     <string name="main_tab_settings" comment="Main navigation tab label, intentionally matching settings page titles.">Settings</string>
     <string name="settings_dictionaries" comment="Settings row label, intentionally matching the backup Dictionaries section.">Dictionaries</string>
@@ -62,16 +59,20 @@
     <string name="settings_about">About</string>
     <string name="settings_backup" comment="Advanced settings row label, intentionally matching the Backup action noun.">Backup</string>
     <string name="settings_title" comment="Shared label for settings page titles distinct from the main tab key.">Settings</string>
-    <string name="bookshelf_open_failed">Failed to open manga.</string>
-    <string name="bookshelf_import_failed">Failed to import manga.</string>
+    <string name="bookshelf_open_failed">Failed to open book.</string>
+    <string name="bookshelf_import_failed">Failed to import book.</string>
     <string name="bookshelf_import_failed_list_format">Failed to import:\n%1$s</string>
-    <string name="bookshelf_importing_epub">Importing manga...</string>
+    <string name="bookshelf_importing_epub">Importing book...</string>
     <string name="settings_language">Language</string>
     <string name="language_follow_system">Follow system</string>
     <string name="language_english" translatable="false">English</string>
     <string name="language_simplified_chinese" translatable="false">简体中文</string>
     <string name="bookshelf_import_files">Import files</string>
     <string name="bookshelf_import_folder">Import folder</string>
+    <string name="bookshelf_import_books">Import books</string>
+    <string name="bookshelf_import_epub_or_manga_files">EPUB or manga files</string>
+    <string name="bookshelf_import_epub_folder">EPUB folder</string>
+    <string name="bookshelf_import_manga_folder">Manga folder</string>
     <string name="bookshelf_scanning_folder">Scanning folder...</string>
     <string name="bookshelf_no_epub_files_found">No EPUB files found.</string>
     <string name="bookshelf_importing_named_format">Importing %1$s...</string>
@@ -89,14 +90,14 @@
     <string name="bookshelf_section_reading">Reading</string>
     <string name="bookshelf_section_unshelved">Unshelved</string>
     <string name="bookshelf_selected_count_format">%1$d Selected</string>
-    <string name="bookshelf_sort_books">Sort manga</string>
+    <string name="bookshelf_sort_books">Sort books</string>
     <string name="bookshelf_sorting_by">Sorting by...</string>
     <string name="bookshelf_sort_recent">Recent</string>
     <string name="bookshelf_sort_title" comment="Sort option label, intentionally matching the title text-field label.">Title</string>
-    <string name="bookshelf_select_books">Select manga</string>
-    <string name="bookshelf_move_selected_books">Move selected manga</string>
+    <string name="bookshelf_select_books">Select books</string>
+    <string name="bookshelf_move_selected_books">Move selected books</string>
     <string name="bookshelf_no_shelf" comment="Shelf picker empty value, intentionally matching generic none.">None</string>
-    <string name="bookshelf_delete_selected_books">Delete selected manga</string>
+    <string name="bookshelf_delete_selected_books">Delete selected books</string>
     <string name="bookshelf_manage_shelves">Manage Shelves</string>
     <string name="bookshelf_import_manga">Import manga</string>
     <string name="bookshelf_sync">Sync</string>
@@ -104,7 +105,7 @@
     <string name="bookshelf_match_sasayaki">Match Sasayaki</string>
     <string name="bookshelf_mark_read">Mark Read</string>
     <string name="bookshelf_reading_shelf">Reading Shelf</string>
-    <string name="bookshelf_reading_shelf_description">Shows manga you\'ve started but not finished.</string>
+    <string name="bookshelf_reading_shelf_description">Shows books you\'ve started but not finished.</string>
     <string name="bookshelf_shelves">Shelves</string>
     <string name="bookshelf_no_shelves">No shelves</string>
     <string name="bookshelf_move_shelf_up">Move shelf up</string>
@@ -112,14 +113,14 @@
     <string name="bookshelf_delete_shelf">Delete shelf</string>
     <string name="bookshelf_shelf_name">Shelf name</string>
     <string name="bookshelf_add_shelf">Add shelf</string>
-    <string name="bookshelf_empty_title">No Manga</string>
-    <string name="bookshelf_empty_message">Import a mokuro manga using the + button to start reading.</string>
+    <string name="bookshelf_empty_title">No Books</string>
+    <string name="bookshelf_empty_message">Import an EPUB or mokuro manga using the + button to start reading.</string>
     <string name="bookshelf_selected">Selected</string>
     <string name="bookshelf_not_selected">Not selected</string>
     <string name="bookshelf_read">Read</string>
     <plurals name="bookshelf_bulk_delete_title">
-        <item quantity="one">Delete %1$d manga?</item>
-        <item quantity="other">Delete %1$d manga?</item>
+        <item quantity="one">Delete %1$d book?</item>
+        <item quantity="other">Delete %1$d books?</item>
     </plurals>
     <string name="dictionary_select_zip_archive">Select a .zip dictionary archive.</string>
     <string name="dictionary_download_failed">Failed to download dictionaries.</string>
@@ -324,14 +325,14 @@
     <string name="update_downloaded_message_format" comment="Downloaded update prompt message, intentionally matching About update status.">Update %1$s has been downloaded.</string>
     <string name="update_available_title">Update Available</string>
     <string name="update_available_message_format">Sui Manga Reader %1$s is available.</string>
-    <string name="backup_books" comment="Backup section label, intentionally matching the Manga tab label.">Manga</string>
+    <string name="backup_books" comment="Backup section label, intentionally matching the Books tab label.">Books</string>
     <string name="backup_dictionaries" comment="Backup section label, intentionally matching the Dictionaries settings label.">Dictionaries</string>
-    <string name="backup_books_saved">Manga backup saved.</string>
-    <string name="backup_books_save_failed">Unable to save manga backup.</string>
+    <string name="backup_books_saved">Books backup saved.</string>
+    <string name="backup_books_save_failed">Unable to save Books backup.</string>
     <string name="backup_dictionaries_saved">Dictionaries backup saved.</string>
     <string name="backup_dictionaries_save_failed">Unable to save Dictionaries backup.</string>
-    <string name="backup_books_restored">Manga restored.</string>
-    <string name="backup_books_restore_failed">Unable to restore manga backup.</string>
+    <string name="backup_books_restored">Books restored.</string>
+    <string name="backup_books_restore_failed">Unable to restore Books backup.</string>
     <string name="backup_dictionaries_restored">Dictionaries restored.</string>
     <string name="backup_dictionaries_restore_failed">Unable to restore Dictionaries backup.</string>
     <string name="backup_restore_overwrites">Restoring will overwrite the current collection.</string>
@@ -341,11 +342,12 @@
     <string name="backup_restoring">Restoring...</string>
     <string name="advanced_audio">Audio</string>
     <string name="advanced_statistics" comment="Advanced settings row label, intentionally matching reader statistics label.">Statistics</string>
-    <string name="advanced_statistics_subtitle">Track per-manga reading time and page-turn pace</string>
+    <string name="advanced_statistics_subtitle">Track per-book reading time, speed, and progress</string>
     <string name="advanced_sasayaki_audiobooks">Sasayaki (Audiobooks)</string>
     <string name="advanced_sasayaki_subtitle">Read along with matched audiobook subtitles</string>
+    <string name="advanced_ttu_sync">ッツ Sync</string>
     <string name="advanced_http_sync">HTTP Sync</string>
-    <string name="advanced_http_sync_subtitle">Sync bookmarks and ChatGPT history to your own server</string>
+    <string name="advanced_http_sync_subtitle">Sync books, reading progress, shelves, and reader data to your own server</string>
     <string name="audio_sources">Sources</string>
     <string name="audio_add_source">Add Source</string>
     <string name="audio_name">Name</string>
@@ -434,7 +436,7 @@
     <string name="about_storage_no_leftovers">No cleanable app storage leftovers were found.</string>
     <string name="about_storage_category_format">%1$s: %2$s (%3$s)</string>
     <string name="about_storage_category_anki_media_cache">Anki media cache</string>
-    <string name="about_storage_category_epub_import_residue">Interrupted manga imports</string>
+    <string name="about_storage_category_epub_import_residue">Interrupted book imports</string>
     <string name="about_storage_category_backup_restore_residue">Interrupted backup restores</string>
     <string name="about_storage_category_dictionary_import_residue">Interrupted dictionary imports</string>
     <string name="about_storage_category_local_audio_import_residue">Interrupted local audio import</string>

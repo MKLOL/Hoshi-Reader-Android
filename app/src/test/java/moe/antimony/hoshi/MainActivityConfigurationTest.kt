@@ -54,6 +54,18 @@ class MainActivityConfigurationTest {
     }
 
     @Test
+    fun mainActivityAcceptsContentBackedEpubOpenWithIntents() {
+        assertTrue(
+            "MainActivity must accept content-backed EPUB files shared through Android's document providers.",
+            mainActivityManifestElement().hasIntentFilter(
+                actionName = "android.intent.action.VIEW",
+                mimeType = "application/epub+zip",
+                scheme = "content",
+            ),
+        )
+    }
+
+    @Test
     fun processTextLookupActivityAppearsInAndroidSelectedTextProcessMenu() {
         val activity = processTextLookupActivityManifestElement()
 
@@ -115,6 +127,7 @@ class MainActivityConfigurationTest {
     private fun Element.hasIntentFilter(
         actionName: String,
         mimeType: String? = null,
+        scheme: String? = null,
     ): Boolean {
         val filters = getElementsByTagName("intent-filter")
         for (filterIndex in 0 until filters.length) {
@@ -129,9 +142,14 @@ class MainActivityConfigurationTest {
                 val item = data.item(index) as Element
                 item.getAttribute("android:mimeType")
             }
+            val schemes = (0 until data.length).map { index ->
+                val item = data.item(index) as Element
+                item.getAttribute("android:scheme")
+            }
             if (actionNames != listOf(actionName)) continue
             if (mimeType == null && mimeTypes.isNotEmpty()) continue
             if (mimeType != null && mimeType !in mimeTypes) continue
+            if (scheme != null && scheme !in schemes) continue
             return true
         }
         return false

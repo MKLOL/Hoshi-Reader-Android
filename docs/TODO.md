@@ -1,6 +1,6 @@
 # Hoshi Android Agent TODO
 
-Last updated: 2026-07-13
+Last updated: 2026-08-23
 
 This file is the short operational handoff for future agents.
 
@@ -27,6 +27,9 @@ This file is the short operational handoff for future agents.
 
 ### Bookshelf, Import, And Backup
 
+- EPUB is again a first-class format alongside mokuro manga: SAF file/folder import and
+  content-URI Open-with are available, bookshelf opens route each format to its matching
+  reader, and Appearance, Sasayaki, and ッツ sync expose the iOS-aligned EPUB workflows.
 - Bookshelf covers now publish stable cover sources with shelf state, decode iOS-sized 768px thumbnails, reuse cached bitmaps when returning to Books, and fill the cover frame without letterboxing.
 - Device-validate bookshelf multi-select markers in E-ink mode, confirming unselected books show an empty circle and selected books show a check mark.
 - Device-validate shelf-name entry, including user shelves named Reading alongside the virtual Reading Shelf, multi-EPUB DocumentsUI import, and recursive EPUB folder import in a session where text input and picker interaction can be driven reliably.

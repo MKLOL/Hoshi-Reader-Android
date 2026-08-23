@@ -9,7 +9,7 @@
 
 [English](README.md) | **简体中文**
 
-Hoshi Reader Android 是一款面向 Android 日语沉浸学习的轻量 EPUB 阅读器 App，支持 Yomitan 辞典查词、Anki 制卡、有声书跟读，以及墨水屏专用的模式选项。
+Hoshi Reader Android 是一款面向 Android 日语沉浸学习的 EPUB 与 mokuro 漫画阅读器 App，支持 Yomitan 辞典查词、Anki 制卡、有声书跟读、漫画翻译、同步，以及墨水屏专用的模式选项。
 
 本项目是 [Hoshi Reader](https://github.com/Manhhao/Hoshi-Reader) 的 Android 原生复刻版。
 
@@ -41,6 +41,7 @@ Hoshi Reader Android 是一款面向 Android 日语沉浸学习的轻量 EPUB �
 ### 书架
 
 - 导入单本或多本 EPUB，并在书架查看阅读进度。
+- 导入 mokuro `.zip` / `.cbz` 文件或输出文件夹，在漫画页面上显示可选择的 OCR 文本。
 - 使用自定义书架整理书籍。
 
 ### 阅读
@@ -76,6 +77,7 @@ Hoshi Reader Android 是一款面向 Android 日语沉浸学习的轻量 EPUB �
 ### 数据同步与迁移
 
 - 通过 Google Drive 同步阅读进度和统计数据，兼容 ッツ Reader。
+- 通过可选的自托管 HTTP 服务同步书籍、阅读进度、书架和阅读器数据。
 - 使用 `.hoshi` 归档备份或恢复书籍和辞典，兼容 Hoshi Reader iOS。
 
 ## 下载 Hoshi Reader Android APK
