@@ -2,10 +2,14 @@ package moe.antimony.hoshi.features.sync.http
 
 import moe.antimony.hoshi.epub.BookRepository
 import moe.antimony.hoshi.epub.ContentType
+import moe.antimony.hoshi.epub.EpubBook
 import moe.antimony.hoshi.epub.EpubBookParser
 import moe.antimony.hoshi.epub.bookContentType
 import moe.antimony.hoshi.mokuro.MokuroBookParser
 import java.io.File
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
+import java.util.UUID
 
 /**
  * Resolves the [moe.antimony.hoshi.epub.BookMetadata.cover] path for a book directory
@@ -42,4 +46,36 @@ internal suspend fun resolveSyncImportedCoverPath(
         }
     }.getOrNull() ?: return null
     return bookRepository.metadataCoverPath(bookRoot, coverHref)
+}
+
+/**
+ * Requires a freshly downloaded EPUB to parse before sync registers it on the shelf and
+ * returns its processed model so import can persist the same `bookinfo.json` as iOS.
+ */
+internal fun validateSyncImportedBook(
+    bookRoot: File,
+    epubParser: EpubBookParser = EpubBookParser(),
+): EpubBook? = if (bookContentType(bookRoot) == ContentType.Epub) {
+    epubParser.parse(bookRoot)
+} else {
+    null
+}
+
+internal fun createSyncImportStagingDirectory(booksDirectory: File): File {
+    Files.createDirectories(booksDirectory.toPath())
+    val stagingParent = booksDirectory.parentFile ?: booksDirectory
+    Files.createDirectories(stagingParent.toPath())
+    return Files.createTempDirectory(stagingParent.toPath(), ".http-sync-import-").toFile()
+}
+
+/** Atomically publishes a validated staging directory to a new, collision-free book folder. */
+internal fun publishSyncImportDirectory(stagingRoot: File, booksDirectory: File): File {
+    val target = booksDirectory.resolve("http-sync-${UUID.randomUUID()}")
+    check(!target.exists()) { "Sync import destination unexpectedly exists: $target" }
+    try {
+        Files.move(stagingRoot.toPath(), target.toPath(), StandardCopyOption.ATOMIC_MOVE)
+    } catch (_: java.nio.file.AtomicMoveNotSupportedException) {
+        Files.move(stagingRoot.toPath(), target.toPath())
+    }
+    return target
 }

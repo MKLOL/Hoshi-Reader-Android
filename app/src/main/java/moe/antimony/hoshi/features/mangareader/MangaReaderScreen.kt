@@ -431,6 +431,7 @@ internal fun MangaReaderScreen(
             // labelling it "On-device translation" would misattribute it. The entry's `model`
             // field carries which model actually wrote it.
             onDevice = false,
+            pretranslated = true,
         )
         return true
     }

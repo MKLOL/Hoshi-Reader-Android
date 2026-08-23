@@ -16,7 +16,9 @@ import moe.antimony.hoshi.features.sync.http.HttpSyncPayloadManifest
 import moe.antimony.hoshi.features.sync.http.HttpSyncSettings
 import moe.antimony.hoshi.features.sync.http.bookmarkKey
 import moe.antimony.hoshi.features.sync.http.deriveSyncId
+import moe.antimony.hoshi.features.sync.http.epubManifestKey
 import moe.antimony.hoshi.features.sync.http.metadataKey
+import moe.antimony.hoshi.features.sync.http.payloadManifestKey
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -97,6 +99,70 @@ class V3EdgeCaseTest {
         val engine = engineFor(repo, transport)
         val result = engine.syncOnce(configured)
         assertTrue(result.errors.any { it.syncId == "bad_meta" && "metadata" in it.message.lowercase() })
+    }
+
+    @Test
+    fun epubSelectionIgnoresMalformedStaleLegacyManifest() = runBlocking {
+        val syncId = "canonical_epub"
+        val transport = FakeKvTransport()
+        transport.putJson(
+            metadataKey(syncId),
+            HttpSyncMetadataBlob.serializer(),
+            HttpSyncMetadataBlob("Canonical EPUB", HttpSyncContentType.Epub),
+            json,
+            "2030-01-01T00:00:00Z",
+        )
+        transport.putJson(
+            epubManifestKey(syncId),
+            HttpSyncPayloadManifest.serializer(),
+            HttpSyncPayloadManifest("sha256:epub", 4, "Canonical EPUB", HttpSyncContentType.Epub),
+            json,
+            "2030-01-01T00:00:01Z",
+        )
+        transport.kv[payloadManifestKey(syncId)] = FakeKvTransport.Stored(
+            body = "{stale-broken-legacy".toByteArray(),
+            contentType = "application/json",
+            lastModified = "2029-01-01T00:00:00Z",
+        )
+
+        val result = V3RemoteState().read(transport) {}
+
+        assertEquals(emptyList<V3Error>(), result.errors)
+        val remote = result.snapshot.books.getValue(syncId)
+        assertEquals(HttpSyncContentType.Epub, remote.manifest?.format)
+        assertEquals(epubManifestKey(syncId), remote.payloadKeys?.manifest)
+    }
+
+    @Test
+    fun mokuroSelectionIgnoresMalformedIrrelevantEpubManifest() = runBlocking {
+        val syncId = "legacy_mokuro"
+        val transport = FakeKvTransport()
+        transport.putJson(
+            metadataKey(syncId),
+            HttpSyncMetadataBlob.serializer(),
+            HttpSyncMetadataBlob("Legacy Mokuro", HttpSyncContentType.Mokuro),
+            json,
+            "2030-01-01T00:00:00Z",
+        )
+        transport.putJson(
+            payloadManifestKey(syncId),
+            HttpSyncPayloadManifest.serializer(),
+            HttpSyncPayloadManifest("sha256:mokuro", 4, "Legacy Mokuro", HttpSyncContentType.Mokuro),
+            json,
+            "2030-01-01T00:00:01Z",
+        )
+        transport.kv[epubManifestKey(syncId)] = FakeKvTransport.Stored(
+            body = "{irrelevant-broken-epub".toByteArray(),
+            contentType = "application/json",
+            lastModified = "2029-01-01T00:00:00Z",
+        )
+
+        val result = V3RemoteState().read(transport) {}
+
+        assertEquals(emptyList<V3Error>(), result.errors)
+        val remote = result.snapshot.books.getValue(syncId)
+        assertEquals(HttpSyncContentType.Mokuro, remote.manifest?.format)
+        assertEquals(payloadManifestKey(syncId), remote.payloadKeys?.manifest)
     }
 
     @Test

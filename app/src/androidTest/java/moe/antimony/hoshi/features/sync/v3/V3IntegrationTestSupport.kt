@@ -78,9 +78,28 @@ internal class SimDevice(
      */
     suspend fun importEpub(title: String): File {
         val root = repo.createBookDirectoryForImportedTitle(title)
-        // Drop a placeholder spine bytes so the payload zip isn't completely empty —
-        // makes sha256-stability assertions interesting.
-        File(root, "content.xhtml").writeText("<html><body>$title</body></html>")
+        File(root, "META-INF").mkdirs()
+        File(root, "OEBPS").mkdirs()
+        File(root, "META-INF/container.xml").writeText(
+            """<?xml version="1.0"?>
+            <container xmlns="urn:oasis:names:tc:opendocument:xmlns:container" version="1.0">
+              <rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles>
+            </container>""".trimIndent(),
+        )
+        File(root, "OEBPS/content.opf").writeText(
+            """<?xml version="1.0" encoding="UTF-8"?>
+            <package xmlns="http://www.idpf.org/2007/opf" unique-identifier="book-id" version="3.0">
+              <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+                <dc:identifier id="book-id">${jsonStr(title)}</dc:identifier>
+                <dc:title>$title</dc:title><dc:language>ja</dc:language>
+              </metadata>
+              <manifest><item id="chapter" href="chapter.xhtml" media-type="application/xhtml+xml"/></manifest>
+              <spine><itemref idref="chapter"/></spine>
+            </package>""".trimIndent(),
+        )
+        File(root, "OEBPS/chapter.xhtml").writeText(
+            """<html xmlns="http://www.w3.org/1999/xhtml"><body><p>食べる。</p></body></html>""",
+        )
         repo.saveMetadata(
             root,
             BookMetadata(

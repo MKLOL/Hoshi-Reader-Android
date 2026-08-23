@@ -10,7 +10,7 @@ import moe.antimony.hoshi.features.sync.http.HttpSyncDeletedBookStateStore
 import moe.antimony.hoshi.features.sync.http.HttpSyncRevisionStore
 import moe.antimony.hoshi.features.sync.http.HttpSyncShelfStateStore
 import moe.antimony.hoshi.features.sync.http.bookmarkKey
-import moe.antimony.hoshi.features.sync.http.deriveSyncId
+import moe.antimony.hoshi.features.sync.http.syncIdForMetadata
 import moe.antimony.hoshi.features.sync.http.metadataKey
 import java.time.Instant
 
@@ -43,6 +43,12 @@ class V3LocalState(
 
     suspend fun read(): V3LocalSnapshot {
         val entries = bookRepository.loadBookEntries()
+        for (entry in entries) {
+            val resolved = syncIdForMetadata(entry.metadata) ?: continue
+            if (entry.metadata.syncId != resolved) {
+                bookRepository.saveMetadata(entry.root, entry.metadata.copy(syncId = resolved))
+            }
+        }
         val shelfRecords = shelfStateStore.load(bookRepository.booksDirectory)
         // Edit-depth revisions for every key this device has revisioned. Read once per
         // snapshot (the store re-reads the sidecar file on each call).
@@ -59,7 +65,7 @@ class V3LocalState(
                 // A deletes; tombstone is on server; A re-imports the same title —
                 // local re-import survives, doesn't get wiped by its own tombstone."
                 val liveSyncIds = entries.asSequence()
-                    .mapNotNull { e -> e.metadata.title.takeUnless { it.isNullOrBlank() }?.let(::deriveSyncId) }
+                    .mapNotNull { e -> syncIdForMetadata(e.metadata) }
                     .toSet()
                 val stale = records.keys.intersect(liveSyncIds)
                 if (stale.isEmpty()) {
@@ -99,7 +105,7 @@ class V3LocalState(
         for (entry in entries) {
             val title = entry.metadata.title.orEmpty()
             if (title.isBlank()) continue
-            val syncId = deriveSyncId(title) ?: continue
+            val syncId = syncIdForMetadata(entry.metadata) ?: continue
             // Tolerate a syncId collision across multiple local books — keep the first
             // (most-recently-read on disk per BookRepository sort) and silently drop the
             // duplicate. The planner can only emit one action set per syncId anyway.

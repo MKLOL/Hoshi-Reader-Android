@@ -30,7 +30,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.zIndex
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -42,9 +44,15 @@ import androidx.lifecycle.findViewTreeLifecycleOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
 import java.io.File
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
+import moe.antimony.hoshi.R
 import moe.antimony.hoshi.LocalHoshiAppContainer
 import moe.antimony.hoshi.epub.EpubBook
 import moe.antimony.hoshi.epub.HighlightColor
@@ -57,6 +65,18 @@ import moe.antimony.hoshi.features.audio.AudioRequestHandler
 import moe.antimony.hoshi.features.audio.AudioSettings
 import moe.antimony.hoshi.features.audio.LocalAudioRepository
 import moe.antimony.hoshi.features.audio.WordAudioPlayer
+import moe.antimony.hoshi.features.ai.AiChatEntry
+import moe.antimony.hoshi.features.ai.AiChatHistoryStore
+import moe.antimony.hoshi.features.ai.AiChatPopupView
+import moe.antimony.hoshi.features.ai.AiChatUiState
+import moe.antimony.hoshi.features.ai.ChatModelCatalog
+import moe.antimony.hoshi.features.ai.CloudChat
+import moe.antimony.hoshi.features.ai.EpubTranslationStore
+import moe.antimony.hoshi.features.ai.aiChatSettingsRepository
+import moe.antimony.hoshi.features.ai.buildAiChatDictionaryLookup
+import moe.antimony.hoshi.features.ai.offline.OfflineLlmManager
+import moe.antimony.hoshi.features.ai.offline.OfflineTranslationResult
+import moe.antimony.hoshi.features.ai.offline.offlineTranslationSettingsRepository
 import moe.antimony.hoshi.features.anki.AnkiViewModel
 import moe.antimony.hoshi.features.dictionary.DictionaryImageRequestHandler
 import moe.antimony.hoshi.features.dictionary.DictionarySettings
@@ -77,6 +97,7 @@ import moe.antimony.hoshi.features.sasayaki.SasayakiAudioRepository
 import moe.antimony.hoshi.features.sasayaki.SasayakiCueRange
 import moe.antimony.hoshi.features.sasayaki.SasayakiPlayer
 import moe.antimony.hoshi.features.sasayaki.SasayakiSettings
+import moe.antimony.hoshi.features.sync.http.syncIdForMetadata
 import moe.antimony.hoshi.features.sasayaki.SasayakiSheet
 import kotlin.math.roundToInt
 
@@ -110,10 +131,37 @@ fun ReaderWebView(
     val audioSettingsRepository = appContainer.audioSettingsRepository
     val sasayakiSettingsRepository = appContainer.sasayakiSettingsRepository
     val bookRepository = appContainer.bookRepository
+    val aiSettingsRepository = remember { context.applicationContext.aiChatSettingsRepository() }
+    val aiSettings by aiSettingsRepository.settings.collectAsState(initial = null)
+    val offlineTranslationRepository = remember {
+        context.applicationContext.offlineTranslationSettingsRepository()
+    }
+    val offlineTranslationSettings by offlineTranslationRepository.settings.collectAsState(initial = null)
+    val aiHistoryStore = remember { AiChatHistoryStore() }
     var sasayakiSettings by remember { mutableStateOf(SasayakiSettings()) }
     var sasayakiMatchData by remember(bookRoot) { mutableStateOf<SasayakiMatchData?>(null) }
     LaunchedEffect(bookRoot, bookRepository) {
         sasayakiMatchData = bookRoot?.let { bookRepository.loadSasayakiMatch(it) }
+    }
+    var sentenceTranslationSyncId by remember(bookRoot) { mutableStateOf<String?>(null) }
+    var sentenceTranslationPopup by remember(bookRoot) { mutableStateOf<AiChatUiState?>(null) }
+    var sentenceTranslationRequest by remember(bookRoot) { mutableStateOf<String?>(null) }
+    var sentenceTranslationJob by remember(bookRoot) { mutableStateOf<Job?>(null) }
+    var sentenceTranslationRetry by remember(bookRoot) { mutableStateOf<(() -> Unit)?>(null) }
+    val translationSettingsLoading = stringResource(R.string.ai_translation_settings_loading)
+    val translationConfigurationMissing = stringResource(R.string.ai_translation_configuration_missing)
+    val translationFailed = stringResource(R.string.ai_translation_failed)
+    val epubPretranslationDebug = stringResource(R.string.ai_translation_epub_pretranslated_debug)
+    LaunchedEffect(bookRoot, book, readerSettings.showSentenceTranslations, bookRepository) {
+        sentenceTranslationSyncId = null
+        val root = bookRoot ?: return@LaunchedEffect
+        if (!readerSettings.showSentenceTranslations) return@LaunchedEffect
+        val syncId = withContext(Dispatchers.IO) {
+            val metadata = bookRepository.loadMetadata(root) ?: return@withContext null
+            val resolved = syncIdForMetadata(metadata) ?: return@withContext null
+            resolved.takeIf { EpubTranslationStore.preload(root, resolved, book.spineCount) }
+        }
+        sentenceTranslationSyncId = syncId
     }
     var highlights by remember(bookRoot) {
         mutableStateOf<List<ReaderHighlight>?>(if (bookRoot == null) emptyList() else null)
@@ -177,6 +225,81 @@ fun ReaderWebView(
     LaunchedEffect(sasayakiSettingsRepository) {
         sasayakiSettingsRepository.settings.collect { settings ->
             sasayakiSettings = settings
+        }
+    }
+    fun askLiveSentenceTranslation(sentence: String) {
+        sentenceTranslationRequest = sentence
+        sentenceTranslationRetry = { askLiveSentenceTranslation(sentence) }
+        val settings = aiSettings
+        val offlineSettings = offlineTranslationSettings
+        if (settings == null || offlineSettings == null) {
+            sentenceTranslationPopup = AiChatUiState.Failed(sentence, translationSettingsLoading)
+            return
+        }
+        val useOnDevice = offlineSettings.useOnDeviceTranslation
+        if (!useOnDevice && !settings.isConfigured) {
+            sentenceTranslationPopup = AiChatUiState.Failed(sentence, translationConfigurationMissing)
+            return
+        }
+        sentenceTranslationJob?.cancel()
+        sentenceTranslationPopup = AiChatUiState.Loading(sentence, onDevice = useOnDevice)
+        sentenceTranslationJob = scope.launch {
+            val dictionaryLookup = async(Dispatchers.IO) {
+                buildAiChatDictionaryLookup(sentence, dictionarySettings)
+            }
+            val result = runCatching {
+                if (useOnDevice) {
+                    OfflineLlmManager.translate(
+                        appContext = context.applicationContext,
+                        instruction = settings.promptText,
+                        japaneseText = sentence,
+                    )
+                } else {
+                    CloudChat.complete(
+                        provider = ChatModelCatalog.providerForModelId(settings.model),
+                        apiKey = settings.apiKey,
+                        model = settings.model,
+                        prompt = settings.promptText,
+                        bubbleText = sentence,
+                    )
+                }
+            }
+            if (!isActive) return@launch
+            result.fold(
+                onSuccess = { value ->
+                    val response: String
+                    val model: String
+                    val debugInfo: String?
+                    if (value is OfflineTranslationResult) {
+                        response = value.text
+                        model = value.modelId
+                        debugInfo = value.debugLine()
+                    } else {
+                        response = value as String
+                        model = settings.model
+                        debugInfo = null
+                    }
+                    val entry = AiChatEntry(
+                        bubbleText = sentence,
+                        prompt = settings.promptText,
+                        model = model,
+                        response = response,
+                        timestampSeconds = bookRepository.currentAppleReferenceDateSeconds(),
+                        dictionaryLookup = dictionaryLookup.await(),
+                        debugInfo = debugInfo,
+                    )
+                    sentenceTranslationPopup = AiChatUiState.Loaded(entry, onDevice = useOnDevice)
+                    bookRoot?.let { root -> runCatching { aiHistoryStore.append(root, entry) } }
+                },
+                onFailure = {
+                    dictionaryLookup.cancel()
+                    sentenceTranslationPopup = AiChatUiState.Failed(
+                        sentence,
+                        translationFailed,
+                        onDevice = useOnDevice,
+                    )
+                },
+            )
         }
     }
     val effectiveSettings = stateHolder.effectiveSettings
@@ -1240,6 +1363,23 @@ fun ReaderWebView(
                 }
                 if (highlights != null) {
                     val loadChapter = currentLoadChapter()
+                    val chapterSentenceAnchorsJson = remember(
+                        bookRoot,
+                        sentenceTranslationSyncId,
+                        loadChapter,
+                        effectiveSettings.showSentenceTranslations,
+                    ) {
+                        val root = bookRoot
+                        val syncId = sentenceTranslationSyncId
+                        if (root == null || syncId == null || !effectiveSettings.showSentenceTranslations) {
+                            null
+                        } else {
+                            val spine = loadChapter.spineIndex ?: readerPosition.loadPosition.index
+                            Json.encodeToString(
+                                EpubTranslationStore.anchors(root, syncId, book.spineCount, spine),
+                            )
+                        }
+                    }
                     ChapterWebView(
                         book = book,
                         chapterPosition = readerPosition.loadPosition,
@@ -1284,6 +1424,7 @@ fun ReaderWebView(
                             matchData = sasayakiMatchData,
                             chapterIndex = readerPosition.loadPosition.index,
                         ),
+                        chapterSentenceAnchorsJson = chapterSentenceAnchorsJson,
                         sasayakiTextColor = sasayakiSettings.textColor(effectiveSettings.usesDarkInterface(systemDarkTheme)),
                         sasayakiBackgroundColor = sasayakiSettings.backgroundColor(effectiveSettings.usesDarkInterface(systemDarkTheme)),
                         onTextSelected = handleTextSelected,
@@ -1292,6 +1433,31 @@ fun ReaderWebView(
                         onReaderInteraction = stateHolder::enterFocusModeForReaderInteraction,
                         onImageTapped = ::openFullscreenImage,
                         onHighlightCreated = ::addHighlight,
+                        onSentenceTranslation = { renderedId ->
+                            val root = bookRoot
+                            val syncId = sentenceTranslationSyncId
+                            val cached = if (root != null && syncId != null) {
+                                EpubTranslationStore.lookup(renderedId, root, syncId, book.spineCount)
+                            } else {
+                                null
+                            }
+                            if (cached != null) {
+                                closeLookupPopupsAndSelection()
+                                sentenceTranslationRequest = cached.sentenceText
+                                sentenceTranslationRetry = null
+                                sentenceTranslationPopup = AiChatUiState.Loaded(
+                                    entry = AiChatEntry(
+                                        bubbleText = cached.sentenceText,
+                                        prompt = "",
+                                        model = cached.model,
+                                        response = cached.markdownResponse,
+                                        timestampSeconds = bookRepository.currentAppleReferenceDateSeconds(),
+                                        debugInfo = epubPretranslationDebug,
+                                    ),
+                                    pretranslated = true,
+                                )
+                            }
+                        },
                         readerPopupBridgeHolder = readerPopupBridgeHolder,
                         readerPopupResourceHandler = readerPopupResourceHandler,
                         readerIframePopupSupported = readerIframePopupSupported,
@@ -1473,6 +1639,22 @@ fun ReaderWebView(
                 bottomSafeAreaPadding = stableNavigationBarPadding,
                 onDismiss = { fullscreenImage = null },
                 modifier = Modifier.fillMaxSize(),
+            )
+        }
+        sentenceTranslationPopup?.let { popup ->
+            AiChatPopupView(
+                state = popup,
+                onDismiss = {
+                    sentenceTranslationJob?.cancel()
+                    sentenceTranslationPopup = null
+                },
+                onRetry = { sentenceTranslationRetry?.invoke() },
+                onAskLive = if (popup is AiChatUiState.Loaded && popup.pretranslated) {
+                    { sentenceTranslationRequest?.let(::askLiveSentenceTranslation) }
+                } else {
+                    null
+                },
+                modifier = Modifier.zIndex(5f),
             )
         }
         webView?.let { _ -> Unit }

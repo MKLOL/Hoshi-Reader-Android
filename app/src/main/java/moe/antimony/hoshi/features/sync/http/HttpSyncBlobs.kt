@@ -3,6 +3,7 @@ package moe.antimony.hoshi.features.sync.http
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import moe.antimony.hoshi.epub.Bookmark
+import moe.antimony.hoshi.epub.BookMetadata
 import moe.antimony.hoshi.epub.ContentType
 import moe.antimony.hoshi.features.ai.AiChatEntry
 import moe.antimony.hoshi.features.ai.AiChatDictionaryLookup
@@ -103,6 +104,40 @@ data class HttpSyncAiChatSettingsBlob(
     val rev: Int? = null,
 )
 
+/** One pre-computed sentence translation inside [HttpSyncSentencesBlob]. */
+@Serializable
+data class HttpSyncSentenceEntry(
+    val spine: Int,
+    val start: Int,
+    val len: Int,
+    val text: String,
+    val hash: String,
+    val translation: String,
+    val explanation: String = "",
+)
+
+/**
+ * Offline sentence translations for one EPUB, stored at `books/{syncId}/sentences` and installed
+ * locally as `sentence_translations.json`. Field names and defaults match the iOS/Python writer.
+ */
+@Serializable
+data class HttpSyncSentencesBlob(
+    val version: Int = 1,
+    val kind: String = "",
+    val syncId: String = "",
+    val title: String = "",
+    val model: String = "",
+    val promptId: String = "",
+    val generatedAt: String = "",
+    val spineCount: Int = 0,
+    val entries: Map<String, HttpSyncSentenceEntry> = emptyMap(),
+) {
+    companion object {
+        const val SUPPORTED_VERSION: Int = 1
+        const val EXPECTED_KIND: String = "epub"
+    }
+}
+
 @Serializable
 enum class HttpSyncContentType {
     @SerialName("epub") Epub,
@@ -153,6 +188,35 @@ internal fun deriveSyncId(title: String?): String? {
     return "${prefix}_$hash"
 }
 
+/**
+ * iOS-compatible identity for a new local import. A uniquified folder makes duplicate-title
+ * books distinct while preserving the historical title-only ID for ordinary imports.
+ */
+internal fun deriveSyncId(title: String?, folderName: String?): String? {
+    val base = deriveSyncId(title) ?: return null
+    val folder = folderName?.trim().orEmpty()
+    if (folder.isEmpty()) return base
+    val folderDerived = deriveSyncId(folder)
+    if (folderDerived == null || folderDerived == base) return base
+    val hash = shortTitleHash(folder)
+    val prefixLength = SYNC_ID_MAX_SEGMENT_LENGTH - hash.length - 1
+    val prefix = base.take(prefixLength.coerceAtLeast(1)).trim('_').ifEmpty { "book" }
+    return "${prefix}_$hash"
+}
+
+internal fun syncIdForMetadata(metadata: BookMetadata): String? =
+    metadata.syncId?.takeIf(::isValidSyncId) ?: deriveSyncId(metadata.title, metadata.folder)
+
+internal fun isValidSyncId(syncId: String): Boolean =
+    syncId.length in 1..SYNC_ID_MAX_SEGMENT_LENGTH && syncId.all {
+        it in 'a'..'z' ||
+            it in 'A'..'Z' ||
+            it in '0'..'9' ||
+            it == '_' ||
+            it == '.' ||
+            it == '-'
+    }
+
 private const val SYNC_ID_MAX_SEGMENT_LENGTH = 64
 private const val SYNC_ID_HASH_HEX_LENGTH = 16
 
@@ -173,6 +237,8 @@ internal fun chatKey(syncId: String, suffix: String): String = "books/$syncId/ch
  * rate-limited, so per-bubble keys would take minutes per book to pull.
  */
 internal fun pretranslationsKey(syncId: String): String = "books/$syncId/pretranslations"
+internal fun sentencesKey(syncId: String): String = "books/$syncId/sentences"
+internal const val MAX_EPUB_SENTENCES_BLOB_BYTES: Int = 32 * 1024 * 1024
 internal const val ALL_BOOKS_PREFIX: String = "books/"
 
 /** Single key for the cross-device ChatGPT settings (model + prompts). */

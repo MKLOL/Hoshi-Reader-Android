@@ -7,6 +7,11 @@ Semantic Versioning.
 
 ## [Unreleased]
 
+### Fixed
+- **HTTP Sync now transfers EPUB books and their offline sentence translations between
+  iOS and Android.** Sync now downloads remote-only EPUBs, preserves their stable sync
+  identity and reading data, and shows validated pre-translated sentences in the EPUB reader.
+
 ## [v0.11.0] - 2026-08-23
 
 ### Added

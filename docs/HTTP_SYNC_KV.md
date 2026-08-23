@@ -198,11 +198,15 @@ The Android client uses this layout under one shared root prefix `books/`:
 | `books/{syncId}/metadata` | `application/json` | `{title, contentType, shelfName?, shelfUpdatedAt?, importedAt, deletedAt?}` | overwrite | ~250 B |
 | `books/{syncId}/bookmark` | `application/json` | `{chapterIndex, progress, characterCount, lastModified}` | overwrite (every page turn batch) | ~250 B |
 | `books/{syncId}/chat/{ts}-{nonce}` | `application/json` | `{bubbleText, prompt, model, response, timestampSeconds, screenshotImage?}` | **write-once** | ~500 B – 2 KB text-only; screenshot entries include the cropped PNG as base64 |
-| `books/{syncId}/payload.zip` | `application/zip` | zip of the original book directory | overwrite (rare; effectively immutable) | 10 MB – 200 MB |
-| `books/{syncId}/payload.manifest` | `application/json` | `{sha256, sizeBytes, originalName, format: "mokuro" \| "epub"}` | overwrite | ~150 B |
+| `books/{syncId}/payload.zip` | `application/zip` | zip of a Mokuro book directory | overwrite (rare; effectively immutable) | 10 MB – 200 MB |
+| `books/{syncId}/payload.manifest` | `application/json` | `{sha256, sizeBytes, originalName, format: "mokuro"}` | overwrite | ~150 B |
+| `books/{syncId}/epub.zip` | `application/zip` | zip of an extracted EPUB directory | overwrite (rare; effectively immutable) | 1 MB – 200 MB |
+| `books/{syncId}/epub.manifest` | `application/json` | `{sha256, sizeBytes, originalName, format: "epub"}` | overwrite | ~150 B |
+| `books/{syncId}/sentences` | `application/json` | validated EPUB sentence translations | download-only | 1 MB – 5 MB typical |
 
-- `syncId` = `deriveSyncId(title)` (the lowercase-alphanumeric sanitizer the v1 client
-  already uses, see `HttpSync.kt:131`). Two devices with the same titled book converge.
+- `syncId` is persisted in `metadata.json`. New imports derive it from title plus a folder
+  hash only when duplicate-title folder uniquification requires one; legacy records backfill
+  the same way. A remote import keeps the key's exact identity.
 - `shelfName` syncs the book's bookshelf shelf/folder placement by visible shelf name.
   Missing `shelfName` means an older client wrote the metadata and the receiver should
   leave local shelf placement alone; explicit `null` means intentionally unshelved.
@@ -228,9 +232,8 @@ applied`. Two flows:
   current bookmark JSON. Coalesced so a burst of turns ends in one PUT.
 - New chat reply persisted → `PUT books/{syncId}/chat/{ts}-{nonce}` with that one
   entry. Never re-uploaded.
-- Book import → upload `books/{syncId}/payload.zip` once (single `PUT` for small
-  payloads, multipart for large payloads), then
-  `PUT books/{syncId}/payload.manifest`, then `PUT books/{syncId}/metadata`.
+- Book import → upload the format-specific zip once (Mokuro `payload.*`, EPUB `epub.*`),
+  then its manifest, then `PUT books/{syncId}/metadata`.
 - Book shelf/folder move → next manual sync overwrites each local book metadata blob
   with the current `shelfName`/`shelfUpdatedAt`; the payload zip is not re-uploaded.
 - Book delete → record a local tombstone outside the deleted book folder; the next
@@ -252,9 +255,12 @@ On app resume / periodic timer:
      treat the tombstone as handled so it does not pin the incremental cursor.
    - `metadata` with `shelfName` present → apply the book's shelf/folder placement if
      `shelfUpdatedAt` is not older than that book's local shelf placement.
-   - `payload.manifest` → if the manifest's `sha256` differs from local (or there is
-     no local book), schedule a payload download.
-   - `payload.zip` → only fetched when the manifest says we need it.
+   - `payload.manifest` / `epub.manifest` → resolve the format-specific key family and,
+     when there is no local book, download and validate its matching zip. A legacy Android
+     EPUB stored in `payload.*` remains readable when its manifest declares `epub`.
+   - `sentences` → after its EPUB exists locally, validate the sync id, EPUB spine count,
+     normalized sentence addresses and hashes, then atomically install
+     `sentence_translations.json`.
 3. Advance `lastSyncedAt` to the max `lastModified` seen.
 
 Conflicts are last-write-wins per key, which is the right granularity because:

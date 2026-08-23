@@ -22,6 +22,8 @@
 - 如果 commit 修复或实现了某个 GitHub Issue，`docs/CHANGELOG.md` 对应用户可见条目末尾加上 `#123` 形式的 issue 引用，便于 GitHub Release 页面自动生成可跳转链接。
 - 修复问题时，如果用户要求建立 GitHub Issue，先调查问题现象和复现方式，再创建关联 issue；之后再进行实际修复，并在修复完成后的 commit message 中使用 closing keyword（如 `Closes #123`）关联该 issue，便于后续追踪 bug 记录。
 - Commit message 使用 Conventional Commits。
+- 用户未明确指定版本级别或具体版本号时，“做一个 release”默认只递增补丁版本
+  `x.y.Z`（最后一位）；只有用户明确要求 minor、major 或具体版本时才使用其他级别。
 - 修复 GitHub Issue 时，在 commit message 中使用 closing keyword（如 `Closes #123`）。
 - 小型 GitHub Issue 修复（如文案、链接、配置等低风险单点修改）直接在 `main` 分支完成并提交；较大功能、跨模块重构或高风险改动再开 `codex/` 前缀分支。
 - 禁止新增读取 `src/main` 源文件后用 `contains`、`substringAfter`、`indexOf` 等字符串方式断言实现细节的源码文本测试；这类断言浪费 token 和上下文，不能替代行为测试。需要回归覆盖时，优先写行为/API/状态流测试；只有 Manifest、资源 XML、Gradle 依赖、权限/Provider 声明等结构化配置，才可用解析结构后的断言。

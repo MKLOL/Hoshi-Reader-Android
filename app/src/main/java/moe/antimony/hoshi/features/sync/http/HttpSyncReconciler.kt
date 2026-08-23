@@ -19,9 +19,14 @@ import moe.antimony.hoshi.features.ai.AiChatSettings
 import moe.antimony.hoshi.features.ai.AiChatSettingsRepository
 import moe.antimony.hoshi.features.ai.PRETRANSLATIONS_FILENAME
 import moe.antimony.hoshi.features.ai.PretranslationStore
+import moe.antimony.hoshi.features.ai.EPUB_TRANSLATIONS_FILENAME
+import moe.antimony.hoshi.features.ai.EpubTranslationStore
+import moe.antimony.hoshi.epub.EpubBookParser
 import moe.antimony.hoshi.epub.BookMetadata
 import kotlinx.coroutines.flow.first
 import java.io.File
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 import java.time.Instant
 import java.util.UUID
 
@@ -103,6 +108,7 @@ class HttpSyncReconciler(
             downloadedChatEntries = inbound.downloadedChatEntries,
             downloadedPayloads = inbound.downloadedPayloads,
             downloadedPretranslations = inbound.downloadedPretranslations,
+            downloadedSentenceTranslations = inbound.downloadedSentenceTranslations,
             downloadedAppSettings = appSettings.downloaded,
             remoteOnlyBooks = inbound.remoteOnlyBooks,
             errors = inbound.errors + outbound.errors + appSettings.errors,
@@ -341,6 +347,7 @@ class HttpSyncReconciler(
         val downloadedChatEntries: Int,
         /** Books whose offline pre-translation blob was pulled this pass. */
         val downloadedPretranslations: Int,
+        val downloadedSentenceTranslations: Int,
         val downloadedPayloads: Int,
         val remoteOnlyBooks: Int,
         val maxHandledLastModified: String?,
@@ -375,6 +382,7 @@ class HttpSyncReconciler(
         var downloadedBookmarks = 0
         var downloadedChatEntries = 0
         var downloadedPretranslations = 0
+        var downloadedSentenceTranslations = 0
         var downloadedPayloads = 0
         var maxHandledLastModified: String? = null
         var minUnhandledLastModified: String? = null
@@ -395,9 +403,15 @@ class HttpSyncReconciler(
 
         onProgress(HttpSyncProgress(message = "Scanning local books", detail = "Preparing to match local and remote sync IDs."))
         val localBookEntries = bookRepository.loadBookEntries()
+        for (entry in localBookEntries) {
+            val resolved = syncIdForMetadata(entry.metadata) ?: continue
+            if (entry.metadata.syncId != resolved) {
+                bookRepository.saveMetadata(entry.root, entry.metadata.copy(syncId = resolved))
+            }
+        }
         val rootsBySyncId: MutableMap<String, File> = mutableMapOf<String, File>().apply {
             for (entry in localBookEntries) {
-                val syncId = deriveSyncId(entry.metadata.title) ?: continue
+                val syncId = syncIdForMetadata(entry.metadata) ?: continue
                 put(syncId, entry.root)
             }
         }
@@ -407,7 +421,7 @@ class HttpSyncReconciler(
         // local copy and let the outbound pass push fresh `deletedAt = null` metadata.
         val localImportedAtBySyncId: Map<String, String?> = buildMap {
             for (entry in localBookEntries) {
-                val syncId = deriveSyncId(entry.metadata.title) ?: continue
+                val syncId = syncIdForMetadata(entry.metadata) ?: continue
                 put(syncId, entry.metadata.importedAt)
             }
         }
@@ -424,7 +438,7 @@ class HttpSyncReconciler(
         //    process bookmark/chat keys inline because they may arrive lex-before the
         //    payload manifest that imports the book they belong to (regression caught by
         //    `freshDeviceSyncDownloadsPayloadBookmarkAndChatInOnePass`).
-        val payloadManifests = mutableListOf<HttpSyncKvKeyMeta>()
+        val payloadManifests = mutableListOf<Pair<ParsedBookKey, HttpSyncKvKeyMeta>>()
         val metadataKeys = mutableListOf<Pair<ParsedBookKey, HttpSyncKvKeyMeta>>()
         val bookmarksAndChats = mutableListOf<Pair<ParsedBookKey, HttpSyncKvKeyMeta>>()
         // Manual `Sync now` always does a full pull. The incremental `since=` filter was
@@ -463,10 +477,10 @@ class HttpSyncReconciler(
                 }
                 remoteSyncIds += parsed.syncId
                 when (parsed.kind) {
-                    BookKeyKind.PayloadManifest -> payloadManifests += meta
-                    BookKeyKind.Bookmark, BookKeyKind.Chat, BookKeyKind.Pretranslations ->
+                    BookKeyKind.PayloadManifest, BookKeyKind.EpubManifest -> payloadManifests += parsed to meta
+                    BookKeyKind.Bookmark, BookKeyKind.Chat, BookKeyKind.Pretranslations, BookKeyKind.Sentences ->
                         bookmarksAndChats += parsed to meta
-                    BookKeyKind.PayloadZip -> markHandled(meta) // followed via the manifest
+                    BookKeyKind.PayloadZip, BookKeyKind.EpubZip -> markHandled(meta) // followed via the manifest
                     BookKeyKind.Metadata -> metadataKeys += parsed to meta
                 }
             }
@@ -478,11 +492,13 @@ class HttpSyncReconciler(
         val shelfSnapshotBeforeMetadata = loadShelfSnapshot()
         val updatedShelfState = shelfSnapshotBeforeMetadata.recordsBySyncId.toMutableMap()
         val deletedSyncIds = mutableSetOf<String>()
+        val remoteContentTypeBySyncId = mutableMapOf<String, HttpSyncContentType>()
         val placementMetadataKeys = mutableListOf<Pair<ParsedBookKey, HttpSyncKvKeyMeta>>()
         for ((parsed, meta) in metadataKeys) {
             runCatching {
                 val remote = fetchRemoteMetadata(transport, meta.key)
                     ?: throw HttpSyncException("Metadata at ${meta.key}: missing.")
+                remoteContentTypeBySyncId[parsed.syncId] = remote.blob.contentType
                 val remoteDeletedAt = remote.blob.deletedAt
                 if (remoteDeletedAt != null) {
                     val localImportedAt = localImportedAtBySyncId[parsed.syncId]
@@ -513,14 +529,39 @@ class HttpSyncReconciler(
         // ── Pass 3: import remote-only books by their payload manifests, BEFORE applying
         //    bookmarks/chats. This is what fixes the ordering bug: once this pass runs,
         //    every non-deleted syncId on the server has a local root in `rootsBySyncId`.
-        for ((index, meta) in payloadManifests.withIndex()) {
-            val parsed = parseBookKey(meta.key) ?: continue
+        // Resolve the exact manifest family once per book. Metadata is authoritative; without it,
+        // two families are ambiguous and fail closed. EPUB prefers the canonical iOS pair and only
+        // falls back to Android 0.11's payload.* shape when epub.manifest is absent.
+        val selectedPayloadManifests = mutableListOf<Pair<ParsedBookKey, HttpSyncKvKeyMeta>>()
+        for ((syncId, candidates) in payloadManifests.groupBy { it.first.syncId }) {
+            val canonical = candidates.firstOrNull { it.first.kind == BookKeyKind.EpubManifest }
+            val legacy = candidates.firstOrNull { it.first.kind == BookKeyKind.PayloadManifest }
+            val selected = when (remoteContentTypeBySyncId[syncId]) {
+                HttpSyncContentType.Epub -> canonical ?: legacy
+                HttpSyncContentType.Mokuro -> legacy
+                null -> when {
+                    canonical != null && legacy != null -> {
+                        errors += "payload $syncId: both EPUB and payload manifest families exist without metadata"
+                        canonical.second.let(::markUnhandled)
+                        legacy.second.let(::markUnhandled)
+                        null
+                    }
+                    else -> canonical ?: legacy
+                }
+            }
+            if (selected != null) selectedPayloadManifests += selected
+            for (candidate in candidates) {
+                if (candidate != selected) markHandled(candidate.second)
+            }
+        }
+        for ((index, pair) in selectedPayloadManifests.withIndex()) {
+            val (parsed, meta) = pair
             onProgress(
                 HttpSyncProgress(
                     message = "Checking remote book payloads",
-                    detail = "Book ${index + 1} of ${payloadManifests.size}: ${parsed.syncId}",
+                    detail = "Book ${index + 1} of ${selectedPayloadManifests.size}: ${parsed.syncId}",
                     completed = index,
-                    total = payloadManifests.size,
+                    total = selectedPayloadManifests.size,
                 ),
             )
             if (parsed.syncId in deletedSyncIds) {
@@ -543,7 +584,22 @@ class HttpSyncReconciler(
                 continue
             }
             runCatching {
-                val imported = importRemoteOnlyBook(transport, parsed.syncId, onProgress)
+                val keys = when (parsed.kind) {
+                    BookKeyKind.EpubManifest -> HttpSyncPayloadKeys.forFormat(HttpSyncContentType.Epub, parsed.syncId)
+                    else -> HttpSyncPayloadKeys.legacy(parsed.syncId)
+                }
+                val expectedFormat = if (parsed.kind == BookKeyKind.EpubManifest) {
+                    HttpSyncContentType.Epub
+                } else {
+                    remoteContentTypeBySyncId[parsed.syncId]
+                }
+                val imported = importRemoteOnlyBook(
+                    transport = transport,
+                    syncId = parsed.syncId,
+                    keys = keys,
+                    expectedFormat = expectedFormat,
+                    onProgress = onProgress,
+                )
                 if (imported != null) {
                     rootsBySyncId[parsed.syncId] = imported
                     downloadedPayloads += 1
@@ -621,6 +677,10 @@ class HttpSyncReconciler(
                     BookKeyKind.Pretranslations ->
                         if (applyPretranslationsFromRemote(transport, root, meta)) {
                             downloadedPretranslations += 1
+                        }
+                    BookKeyKind.Sentences ->
+                        if (applySentencesFromRemote(transport, parsed.syncId, root, meta)) {
+                            downloadedSentenceTranslations += 1
                         }
                     else -> Unit
                 }
@@ -703,6 +763,7 @@ class HttpSyncReconciler(
             downloadedBookmarks = downloadedBookmarks,
             downloadedChatEntries = downloadedChatEntries,
             downloadedPretranslations = downloadedPretranslations,
+            downloadedSentenceTranslations = downloadedSentenceTranslations,
             downloadedPayloads = downloadedPayloads,
             remoteOnlyBooks = remoteOnly,
             maxHandledLastModified = maxHandledLastModified,
@@ -776,10 +837,11 @@ class HttpSyncReconciler(
         // sync lists every key with no cursor, so without this a 30-volume shelf would re-download
         // and rewrite every blob on every sync and report them all as freshly downloaded.
         val remoteSize = meta.size
-        if (remoteSize != null && target.isFile && target.length() == remoteSize.toLong()) {
+        if (target.isFile && target.length() == remoteSize.toLong()) {
             return false
         }
-        val fetched = transport.get(meta.key) ?: return false
+        val fetched = transport.get(meta.key)
+            ?: throw HttpSyncException("Offline translations at ${meta.key}: listed key is missing.")
         val body = fetched.body.toString(Charsets.UTF_8)
         val blob = runCatching {
             json.decodeFromString(PretranslationsBlob.serializer(), body)
@@ -801,12 +863,72 @@ class HttpSyncReconciler(
         // file behind if the process died mid-write, silently losing every offline translation.
         val temp = File(bookRoot, "$PRETRANSLATIONS_FILENAME.tmp")
         temp.writeText(body, Charsets.UTF_8)
-        if (!temp.renameTo(target)) {
-            temp.delete()
-            throw HttpSyncException("Offline translations at ${meta.key}: could not replace $target.")
-        }
+        replaceSyncSidecar(temp, target, meta.key)
         PretranslationStore.invalidate(bookRoot)
         return true
+    }
+
+    /** Pulls and atomically installs an iOS-compatible EPUB sentence translation blob. */
+    private suspend fun applySentencesFromRemote(
+        transport: HttpSyncKvTransport,
+        syncId: String,
+        bookRoot: File,
+        meta: HttpSyncKvKeyMeta,
+    ): Boolean {
+        if (bookContentType(bookRoot) != ContentType.Epub) return false
+        val target = File(bookRoot, EPUB_TRANSLATIONS_FILENAME)
+        if (meta.size > MAX_EPUB_SENTENCES_BLOB_BYTES) {
+            throw HttpSyncException("Sentence translations at ${meta.key}: blob is too large (${meta.size} bytes).")
+        }
+        val fetched = transport.getBounded(meta.key, MAX_EPUB_SENTENCES_BLOB_BYTES)
+            ?: throw HttpSyncException("Sentence translations at ${meta.key}: listed key is missing.")
+        val alreadyInstalled = target.isFile &&
+            target.length() == fetched.body.size.toLong() &&
+            target.length() <= MAX_EPUB_SENTENCES_BLOB_BYTES &&
+            target.readBytes().contentEquals(fetched.body)
+        val body = fetched.body.toString(Charsets.UTF_8)
+        val spineCount = runCatching {
+            EpubBookParser().parse(
+                root = bookRoot,
+                cachedBookInfo = bookRepository.loadBookInfo(bookRoot),
+            ).spineCount
+        }.getOrElse { error ->
+            throw HttpSyncException(
+                "Sentence translations at ${meta.key}: could not parse EPUB " +
+                    "(${error.message ?: error.javaClass.simpleName})",
+            )
+        }
+        runCatching {
+            EpubTranslationStore.decodeAndValidate(body, syncId, spineCount)
+        }.getOrElse { error ->
+            throw HttpSyncException(
+                "Sentence translations at ${meta.key}: ${error.message ?: error.javaClass.simpleName}",
+            )
+        }
+        if (alreadyInstalled) return false
+        val temp = File(bookRoot, "$EPUB_TRANSLATIONS_FILENAME.tmp")
+        temp.writeText(body, Charsets.UTF_8)
+        replaceSyncSidecar(temp, target, meta.key)
+        EpubTranslationStore.invalidate(bookRoot)
+        return true
+    }
+
+    private fun replaceSyncSidecar(source: File, target: File, key: String) {
+        try {
+            try {
+                Files.move(
+                    source.toPath(),
+                    target.toPath(),
+                    StandardCopyOption.ATOMIC_MOVE,
+                    StandardCopyOption.REPLACE_EXISTING,
+                )
+            } catch (_: Exception) {
+                Files.move(source.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING)
+            }
+        } catch (error: Exception) {
+            source.delete()
+            throw HttpSyncException("Translations at $key: could not replace $target (${error.message}).")
+        }
     }
 
     private suspend fun applyChatEntryFromRemote(
@@ -1028,7 +1150,7 @@ class HttpSyncReconciler(
         val pendingDeletedBooks = deletedBookStateStore.load(bookRepository.booksDirectory)
         val localBooks = entries.mapNotNull { entry ->
             val title = entry.metadata.title.orEmpty().ifBlank { return@mapNotNull null }
-            val syncId = deriveSyncId(title) ?: return@mapNotNull null
+            val syncId = syncIdForMetadata(entry.metadata) ?: return@mapNotNull null
             LocalSyncBook(
                 bookId = entry.metadata.id,
                 title = title,
@@ -1048,7 +1170,7 @@ class HttpSyncReconciler(
                 deletedBookStateStore.removeDeletedBook(bookRepository.booksDirectory, syncId)
             }
         }
-        val payloadBookCount = localBooks.count { it.contentType == ContentType.Mokuro }
+        val payloadBookCount = localBooks.size
         var payloadBookIndex = 0
         for ((syncId, deleted) in tombstonesToPush) {
             try {
@@ -1207,14 +1329,14 @@ class HttpSyncReconciler(
                 // Payload push: zip the book directory once, compare sha to remote manifest,
                 // upload zip + manifest only if different. The codec caches nothing, so this
                 // is roughly free on a second sync (it'll fetch the manifest, see the sha
-                // matches, skip the zip entirely). Mokuro-only for v2.0; EPUB payload sync
-                // can be added by widening the gate.
-                if (contentType == ContentType.Mokuro) {
+                // matches, skip the zip entirely). Mokuro uses payload.*; EPUB uses the iOS
+                // epub.* pair selected by HttpSyncPayloadCodec.
+                if (contentType == ContentType.Mokuro || contentType == ContentType.Epub) {
                     val currentPayloadIndex = payloadBookIndex
                     payloadBookIndex += 1
                     onProgress(
                         HttpSyncProgress(
-                            message = "Checking manga payload upload",
+                            message = "Checking book payload upload",
                             detail = "Book ${currentPayloadIndex + 1} of $payloadBookCount: $title",
                             completed = currentPayloadIndex,
                             total = payloadBookCount,
@@ -1439,7 +1561,17 @@ class HttpSyncReconciler(
 
     // ----- Key parsing --------------------------------------------------------------------
 
-    private enum class BookKeyKind { Bookmark, Chat, Metadata, PayloadManifest, PayloadZip, Pretranslations }
+    private enum class BookKeyKind {
+        Bookmark,
+        Chat,
+        Metadata,
+        PayloadManifest,
+        PayloadZip,
+        EpubManifest,
+        EpubZip,
+        Pretranslations,
+        Sentences,
+    }
 
     private data class ParsedBookKey(val syncId: String, val kind: BookKeyKind)
 
@@ -1461,7 +1593,10 @@ class HttpSyncReconciler(
             suffix == "metadata" -> BookKeyKind.Metadata
             suffix == "payload.manifest" -> BookKeyKind.PayloadManifest
             suffix == "payload.zip" -> BookKeyKind.PayloadZip
+            suffix == "epub.manifest" -> BookKeyKind.EpubManifest
+            suffix == "epub.zip" -> BookKeyKind.EpubZip
             suffix == "pretranslations" -> BookKeyKind.Pretranslations
+            suffix == "sentences" -> BookKeyKind.Sentences
             suffix.startsWith("chat/") -> BookKeyKind.Chat
             else -> return null
         }
@@ -1480,44 +1615,62 @@ class HttpSyncReconciler(
     private suspend fun importRemoteOnlyBook(
         transport: HttpSyncKvTransport,
         syncId: String,
+        keys: HttpSyncPayloadKeys = HttpSyncPayloadKeys.legacy(syncId),
+        expectedFormat: HttpSyncContentType? = null,
         onProgress: suspend (HttpSyncProgress) -> Unit = {},
     ): File? {
-        val targetRoot = bookRepository.createBookDirectoryForImportedTitle(syncId)
-        val manifest = try {
-            withByteProgress(
+        val stagingRoot = createSyncImportStagingDirectory(bookRepository.booksDirectory)
+        var publishedRoot: File? = null
+        return try {
+            val manifest = withByteProgress(
                 onProgress = onProgress,
                 makeProgress = { transferred, total ->
                     byteProgressOf("Downloading", syncId, transferred, total)
                 },
             ) { onByteProgress ->
-                payloadCodec.downloadAndUnpack(transport, syncId, targetRoot, onByteProgress)
+                payloadCodec.downloadAndUnpack(
+                    transport = transport,
+                    syncId = syncId,
+                    targetDir = stagingRoot,
+                    onByteProgress = onByteProgress,
+                    keys = keys,
+                    expectedFormat = expectedFormat,
+                )
             }
-        } catch (e: HttpSyncException) {
-            // Clean up the half-imported directory so a retry doesn't see stale partial state.
-            targetRoot.deleteRecursively()
+            val actualContentType = bookContentType(stagingRoot)
+            if (actualContentType != manifest.format.toLocal()) {
+                throw HttpSyncException(
+                    "Payload for $syncId declares ${manifest.format} but unpacked as $actualContentType.",
+                )
+            }
+            val parsedEpub = validateSyncImportedBook(stagingRoot)
+            val targetRoot = publishSyncImportDirectory(stagingRoot, bookRepository.booksDirectory)
+            publishedRoot = targetRoot
+            val coverPath = if (parsedEpub != null) {
+                bookRepository.metadataCoverPath(targetRoot, parsedEpub.coverHref)
+            } else {
+                resolveSyncImportedCoverPath(bookRepository, targetRoot)
+            }
+            parsedEpub?.let { bookRepository.saveBookInfo(targetRoot, it.bookInfo) }
+            bookRepository.saveMetadata(
+                targetRoot,
+                BookMetadata(
+                    id = UUID.randomUUID().toString(),
+                    title = manifest.originalName,
+                    cover = coverPath,
+                    folder = targetRoot.name,
+                    lastAccess = 0.0,
+                    syncId = syncId,
+                    importedAt = Instant.now().toString(),
+                ),
+            )
+            targetRoot
+        } catch (e: Exception) {
+            // Download, type detection, parse/cover generation, and metadata registration form one
+            // transaction. A malformed remote EPUB must not leave a ghost shelf directory.
+            (publishedRoot ?: stagingRoot).deleteRecursively()
             throw e
         }
-        // Mirror the user-side import path: parse the freshly-unzipped book and resolve a
-        // cover path so the bookshelf can render a thumbnail before the user opens it. Without
-        // this, `metadata.cover` stayed null until the first open triggered the parser via
-        // `BookshelfRepository.openBook`, and the bookshelf showed a blank cover slot.
-        val coverPath = resolveSyncImportedCoverPath(bookRepository, targetRoot)
-        // Write a minimal metadata sidecar — title comes from the manifest, id is fresh per
-        // device (consistent with how local imports generate UUIDs).
-        bookRepository.saveMetadata(
-            targetRoot,
-            BookMetadata(
-                id = UUID.randomUUID().toString(),
-                title = manifest.originalName,
-                cover = coverPath,
-                folder = targetRoot.name,
-                lastAccess = 0.0,
-                // Stamp the import so this device participates in the re-import-after-tombstone
-                // protocol (see `compareRfc3339(local.importedAt, remote.deletedAt)` callers below).
-                importedAt = Instant.now().toString(),
-            ),
-        )
-        return targetRoot
     }
 }
 
@@ -1551,6 +1704,8 @@ data class HttpSyncResult(
     val downloadedPayloads: Int = 0,
     /** Books whose offline pre-translation blob was pulled this pass. */
     val downloadedPretranslations: Int = 0,
+    /** EPUBs whose sentence translation blob was pulled this pass. */
+    val downloadedSentenceTranslations: Int = 0,
     val downloadedAppSettings: Boolean = false,
     val remoteOnlyBooks: Int,
     val errors: List<String>,
@@ -1572,6 +1727,9 @@ data class HttpSyncResult(
         if (downloadedPayloads > 0) parts += "$downloadedPayloads book payload${plural(downloadedPayloads)} down"
         if (downloadedPretranslations > 0) {
             parts += "$downloadedPretranslations offline translation set${plural(downloadedPretranslations)} down"
+        }
+        if (downloadedSentenceTranslations > 0) {
+            parts += "$downloadedSentenceTranslations EPUB translation set${plural(downloadedSentenceTranslations)} down"
         }
         if (downloadedAppSettings) parts += "ChatGPT settings down"
         if (remoteOnlyBooks > 0) parts += "$remoteOnlyBooks remote-only book${plural(remoteOnlyBooks)}"

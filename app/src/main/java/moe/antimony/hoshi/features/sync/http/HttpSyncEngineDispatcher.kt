@@ -106,6 +106,7 @@ internal fun V3SyncResult.toHttpSyncResult(): HttpSyncResult = HttpSyncResult(
     downloadedBookmarks = applied.bookmarks,
     downloadedChatEntries = applied.chatEntries,
     downloadedPayloads = applied.payloads,
+    downloadedSentenceTranslations = applied.sentenceTranslations,
     downloadedAppSettings = applied.aiSettings > 0,
     remoteOnlyBooks = remoteOnlyBooks,
     errors = errors.map { e ->

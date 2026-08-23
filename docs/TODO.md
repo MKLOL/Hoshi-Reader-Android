@@ -102,9 +102,10 @@ This file is the short operational handoff for future agents.
 - Keep reader auto-export save/upload work on a scope that survives reader route disposal so close and background flushes can finish after navigation.
 - Keep HTTP Sync `payload.zip` upload/download file-backed; large Mokuro manga must not be materialized as a single `ByteArray` in production sync paths.
 - Keep HTTP Sync large `payload.zip` uploads on the multipart KV API with Cloudflare-safe part sizes; do not fall back to one oversized HTTP request.
-- HTTP sync v2 currently syncs EPUB metadata and reading state but deliberately uploads
-  book payloads only for mokuro; widen the payload gate or finish the v3 rollout before
-  advertising cross-device EPUB content transfer.
+- HTTP Sync must keep Android interoperable with the current iOS EPUB wire contract:
+  `epub.zip` + `epub.manifest` materialize remote-only EPUBs, `sentences` installs the
+  validated offline sentence-translation sidecar, and the legacy v2 fallback must upload
+  EPUB content instead of reporting metadata-only success.
 - Preserve HTTP Sync manual-progress callbacks when adding reconciliation phases; long-running work should update the Settings screen with a real phase and item counter.
 - Preserve HTTP Sync per-key revision sidecars for bookmark/metadata edits; manual sync and auto-push paths must keep tombstones, shelf placement, imports, and bookmark writes revisioned so stale devices cannot overwrite newer remote state.
 - Harden the HTTP Sync KV server with mutation-safe pagination and conditional bookmark PUTs so concurrent writes cannot be missed or overwritten between Android reconciliation passes.

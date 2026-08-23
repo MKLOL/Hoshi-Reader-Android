@@ -91,8 +91,32 @@ class V3SyncEngineTest {
                 lastAccess = 0.0,
             ),
         )
-        root.resolve("book.html").writeText("<html/>")
+        writeMinimalEpub(root, title)
         return root
+    }
+
+    private fun writeMinimalEpub(root: File, title: String) {
+        root.resolve("META-INF").mkdirs()
+        root.resolve("OEBPS").mkdirs()
+        root.resolve("META-INF/container.xml").writeText(
+            """<?xml version="1.0"?>
+            <container xmlns="urn:oasis:names:tc:opendocument:xmlns:container" version="1.0">
+              <rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles>
+            </container>""".trimIndent(),
+        )
+        root.resolve("OEBPS/content.opf").writeText(
+            """<?xml version="1.0" encoding="UTF-8"?>
+            <package xmlns="http://www.idpf.org/2007/opf" unique-identifier="book-id" version="3.0">
+              <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+                <dc:identifier id="book-id">sync-test</dc:identifier><dc:title>$title</dc:title><dc:language>ja</dc:language>
+              </metadata>
+              <manifest><item id="chapter" href="chapter.xhtml" media-type="application/xhtml+xml"/></manifest>
+              <spine><itemref idref="chapter"/></spine>
+            </package>""".trimIndent(),
+        )
+        root.resolve("OEBPS/chapter.xhtml").writeText(
+            """<html xmlns="http://www.w3.org/1999/xhtml"><body><p>食べる。</p></body></html>""",
+        )
     }
 
     private suspend fun uploadRemoteMokuroPayload(
@@ -213,7 +237,7 @@ class V3SyncEngineTest {
         // Build an EPUB payload via the codec.
         run {
             val src = tempFolder.newFolder("epub-src")
-            src.resolve("book.html").writeText("<html/>")
+            writeMinimalEpub(src, title)
             HttpSyncPayloadCodec(kotlinx.coroutines.Dispatchers.Unconfined)
                 .uploadIfChanged(transport, syncId, src, title, HttpSyncContentType.Epub)
         }
@@ -225,7 +249,10 @@ class V3SyncEngineTest {
         assertEquals(emptyList<V3Error>(), result.errors)
         assertEquals(1, result.applied.payloads)
         val imported = repo.loadBookEntries().single { deriveSyncId(it.metadata.title) == syncId }
-        assertTrue("EPUB file survived round-trip", imported.root.resolve("book.html").exists())
+        assertTrue(
+            "EPUB chapter survived round-trip",
+            imported.root.resolve("OEBPS/chapter.xhtml").exists(),
+        )
     }
 
     @Test

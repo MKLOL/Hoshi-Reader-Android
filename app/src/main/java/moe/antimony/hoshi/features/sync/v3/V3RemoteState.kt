@@ -8,6 +8,8 @@ import moe.antimony.hoshi.features.sync.http.HttpSyncBookmarkBlob
 import moe.antimony.hoshi.features.sync.http.HttpSyncKvTransport
 import moe.antimony.hoshi.features.sync.http.HttpSyncMetadataBlob
 import moe.antimony.hoshi.features.sync.http.HttpSyncPayloadManifest
+import moe.antimony.hoshi.features.sync.http.HttpSyncPayloadKeys
+import moe.antimony.hoshi.features.sync.http.HttpSyncContentType
 
 /**
  * Step 2 of the v3 algorithm. Reads everything an immediate sync would need to know
@@ -83,15 +85,16 @@ class V3RemoteState {
             var metadata: HttpSyncMetadataBlob? = null
             var metadataLastModified: String? = null
             var metadataMalformed = false
-            var manifest: HttpSyncPayloadManifest? = null
-            var manifestLastModified: String? = null
-            var manifestMalformed = false
+            var legacyManifestKey: RemoteKey? = null
+            var epubManifestKey: RemoteKey? = null
             var bookmark: HttpSyncBookmarkBlob? = null
             var bookmarkLastModified: String? = null
             var bookmarkMalformed = false
             val chatKeys = mutableSetOf<String>()
             var pretranslationsKey: String? = null
             var pretranslationsSize: Int? = null
+            var sentencesKey: String? = null
+            var sentencesSize: Int? = null
             for (k in grouped.getValue(syncId)) {
                 when (k.kind) {
                     BookKind.Metadata -> {
@@ -116,25 +119,8 @@ class V3RemoteState {
                             )
                         }
                     }
-                    BookKind.Manifest -> {
-                        try {
-                            val fetched = transport.get(k.key)
-                            if (fetched != null) {
-                                manifest = json.decodeFromString(
-                                    HttpSyncPayloadManifest.serializer(),
-                                    fetched.body.toString(Charsets.UTF_8),
-                                )
-                                manifestLastModified = fetched.lastModified
-                            }
-                        } catch (e: Exception) {
-                            manifestMalformed = true
-                            errors += V3Error(
-                                syncId = syncId,
-                                action = "ReadRemoteManifest",
-                                message = "manifest ${syncId}: ${e.message ?: e.javaClass.simpleName}",
-                            )
-                        }
-                    }
+                    BookKind.LegacyManifest -> legacyManifestKey = k
+                    BookKind.EpubManifest -> epubManifestKey = k
                     BookKind.Bookmark -> {
                         try {
                             val fetched = transport.get(k.key)
@@ -161,7 +147,90 @@ class V3RemoteState {
                         pretranslationsKey = k.key
                         pretranslationsSize = k.size
                     }
-                    BookKind.PayloadZip -> Unit // body not fetched here
+                    BookKind.Sentences -> {
+                        sentencesKey = k.key
+                        sentencesSize = k.size
+                    }
+                    BookKind.PayloadZip, BookKind.EpubZip -> Unit // body not fetched here
+                }
+            }
+            data class ManifestCandidate(
+                val remoteKey: RemoteKey,
+                val keys: HttpSyncPayloadKeys,
+                val expectedFormat: HttpSyncContentType?,
+            )
+            var selectionError: String? = null
+            val candidate = when (metadata?.contentType) {
+                HttpSyncContentType.Epub -> when {
+                    epubManifestKey != null -> ManifestCandidate(
+                        epubManifestKey!!,
+                        HttpSyncPayloadKeys.forFormat(HttpSyncContentType.Epub, syncId),
+                        HttpSyncContentType.Epub,
+                    )
+                    legacyManifestKey != null -> ManifestCandidate(
+                        legacyManifestKey!!,
+                        HttpSyncPayloadKeys.legacy(syncId),
+                        HttpSyncContentType.Epub,
+                    )
+                    else -> null
+                }
+                HttpSyncContentType.Mokuro -> when {
+                    legacyManifestKey != null -> ManifestCandidate(
+                        legacyManifestKey!!,
+                        HttpSyncPayloadKeys.legacy(syncId),
+                        HttpSyncContentType.Mokuro,
+                    )
+                    else -> null
+                }
+                null -> when {
+                    epubManifestKey != null && legacyManifestKey != null -> {
+                        selectionError = "both EPUB and payload manifest families exist without metadata"
+                        null
+                    }
+                    epubManifestKey != null -> ManifestCandidate(
+                        epubManifestKey!!,
+                        HttpSyncPayloadKeys.forFormat(HttpSyncContentType.Epub, syncId),
+                        HttpSyncContentType.Epub,
+                    )
+                    legacyManifestKey != null -> ManifestCandidate(
+                        legacyManifestKey!!,
+                        HttpSyncPayloadKeys.legacy(syncId),
+                        null,
+                    )
+                    else -> null
+                }
+            }
+            if (selectionError != null) {
+                errors += V3Error(syncId, "SelectRemoteManifest", selectionError!!)
+            }
+            var manifest: HttpSyncPayloadManifest? = null
+            var manifestLastModified: String? = null
+            var payloadKeys: HttpSyncPayloadKeys? = null
+            var manifestMalformed = selectionError != null
+            if (candidate != null) {
+                try {
+                    val fetched = transport.get(candidate.remoteKey.key)
+                    if (fetched != null) {
+                        val decoded = json.decodeFromString(
+                            HttpSyncPayloadManifest.serializer(),
+                            fetched.body.toString(Charsets.UTF_8),
+                        )
+                        if (candidate.expectedFormat != null && decoded.format != candidate.expectedFormat) {
+                            throw IllegalArgumentException(
+                                "${candidate.remoteKey.kind} declares ${decoded.format}, expected ${candidate.expectedFormat}",
+                            )
+                        }
+                        manifest = decoded
+                        manifestLastModified = fetched.lastModified
+                        payloadKeys = candidate.keys
+                    }
+                } catch (e: Exception) {
+                    manifestMalformed = true
+                    errors += V3Error(
+                        syncId = syncId,
+                        action = "ReadRemoteManifest",
+                        message = "manifest ${syncId}: ${e.message ?: e.javaClass.simpleName}",
+                    )
                 }
             }
             books[syncId] = V3RemoteBook(
@@ -170,11 +239,14 @@ class V3RemoteState {
                 metadataLastModified = metadataLastModified,
                 manifest = manifest,
                 manifestLastModified = manifestLastModified,
+                payloadKeys = payloadKeys,
                 bookmark = bookmark,
                 bookmarkLastModified = bookmarkLastModified,
                 chatKeys = chatKeys,
                 pretranslationsKey = pretranslationsKey,
                 pretranslationsSize = pretranslationsSize,
+                sentencesKey = sentencesKey,
+                sentencesSize = sentencesSize,
                 metadataMalformed = metadataMalformed,
                 manifestMalformed = manifestMalformed,
                 bookmarkMalformed = bookmarkMalformed,
@@ -217,7 +289,17 @@ class V3RemoteState {
         )
     }
 
-    private enum class BookKind { Metadata, Manifest, Bookmark, Chat, PayloadZip, Pretranslations }
+    private enum class BookKind {
+        Metadata,
+        LegacyManifest,
+        EpubManifest,
+        Bookmark,
+        Chat,
+        PayloadZip,
+        EpubZip,
+        Pretranslations,
+        Sentences,
+    }
 
     /**
      * Parses a `books/{syncId}/{...}` key into `(syncId, kind)`. Returns null for keys
@@ -234,8 +316,11 @@ class V3RemoteState {
             suffix == "bookmark" -> BookKind.Bookmark
             suffix == "pretranslations" -> BookKind.Pretranslations
             suffix == "metadata" -> BookKind.Metadata
-            suffix == "payload.manifest" -> BookKind.Manifest
+            suffix == "payload.manifest" -> BookKind.LegacyManifest
             suffix == "payload.zip" -> BookKind.PayloadZip
+            suffix == "epub.manifest" -> BookKind.EpubManifest
+            suffix == "epub.zip" -> BookKind.EpubZip
+            suffix == "sentences" -> BookKind.Sentences
             suffix.startsWith("chat/") && suffix.length > 5 -> BookKind.Chat
             else -> return null
         }

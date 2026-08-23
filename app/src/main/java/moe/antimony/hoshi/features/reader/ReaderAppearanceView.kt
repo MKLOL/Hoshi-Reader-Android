@@ -329,6 +329,12 @@ private fun ReaderAppearanceContent(
                         checked = settings.hideFurigana,
                         onCheckedChange = { onSettingsChange(settings.copy(hideFurigana = it)) },
                     )
+                    AppearanceDivider(palette)
+                    SwitchRow(
+                        label = stringResource(R.string.reader_appearance_sentence_translations),
+                        checked = settings.showSentenceTranslations,
+                        onCheckedChange = { onSettingsChange(settings.copy(showSentenceTranslations = it)) },
+                    )
                 }
                 AppearanceSection(title = stringResource(R.string.reader_appearance_layout), palette = palette) {
                     val paginatedLabel = stringResource(R.string.reader_appearance_paginated)

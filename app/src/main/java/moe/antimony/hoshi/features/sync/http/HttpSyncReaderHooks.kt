@@ -4,8 +4,11 @@ import android.util.Log
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.produceState
+import androidx.compose.runtime.setValue
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import moe.antimony.hoshi.LocalHoshiAppContainer
@@ -50,6 +53,11 @@ class HttpSyncReaderHooks internal constructor(
      * server is clearly reachable now, no reason to keep silencing auto-pushes.
      */
     private val breakerResetSignal: () -> Long = { 0L },
+    private val persistedSyncId: String? = null,
+    private val persistedSyncIdProvider: () -> String? = { persistedSyncId },
+    private val identityReady: () -> Boolean = { true },
+    private val pushBookmarkWithSyncId: (suspend (File, String, HttpSyncSettings, String?) -> Unit)? = null,
+    private val pushChatEntryWithSyncId: (suspend (String, AiChatEntry, HttpSyncSettings, String?) -> Unit)? = null,
 ) {
     private var unpushedPageTurns: Int = 0
     private var consecutiveFailures: Int = 0
@@ -72,10 +80,14 @@ class HttpSyncReaderHooks internal constructor(
 
     /** Call this once for every chat entry that gets appended to the local log. */
     fun onChatEntryPersisted(entry: AiChatEntry) {
+        if (!identityReady()) return
         val settings = activeSettings() ?: return
         if (breakerOpen()) return
         persistenceScope.launch {
-            runCatching { pushChatEntry(title, entry, settings) }
+            runCatching {
+                pushChatEntryWithSyncId?.invoke(title, entry, settings, persistedSyncIdProvider())
+                    ?: pushChatEntry(title, entry, settings)
+            }
                 .onSuccess { onPushSuccess() }
                 .onFailure { onPushFailure("chat", it) }
         }
@@ -83,6 +95,7 @@ class HttpSyncReaderHooks internal constructor(
 
     private fun flushBookmarkIfActivity() {
         if (unpushedPageTurns <= 0) return
+        if (!identityReady()) return
         val settings = activeSettings() ?: return
         if (breakerOpen()) {
             // We're suppressed; keep the unpushed counter so a later success can pick up
@@ -91,7 +104,10 @@ class HttpSyncReaderHooks internal constructor(
         }
         unpushedPageTurns = 0
         persistenceScope.launch {
-            runCatching { pushBookmark(bookRoot, title, settings) }
+            runCatching {
+                pushBookmarkWithSyncId?.invoke(bookRoot, title, settings, persistedSyncIdProvider())
+                    ?: pushBookmark(bookRoot, title, settings)
+            }
                 .onSuccess { onPushSuccess() }
                 .onFailure { onPushFailure("bookmark", it) }
         }
@@ -182,6 +198,18 @@ fun rememberHttpSyncReaderHooks(
     val manualSyncSuccessAt = appContainer.httpSyncManualSyncSuccessAt
     val settings by appContainer.httpSyncSettingsRepository.settings.collectAsState(initial = null)
     val settingsRef = rememberUpdatedState(settings)
+    var identityLoaded by remember(bookRoot) { mutableStateOf(false) }
+    val persistedSyncId by produceState<String?>(
+        initialValue = null,
+        key1 = bookRoot,
+        key2 = appContainer.bookRepository,
+    ) {
+        value = appContainer.bookRepository.loadMetadata(bookRoot)?.let(::syncIdForMetadata)
+            ?: deriveSyncId(title)
+        identityLoaded = true
+    }
+    val persistedSyncIdRef = rememberUpdatedState(persistedSyncId)
+    val identityLoadedRef = rememberUpdatedState(identityLoaded)
     return remember(bookRoot, title, persistenceScope) {
         HttpSyncReaderHooks(
             bookRoot = bookRoot,
@@ -191,6 +219,10 @@ fun rememberHttpSyncReaderHooks(
             currentSettings = { settingsRef.value },
             persistenceScope = persistenceScope,
             breakerResetSignal = { manualSyncSuccessAt.value },
+            persistedSyncIdProvider = { persistedSyncIdRef.value },
+            identityReady = { identityLoadedRef.value },
+            pushBookmarkWithSyncId = pusher::pushBookmark,
+            pushChatEntryWithSyncId = pusher::pushChatEntry,
         )
     }
 }

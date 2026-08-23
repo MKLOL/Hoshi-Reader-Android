@@ -35,6 +35,8 @@ data class BookMetadata(
     val cover: String?,
     val folder: String?,
     val lastAccess: Double,
+    /** Stable HTTP-sync identity. New imports persist it; legacy records derive it on read. */
+    val syncId: String? = null,
     /**
      * RFC 3339 UTC timestamp recording when this book was imported on the current device.
      * Optional for older books written before this field existed; new imports populate it

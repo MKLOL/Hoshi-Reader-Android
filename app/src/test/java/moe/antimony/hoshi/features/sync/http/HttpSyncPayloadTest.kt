@@ -101,6 +101,44 @@ class HttpSyncPayloadTest {
     }
 
     @Test
+    fun epubUsesCanonicalIosKeysAndExcludesIosPerDeviceSidecars() = runBlocking {
+        val src = tempFolder.newFolder("epub-wire-book").apply {
+            resolve("chapter.xhtml").writeText("<p>食べる。</p>")
+            resolve("sentence_translations.json").writeText("do not package me")
+            resolve("bookinfo.json").writeText("do not package me")
+            resolve("highlights.json").writeText("do not package me")
+        }
+        val transport = FakeKvTransport()
+
+        assertTrue(
+            codec.uploadIfChanged(
+                transport = transport,
+                syncId = "epub_wire",
+                bookRoot = src,
+                originalName = "EPUB Wire",
+                format = HttpSyncContentType.Epub,
+            ),
+        )
+
+        assertNotNull(transport.kv[epubZipKey("epub_wire")])
+        assertNotNull(transport.kv[epubManifestKey("epub_wire")])
+        assertFalse(payloadZipKey("epub_wire") in transport.kv)
+        assertFalse(payloadManifestKey("epub_wire") in transport.kv)
+        val target = tempFolder.newFolder("epub-wire-target")
+        codec.downloadAndUnpack(
+            transport = transport,
+            syncId = "epub_wire",
+            targetDir = target,
+            keys = HttpSyncPayloadKeys.forFormat(HttpSyncContentType.Epub, "epub_wire"),
+            expectedFormat = HttpSyncContentType.Epub,
+        )
+        assertTrue(target.resolve("chapter.xhtml").isFile)
+        assertFalse(target.resolve("sentence_translations.json").exists())
+        assertFalse(target.resolve("bookinfo.json").exists())
+        assertFalse(target.resolve("highlights.json").exists())
+    }
+
+    @Test
     fun uploadDoesNotWriteManifestWhenPayloadUploadFails() = runBlocking {
         val src = tempFolder.newFolder("failing-stream-upload-book").apply {
             resolve("mokuro.json").writeText("""{"version":"1.0"}""")
@@ -190,8 +228,11 @@ class HttpSyncPayloadTest {
             resolve("ai_chat_log.json").writeText("""{"entries":[]}""")
             resolve("metadata.json").writeText("""{"title":"T","id":"abc","lastAccess":12345}""")
             resolve("statistics.json").writeText("""[{"chapterIndex":1,"timestampSeconds":1.0}]""")
+            resolve("manga_statistics.json").writeText("""{"pages":1}""")
             resolve("sasayaki_match.json").writeText("""{"deviceId":"a"}""")
             resolve("sasayaki_playback.json").writeText("""{"playheadPosition":10.0}""")
+            resolve("bookinfo.json").writeText("""{"characterCount":1}""")
+            resolve("highlights.json").writeText("[]")
             // Sasayaki audio file lives under its own subdirectory.
             resolve("Sasayaki").mkdirs()
             resolve("Sasayaki/audio.m4b").writeBytes(ByteArray(64) { it.toByte() })
@@ -206,8 +247,11 @@ class HttpSyncPayloadTest {
             "ai_chat_log.json",
             "metadata.json",
             "statistics.json",
+            "manga_statistics.json",
             "sasayaki_match.json",
             "sasayaki_playback.json",
+            "bookinfo.json",
+            "highlights.json",
         )) {
             assertFalse("$name must not round-trip — it's per-device", dest.resolve(name).exists())
         }

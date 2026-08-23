@@ -17,9 +17,11 @@ import java.util.zip.ZipOutputStream
  * Book-payload (the .epub file or the mokuro pages/json) round-trip over the v2 KV sync.
  *
  * Wire layout, per book:
- *  - `books/{syncId}/payload.zip`      — `application/zip`, the actual content bytes
- *  - `books/{syncId}/payload.manifest` — JSON `{sha256, sizeBytes, originalName, format}`,
- *                                        used by clients to decide whether to fetch the zip
+ *  - Mokuro: `books/{syncId}/payload.zip` + `payload.manifest`
+ *  - EPUB: `books/{syncId}/epub.zip` + `epub.manifest`
+ *
+ * EPUB uses the separate key pair established by the iOS client. Downloaders still accept the
+ * legacy Android `payload.*` EPUB shape so books uploaded by Android 0.11 remain recoverable.
  *
  * The manifest is the change-detector. We compute the local zip's sha256 and compare to the
  * remote manifest; if they match, the zip upload is skipped. The first sync of a book is
@@ -71,9 +73,13 @@ internal val PAYLOAD_EXCLUDED_FILES: Set<String> = setOf(
     "ai_chat_log.json",
     "metadata.json",
     "statistics.json",
+    "manga_statistics.json",
     "sasayaki_match.json",
     "sasayaki_playback.json",
+    "bookinfo.json",
+    "highlights.json",
     "pretranslations.json",     // synced as …/pretranslations
+    "sentence_translations.json", // synced as …/sentences
     PAYLOAD_SHA_CACHE_FILENAME,
 )
 
@@ -95,6 +101,33 @@ internal const val PAYLOAD_SHA_CACHE_FILENAME: String = ".payload.sha256.cache"
 
 internal fun payloadZipKey(syncId: String): String = "books/$syncId/payload.zip"
 internal fun payloadManifestKey(syncId: String): String = "books/$syncId/payload.manifest"
+internal fun epubZipKey(syncId: String): String = "books/$syncId/epub.zip"
+internal fun epubManifestKey(syncId: String): String = "books/$syncId/epub.manifest"
+
+data class HttpSyncPayloadKeys(
+    val zip: String,
+    val manifest: String,
+) {
+    companion object {
+        fun forFormat(format: HttpSyncContentType, syncId: String): HttpSyncPayloadKeys =
+            when (format) {
+                HttpSyncContentType.Mokuro -> HttpSyncPayloadKeys(
+                    zip = payloadZipKey(syncId),
+                    manifest = payloadManifestKey(syncId),
+                )
+                HttpSyncContentType.Epub -> HttpSyncPayloadKeys(
+                    zip = epubZipKey(syncId),
+                    manifest = epubManifestKey(syncId),
+                )
+            }
+
+        /** Android 0.11 wrote EPUBs to the original shared Mokuro key pair. */
+        fun legacy(syncId: String): HttpSyncPayloadKeys = HttpSyncPayloadKeys(
+            zip = payloadZipKey(syncId),
+            manifest = payloadManifestKey(syncId),
+        )
+    }
+}
 
 /**
  * Zips a book directory, computes sha256 of the resulting bytes, uploads zip + manifest
@@ -154,7 +187,8 @@ class HttpSyncPayloadCodec(
         format: HttpSyncContentType,
         onByteProgress: ((bytesTransferred: Long, totalBytes: Long) -> Unit)? = null,
     ): Boolean = withContext(ioDispatcher) {
-        val remoteManifest = fetchManifest(transport, syncId)
+        val keys = HttpSyncPayloadKeys.forFormat(format, syncId)
+        val remoteManifest = fetchManifest(transport, syncId, keys)
         if (remoteManifest != null) {
             // Server already has this book — refuse to re-upload. No matter what mtime
             // changes have happened locally (and they will happen, all the time — opening
@@ -175,7 +209,7 @@ class HttpSyncPayloadCodec(
 
             // PUT zip first so the manifest never points at a missing or stale blob.
             transport.putFile(
-                key = payloadZipKey(syncId),
+                key = keys.zip,
                 contentType = "application/zip",
                 file = zipFile,
                 onByteProgress = onByteProgress,
@@ -187,7 +221,7 @@ class HttpSyncPayloadCodec(
                 format = format,
             )
             transport.put(
-                key = payloadManifestKey(syncId),
+                key = keys.manifest,
                 contentType = "application/json; charset=utf-8",
                 body = json.encodeToString(HttpSyncPayloadManifest.serializer(), manifest).toByteArray(),
             )
@@ -282,14 +316,27 @@ class HttpSyncPayloadCodec(
         syncId: String,
         targetDir: File,
         onByteProgress: ((bytesTransferred: Long, totalBytes: Long) -> Unit)? = null,
+        keys: HttpSyncPayloadKeys = HttpSyncPayloadKeys.legacy(syncId),
+        expectedFormat: HttpSyncContentType? = null,
     ): HttpSyncPayloadManifest = withContext(ioDispatcher) {
-        val manifest = fetchManifest(transport, syncId)
+        val manifest = fetchManifest(transport, syncId, keys)
             ?: throw HttpSyncException("No payload manifest for $syncId.")
+        if (expectedFormat != null && manifest.format != expectedFormat) {
+            throw HttpSyncException(
+                "Payload manifest for $syncId declares ${manifest.format}, " +
+                    "but ${keys.manifest} requires $expectedFormat.",
+            )
+        }
         val spoolDir = targetDir.parentFile ?: targetDir
         val zipFile = File.createTempFile("hoshi-sync-download-", ".zip", spoolDir)
         try {
-            transport.downloadToFile(payloadZipKey(syncId), zipFile, onByteProgress)
+            transport.downloadToFile(keys.zip, zipFile, onByteProgress)
                 ?: throw HttpSyncException("Payload zip missing for $syncId (manifest existed).")
+            if (zipFile.length() != manifest.sizeBytes) {
+                throw HttpSyncException(
+                    "Payload zip for $syncId has ${zipFile.length()} bytes; manifest declares ${manifest.sizeBytes}.",
+                )
+            }
             // Validate sha256 before unpacking — a corrupted zip should fail loud, not produce a
             // half-imported book directory.
             val actualSha = sha256Hex(zipFile)
@@ -312,8 +359,9 @@ class HttpSyncPayloadCodec(
     suspend fun fetchManifest(
         transport: HttpSyncKvTransport,
         syncId: String,
+        keys: HttpSyncPayloadKeys = HttpSyncPayloadKeys.legacy(syncId),
     ): HttpSyncPayloadManifest? {
-        val fetched = transport.get(payloadManifestKey(syncId)) ?: return null
+        val fetched = transport.get(keys.manifest) ?: return null
         return runCatching {
             json.decodeFromString(
                 HttpSyncPayloadManifest.serializer(),

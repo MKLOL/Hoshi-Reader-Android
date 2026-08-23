@@ -62,6 +62,7 @@ internal data class ReaderSelectionResult(
     val selectedNothing: Boolean,
     val isImageTap: Boolean = false,
     val isLinkTap: Boolean = false,
+    val isTranslationTap: Boolean = false,
 ) {
     companion object {
         fun fromWebViewResult(result: String?): ReaderSelectionResult {
@@ -71,6 +72,7 @@ internal data class ReaderSelectionResult(
                 selectedNothing = value == null || value == "null" || value == "undefined",
                 isImageTap = token == "image",
                 isLinkTap = token == "link",
+                isTranslationTap = token == "translation",
             )
         }
     }

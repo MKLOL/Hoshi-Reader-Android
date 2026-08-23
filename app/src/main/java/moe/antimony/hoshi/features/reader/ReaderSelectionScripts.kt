@@ -377,6 +377,12 @@ internal object ReaderSelectionScripts {
           },
           selectText: function(x, y, maxLength) {
             var hitElement = document.elementFromPoint(x, y);
+            var translationButton = hitElement?.closest('.hoshi-tl');
+            if (translationButton) {
+              this.clearSelection();
+              try { HoshiSentenceTranslation.postMessage(translationButton.dataset.tl || ''); } catch (e) {}
+              return 'translation';
+            }
             if (hitElement?.closest('a')) {
               return 'link';
             }

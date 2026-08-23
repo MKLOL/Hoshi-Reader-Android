@@ -14,6 +14,8 @@ data class EpubBook(
     private val resources: Map<String, EpubResource> = emptyMap(),
     private val rootDirectory: File? = null,
     val bookInfo: BookInfo = chapters.toBookInfo(),
+    /** Total package spine item count, including any non-HTML items skipped by [chapters]. */
+    val spineCount: Int = chapters.maxOfOrNull { (it.spineIndex ?: -1) + 1 } ?: chapters.size,
 ) {
     fun readResource(path: String): ByteArray? {
         val normalized = path.normalizeResourceHref()
@@ -79,10 +81,11 @@ class EpubBookParser {
 
     private fun NativeEpubBook.toReaderBook(root: File, fallbackTitle: String?, cachedBookInfo: BookInfo?): EpubBook {
         val manifest = manifest().associateBy { it.id }
+        val nativeSpine = spine()
         val contentDirectory = File(contentDir())
         val contentDirectoryPrefix = contentDirectory.relativeDirectoryHref(root)
         val guideTocHrefs = root.readGuideTocHrefs()
-        val chapterShells = spine().mapIndexedNotNull { index, spineItem ->
+        val chapterShells = nativeSpine.mapIndexedNotNull { index, spineItem ->
             val manifestItem = manifest[spineItem.idref] ?: return@mapIndexedNotNull null
             if (!manifestItem.mediaType.isHtmlMediaType()) return@mapIndexedNotNull null
             val href = contentDirectoryPrefix.resolveManifestHref(manifestItem.href)
@@ -126,6 +129,7 @@ class EpubBookParser {
             resources = resources,
             rootDirectory = root,
             bookInfo = reusableBookInfo ?: chapters.toBookInfo(),
+            spineCount = nativeSpine.size,
         )
     }
 }

@@ -1,10 +1,9 @@
 # Hoshi Sync v3 — implementation spec
 
 **Status:** active. Implementation lives in
-`app/src/main/java/moe/antimony/hoshi/features/sync/v3/` and is intentionally **not
-hooked into the app** — `HttpSyncSettingsView`, `HoshiAppContainer`, and the reader
-hooks still call the v2 reconciler. v3 ships as parallel code with its own tests, and
-the user will tell us when to flip the switch.
+`app/src/main/java/moe/antimony/hoshi/features/sync/v3/`. Manual HTTP Sync dispatches
+to v3 when the saved `useV3Sync` setting is enabled and retains v2 as a compatible
+fallback. Reader fire-and-forget writes still use the shared v2 push path.
 
 This spec is the contract that all implementation and review agents work against. If
 you find ambiguity, fix the spec first, then the code.
@@ -36,10 +35,11 @@ structurally wrong:
 3. **Wire-protocol-compatible with v2.** Same key layout, same blob shapes, same KV
    server (`docs/HTTP_SYNC_KV.md`). The server is data storage; no server changes
    for v3.0.
-4. **Single push primitive** shared by the reconciler and the reader hooks (later —
-   v3.0 keeps the reader on v2 since we don't hook anything up).
-5. **EPUB payload sync.** Same `payload.zip` + `payload.manifest` keys, just widen
-   the gate that the v2 codec hides behind.
+4. **Single v3 push primitive.** The v3 executor owns one push implementation while
+   reader fire-and-forget writes remain wire-compatible through `HttpSyncPusher`.
+5. **EPUB payload sync.** Mokuro keeps `payload.zip` + `payload.manifest`; EPUB uses
+   the iOS-compatible `epub.zip` + `epub.manifest` pair and can download the legacy
+   Android `payload.*` EPUB shape.
 6. **Real integration tests.** Embedded HTTP server (`StubKvServer`) implements the
    v2 KV protocol in-process. Android instrumentation tests run two simulated
    devices against one server.
@@ -49,10 +49,8 @@ structurally wrong:
 - Server-side conditional writes (`If-Match` / 412). The v2 server doesn't honour
   them and we promised no backend changes. LWW per key stays.
 - Real-time push / websockets / auto-poll.
-- Migration tooling. v3 reads and writes the same keys as v2; an existing user's
-  server state stays valid.
-- Hooking v3 into the app. That ships in a later, deliberate commit, gated on the
-  user's word.
+- Destructive migration tooling. Existing server state stays valid: v3 reads legacy
+  Android EPUB `payload.*` keys and republishes their content under canonical `epub.*`.
 
 ## Wire protocol (unchanged from v2)
 
@@ -66,15 +64,20 @@ Routes:
 - `DELETE /v1/kv/{key}` — `204` on delete, `404` is no-op success.
 - Multipart: `POST /v1/kv-multipart/start`, `PUT /v1/kv-multipart/{uploadId}/{partNumber}`, `POST /v1/kv-multipart/{uploadId}/complete`, `DELETE /v1/kv-multipart/{uploadId}`.
 
-Keys, per book at `syncId = deriveSyncId(title)`:
+Keys are grouped by the stable `syncId` persisted in `metadata.json`. New local imports derive
+it from title plus a folder hash only when duplicate-title folder uniquification requires one;
+remote imports preserve the server key exactly, and legacy metadata is backfilled once.
 
 | Key | Mutability |
 |---|---|
 | `books/{syncId}/metadata` | overwrite — `{title, contentType, shelfName?, shelfUpdatedAt?, importedAt?, deletedAt?}` |
 | `books/{syncId}/bookmark` | overwrite per page-turn batch — `{chapterIndex, progress, characterCount, lastModified}` |
 | `books/{syncId}/chat/{ts}-{nonce}` | write-once — chat entry |
-| `books/{syncId}/payload.zip` | rare overwrite — zipped book directory bytes |
-| `books/{syncId}/payload.manifest` | rare overwrite — `{sha256, sizeBytes, originalName, format}` |
+| `books/{syncId}/payload.zip` | rare overwrite — zipped Mokuro directory (or legacy Android EPUB) |
+| `books/{syncId}/payload.manifest` | rare overwrite — Mokuro/legacy manifest |
+| `books/{syncId}/epub.zip` | rare overwrite — zipped EPUB directory |
+| `books/{syncId}/epub.manifest` | rare overwrite — canonical EPUB manifest |
+| `books/{syncId}/sentences` | download-only — validated EPUB sentence translations |
 | `app/ai_chat_settings` | overwrite — global ChatGPT settings (model + prompts) |
 
 v3 reuses the existing blob types from `HttpSyncBlobs.kt` verbatim
@@ -183,10 +186,19 @@ data class V3RemoteBook(
     val metadataLastModified: String? = null,
     val manifest: HttpSyncPayloadManifest? = null,
     val manifestLastModified: String? = null,
+    /** Exact canonical or legacy key family backing manifest. */
+    val payloadKeys: HttpSyncPayloadKeys? = null,
     val bookmark: HttpSyncBookmarkBlob? = null,
     val bookmarkLastModified: String? = null,
     /** Keys present on the server, NOT bodies. Bodies fetched lazily in executor. */
     val chatKeys: Set<String> = emptySet(),
+    val pretranslationsKey: String? = null,
+    val pretranslationsSize: Int? = null,
+    val sentencesKey: String? = null,
+    val sentencesSize: Int? = null,
+    val metadataMalformed: Boolean = false,
+    val manifestMalformed: Boolean = false,
+    val bookmarkMalformed: Boolean = false,
 )
 
 data class V3RemoteSnapshot(
@@ -248,10 +260,13 @@ Planner rules (deterministic):
 - **Chat set-union.** For every server chat key not in local, action is `ImportChat`.
   For every local chat not on server (computed from content-addressable key shape),
   action is `PushChat`.
-- **Payload push.** For every Mokuro OR EPUB local book where remote has no
-  manifest, action is `PushPayload`. (Widened gate: EPUB included in v3.)
-- **Payload re-push policy.** If remote has a manifest, v3.0 does NOT re-upload.
-  Same conservative gate as v2. (Re-pushing on hash mismatch can land in v3.1.)
+- **Payload push.** For every Mokuro or EPUB local book where the canonical manifest
+  is absent, action is `PushPayload`. An EPUB backed only by legacy Android
+  `payload.*` is imported and republished under `epub.*` in the same pass. Existing
+  canonical manifests retain the conservative no-repush policy.
+- **Offline translations.** Mokuro `pretranslations` and EPUB `sentences` are
+  download-only. EPUB sentence blobs are size-bounded, fail-closed against sync id,
+  spine count, address and text hash, and installed atomically.
 - **App settings.** LWW on `lastModified`. Tie → no action. Single global key.
 
 Output is the action list in a determined order:
@@ -579,35 +594,13 @@ Scenarios:
 
 These are not optional. Reviewers MUST flag any missing scenario.
 
-## Backward compatibility / hookup plan
+## Backward compatibility
 
-When the user is ready to flip the switch, the swap is:
-
-1. In `HoshiAppContainer.kt`, replace the construction of `HttpSyncReconciler`
-   with `V3SyncEngine` (same constructor inputs available — they share the
-   `BookRepository`, `HttpSyncPayloadCodec`, etc).
-2. In `HttpSyncSettingsView.kt`, change the call site from
-   `reconciler.syncOnce(settings) { progress -> … }` to
-   `engine.syncOnce(settings) { progress -> … }`. The progress callback shape is
-   different (`V3Progress` vs `HttpSyncProgress`) — adapt the UI status mapping
-   accordingly. Plan to use a thin adapter so the swap is one import + one type
-   rename.
-3. The reader hooks stay on `HttpSyncPusher` for now. Future PR migrates them to
-   `V3PushOps`.
-
-The KV server state, local sidecars, and DataStore-backed `HttpSyncSettings` are
-**unchanged**, so a device that runs v2 yesterday and v3 today picks up where it
-left off with no migration step.
-
-## Out-of-scope items (do NOT do)
-
-- Don't touch `HttpSyncReconciler`, `HttpSyncPusher`, `HttpSyncReaderHooks`,
-  `HttpSyncSettingsView`, or `HoshiAppContainer` in this PR.
-- Don't change the wire protocol or any server behavior.
-- Don't change `HttpSyncBlobs.kt` types (reuse them verbatim).
-- Don't change `HttpSyncPayloadCodec` — v3 reuses it.
-- Don't add a feature flag — v3 lives in its own package, unwired.
-- Don't cut a release. Don't add a changelog entry.
+The dispatcher, progress adapter, and saved `useV3Sync` selection are wired into the
+app. v2 and v3 share KV records, stable persisted sync identities, payload codec and
+local sidecars. Mokuro remains on `payload.*`; EPUB writes iOS-compatible `epub.*` and
+reads the Android 0.11 legacy EPUB shape without deleting it. This lets older Android
+installs recover their content while current iOS and Android converge on canonical keys.
 
 ## What "done" looks like
 
@@ -620,4 +613,3 @@ left off with no migration step.
 - `docs/SYNC_V3_SPEC.md` (this doc) and `docs/SYNC_REDESIGN.md` reference each other.
 - `app/src/main/java/moe/antimony/hoshi/features/sync/v3/README.md` exists and
   links to this spec.
-- The commit message is "feat: v3 sync engine (not yet hooked up)" or similar.

@@ -49,9 +49,17 @@ class HttpSyncPusher(
      * first; if its edit chain is deeper (rev — timestamps only break rev ties), we apply
      * it to the local file and return without pushing. Otherwise we push our local copy.
      */
-    suspend fun pushBookmark(bookRoot: File, title: String, settings: HttpSyncSettings) {
+    suspend fun pushBookmark(bookRoot: File, title: String, settings: HttpSyncSettings) =
+        pushBookmark(bookRoot, title, settings, persistedSyncId = null)
+
+    suspend fun pushBookmark(
+        bookRoot: File,
+        title: String,
+        settings: HttpSyncSettings,
+        persistedSyncId: String?,
+    ) {
         require(settings.isConfigured) { "HTTP sync is not configured." }
-        val syncId = deriveSyncId(title)
+        val syncId = persistedSyncId ?: deriveSyncId(title)
             ?: throw HttpSyncException("Book '$title' has no title to derive a syncId from.")
         val transport = transportFactory(settings)
         val key = bookmarkKey(syncId)
@@ -220,9 +228,17 @@ class HttpSyncPusher(
      * PUTs a single chat entry at `books/{syncId}/chat/{ts}-{contenthash}`. The key is
      * content-addressable, so re-pushes are idempotent on the server.
      */
-    suspend fun pushChatEntry(title: String, entry: AiChatEntry, settings: HttpSyncSettings) {
+    suspend fun pushChatEntry(title: String, entry: AiChatEntry, settings: HttpSyncSettings) =
+        pushChatEntry(title, entry, settings, persistedSyncId = null)
+
+    suspend fun pushChatEntry(
+        title: String,
+        entry: AiChatEntry,
+        settings: HttpSyncSettings,
+        persistedSyncId: String?,
+    ) {
         require(settings.isConfigured) { "HTTP sync is not configured." }
-        val syncId = deriveSyncId(title)
+        val syncId = persistedSyncId ?: deriveSyncId(title)
             ?: throw HttpSyncException("Book '$title' has no title to derive a syncId from.")
         val blob = entry.toBlob()
         val suffix = chatEntryKeySuffix(entry.timestampSeconds, entry.bubbleText, entry.response)

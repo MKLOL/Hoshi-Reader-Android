@@ -33,6 +33,7 @@ data class ReaderSettings(
     val selectedFont: String = ReaderFontManager.defaultMinchoFont,
     val fontSize: Int = 22,
     val hideFurigana: Boolean = false,
+    val showSentenceTranslations: Boolean = true,
     val continuousMode: Boolean = false,
     val enableStatistics: Boolean = false,
     val statisticsAutostartMode: StatisticsAutostartMode = StatisticsAutostartMode.Off,
@@ -261,6 +262,7 @@ class ReaderSettingsStore(context: Context) : ReaderSettingsLegacySource {
         ),
         fontSize = preferences.getInt("fontSize", 22),
         hideFurigana = preferences.getBoolean("readerHideFurigana", false),
+        showSentenceTranslations = preferences.getBoolean("readerShowSentenceTranslations", true),
         continuousMode = preferences.getBoolean("continuousMode", false),
         enableStatistics = preferences.getBoolean("enableStatistics", false),
         statisticsAutostartMode = StatisticsAutostartMode.fromRawValue(
@@ -320,6 +322,7 @@ class ReaderSettingsStore(context: Context) : ReaderSettingsLegacySource {
             .putString("selectedFont", settings.selectedFont)
             .putInt("fontSize", settings.fontSize)
             .putBoolean("readerHideFurigana", settings.hideFurigana)
+            .putBoolean("readerShowSentenceTranslations", settings.showSentenceTranslations)
             .putBoolean("continuousMode", settings.continuousMode)
             .putBoolean("enableStatistics", settings.enableStatistics)
             .putString("statisticsAutostartMode", settings.statisticsAutostartMode.rawValue)
@@ -416,6 +419,7 @@ class ReaderSettingsRepository(
             ),
             fontSize = this[KEY_FONT_SIZE] ?: 22,
             hideFurigana = this[KEY_HIDE_FURIGANA] ?: false,
+            showSentenceTranslations = this[KEY_SHOW_SENTENCE_TRANSLATIONS] ?: true,
             continuousMode = this[KEY_CONTINUOUS_MODE] ?: false,
             enableStatistics = this[KEY_ENABLE_STATISTICS] ?: false,
             statisticsAutostartMode = StatisticsAutostartMode.fromRawValue(this[KEY_STATISTICS_AUTOSTART_MODE]),
@@ -472,6 +476,7 @@ class ReaderSettingsRepository(
         this[KEY_SELECTED_FONT] = settings.selectedFont
         this[KEY_FONT_SIZE] = settings.fontSize
         this[KEY_HIDE_FURIGANA] = settings.hideFurigana
+        this[KEY_SHOW_SENTENCE_TRANSLATIONS] = settings.showSentenceTranslations
         this[KEY_CONTINUOUS_MODE] = settings.continuousMode
         this[KEY_ENABLE_STATISTICS] = settings.enableStatistics
         this[KEY_STATISTICS_AUTOSTART_MODE] = settings.statisticsAutostartMode.rawValue
@@ -533,6 +538,7 @@ class ReaderSettingsRepository(
         private val KEY_SELECTED_FONT = stringPreferencesKey("selectedFont")
         private val KEY_FONT_SIZE = intPreferencesKey("fontSize")
         private val KEY_HIDE_FURIGANA = booleanPreferencesKey("readerHideFurigana")
+        private val KEY_SHOW_SENTENCE_TRANSLATIONS = booleanPreferencesKey("readerShowSentenceTranslations")
         private val KEY_CONTINUOUS_MODE = booleanPreferencesKey("continuousMode")
         private val KEY_ENABLE_STATISTICS = booleanPreferencesKey("enableStatistics")
         private val KEY_STATISTICS_AUTOSTART_MODE = stringPreferencesKey("statisticsAutostartMode")

@@ -51,6 +51,12 @@
     <string name="settings_chatgpt">ChatGPT</string>
     <string name="ai_chat_history_yomitan_lookup">Yomitan 查词</string>
     <string name="ai_chat_history_yomitan_matched_format">匹配：%1$s</string>
+    <string name="ai_chat_backend_pretranslated">预翻译</string>
+    <string name="ai_chat_ask_live_instead">改用 ChatGPT 询问</string>
+    <string name="ai_translation_settings_loading">翻译功能仍在加载，请稍后再点一次。</string>
+    <string name="ai_translation_configuration_missing">请在“设置 → ChatGPT”中设置 OpenAI API 密钥，或开启设备端翻译以离线使用。</string>
+    <string name="ai_translation_failed">翻译失败。</string>
+    <string name="ai_translation_epub_pretranslated_debug">离线 EPUB 预翻译</string>
     <string name="settings_appearance">外观</string>
     <string name="settings_behavior">行为</string>
     <string name="settings_advanced">高级</string>
@@ -241,6 +247,7 @@
     <string name="reader_appearance_color_green">绿色</string>
     <string name="reader_appearance_color_blue">蓝色</string>
     <string name="reader_appearance_text_orientation">文字方向</string>
+    <string name="reader_appearance_sentence_translations">显示句子翻译</string>
     <string name="reader_appearance_vertical">竖排</string>
     <string name="reader_appearance_horizontal">横排</string>
     <string name="reader_appearance_font" comment="Reader font setting, intentionally matching dictionary custom CSS font.">字体</string>
@@ -344,6 +351,7 @@
     <string name="advanced_ttu_sync">ッツ 同步</string>
     <string name="advanced_http_sync">HTTP 同步</string>
     <string name="advanced_http_sync_subtitle">将书籍、阅读进度、书架和阅读器数据同步到你自己的服务器</string>
+    <string name="http_sync_description">通过 HTTPS 将书籍内容、阅读进度、书架和漫画聊天记录同步到你自己的服务器。同步也可能下载经过验证的 EPUB 句子和漫画气泡离线翻译。</string>
     <string name="audio_sources">来源</string>
     <string name="audio_add_source">添加来源</string>
     <string name="audio_name">名称</string>

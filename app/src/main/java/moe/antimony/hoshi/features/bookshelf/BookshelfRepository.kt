@@ -31,6 +31,7 @@ import moe.antimony.hoshi.features.sync.http.HttpSyncContentType
 import moe.antimony.hoshi.features.sync.http.HttpSyncDeletedBookRecord
 import moe.antimony.hoshi.features.sync.http.HttpSyncDeletedBookStateStore
 import moe.antimony.hoshi.features.sync.http.deriveSyncId
+import moe.antimony.hoshi.features.sync.http.syncIdForMetadata
 import moe.antimony.hoshi.mokuro.MokuroBook
 import moe.antimony.hoshi.mokuro.MokuroBookParser
 import moe.antimony.hoshi.mokuro.MokuroImportException
@@ -277,6 +278,7 @@ internal class AndroidBookshelfRepository(
             cover = bookRepository.metadataCoverPath(root, parsedBook.coverHref),
             folder = root.name,
             lastAccess = bookRepository.currentAppleReferenceDateSeconds(),
+            syncId = previous?.syncId ?: deriveSyncId(parsedBook.title, root.name),
             // Preserve an existing import stamp on re-save (cover-parse fill-in, migrations, etc.).
             // First-time imports get a fresh RFC 3339 stamp so a server-side tombstone with an
             // older `deletedAt` can no longer wipe the fresh local copy on the next sync.
@@ -313,6 +315,7 @@ internal class AndroidBookshelfRepository(
             cover = bookRepository.metadataCoverPath(root, book.coverImagePath),
             folder = root.name,
             lastAccess = bookRepository.currentAppleReferenceDateSeconds(),
+            syncId = previous?.syncId ?: deriveSyncId(book.title, root.name),
             // Same rule as the EPUB import path: preserve a prior stamp on re-save, otherwise
             // record a fresh RFC 3339 import stamp so a stale remote tombstone cannot wipe
             // this freshly-imported book on the next sync.
@@ -326,7 +329,7 @@ internal class AndroidBookshelfRepository(
 
     private fun recordHttpSyncTombstone(entry: BookEntry): StagedTombstone? {
         val title = entry.metadata.title?.takeIf { it.isNotBlank() } ?: return null
-        val syncId = deriveSyncId(title) ?: return null
+        val syncId = syncIdForMetadata(entry.metadata) ?: return null
         val record = HttpSyncDeletedBookRecord(
             title = title,
             contentType = HttpSyncContentType.fromLocal(bookContentType(entry.root)),
@@ -354,6 +357,7 @@ internal class AndroidBookshelfRepository(
             title = metadata.title,
             contentType = bookContentType(root),
             importedAt = metadata.importedAt,
+            persistedSyncId = syncIdForMetadata(metadata),
         )
     }
 
@@ -369,7 +373,11 @@ internal class AndroidBookshelfRepository(
     }
 
     private suspend fun notifyBookmarkEdited(entry: BookEntry) {
-        httpSyncAutoPush?.onBookmarkEdited(entry.root, entry.metadata.title)
+        httpSyncAutoPush?.onBookmarkEdited(
+            entry.root,
+            entry.metadata.title,
+            syncIdForMetadata(entry.metadata),
+        )
     }
 
     private suspend fun notifyShelfPlacementChanged(bookIds: Set<String>, shelfName: String?) {
@@ -383,6 +391,7 @@ internal class AndroidBookshelfRepository(
                 contentType = bookContentType(entry.root),
                 importedAt = entry.metadata.importedAt,
                 shelfName = shelfName,
+                persistedSyncId = syncIdForMetadata(entry.metadata),
             )
         }
     }

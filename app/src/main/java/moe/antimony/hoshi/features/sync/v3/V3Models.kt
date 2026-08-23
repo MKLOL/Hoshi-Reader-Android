@@ -10,6 +10,7 @@ import moe.antimony.hoshi.features.sync.http.HttpSyncContentType
 import moe.antimony.hoshi.features.sync.http.HttpSyncDeletedBookRecord
 import moe.antimony.hoshi.features.sync.http.HttpSyncMetadataBlob
 import moe.antimony.hoshi.features.sync.http.HttpSyncPayloadManifest
+import moe.antimony.hoshi.features.sync.http.HttpSyncPayloadKeys
 import java.io.File
 import java.time.Instant
 
@@ -90,6 +91,8 @@ data class V3RemoteBook(
     val metadataLastModified: String? = null,
     val manifest: HttpSyncPayloadManifest? = null,
     val manifestLastModified: String? = null,
+    /** Exact remote key pair backing [manifest], including legacy Android EPUB payload.*. */
+    val payloadKeys: HttpSyncPayloadKeys? = null,
     val bookmark: HttpSyncBookmarkBlob? = null,
     val bookmarkLastModified: String? = null,
     /** All `books/{syncId}/chat/...` keys observed on the server. */
@@ -98,6 +101,9 @@ data class V3RemoteBook(
     val pretranslationsKey: String? = null,
     /** Its size, used to skip re-downloading an unchanged blob. */
     val pretranslationsSize: Int? = null,
+    /** `books/{syncId}/sentences`, when the server has EPUB sentence translations. */
+    val sentencesKey: String? = null,
+    val sentencesSize: Int? = null,
     /**
      * Bug 5: per-field "remote returned bytes but they didn't decode" markers. The
      * decoded field (e.g. [metadata]) is left null on decode failure, but the planner
@@ -128,6 +134,7 @@ sealed interface V3Action {
     data class ImportRemoteBook(
         override val syncId: String,
         val manifest: HttpSyncPayloadManifest,
+        val payloadKeys: HttpSyncPayloadKeys = HttpSyncPayloadKeys.forFormat(manifest.format, syncId),
         val shelfName: String? = null,
         val shelfUpdatedAt: String? = null,
     ) : V3Action
@@ -142,6 +149,11 @@ sealed interface V3Action {
      * server copy always wins.
      */
     data class ImportPretranslations(
+        val root: File,
+        override val syncId: String,
+        val key: String,
+    ) : V3Action
+    data class ImportSentences(
         val root: File,
         override val syncId: String,
         val key: String,
@@ -199,11 +211,12 @@ data class V3AppliedCounts(
     val bookmarks: Int = 0,
     val chatEntries: Int = 0,
     val payloads: Int = 0,
+    val sentenceTranslations: Int = 0,
     val metadataDeletes: Int = 0,
     val shelfPlacements: Int = 0,
     val aiSettings: Int = 0,
 ) {
-    val total: Int get() = bookmarks + chatEntries + payloads + metadataDeletes + shelfPlacements + aiSettings
+    val total: Int get() = bookmarks + chatEntries + payloads + sentenceTranslations + metadataDeletes + shelfPlacements + aiSettings
 }
 
 data class V3PushedCounts(

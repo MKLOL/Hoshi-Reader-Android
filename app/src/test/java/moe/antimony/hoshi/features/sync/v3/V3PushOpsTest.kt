@@ -314,8 +314,8 @@ class V3PushOpsTest {
             format = HttpSyncContentType.Epub,
         )
         assertEquals("EPUB payloads must round-trip via v3", true, uploaded)
-        assertNotNull(transport.kv["books/fresh_epub/payload.zip"])
-        assertNotNull(transport.kv["books/fresh_epub/payload.manifest"])
+        assertNotNull(transport.kv["books/fresh_epub/epub.zip"])
+        assertNotNull(transport.kv["books/fresh_epub/epub.manifest"])
     }
 
     // --- tombstone ------------------------------------------------------------

@@ -38,6 +38,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.ui.res.stringResource
+import moe.antimony.hoshi.R
 import moe.antimony.hoshi.features.ai.offline.OfflineLlmManager
 import moe.antimony.hoshi.features.dictionary.LookupPopupAndroidStack
 import moe.antimony.hoshi.features.dictionary.LookupPopupItem
@@ -61,6 +63,7 @@ sealed interface AiChatUiState {
     data class Loaded(
         val entry: AiChatEntry,
         override val onDevice: Boolean = false,
+        val pretranslated: Boolean = false,
     ) : AiChatUiState {
         override val bubbleText: String get() = entry.bubbleText
     }
@@ -117,7 +120,12 @@ fun AiChatPopupView(
             Column(modifier = Modifier.padding(20.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        text = if (state.onDevice) "On-device translation" else "ChatGPT",
+                        text = when {
+                            state is AiChatUiState.Loaded && state.pretranslated ->
+                                stringResource(R.string.ai_chat_backend_pretranslated)
+                            state.onDevice -> "On-device translation"
+                            else -> "ChatGPT"
+                        },
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.SemiBold,
                         modifier = Modifier.weight(1f),
@@ -196,7 +204,9 @@ private fun ResponseBody(response: String, debugInfo: String?, onAskLive: (() ->
             Spacer(Modifier.size(8.dp))
             // A pre-translated reply is instant and free, so it is what a tap shows. Offer the
             // live model for the times it isn't enough.
-            OutlinedButton(onClick = onAskLive) { Text("Ask ChatGPT instead") }
+            OutlinedButton(onClick = onAskLive) {
+                Text(stringResource(R.string.ai_chat_ask_live_instead))
+            }
         }
         if (debugInfo != null) {
             Spacer(Modifier.size(10.dp))
@@ -335,4 +345,3 @@ private fun AiChatHistoryWebViewWithLookup(
         )
     }
 }
-

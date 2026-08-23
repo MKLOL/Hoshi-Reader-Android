@@ -70,8 +70,9 @@ class HttpSyncAutoPush(
         contentType: ContentType,
         importedAt: String?,
         shelfName: String?,
+        persistedSyncId: String? = null,
     ) {
-        val syncId = deriveSyncId(title) ?: return
+        val syncId = persistedSyncId ?: deriveSyncId(title) ?: return
         // Record placement locally even when offline/disabled — the next manual sync uses it.
         // Atomic per-key write (re-reads disk under the store's lock) so a concurrent
         // end-of-sync whole-map save by either engine can't clobber this move.
@@ -105,8 +106,13 @@ class HttpSyncAutoPush(
      * other devices see it; the (large) payload still uploads on the next manual sync only.
      * Mirrors iOS `HttpSyncManager.onBookImported`.
      */
-    suspend fun onBookImported(title: String?, contentType: ContentType, importedAt: String?) {
-        val syncId = deriveSyncId(title) ?: return
+    suspend fun onBookImported(
+        title: String?,
+        contentType: ContentType,
+        importedAt: String?,
+        persistedSyncId: String? = null,
+    ) {
+        val syncId = persistedSyncId ?: deriveSyncId(title) ?: return
         val localRev = revisionStore.bumpForLocalEdit(booksRoot, metadataKey(syncId))
         val settings = activeSettings() ?: return
         launchPush("metadata") {
@@ -164,11 +170,11 @@ class HttpSyncAutoPush(
      * the deliberate edit out-revisions stale remote bookmarks instead of relying on
      * timestamps alone.
      */
-    suspend fun onBookmarkEdited(bookRoot: File, title: String?) {
+    suspend fun onBookmarkEdited(bookRoot: File, title: String?, persistedSyncId: String? = null) {
         val resolvedTitle = title?.takeIf { deriveSyncId(it) != null } ?: return
         val settings = activeSettings() ?: return
         launchPush("bookmark") {
-            pusher.pushBookmark(bookRoot, resolvedTitle, settings)
+            pusher.pushBookmark(bookRoot, resolvedTitle, settings, persistedSyncId)
         }
     }
 

@@ -51,6 +51,12 @@
     <string name="settings_chatgpt">ChatGPT</string>
     <string name="ai_chat_history_yomitan_lookup">Yomitan lookup</string>
     <string name="ai_chat_history_yomitan_matched_format">Matched: %1$s</string>
+    <string name="ai_chat_backend_pretranslated">Pre-translated</string>
+    <string name="ai_chat_ask_live_instead">Ask ChatGPT instead</string>
+    <string name="ai_translation_settings_loading">Translation is still loading—tap again in a moment.</string>
+    <string name="ai_translation_configuration_missing">Set your OpenAI API key in Settings → ChatGPT, or turn on on-device translation to work offline.</string>
+    <string name="ai_translation_failed">Translation failed.</string>
+    <string name="ai_translation_epub_pretranslated_debug">Offline EPUB pre-translation</string>
     <string name="settings_appearance">Appearance</string>
     <string name="settings_behavior">Behavior</string>
     <string name="settings_advanced">Advanced</string>
@@ -243,6 +249,7 @@
     <string name="reader_appearance_color_green">Green</string>
     <string name="reader_appearance_color_blue">Blue</string>
     <string name="reader_appearance_text_orientation">Text Orientation</string>
+    <string name="reader_appearance_sentence_translations">Show sentence translations</string>
     <string name="reader_appearance_vertical">Vertical</string>
     <string name="reader_appearance_horizontal">Horizontal</string>
     <string name="reader_appearance_font" comment="Reader font setting, intentionally matching dictionary custom CSS font.">Font</string>
@@ -346,6 +353,7 @@
     <string name="advanced_ttu_sync">ッツ Sync</string>
     <string name="advanced_http_sync">HTTP Sync</string>
     <string name="advanced_http_sync_subtitle">Sync books, reading progress, shelves, and reader data to your own server</string>
+    <string name="http_sync_description">Sync book content, reading progress, shelves, and manga chat history to your own server over HTTPS. Sync may also download validated offline translations for EPUB sentences and manga bubbles.</string>
     <string name="audio_sources">Sources</string>
     <string name="audio_add_source">Add Source</string>
     <string name="audio_name">Name</string>

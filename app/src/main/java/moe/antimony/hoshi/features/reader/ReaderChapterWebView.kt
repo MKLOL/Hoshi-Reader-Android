@@ -73,6 +73,7 @@ internal fun ChapterWebView(
     readerSettings: ReaderSettings,
     chapterHighlightsJson: String?,
     chapterSasayakiCuesJson: String?,
+    chapterSentenceAnchorsJson: String?,
     sasayakiTextColor: Long,
     sasayakiBackgroundColor: Long,
     onTextSelected: (ReaderSelectionData, selectionRects: (Int, (List<ReaderSelectionRect>) -> Unit) -> Unit) -> Unit,
@@ -81,6 +82,7 @@ internal fun ChapterWebView(
     onReaderInteraction: () -> Unit,
     onImageTapped: (String) -> Unit,
     onHighlightCreated: (HighlightColor, String, ReaderHighlightCreationResult) -> Unit,
+    onSentenceTranslation: (String) -> Unit,
     readerPopupBridgeHolder: ReaderLookupPopupBridgeCallbackHolder,
     readerPopupResourceHandler: ReaderLookupPopupResourceHandler,
     readerIframePopupSupported: Boolean,
@@ -99,6 +101,7 @@ internal fun ChapterWebView(
     val currentOnReaderInteraction = rememberUpdatedState(onReaderInteraction)
     val currentOnImageTapped = rememberUpdatedState(onImageTapped)
     val currentOnHighlightCreated = rememberUpdatedState(onHighlightCreated)
+    val currentOnSentenceTranslation = rememberUpdatedState(onSentenceTranslation)
     val currentReaderPopupResourceHandler = rememberUpdatedState(readerPopupResourceHandler)
     val currentReaderPopupFrames = rememberUpdatedState(readerPopupFrames)
     val currentOnNextChapter = rememberUpdatedState(onNextChapter)
@@ -111,6 +114,7 @@ internal fun ChapterWebView(
     var continuousScrollSaveRequestId by remember { mutableStateOf(0L) }
     val chapter = book.chapters[chapterPosition.index]
     var readerWebView by remember { mutableStateOf<WebView?>(null) }
+    var readerPageReadyKey by remember { mutableStateOf<String?>(null) }
     val fontFaceUrl = remember(readerSettings.selectedFont) {
         fontManager.webViewFontUrl(readerSettings.selectedFont)
     }
@@ -159,6 +163,7 @@ internal fun ChapterWebView(
         sasayakiBackgroundColor,
         chapterSasayakiCuesJson,
         chapterHighlightsJson,
+        chapterSentenceAnchorsJson,
         loadKey,
     ) {
         readerSetupScript(
@@ -172,6 +177,7 @@ internal fun ChapterWebView(
             sasayakiBackgroundColor = sasayakiBackgroundColor,
             sasayakiCuesJson = chapterSasayakiCuesJson,
             highlightsJson = chapterHighlightsJson,
+            sentenceAnchorsJson = chapterSentenceAnchorsJson,
             restoreToken = loadKey,
         )
     }
@@ -193,6 +199,22 @@ internal fun ChapterWebView(
         if (isWebViewRestoring) return@LaunchedEffect
         if (webView.tag != loadKey) return@LaunchedEffect
         webView.evaluateJavascript(ReaderPaginationScripts.applySasayakiCuesInvocation(cuesJson), null)
+    }
+    LaunchedEffect(
+        readerWebView,
+        loadKey,
+        readerPageReadyKey,
+        chapterSentenceAnchorsJson,
+        isWebViewRestoring,
+    ) {
+        val webView = readerWebView ?: return@LaunchedEffect
+        if (isWebViewRestoring) return@LaunchedEffect
+        if (webView.tag != loadKey) return@LaunchedEffect
+        if (readerPageReadyKey != loadKey) return@LaunchedEffect
+        webView.evaluateJavascript(
+            "window.hoshiTranslations?.apply(${chapterSentenceAnchorsJson ?: "[]"});",
+            null,
+        )
     }
     AndroidView(
         modifier = modifier
@@ -226,6 +248,10 @@ internal fun ChapterWebView(
                     },
                     "HoshiReaderImage",
                 )
+                addJavascriptInterface(
+                    ReaderSentenceTranslationBridge(this) { id -> currentOnSentenceTranslation.value(id) },
+                    "HoshiSentenceTranslation",
+                )
                 if (readerIframePopupSupported) {
                     ReaderLookupPopupWebBridge.install(this, readerPopupBridgeHolder)
                 }
@@ -235,7 +261,9 @@ internal fun ChapterWebView(
                     onInternalLink = onInternalLink,
                     popupResourceHandler = { currentReaderPopupResourceHandler.value },
                 ) { view ->
-                    view.evaluateJavascript(readerSetupScript, null)
+                    view.evaluateJavascript(readerSetupScript) {
+                        readerPageReadyKey = loadKey
+                    }
                 }
                 readerWebView = this
                 onWebViewReady(this)
@@ -253,7 +281,7 @@ internal fun ChapterWebView(
                 ) { result ->
                     val selectionResult = ReaderSelectionResult.fromWebViewResult(result)
                     when {
-                        selectionResult.isImageTap || selectionResult.isLinkTap -> Unit
+                        selectionResult.isImageTap || selectionResult.isLinkTap || selectionResult.isTranslationTap -> Unit
                         selectionResult.selectedNothing -> currentOnReaderTapOutside.value()
                     }
                 }
@@ -387,7 +415,9 @@ internal fun ChapterWebView(
                     onInternalLink = onInternalLink,
                     popupResourceHandler = { currentReaderPopupResourceHandler.value },
                 ) { view ->
-                    view.evaluateJavascript(readerSetupScript, null)
+                    view.evaluateJavascript(readerSetupScript) {
+                        readerPageReadyKey = loadKey
+                    }
                 }
                 webView.loadUrl(baseUrl)
             }
@@ -715,17 +745,20 @@ private fun readerSetupScript(
     sasayakiBackgroundColor: Long,
     sasayakiCuesJson: String?,
     highlightsJson: String?,
+    sentenceAnchorsJson: String?,
     restoreToken: String,
 ): String {
     val eInkMode = readerJavaScriptStringLiteral(if (settings.eInkMode) "true" else "false")
-    val css = ReaderContentStyles.css(
+    val css = (ReaderContentStyles.css(
         settings = settings,
         fontFaceUrl = fontFaceUrl,
         systemDark = systemDark,
         sasayakiTextColor = sasayakiTextColor,
         sasayakiBackgroundColor = sasayakiBackgroundColor,
-    ).let(::readerJavaScriptStringLiteral)
+    ) + "\n" + ReaderTranslationScripts.css).let(::readerJavaScriptStringLiteral)
     val selectionScript = ReaderSelectionScripts.source()
+    val translationScript = ReaderTranslationScripts.source()
+    val translationInvocation = "window.hoshiTranslations.apply(${sentenceAnchorsJson ?: "[]"});"
     val paginationScript = ReaderPaginationScripts.shellScriptWithRestoreToken(
         initialProgress = initialProgress,
         initialFragment = initialFragment,
@@ -742,6 +775,7 @@ private fun readerSetupScript(
           document.head.appendChild(style);
           window.scanNonJapaneseText = $scanNonJapaneseText;
           $selectionScript
+          $translationScript
           if (!document.getElementById('hoshi-reader-popup-host-script')) {
             var popupHostScript = document.createElement('script');
             popupHostScript.id = 'hoshi-reader-popup-host-script';
@@ -749,6 +783,7 @@ private fun readerSetupScript(
             document.head.appendChild(popupHostScript);
           }
           $paginationScript
+          $translationInvocation
         })();
     """.trimIndent()
 }
@@ -993,6 +1028,16 @@ private class ReaderImageTapBridge(
         webView.post {
             onImageTapped(sourceUrl)
         }
+    }
+}
+
+private class ReaderSentenceTranslationBridge(
+    private val webView: WebView,
+    private val onSentenceTranslation: (String) -> Unit,
+) {
+    @JavascriptInterface
+    fun postMessage(id: String) {
+        webView.post { onSentenceTranslation(id) }
     }
 }
 

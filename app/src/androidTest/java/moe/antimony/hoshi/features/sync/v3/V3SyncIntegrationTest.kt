@@ -70,8 +70,8 @@ class V3SyncIntegrationTest {
             val syncId = deriveSyncId(title)!!
             val keys = server.keys().toSet()
             // v3 widens the payload gate to EPUB too.
-            assertTrue("EPUB manifest missing: $keys", "books/$syncId/payload.manifest" in keys)
-            assertTrue("EPUB payload missing: $keys", "books/$syncId/payload.zip" in keys)
+            assertTrue("EPUB manifest missing: $keys", "books/$syncId/epub.manifest" in keys)
+            assertTrue("EPUB payload missing: $keys", "books/$syncId/epub.zip" in keys)
         }
     }
 
@@ -274,4 +274,3 @@ class V3SyncIntegrationTest {
         }
     }
 }
-

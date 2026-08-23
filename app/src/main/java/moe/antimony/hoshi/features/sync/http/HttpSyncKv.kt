@@ -11,6 +11,7 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import java.io.File
 import java.io.InputStream
+import java.io.ByteArrayOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
@@ -108,6 +109,23 @@ private data class HttpSyncMultipartCompleteResponse(
 
 class HttpSyncException(message: String) : Exception(message)
 
+private fun InputStream.readBytesBounded(key: String, maxBytes: Int): ByteArray {
+    val output = ByteArrayOutputStream(minOf(maxBytes, DEFAULT_BUFFER_SIZE))
+    val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+    var total = 0
+    while (true) {
+        val read = read(buffer)
+        if (read < 0) break
+        if (read == 0) continue
+        if (total > maxBytes - read) {
+            throw HttpSyncException("Blob at $key exceeds the $maxBytes-byte download limit.")
+        }
+        output.write(buffer, 0, read)
+        total += read
+    }
+    return output.toByteArray()
+}
+
 // ----- Transport interface ---------------------------------------------------------------
 
 /**
@@ -134,6 +152,16 @@ interface HttpSyncKvTransport {
 
     /** Returns `null` on `404` (key not present). All other non-2xx responses throw. */
     suspend fun get(key: String): HttpSyncKvFetched?
+
+    /** Like [get], but aborts before retaining more than [maxBytes] in memory. */
+    suspend fun getBounded(key: String, maxBytes: Int): HttpSyncKvFetched? {
+        require(maxBytes >= 0)
+        val fetched = get(key) ?: return null
+        if (fetched.body.size > maxBytes) {
+            throw HttpSyncException("Blob at $key exceeds the $maxBytes-byte download limit.")
+        }
+        return fetched
+    }
 
     /**
      * Downloads [key] into [targetFile] without requiring callers to keep the body in memory.
@@ -455,7 +483,14 @@ class HttpSyncKvClient(
         }
     }
 
-    override suspend fun get(key: String): HttpSyncKvFetched? = withContext(ioDispatcher) {
+    override suspend fun get(key: String): HttpSyncKvFetched? = getWithLimit(key, maxBytes = null)
+
+    override suspend fun getBounded(key: String, maxBytes: Int): HttpSyncKvFetched? {
+        require(maxBytes >= 0)
+        return getWithLimit(key, maxBytes)
+    }
+
+    private suspend fun getWithLimit(key: String, maxBytes: Int?): HttpSyncKvFetched? = withContext(ioDispatcher) {
         val connection = openConnection("GET", "/v1/kv/${encodeKey(key)}", contentType = null)
         try {
             val code = connection.responseCode
@@ -469,7 +504,13 @@ class HttpSyncKvClient(
             // Defensive null check: per HTTP spec a 2xx with a body always has a non-null
             // inputStream, but a misbehaving proxy / Cloudflare worker could return 200 with
             // an empty payload, and dereferencing would NPE under that pathology.
-            val body = connection.inputStream?.use { it.readBytes() } ?: byteArrayOf()
+            val declaredLength = connection.contentLengthLong
+            if (maxBytes != null && declaredLength > maxBytes) {
+                throw HttpSyncException("Blob at $key exceeds the $maxBytes-byte download limit.")
+            }
+            val body = connection.inputStream?.use { input ->
+                if (maxBytes == null) input.readBytes() else input.readBytesBounded(key, maxBytes)
+            } ?: byteArrayOf()
             HttpSyncKvFetched(
                 body = body,
                 contentType = connection.getHeaderField("Content-Type")

@@ -11,6 +11,8 @@ import moe.antimony.hoshi.epub.Bookmark
 import moe.antimony.hoshi.features.ai.AiChatEntry
 import moe.antimony.hoshi.features.ai.PretranslationStore
 import moe.antimony.hoshi.features.ai.PRETRANSLATIONS_FILENAME
+import moe.antimony.hoshi.features.ai.EPUB_TRANSLATIONS_FILENAME
+import moe.antimony.hoshi.features.ai.EpubTranslationStore
 import moe.antimony.hoshi.features.ai.AiChatHistoryStore
 import moe.antimony.hoshi.features.sync.http.HttpSyncBookLocks
 import moe.antimony.hoshi.features.sync.http.HttpSyncBookmarkBlob
@@ -19,9 +21,14 @@ import moe.antimony.hoshi.features.sync.http.PretranslationsBlob
 import moe.antimony.hoshi.features.sync.http.HttpSyncDeletedBookStateStore
 import moe.antimony.hoshi.features.sync.http.HttpSyncKvTransport
 import moe.antimony.hoshi.features.sync.http.HttpSyncPayloadCodec
+import moe.antimony.hoshi.features.sync.http.MAX_EPUB_SENTENCES_BLOB_BYTES
+import moe.antimony.hoshi.epub.EpubBookParser
+import moe.antimony.hoshi.epub.bookContentType
 import moe.antimony.hoshi.features.sync.http.HttpSyncRevisionStore
 import moe.antimony.hoshi.features.sync.http.HttpSyncShelfPlacementRecord
 import moe.antimony.hoshi.features.sync.http.resolveSyncImportedCoverPath
+import moe.antimony.hoshi.features.sync.http.createSyncImportStagingDirectory
+import moe.antimony.hoshi.features.sync.http.publishSyncImportDirectory
 import moe.antimony.hoshi.features.sync.http.HttpSyncShelfStateStore
 import moe.antimony.hoshi.features.sync.http.SyncComparison
 import moe.antimony.hoshi.features.sync.http.appleSecondsToRfc3339
@@ -29,6 +36,8 @@ import moe.antimony.hoshi.features.sync.http.bookmarkKey
 import moe.antimony.hoshi.features.sync.http.compareRevisioned
 import moe.antimony.hoshi.features.sync.http.rfc3339ToAppleSeconds
 import java.io.File
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 import java.util.UUID
 
 /**
@@ -65,6 +74,7 @@ class V3Executor(
         var appliedBookmarks = 0
         var appliedChatEntries = 0
         var appliedPretranslations = 0
+        var appliedSentenceTranslations = 0
         var appliedPayloads = 0
         var appliedMetadataDeletes = 0
         var appliedShelfPlacements = 0
@@ -222,7 +232,8 @@ class V3Executor(
                     is V3Action.ImportPretranslations -> {
                         val targetRoot = resolveRoot(action.root, action.syncId, rootBySyncId)
                             ?: continue
-                        val fetched = transport.get(action.key) ?: continue
+                        val fetched = transport.get(action.key)
+                            ?: throw IllegalStateException("Listed offline translations are missing at ${action.key}.")
                         val body = fetched.body.toString(Charsets.UTF_8)
                         val blob = json.decodeFromString(
                             PretranslationsBlob.serializer(),
@@ -240,12 +251,32 @@ class V3Executor(
                         val target = File(targetRoot, PRETRANSLATIONS_FILENAME)
                         val temp = File(targetRoot, "$PRETRANSLATIONS_FILENAME.tmp")
                         temp.writeText(body, Charsets.UTF_8)
-                        if (temp.renameTo(target)) {
-                            PretranslationStore.invalidate(targetRoot)
-                            appliedPretranslations += 1
-                        } else {
-                            temp.delete()
-                        }
+                        replaceFile(temp, target)
+                        PretranslationStore.invalidate(targetRoot)
+                        appliedPretranslations += 1
+                    }
+                    is V3Action.ImportSentences -> {
+                        val targetRoot = resolveRoot(action.root, action.syncId, rootBySyncId)
+                            ?: continue
+                        val fetched = transport.getBounded(action.key, MAX_EPUB_SENTENCES_BLOB_BYTES)
+                            ?: throw IllegalStateException("Listed sentence translations are missing at ${action.key}.")
+                        val target = File(targetRoot, EPUB_TRANSLATIONS_FILENAME)
+                        val alreadyInstalled = target.isFile &&
+                            target.length() == fetched.body.size.toLong() &&
+                            target.length() <= MAX_EPUB_SENTENCES_BLOB_BYTES &&
+                            target.readBytes().contentEquals(fetched.body)
+                        val body = fetched.body.toString(Charsets.UTF_8)
+                        val spineCount = EpubBookParser().parse(
+                            root = targetRoot,
+                            cachedBookInfo = bookRepository.loadBookInfo(targetRoot),
+                        ).spineCount
+                        EpubTranslationStore.decodeAndValidate(body, action.syncId, spineCount)
+                        if (alreadyInstalled) continue
+                        val temp = File(targetRoot, "$EPUB_TRANSLATIONS_FILENAME.tmp")
+                        temp.writeText(body, Charsets.UTF_8)
+                        replaceFile(temp, target)
+                        EpubTranslationStore.invalidate(targetRoot)
+                        appliedSentenceTranslations += 1
                     }
                     is V3Action.ImportChat -> {
                         val targetRoot = resolveRoot(action.root, action.syncId, rootBySyncId)
@@ -309,6 +340,8 @@ class V3Executor(
                         pushedChatEntries += 1
                     }
                     is V3Action.PushPayload -> {
+                        val targetRoot = resolveRoot(action.root, action.syncId, rootBySyncId)
+                            ?: continue
                         val uploaded = withByteProgress(
                             onProgress = onProgress,
                             makeProgress = { transferred, total ->
@@ -323,7 +356,7 @@ class V3Executor(
                         ) { onByteProgress ->
                             pushOps.pushPayload(
                                 transport = transport,
-                                bookRoot = action.root,
+                                bookRoot = targetRoot,
                                 syncId = action.syncId,
                                 title = action.title,
                                 format = action.format,
@@ -372,6 +405,7 @@ class V3Executor(
                 bookmarks = appliedBookmarks,
                 chatEntries = appliedChatEntries,
                 payloads = appliedPayloads,
+                sentenceTranslations = appliedSentenceTranslations,
                 metadataDeletes = appliedMetadataDeletes,
                 shelfPlacements = appliedShelfPlacements,
                 aiSettings = appliedAiSettings,
@@ -399,9 +433,10 @@ class V3Executor(
         action: V3Action.ImportRemoteBook,
         onProgress: suspend (V3Progress) -> Unit = {},
     ): File? {
-        val targetRoot = bookRepository.createBookDirectoryForImportedTitle(syncId)
-        val manifest = try {
-            withByteProgress(
+        val stagingRoot = createSyncImportStagingDirectory(bookRepository.booksDirectory)
+        var publishedRoot: File? = null
+        return try {
+            val manifest = withByteProgress(
                 onProgress = onProgress,
                 makeProgress = { transferred, total ->
                     byteProgress(
@@ -413,33 +448,49 @@ class V3Executor(
                     )
                 },
             ) { onByteProgress ->
-                payloadCodec.downloadAndUnpack(transport, syncId, targetRoot, onByteProgress)
+                payloadCodec.downloadAndUnpack(
+                    transport = transport,
+                    syncId = syncId,
+                    targetDir = stagingRoot,
+                    onByteProgress = onByteProgress,
+                    keys = action.payloadKeys,
+                    expectedFormat = action.manifest.format,
+                )
             }
+            val actualContentType = bookContentType(stagingRoot)
+            if (actualContentType != manifest.format.toLocal()) {
+                throw IllegalArgumentException(
+                    "Payload for $syncId declares ${manifest.format} but unpacked as $actualContentType.",
+                )
+            }
+            val parsedEpub = moe.antimony.hoshi.features.sync.http.validateSyncImportedBook(stagingRoot)
+            val targetRoot = publishSyncImportDirectory(stagingRoot, bookRepository.booksDirectory)
+            publishedRoot = targetRoot
+            // Parse/cover resolution is deliberately inside the cleanup boundary: malformed
+            // remote bytes must never leave a ghost shelf directory behind.
+            val coverPath = if (parsedEpub != null) {
+                bookRepository.metadataCoverPath(targetRoot, parsedEpub.coverHref)
+            } else {
+                resolveSyncImportedCoverPath(bookRepository, targetRoot)
+            }
+            parsedEpub?.let { bookRepository.saveBookInfo(targetRoot, it.bookInfo) }
+            bookRepository.saveMetadata(
+                targetRoot,
+                BookMetadata(
+                    id = UUID.randomUUID().toString(),
+                    title = manifest.originalName,
+                    cover = coverPath,
+                    folder = targetRoot.name,
+                    lastAccess = 0.0,
+                    syncId = action.syncId,
+                    importedAt = java.time.Instant.now().toString(),
+                ),
+            )
+            targetRoot
         } catch (e: Exception) {
-            // Clean up the half-imported directory.
-            targetRoot.deleteRecursively()
+            (publishedRoot ?: stagingRoot).deleteRecursively()
             throw e
         }
-        // Mirror the user-side import path: parse the freshly-unzipped book and resolve a
-        // cover path so the bookshelf can render a thumbnail before the user opens it. Without
-        // this, `metadata.cover` stayed null until the first open triggered the parser via
-        // `BookshelfRepository.openBook`, and the bookshelf showed a blank cover slot.
-        val coverPath = resolveSyncImportedCoverPath(bookRepository, targetRoot)
-        bookRepository.saveMetadata(
-            targetRoot,
-            BookMetadata(
-                id = UUID.randomUUID().toString(),
-                title = manifest.originalName,
-                cover = coverPath,
-                folder = targetRoot.name,
-                lastAccess = 0.0,
-                // Stamp the import the same way the user-side import path does. Lets the
-                // planner's next pass compare local `importedAt` against any remote tombstone
-                // and overwrite the tombstone when the local re-import is strictly newer.
-                importedAt = java.time.Instant.now().toString(),
-            ),
-        )
-        return targetRoot
     }
 
     /**
@@ -554,11 +605,25 @@ class V3Executor(
         is V3Action.ApplyRemoteBookmark,
         is V3Action.ImportChat,
         is V3Action.ImportPretranslations,
+        is V3Action.ImportSentences,
         is V3Action.ApplyAiSettings -> V3Phase.ApplyingRemoteState
         is V3Action.PushBookmark,
         is V3Action.PushChat,
         is V3Action.PushPayload,
         is V3Action.PushMetadata -> V3Phase.PushingLocalState
         is V3Action.PushAiSettings -> V3Phase.SyncingAppSettings
+    }
+
+    private fun replaceFile(source: File, target: File) {
+        try {
+            Files.move(
+                source.toPath(),
+                target.toPath(),
+                StandardCopyOption.ATOMIC_MOVE,
+                StandardCopyOption.REPLACE_EXISTING,
+            )
+        } catch (_: Exception) {
+            Files.move(source.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING)
+        }
     }
 }

@@ -2,6 +2,8 @@ package moe.antimony.hoshi.features.sync.v3
 
 import moe.antimony.hoshi.features.ai.PRETRANSLATIONS_FILENAME
 import moe.antimony.hoshi.features.sync.http.HttpSyncContentType
+import moe.antimony.hoshi.features.sync.http.HttpSyncPayloadKeys
+import moe.antimony.hoshi.features.sync.http.MAX_EPUB_SENTENCES_BLOB_BYTES
 import moe.antimony.hoshi.features.sync.http.SyncComparison
 import moe.antimony.hoshi.features.sync.http.appleSecondsToRfc3339
 import moe.antimony.hoshi.features.sync.http.chatEntryKeySuffix
@@ -38,6 +40,7 @@ class V3Planner {
         val applyRemoteBookmarks = mutableListOf<V3Action.ApplyRemoteBookmark>()
         val importChats = mutableListOf<V3Action.ImportChat>()
         val importPretranslations = mutableListOf<V3Action.ImportPretranslations>()
+        val importSentences = mutableListOf<V3Action.ImportSentences>()
         val applyAiSettings = mutableListOf<V3Action.ApplyAiSettings>()
         val pushBookmarks = mutableListOf<V3Action.PushBookmark>()
         val pushChats = mutableListOf<V3Action.PushChat>()
@@ -104,6 +107,8 @@ class V3Planner {
                     importRemoteBooks += V3Action.ImportRemoteBook(
                         syncId = syncId,
                         manifest = r.manifest,
+                        payloadKeys = r.payloadKeys
+                            ?: moe.antimony.hoshi.features.sync.http.HttpSyncPayloadKeys.forFormat(r.manifest.format, syncId),
                         shelfName = r.metadata?.shelfName,
                         shelfUpdatedAt = r.metadata?.shelfUpdatedAt
                             ?: r.metadata?.let { r.metadataLastModified },
@@ -126,11 +131,37 @@ class V3Planner {
                             key = chatKey,
                         )
                     }
-                    r.pretranslationsKey?.let { key ->
+                    r.pretranslationsKey?.takeIf { r.manifest.format == HttpSyncContentType.Mokuro }?.let { key ->
                         importPretranslations += V3Action.ImportPretranslations(
                             root = sentinelRoot(syncId),
                             syncId = syncId,
                             key = key,
+                        )
+                    }
+                    r.sentencesKey?.takeIf { r.manifest.format == HttpSyncContentType.Epub }?.let { key ->
+                        if ((r.sentencesSize ?: 0) > MAX_EPUB_SENTENCES_BLOB_BYTES) {
+                            plannerErrors += V3Error(
+                                syncId,
+                                "ImportSentences",
+                                "remote sentence translations exceed the $MAX_EPUB_SENTENCES_BLOB_BYTES-byte limit",
+                            )
+                        } else {
+                            importSentences += V3Action.ImportSentences(
+                                root = sentinelRoot(syncId),
+                                syncId = syncId,
+                                key = key,
+                            )
+                        }
+                    }
+                    if (
+                        r.manifest.format == HttpSyncContentType.Epub &&
+                        r.payloadKeys == HttpSyncPayloadKeys.legacy(syncId)
+                    ) {
+                        pushPayloads += V3Action.PushPayload(
+                            root = sentinelRoot(syncId),
+                            syncId = syncId,
+                            title = r.metadata?.title ?: r.manifest.originalName,
+                            format = HttpSyncContentType.Epub,
                         )
                     }
                 } else {
@@ -341,6 +372,24 @@ class V3Planner {
                         }
                     }
                 }
+                if (l.contentType == moe.antimony.hoshi.epub.ContentType.Epub) {
+                    val sentencesKey = r?.sentencesKey
+                    if (sentencesKey != null) {
+                        if ((r.sentencesSize ?: 0) > MAX_EPUB_SENTENCES_BLOB_BYTES) {
+                            plannerErrors += V3Error(
+                                syncId,
+                                "ImportSentences",
+                                "remote sentence translations exceed the $MAX_EPUB_SENTENCES_BLOB_BYTES-byte limit",
+                            )
+                        } else {
+                            importSentences += V3Action.ImportSentences(
+                                root = l.root,
+                                syncId = syncId,
+                                key = sentencesKey,
+                            )
+                        }
+                    }
+                }
 
                 // ── Payload push (widened gate: Mokuro OR EPUB) ──
                 // Bug 5: if the remote manifest blob is present-but-malformed, treat the
@@ -354,7 +403,16 @@ class V3Planner {
                         action = "MalformedRemoteManifest",
                         message = "remote manifest for syncId '$syncId' is malformed; skipping payload push to avoid overwriting the only copy of corrupt remote data",
                     )
-                } else if (l.bookId.isNotEmpty() && r?.manifest == null) {
+                } else if (
+                    l.bookId.isNotEmpty() &&
+                    (
+                        r?.manifest == null ||
+                            (
+                                l.contentType == moe.antimony.hoshi.epub.ContentType.Epub &&
+                                    r.payloadKeys == HttpSyncPayloadKeys.legacy(syncId)
+                                )
+                        )
+                ) {
                     pushPayloads += V3Action.PushPayload(
                         root = l.root,
                         syncId = syncId,
@@ -414,6 +472,7 @@ class V3Planner {
             addAll(applyRemoteBookmarks.sortedBy { it.syncId })
             addAll(importChats.sortedWith(compareBy({ it.syncId }, { it.key })))
             addAll(importPretranslations.sortedBy { it.syncId })
+            addAll(importSentences.sortedBy { it.syncId })
             addAll(applyAiSettings)
             // Push bucket: bookmark, chat, payload, metadata, ai settings.
             addAll(pushBookmarks.sortedBy { it.syncId })

@@ -10,6 +10,7 @@ import moe.antimony.hoshi.features.sync.http.HttpSyncContentType
 import moe.antimony.hoshi.features.sync.http.HttpSyncDeletedBookRecord
 import moe.antimony.hoshi.features.sync.http.HttpSyncMetadataBlob
 import moe.antimony.hoshi.features.sync.http.HttpSyncPayloadManifest
+import moe.antimony.hoshi.features.sync.http.HttpSyncPayloadKeys
 import moe.antimony.hoshi.features.sync.http.appleSecondsToRfc3339
 import moe.antimony.hoshi.features.sync.http.chatEntryKeySuffix
 import moe.antimony.hoshi.features.sync.http.chatKey
@@ -62,8 +63,11 @@ class V3PlannerTest {
         syncId: String,
         metadata: HttpSyncMetadataBlob? = null,
         manifest: HttpSyncPayloadManifest? = null,
+        payloadKeys: HttpSyncPayloadKeys? = null,
         bookmark: HttpSyncBookmarkBlob? = null,
         chatKeys: Set<String> = emptySet(),
+        sentencesKey: String? = null,
+        sentencesSize: Int? = null,
         metadataMalformed: Boolean = false,
         manifestMalformed: Boolean = false,
         bookmarkMalformed: Boolean = false,
@@ -73,9 +77,12 @@ class V3PlannerTest {
         metadataLastModified = metadata?.shelfUpdatedAt,
         manifest = manifest,
         manifestLastModified = null,
+        payloadKeys = payloadKeys,
         bookmark = bookmark,
         bookmarkLastModified = bookmark?.lastModified,
         chatKeys = chatKeys,
+        sentencesKey = sentencesKey,
+        sentencesSize = sentencesSize,
         metadataMalformed = metadataMalformed,
         manifestMalformed = manifestMalformed,
         bookmarkMalformed = bookmarkMalformed,
@@ -130,6 +137,46 @@ class V3PlannerTest {
         // No apply-side actions.
         assertFalse(kinds.contains("ApplyRemoteBookmark"))
         assertFalse(kinds.contains("ApplyRemoteMetadata"))
+    }
+
+    @Test
+    fun epubBackedByLegacyAndroidKeysIsRepublishedToCanonicalIosKeys() {
+        val syncId = "legacy_epub"
+        val local = localBook(syncId, contentType = ContentType.Epub)
+        val remote = remoteBook(
+            syncId = syncId,
+            manifest = HttpSyncPayloadManifest(
+                sha256 = "sha256:0",
+                sizeBytes = 1,
+                originalName = syncId,
+                format = HttpSyncContentType.Epub,
+            ),
+            payloadKeys = HttpSyncPayloadKeys.legacy(syncId),
+        )
+
+        val plan = planner.compute(snapshot(listOf(local)), remoteSnapshot(listOf(remote)))
+
+        assertNotNull(
+            "legacy Android EPUB should be republished under epub.zip/epub.manifest",
+            plan.actions.filterIsInstance<V3Action.PushPayload>()
+                .firstOrNull { it.syncId == syncId },
+        )
+    }
+
+    @Test
+    fun oversizedListedEpubSentencesAreRejectedBeforeDownload() {
+        val syncId = "oversized_sentences"
+        val local = localBook(syncId, contentType = ContentType.Epub)
+        val remote = remoteBook(
+            syncId = syncId,
+            sentencesKey = "books/$syncId/sentences",
+            sentencesSize = moe.antimony.hoshi.features.sync.http.MAX_EPUB_SENTENCES_BLOB_BYTES + 1,
+        )
+
+        val plan = planner.compute(snapshot(listOf(local)), remoteSnapshot(listOf(remote)))
+
+        assertTrue(plan.actions.none { it is V3Action.ImportSentences })
+        assertTrue(plan.errors.any { it.action == "ImportSentences" })
     }
 
     // --- remote-only with manifest -------------------------------------------

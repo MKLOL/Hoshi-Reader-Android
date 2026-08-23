@@ -2241,7 +2241,7 @@ class HttpSyncTest {
         assertTrue(progress.any { it.message == "Preparing sync" })
         assertTrue(progress.any { it.message == "Listing remote changes" })
         assertTrue(progress.any { it.message == "Uploading local book state" && it.total == 1 })
-        assertTrue(progress.any { it.message == "Checking manga payload upload" && it.total == 1 })
+        assertTrue(progress.any { it.message == "Checking book payload upload" && it.total == 1 })
         assertTrue(progress.any { it.message == "Finishing sync" })
         assertTrue(progress.any { it.fraction != null })
     }
@@ -2282,10 +2282,10 @@ class HttpSyncTest {
 
         reconciler.syncOnce(configured) { progress += it }
 
-        val payloadProgress = progress.single { it.message == "Checking manga payload upload" }
-        assertEquals("Book 1 of 1: Progress Manga", payloadProgress.detail)
-        assertEquals(0, payloadProgress.completed)
-        assertEquals(1, payloadProgress.total)
+        val payloadProgress = progress.filter { it.message == "Checking book payload upload" }
+        assertEquals(setOf("Progress Manga", "Progress Epub"), payloadProgress.map { it.detail!!.substringAfter(": ") }.toSet())
+        assertEquals(setOf(0, 1), payloadProgress.map { it.completed }.toSet())
+        assertTrue(payloadProgress.all { it.total == 2 })
 
         val chatProgress = progress.single { it.message == "Uploading manga chat history" }
         assertEquals("Progress Manga: chat 1 of 1", chatProgress.detail)
