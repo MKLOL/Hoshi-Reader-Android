@@ -7,6 +7,8 @@ Semantic Versioning.
 
 ## [Unreleased]
 
+## [v0.11.2] - 2026-08-26
+
 ### Fixed
 - **HTTP Sync is now immediate for unchanged libraries and continuously protects reading positions.**
   A single exchange compares the per-user BookID→SHA and BookID→bookmark maps instead of
