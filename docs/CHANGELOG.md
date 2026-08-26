@@ -9,8 +9,9 @@ Semantic Versioning.
 
 ### Fixed
 - **HTTP Sync is now immediate for unchanged libraries and continuously protects reading positions.**
-  One exchange replaces per-book polling, and every EPUB or manga page-position change is
-  durably batched within five seconds so restarts and device switches cannot silently lose it.
+  A single exchange compares the per-user BookID→SHA and BookID→bookmark maps instead of
+  polling every book. Every EPUB or manga page-position change is durably batched within
+  five seconds, and a stale device cannot move a newer reading position backwards.
 
 ## [v0.11.1] - 2026-08-23
 

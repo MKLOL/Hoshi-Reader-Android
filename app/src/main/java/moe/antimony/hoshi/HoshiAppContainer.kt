@@ -109,7 +109,10 @@ internal class HoshiAppContainer(context: Context) {
         aiSettingsRepository = aiChatSettingsRepository,
         bookLocks = httpSyncBookLocks,
     )
-    val httpSyncBatchState: HttpSyncBatchState = HttpSyncBatchState(bookRepository)
+    val httpSyncBatchState: HttpSyncBatchState = HttpSyncBatchState(
+        bookRepository = bookRepository,
+        bookLocks = httpSyncBookLocks,
+    )
     // Fire-and-forget auto-push for metadata-class edits (shelf moves, deletes, imports,
     // AI-settings edits). One instance so its circuit breaker is shared by every hook;
     // a successful manual Sync now resets it via the same signal the reader hooks use.
@@ -137,7 +140,7 @@ internal class HoshiAppContainer(context: Context) {
     val httpSyncBookmarkScheduler: HttpSyncBookmarkScheduler = HttpSyncBookmarkScheduler(
         state = httpSyncBatchState,
         currentSettings = { httpSyncSettingsRepository.settings.first() },
-        syncNow = { settings -> v3SyncEngine.syncOnce(settings) },
+        syncBooksNow = { settings -> v3SyncEngine.syncOnce(settings) },
         scope = appScope,
     )
 

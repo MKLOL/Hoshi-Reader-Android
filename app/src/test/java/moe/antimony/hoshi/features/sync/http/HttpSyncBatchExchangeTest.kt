@@ -35,9 +35,15 @@ class HttpSyncBatchExchangeTest {
         val encoded = Base64.getEncoder().encodeToString(body.toByteArray())
         server.createContext("/") { exchange ->
             calls.incrementAndGet()
-            exchange.requestBody.use { it.readBytes() }
+            val request = exchange.requestBody.use { it.readBytes().toString(Charsets.UTF_8) }
+            assertFalse(request.contains("knownEtags"))
+            assertTrue(request.contains("booksHash"))
             val response = """{
-                "keys":[{
+                "booksHash":"sha256:books",
+                "books":{"cached":"sha256:cached-book"},
+                "bookmarksHash":"sha256:bookmarks",
+                "bookmarks":{},
+                "bookKeys":[{
                     "key":"books/cached/metadata",
                     "lastModified":"2026-08-26T12:00:00.000Z",
                     "etag":"sha256:cached",
@@ -45,7 +51,6 @@ class HttpSyncBatchExchangeTest {
                     "contentType":"application/json",
                     "bodyBase64":"$encoded"
                 }],
-                "removedKeys":[],
                 "writeAcks":[]
             }""".trimIndent().toByteArray()
             exchange.responseHeaders.set("Content-Type", "application/json")
@@ -101,16 +106,21 @@ class HttpSyncBatchExchangeTest {
 
         // An acknowledgement for only one exact mutation must leave the other durable.
         val accepted = request.writes.first()
+        val acceptedBlob = Json.decodeFromString(
+            HttpSyncBookmarkBlob.serializer(),
+            String(Base64.getDecoder().decode(accepted.bodyBase64)),
+        )
+        val acceptedSyncId = accepted.key.split('/')[1]
         state.applyExchange(
             HttpSyncExchangeResponse(
-                keys = listOf(
-                    HttpSyncExchangeKey(
-                        key = accepted.key,
+                booksHash = "sha256:books",
+                books = emptyMap(),
+                bookmarksHash = "sha256:accepted-map",
+                bookmarks = mapOf(
+                    acceptedSyncId to HttpSyncBookmarkMapEntry(
                         lastModified = "2026-08-26T12:00:00.000Z",
                         etag = "sha256:accepted",
-                        size = 64,
-                        contentType = HttpSyncPusher.JSON_CONTENT_TYPE,
-                        bodyBase64 = accepted.bodyBase64,
+                        value = acceptedBlob,
                     ),
                 ),
                 writeAcks = listOf(
@@ -120,17 +130,70 @@ class HttpSyncBatchExchangeTest {
         )
         assertTrue(state.hasPending())
         assertEquals(1, state.exchangeRequest().writes.size)
-        assertEquals("sha256:accepted", state.exchangeRequest().knownEtags[accepted.key])
+        assertEquals("sha256:accepted-map", state.exchangeRequest().bookmarksHash)
 
         val remaining = state.exchangeRequest().writes.single()
         state.applyExchange(
             HttpSyncExchangeResponse(
+                booksHash = "sha256:books",
+                bookmarksHash = "sha256:remaining-map",
                 writeAcks = listOf(
                     HttpSyncExchangeWriteAck(remaining.key, remaining.mutationId, true, "sha256:remaining"),
                 ),
             ),
         )
         assertFalse(state.hasPending())
+    }
+
+    @Test
+    fun bookmarkMapUsesEventTimeBeforeRevision() = runBlocking {
+        val repository = BookRepository(temporaryFolder.newFolder())
+        val state = HttpSyncBatchState(repository)
+        val root = createBook(repository, "Example", "example")
+        repository.saveBookmark(root, Bookmark(0, 0.2, 20, 100.0))
+        state.queueBookmark(root, "Example", "example") // local rev 1
+
+        state.applyExchange(
+            HttpSyncExchangeResponse(
+                booksHash = "sha256:books",
+                bookmarksHash = "sha256:newer",
+                bookmarks = mapOf(
+                    "example" to HttpSyncBookmarkMapEntry(
+                        lastModified = "2026-08-26T12:05:00.000Z",
+                        etag = "sha256:newer",
+                        value = HttpSyncBookmarkBlob(
+                            chapterIndex = 2,
+                            progress = 0.9,
+                            characterCount = 90,
+                            lastModified = "2026-08-26T12:05:00.000Z",
+                            rev = 0,
+                        ),
+                    ),
+                ),
+            ),
+        )
+        assertEquals(0.9, repository.loadBookmark(root)!!.progress, 0.0)
+
+        state.applyExchange(
+            HttpSyncExchangeResponse(
+                booksHash = "sha256:books",
+                bookmarksHash = "sha256:older",
+                bookmarks = mapOf(
+                    "example" to HttpSyncBookmarkMapEntry(
+                        lastModified = "2026-08-26T12:00:00.000Z",
+                        etag = "sha256:older",
+                        value = HttpSyncBookmarkBlob(
+                            chapterIndex = 0,
+                            progress = 0.1,
+                            characterCount = 10,
+                            lastModified = "2026-08-26T12:00:00.000Z",
+                            rev = 99,
+                        ),
+                    ),
+                ),
+            ),
+        )
+        assertEquals(0.9, repository.loadBookmark(root)!!.progress, 0.0)
     }
 
     private suspend fun createBook(repository: BookRepository, title: String, syncId: String) =

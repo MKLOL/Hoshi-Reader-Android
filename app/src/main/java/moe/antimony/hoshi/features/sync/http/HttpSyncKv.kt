@@ -90,7 +90,8 @@ data class HttpSyncExchangeWrite(
 
 @Serializable
 data class HttpSyncExchangeRequest(
-    val knownEtags: Map<String, String> = emptyMap(),
+    val booksHash: String? = null,
+    val bookmarksHash: String? = null,
     val writes: List<HttpSyncExchangeWrite> = emptyList(),
 )
 
@@ -113,9 +114,19 @@ data class HttpSyncExchangeWriteAck(
 )
 
 @Serializable
+data class HttpSyncBookmarkMapEntry(
+    val etag: String,
+    val lastModified: String,
+    val value: HttpSyncBookmarkBlob? = null,
+)
+
+@Serializable
 data class HttpSyncExchangeResponse(
-    val keys: List<HttpSyncExchangeKey> = emptyList(),
-    val removedKeys: List<String> = emptyList(),
+    val booksHash: String,
+    val books: Map<String, String>? = null,
+    val bookmarksHash: String,
+    val bookmarks: Map<String, HttpSyncBookmarkMapEntry>? = null,
+    val bookKeys: List<HttpSyncExchangeKey>? = null,
     val writeAcks: List<HttpSyncExchangeWriteAck> = emptyList(),
 )
 

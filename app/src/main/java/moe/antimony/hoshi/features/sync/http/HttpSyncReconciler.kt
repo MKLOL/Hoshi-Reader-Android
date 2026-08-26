@@ -44,9 +44,8 @@ import java.util.UUID
  *  3. Compute the new cursor as `max(inbound.lastModified, outbound.lastModified)`. Return
  *     it in [HttpSyncResult.newLastSyncedAt] for the caller to persist.
  *
- * The reader's fire-and-forget pushes (every-5-page-turns, on-leave, on-chat-reply) go
- * through [HttpSyncPusher] instead and bypass this entire flow — they are one PUT each
- * and need none of the listing or cursor logic.
+ * Reader bookmarks use the durable five-second map exchange and bypass this full flow.
+ * Chat replies still use [HttpSyncPusher] as a content-addressed one-key PUT.
  *
  * Per-book errors are collected into [HttpSyncResult.errors] so one corrupt book never
  * kills the whole pass.

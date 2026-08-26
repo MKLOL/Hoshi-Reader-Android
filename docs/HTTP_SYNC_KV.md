@@ -223,13 +223,14 @@ The Android client uses this layout under one shared root prefix `books/`:
 
 ## Sync algorithm (client-side, also informative)
 
-The client tracks one local cursor: `lastSyncedAt = highest lastModified it has
-applied`. Two flows:
+The client persists the last `books` and `bookmarks` map hashes (plus its key
+metadata cache). The legacy full reconciler still retains `lastSyncedAt` for
+compatibility, but it runs only after the books map changes. Two flows:
 
 ### Outbound (writes)
 
-- Page turn → after the existing debounce, `PUT books/{syncId}/bookmark` with the
-  current bookmark JSON. Coalesced so a burst of turns ends in one PUT.
+- Page turn → after the local save, replace that BookID's durable outbox entry.
+  At most five seconds later, send every dirty book in one `POST /v2/exchange`.
 - New chat reply persisted → `PUT books/{syncId}/chat/{ts}-{nonce}` with that one
   entry. Never re-uploaded.
 - Book import → upload the format-specific zip once (Mokuro `payload.*`, EPUB `epub.*`),
@@ -242,12 +243,11 @@ applied`. Two flows:
 
 ### Inbound (reads)
 
-On app resume / periodic timer:
+On app resume, manual sync, and each five-second dirty timer:
 
-1. `GET /v1/kv?prefix=books/&since={lastSyncedAt}` (paginate via `cursor`).
-2. For each returned key:
-   - `bookmark` → if newer than local `lastModified`, fetch and overwrite local
-     bookmark.
+1. `POST /v2/exchange` with the two cached map hashes and all dirty bookmarks.
+2. If only bookmarks changed, apply the returned bookmark map immediately.
+3. Only if the books map changed, reconcile the returned book-key index:
    - `chat/{ts}-{nonce}` → if the local chat log doesn't have that exact key, fetch
      and append. Order in-memory by `timestampSeconds`.
    - `metadata` with `deletedAt` set → if local copy exists, delete it locally and do
@@ -261,7 +261,7 @@ On app resume / periodic timer:
    - `sentences` → after its EPUB exists locally, validate the sync id, EPUB spine count,
      normalized sentence addresses and hashes, then atomically install
      `sentence_translations.json`.
-3. Advance `lastSyncedAt` to the max `lastModified` seen.
+4. Advance `lastSyncedAt` to the max `lastModified` seen by that full reconcile.
 
 Conflicts are last-write-wins per key, which is the right granularity because:
 - A bookmark conflict is "one user, two phones, both reading the same book at the

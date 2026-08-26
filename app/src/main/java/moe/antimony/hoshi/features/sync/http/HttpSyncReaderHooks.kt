@@ -25,8 +25,8 @@ private const val TAG = "HttpSync"
  * conflicts a 3-line re-apply at most.
  *
  * Triggers, all fire-and-forget on the [persistenceScope]:
- *  - Every [PAGE_TURN_PUSH_THRESHOLD] page-turn saves: PUT the current bookmark.
- *  - On reader leave: PUT the bookmark iff there's been any unpushed activity.
+ *  - Every persisted page turn queues the latest bookmark for the five-second map exchange.
+ *  - On reader leave: flush the queued bookmark immediately.
  *  - On every new ChatGPT response that gets persisted: PUT that one chat entry at its
  *    content-addressable key (write-once on the server; safe to retry).
  *
@@ -174,10 +174,8 @@ class HttpSyncReaderHooks internal constructor(
 
     companion object {
         /**
-         * How many bookmark saves to coalesce into one PUT. Smaller = the server tracks
-         * reality more tightly, more HTTPS round-trips; larger = cheaper but more pages
-         * lost when the phone dies mid-read. Five balances out at ~250 B per push, plus a
-         * force-push on leave so the bookmark is never more than 4 turns out of date.
+         * Legacy direct-PUT fallback only. Production injects [queueBookmark] and queues
+         * every persisted page turn into the five-second batch exchange instead.
          */
         const val PAGE_TURN_PUSH_THRESHOLD: Int = 5
 
