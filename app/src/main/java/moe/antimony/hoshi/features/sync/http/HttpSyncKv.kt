@@ -158,7 +158,7 @@ private data class HttpSyncMultipartCompleteResponse(
     val contentType: String? = null,
 )
 
-class HttpSyncException(message: String) : Exception(message)
+class HttpSyncException(message: String, val httpCode: Int? = null) : Exception(message)
 
 private fun InputStream.readBytesBounded(key: String, maxBytes: Int): ByteArray {
     val output = ByteArrayOutputStream(minOf(maxBytes, DEFAULT_BUFFER_SIZE))
@@ -315,7 +315,9 @@ class HttpSyncKvClient(
                     context.ensureActive()
                     val (code, raw) = readBody(connection)
                     context.ensureActive()
-                    if (code !in 200..299) throw HttpSyncException(parseError(code, raw))
+                    if (code !in 200..299) {
+                        throw HttpSyncException(parseError(code, raw), httpCode = code)
+                    }
                     json.decodeFromString(HttpSyncExchangeResponse.serializer(), raw)
                 }
             } catch (e: HttpSyncException) {

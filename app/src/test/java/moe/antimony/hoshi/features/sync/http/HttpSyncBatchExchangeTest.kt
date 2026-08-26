@@ -196,6 +196,56 @@ class HttpSyncBatchExchangeTest {
         assertEquals(0.9, repository.loadBookmark(root)!!.progress, 0.0)
     }
 
+    @Test
+    fun missingExchangeRouteFallsBackAndResolvesLegacyBookmarkPut() = runBlocking {
+        val repository = BookRepository(temporaryFolder.newFolder())
+        val state = HttpSyncBatchState(repository)
+        val root = createBook(repository, "Example", "example")
+        repository.saveBookmark(root, Bookmark(0, 0.6, 60, 100.0))
+        state.queueBookmark(root, "Example", "example")
+
+        val calls = AtomicInteger()
+        val server = HttpServer.create(
+            InetSocketAddress(InetAddress.getByName("127.0.0.1"), 0),
+            0,
+        )
+        server.createContext("/") { exchange ->
+            calls.incrementAndGet()
+            exchange.requestBody.use { it.readBytes() }
+            if (exchange.requestURI.path == "/v2/exchange") {
+                val body = "not found".toByteArray()
+                exchange.sendResponseHeaders(404, body.size.toLong())
+                exchange.responseBody.use { it.write(body) }
+            } else {
+                val response = """{
+                    "key":"books/example/bookmark",
+                    "lastModified":"2026-08-26T12:05:00.000Z",
+                    "etag":"sha256:legacy",
+                    "size":2,
+                    "contentType":"application/json"
+                }""".trimIndent().toByteArray()
+                exchange.responseHeaders.set("Content-Type", "application/json")
+                exchange.sendResponseHeaders(200, response.size.toLong())
+                exchange.responseBody.use { it.write(response) }
+            }
+        }
+        server.start()
+        try {
+            val transport = HttpSyncBatchKvTransport(
+                HttpSyncSettings(
+                    baseUrl = "http://127.0.0.1:${server.address.port}",
+                    bearerToken = "token",
+                ),
+                state,
+            )
+            transport.put(bookmarkKey("example"), "application/json", "{}".toByteArray())
+            assertEquals(2, calls.get())
+            assertFalse(state.hasPending())
+        } finally {
+            server.stop(0)
+        }
+    }
+
     private suspend fun createBook(repository: BookRepository, title: String, syncId: String) =
         repository.createBookDirectoryForImportedTitle(title).also { root ->
             repository.saveMetadata(

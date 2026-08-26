@@ -21,6 +21,7 @@ import java.util.UUID
 /** A transport that primes the two remote maps with one v2 exchange call. */
 interface HttpSyncPreparedTransport {
     suspend fun prepare()
+    suspend fun finish(success: Boolean) = Unit
 }
 
 @Serializable
@@ -242,6 +243,12 @@ class HttpSyncBatchState(
         if (key == null) pending.isNotEmpty() else pending.any { it.key == key }
     }
 
+    internal fun resolveLegacyWrite(key: String, mutationId: String) = synchronized(stateLock) {
+        savePendingLocked(
+            loadPendingLocked().filterNot { it.key == key && it.mutationId == mutationId },
+        )
+    }
+
     internal fun cacheWrite(response: HttpSyncKvWriteResponse, body: ByteArray?) = synchronized(stateLock) {
         val state = loadStateLocked()
         val keys = state.keys.toMutableMap()
@@ -347,17 +354,35 @@ class HttpSyncBatchKvTransport(
     private val delegate: HttpSyncKvClient = HttpSyncKvClient(settings.baseUrl, settings.bearerToken),
 ) : HttpSyncKvTransport, HttpSyncPreparedTransport {
     private var prepared = false
+    private var legacyFallback = false
+    private var legacyMutations: Map<String, String> = emptyMap()
 
     override suspend fun prepare() {
         if (prepared) return
-        state.exchange(delegate)
+        try {
+            state.exchange(delegate)
+        } catch (error: HttpSyncException) {
+            if (error.httpCode != 404 && error.httpCode != 405) throw error
+            // Rolling deploy compatibility: keep the released app fully usable
+            // until this server gains /v2/exchange, then use maps automatically.
+            legacyFallback = true
+            legacyMutations = state.exchangeRequest().writes.associate { it.key to it.mutationId }
+        }
         prepared = true
+    }
+
+    override suspend fun finish(success: Boolean) {
+        if (!legacyFallback || !success) return
+        for ((key, mutationId) in legacyMutations) {
+            state.resolveLegacyWrite(key, mutationId)
+        }
     }
 
     private suspend fun ensurePrepared() = prepare()
 
     override suspend fun list(prefix: String?, since: String?, cursor: String?, limit: Int?): HttpSyncKvList {
         ensurePrepared()
+        if (legacyFallback) return delegate.list(prefix, since, cursor, limit)
         if (prefix != null && !prefix.startsWith("books/")) {
             return delegate.list(prefix, since, cursor, limit)
         }
@@ -373,6 +398,7 @@ class HttpSyncBatchKvTransport(
 
     override suspend fun get(key: String): HttpSyncKvFetched? {
         ensurePrepared()
+        if (legacyFallback) return delegate.get(key)
         if (!key.isPerBookKey()) return delegate.get(key)
         val cached = state.snapshot()[key] ?: return null
         val body = cached.bodyBase64?.fromBase64()
@@ -384,10 +410,17 @@ class HttpSyncBatchKvTransport(
 
     override suspend fun put(key: String, contentType: String, body: ByteArray): HttpSyncKvWriteResponse {
         ensurePrepared()
-        if (key.isBookmarkKey() && state.hasPending(key)) {
+        if (!legacyFallback && key.isBookmarkKey() && state.hasPending(key)) {
             throw HttpSyncException("A newer local bookmark is still awaiting conflict-safe acknowledgement.")
         }
-        return delegate.put(key, contentType, body).also { state.cacheWrite(it, body) }
+        return delegate.put(key, contentType, body).also {
+            state.cacheWrite(it, body)
+            legacyMutations[key]?.let { mutationId ->
+                if (legacyFallback && key.isBookmarkKey()) {
+                    state.resolveLegacyWrite(key, mutationId)
+                }
+            }
+        }
     }
 
     override suspend fun putFile(
@@ -443,9 +476,17 @@ class HttpSyncBookmarkScheduler(
     private suspend fun runExchange() {
         val settings = currentSettings() ?: return
         if (!settings.isConfigured) return
-        val changes = runCatching {
+        val changes = try {
             state.exchange(HttpSyncKvClient(settings.baseUrl, settings.bearerToken))
-        }.getOrNull() ?: return
+        } catch (error: HttpSyncException) {
+            if (error.httpCode != 404 && error.httpCode != 405) return
+            // Old server during a rolling deployment: the full engine's batch
+            // transport falls back to v1 and still flushes the durable bookmark.
+            runCatching { syncBooksNow(settings) }
+            return
+        } catch (_: Exception) {
+            return
+        }
         // Discovery stays in the same one-call hot path. Only a changed/new book
         // starts the larger reconciler, and it runs in this background scope.
         if (changes.booksChanged) runCatching { syncBooksNow(settings) }

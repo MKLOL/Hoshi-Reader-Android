@@ -84,7 +84,8 @@ class V3SyncEngine(
 
             // The production batch transport applies every queued bookmark and primes
             // the complete remote snapshot in one HTTP request before either side is read.
-            (transport as? HttpSyncPreparedTransport)?.prepare()
+            val preparedTransport = transport as? HttpSyncPreparedTransport
+            preparedTransport?.prepare()
 
             onProgress(V3Progress(V3Phase.ReadingLocal, "Reading local books"))
             val local = localState.read()
@@ -100,7 +101,9 @@ class V3SyncEngine(
             // alongside any per-action executor errors so the UI surfaces them in one
             // place.
             val executed = executor.run(plan, transport, onProgress)
-            executed.copy(errors = remoteResult.errors + plan.errors + executed.errors)
+            val result = executed.copy(errors = remoteResult.errors + plan.errors + executed.errors)
+            preparedTransport?.finish(success = result.errors.isEmpty())
+            result
         }
     }
 }
