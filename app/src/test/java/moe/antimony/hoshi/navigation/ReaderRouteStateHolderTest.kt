@@ -100,12 +100,24 @@ class ReaderRouteStateHolderTest {
         val root = File("book-a")
         val book = readerBook(html = "1234567890")
         val repository = FakeReaderRouteBookRepository(entry = null, now = 99.0)
-        val stateHolder = ReaderRouteStateHolder(repository, FakeReaderRouteEpubParser(book))
+        var queued: Triple<File, String?, String?>? = null
+        val stateHolder = ReaderRouteStateHolder(
+            repository,
+            FakeReaderRouteEpubParser(book),
+            onBookmarkPersisted = { savedRoot, title, syncId ->
+                // The durable HTTP outbox hook must run after the bookmark exists.
+                assertTrue(repository.savedBookmark != null)
+                queued = Triple(savedRoot, title, syncId)
+            },
+        )
         var refreshCount = 0
 
         stateHolder.saveBookmark(
             state = ReaderRouteLoadState.Ready(
-                entry = BookEntry(root, BookMetadata("book-a", "Book", null, "book-a", 0.0)),
+                entry = BookEntry(
+                    root,
+                    BookMetadata("book-a", "Book", null, "book-a", 0.0, syncId = "stable-book"),
+                ),
                 bookRoot = root,
                 book = book,
                 bookmark = null,
@@ -125,6 +137,7 @@ class ReaderRouteStateHolderTest {
             repository.savedBookmark,
         )
         assertEquals(1, refreshCount)
+        assertEquals(Triple(root, "Book", "stable-book"), queued)
     }
 
     @Test

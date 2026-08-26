@@ -15,6 +15,7 @@ internal class ReaderRouteStateHolder(
     private val repository: ReaderRouteBookRepository,
     private val parser: ReaderRouteEpubParser = DefaultReaderRouteEpubParser,
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
+    private val onBookmarkPersisted: suspend (File, String?, String?) -> Unit = { _, _, _ -> },
 ) {
     suspend fun load(
         bookId: String,
@@ -72,6 +73,11 @@ internal class ReaderRouteStateHolder(
                 repository.saveStatistics(state.bookRoot, statistics)
             }
         }
+        onBookmarkPersisted(
+            state.bookRoot,
+            state.entry.metadata.title,
+            state.entry.metadata.syncId,
+        )
         onBookmarkSaved()
     }
 }

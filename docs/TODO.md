@@ -1,6 +1,6 @@
 # Hoshi Android Agent TODO
 
-Last updated: 2026-08-23
+Last updated: 2026-08-26
 
 This file is the short operational handoff for future agents.
 
@@ -108,7 +108,7 @@ This file is the short operational handoff for future agents.
   EPUB content instead of reporting metadata-only success.
 - Preserve HTTP Sync manual-progress callbacks when adding reconciliation phases; long-running work should update the Settings screen with a real phase and item counter.
 - Preserve HTTP Sync per-key revision sidecars for bookmark/metadata edits; manual sync and auto-push paths must keep tombstones, shelf placement, imports, and bookmark writes revisioned so stale devices cannot overwrite newer remote state.
-- Harden the HTTP Sync KV server with mutation-safe pagination and conditional bookmark PUTs so concurrent writes cannot be missed or overwritten between Android reconciliation passes.
+- Keep the one-call HTTP exchange and durable five-second EPUB/manga bookmark outbox covered: unchanged libraries must not regress to per-book GETs, and conditional batched bookmark writes must never roll a reader back.
 - Device-validate the first Android Google Drive sync slice with `testdata/test.epub` on a user-configured Device Code OAuth client from the same project as iOS/ッツ: connect/sign-out state, transient network backoff and another-device authorization guidance, long-press manual import/export result dialogs, reader-open import-only, iOS-aligned paginated/continuous auto-export timing, close/background flush export, statistics Merge/Replace, and Sasayaki last-position sync.
 
 ### Release Distribution

@@ -43,6 +43,9 @@ import moe.antimony.hoshi.features.sync.SyncManager
 import moe.antimony.hoshi.features.sync.SyncSettingsRepository
 import moe.antimony.hoshi.features.sync.syncSettingsRepository
 import moe.antimony.hoshi.features.sync.http.HttpSyncAutoPush
+import moe.antimony.hoshi.features.sync.http.HttpSyncBatchKvTransport
+import moe.antimony.hoshi.features.sync.http.HttpSyncBatchState
+import moe.antimony.hoshi.features.sync.http.HttpSyncBookmarkScheduler
 import moe.antimony.hoshi.features.sync.http.HttpSyncPusher
 import moe.antimony.hoshi.features.sync.http.HttpSyncReconciler
 import moe.antimony.hoshi.features.sync.http.HttpSyncSettingsRepository
@@ -106,6 +109,7 @@ internal class HoshiAppContainer(context: Context) {
         aiSettingsRepository = aiChatSettingsRepository,
         bookLocks = httpSyncBookLocks,
     )
+    val httpSyncBatchState: HttpSyncBatchState = HttpSyncBatchState(bookRepository)
     // Fire-and-forget auto-push for metadata-class edits (shelf moves, deletes, imports,
     // AI-settings edits). One instance so its circuit breaker is shared by every hook;
     // a successful manual Sync now resets it via the same signal the reader hooks use.
@@ -118,11 +122,6 @@ internal class HoshiAppContainer(context: Context) {
         breakerResetSignal = { httpSyncManualSyncSuccessAt.value },
     )
 
-    init {
-        // AI chat settings edits sync immediately (debounced inside the hook; no-op when
-        // sync is off). Mirrors iOS AiChatSettingsStore → HttpSyncManager.onAiSettingsChanged.
-        aiChatSettingsRepository.onSyncRelevantEdit = { httpSyncAutoPush.onAiSettingsChanged() }
-    }
     // v3 engine ships side-by-side with v2 (HttpSyncReconciler). The "Sync now" UI
     // dispatches between them based on the HttpSyncSettings.useV3Sync flag (default v2).
     // Both write the same on-disk + remote state, so flipping mid-life is safe. See
@@ -131,7 +130,25 @@ internal class HoshiAppContainer(context: Context) {
         bookRepository = bookRepository,
         aiSettingsRepository = aiChatSettingsRepository,
         bookLocks = httpSyncBookLocks,
+        transportFactory = { settings ->
+            HttpSyncBatchKvTransport(settings, httpSyncBatchState)
+        },
     )
+    val httpSyncBookmarkScheduler: HttpSyncBookmarkScheduler = HttpSyncBookmarkScheduler(
+        state = httpSyncBatchState,
+        currentSettings = { httpSyncSettingsRepository.settings.first() },
+        syncNow = { settings -> v3SyncEngine.syncOnce(settings) },
+        scope = appScope,
+    )
+
+    init {
+        // AI chat settings edits sync immediately (debounced inside the hook; no-op when
+        // sync is off). Mirrors iOS AiChatSettingsStore → HttpSyncManager.onAiSettingsChanged.
+        aiChatSettingsRepository.onSyncRelevantEdit = { httpSyncAutoPush.onAiSettingsChanged() }
+        // Prime the remote ETag/body cache before reading and retry durable bookmarks
+        // left by a process death. With no changes this is one small HTTP request.
+        httpSyncBookmarkScheduler.start()
+    }
     val ankiRepository: AnkiRepository = AnkiRepository(
         context = appContext,
         backend = AnkiDroidBackendAdapter(AndroidAnkiContentApi(appContext)),
@@ -149,7 +166,12 @@ internal class HoshiAppContainer(context: Context) {
     )
 
     fun readerRouteStateHolder(): ReaderRouteStateHolder =
-        ReaderRouteStateHolder(bookRepository)
+        ReaderRouteStateHolder(
+            repository = bookRepository,
+            onBookmarkPersisted = { root, title, syncId ->
+                httpSyncBookmarkScheduler.onBookmarkChanged(root, title, syncId)
+            },
+        )
 
     fun bookshelfRepository(context: Context): BookshelfRepository =
         AndroidBookshelfRepository(

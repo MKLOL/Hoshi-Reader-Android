@@ -12,6 +12,7 @@ import moe.antimony.hoshi.features.sync.http.HttpSyncBookLocks
 import moe.antimony.hoshi.features.sync.http.HttpSyncKvClient
 import moe.antimony.hoshi.features.sync.http.HttpSyncKvTransport
 import moe.antimony.hoshi.features.sync.http.HttpSyncPayloadCodec
+import moe.antimony.hoshi.features.sync.http.HttpSyncPreparedTransport
 import moe.antimony.hoshi.features.sync.http.HttpSyncSettings
 
 /**
@@ -80,6 +81,10 @@ class V3SyncEngine(
         require(settings.isConfigured) { "HTTP sync is not configured." }
         syncMutex.withLock {
             val transport = transportFactory(settings)
+
+            // The production batch transport applies every queued bookmark and primes
+            // the complete remote snapshot in one HTTP request before either side is read.
+            (transport as? HttpSyncPreparedTransport)?.prepare()
 
             onProgress(V3Progress(V3Phase.ReadingLocal, "Reading local books"))
             val local = localState.read()
