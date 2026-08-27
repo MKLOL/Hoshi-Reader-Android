@@ -7,8 +7,13 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import java.io.ByteArrayOutputStream
 import java.io.File
+import java.nio.ByteBuffer
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 import java.security.DigestOutputStream
 import java.security.MessageDigest
+import java.text.Normalizer
+import java.util.UUID
 import java.util.zip.ZipEntry
 import java.util.zip.ZipInputStream
 import java.util.zip.ZipOutputStream
@@ -41,6 +46,8 @@ data class HttpSyncPayloadManifest(
     /** The local folder name used at import time. Receiving devices reuse this. */
     val originalName: String,
     val format: HttpSyncContentType,
+    /** Cross-platform hash of sorted static paths + bytes (independent of ZIP metadata). */
+    val contentSha256: String? = null,
 )
 
 /**
@@ -81,6 +88,9 @@ internal val PAYLOAD_EXCLUDED_FILES: Set<String> = setOf(
     "pretranslations.json",     // synced as …/pretranslations
     "sentence_translations.json", // synced as …/sentences
     PAYLOAD_SHA_CACHE_FILENAME,
+    LEGACY_PAYLOAD_SHA_CACHE_FILENAME,
+    PAYLOAD_LOCAL_DIRTY_FILENAME,
+    PAYLOAD_REPLACEMENT_TARGET_FILENAME,
 )
 
 /**
@@ -92,12 +102,21 @@ internal val PAYLOAD_EXCLUDED_FILES: Set<String> = setOf(
  */
 internal val PAYLOAD_EXCLUDED_DIRS: Set<String> = setOf("Sasayaki")
 
+// Derived from static EPUB bytes. It remains excluded from uploads, but a replacement must
+// regenerate it rather than carry chapter offsets from the old payload forward.
+private val PAYLOAD_REPLACEMENT_PRESERVED_FILES = PAYLOAD_EXCLUDED_FILES -
+    setOf("bookinfo.json", PAYLOAD_SHA_CACHE_FILENAME, PAYLOAD_REPLACEMENT_TARGET_FILENAME)
+
 /**
  * Sidecar that caches the last-computed payload sha so subsequent syncs of an unchanged
  * book don't have to re-zip and re-hash the entire directory. Living alongside the
  * bookmark / chat sidecars is fine — like them, it never travels in the zip itself.
  */
-internal const val PAYLOAD_SHA_CACHE_FILENAME: String = ".payload.sha256.cache"
+internal const val PAYLOAD_SHA_CACHE_FILENAME: String = ".payload.content.sha256.cache"
+private const val LEGACY_PAYLOAD_SHA_CACHE_FILENAME: String = ".payload.sha256.cache"
+private const val PAYLOAD_LOCAL_DIRTY_FILENAME: String = ".payload.content.local_dirty"
+private const val PAYLOAD_REPLACEMENT_TARGET_FILENAME = ".payload.replacement.target"
+private const val PAYLOAD_REPLACEMENT_BACKUP_PREFIX = ".hoshi-sync-backup-"
 
 internal fun payloadZipKey(syncId: String): String = "books/$syncId/payload.zip"
 internal fun payloadManifestKey(syncId: String): String = "books/$syncId/payload.manifest"
@@ -143,6 +162,151 @@ class HttpSyncPayloadCodec(
     private val json = Json {
         ignoreUnknownKeys = true
         encodeDefaults = true
+    }
+
+    /** The cross-platform static-content hash remembered beside an already-materialized book. */
+    internal fun cachedPayloadSha(bookRoot: File): String? = runCatching {
+        bookRoot.resolve(PAYLOAD_SHA_CACHE_FILENAME).readText().trim()
+    }.getOrNull()?.takeIf { SHA256_VALUE.matches(it) }
+
+    /**
+     * Writes a verified content-hash baseline after an import/download or one-time upgrade hash.
+     */
+    internal fun rememberPayloadSha(bookRoot: File, sha: String) {
+        require(SHA256_VALUE.matches(sha)) { "Invalid payload sha256: $sha" }
+        writeCachedSha(bookRoot.resolve(PAYLOAD_SHA_CACHE_FILENAME), sha)
+    }
+
+    /** One-time/import-time content hash; later fast syncs only read the sidecar. */
+    internal suspend fun ensurePayloadContentSha(bookRoot: File): String = withContext(ioDispatcher) {
+        cachedPayloadSha(bookRoot) ?: computePayloadContentSha(bookRoot).also {
+            writeCachedSha(bookRoot.resolve(PAYLOAD_SHA_CACHE_FILENAME), it)
+        }
+    }
+
+    internal fun computePayloadContentSha(bookRoot: File): String {
+        require(bookRoot.isDirectory) { "Book root is not a directory: $bookRoot" }
+        val digest = MessageDigest.getInstance("SHA-256")
+        val files = bookRoot.walkTopDown().filter { file ->
+            file.isFile && file.name !in PAYLOAD_EXCLUDED_FILES &&
+                !file.isInsideExcludedDir(bookRoot)
+        }.sortedBy { file ->
+            Normalizer.normalize(
+                file.relativeTo(bookRoot).path.replace(File.separatorChar, '/'),
+                Normalizer.Form.NFC,
+            )
+        }.toList()
+        for (file in files) {
+            val path = Normalizer.normalize(
+                file.relativeTo(bookRoot).path.replace(File.separatorChar, '/'),
+                Normalizer.Form.NFC,
+            )
+                .toByteArray(Charsets.UTF_8)
+            digest.update(ByteBuffer.allocate(4).putInt(path.size).array())
+            digest.update(path)
+            digest.update(ByteBuffer.allocate(8).putLong(file.length()).array())
+            file.inputStream().buffered(STREAM_BUFFER_SIZE).use { input ->
+                val buffer = ByteArray(STREAM_BUFFER_SIZE)
+                while (true) {
+                    val read = input.read(buffer)
+                    if (read <= 0) break
+                    digest.update(buffer, 0, read)
+                }
+            }
+        }
+        return "sha256:" + digest.digest().joinToString("") { "%02x".format(it) }
+    }
+
+    internal fun markPayloadContentDirty(bookRoot: File) {
+        writeSidecarAtomically(bookRoot.resolve(PAYLOAD_LOCAL_DIRTY_FILENAME), "1")
+    }
+
+    internal fun hasPayloadContentDirty(bookRoot: File): Boolean =
+        bookRoot.resolve(PAYLOAD_LOCAL_DIRTY_FILENAME).isFile
+
+    /**
+     * Atomically installs a downloaded static payload while retaining mutable/per-device files.
+     * The old directory remains as a rollback backup until every preserved sidecar has moved.
+     */
+    internal fun installReplacement(bookRoot: File, stagingRoot: File, sha: String) {
+        require(bookRoot.isDirectory) { "Book directory disappeared during payload replacement." }
+        require(stagingRoot.isDirectory) { "Downloaded payload staging directory is missing." }
+        val parent = bookRoot.parentFile ?: throw HttpSyncException("Book directory has no parent.")
+        recoverInterruptedReplacements(parent)
+        val backup = File(parent, "$PAYLOAD_REPLACEMENT_BACKUP_PREFIX${UUID.randomUUID()}")
+        writeSidecarAtomically(bookRoot.resolve(PAYLOAD_REPLACEMENT_TARGET_FILENAME), bookRoot.name)
+        try {
+            moveDirectory(bookRoot, backup)
+        } catch (error: Exception) {
+            bookRoot.resolve(PAYLOAD_REPLACEMENT_TARGET_FILENAME).delete()
+            throw HttpSyncException("Could not stage changed payload: ${error.message}")
+        }
+        val movedSidecars = mutableListOf<String>()
+        try {
+            moveDirectory(stagingRoot, bookRoot)
+            val preserved = replacementSidecars(backup)
+            for (child in preserved) {
+                val destination = bookRoot.resolve(child.name)
+                if (destination.exists()) destination.deleteRecursively()
+                Files.move(child.toPath(), destination.toPath(), StandardCopyOption.REPLACE_EXISTING)
+                movedSidecars += child.name
+            }
+            rememberPayloadSha(bookRoot, sha)
+            backup.deleteRecursively()
+        } catch (error: Exception) {
+            // Put moved sidecars back into the backup before restoring the original directory.
+            for (name in movedSidecars.asReversed()) {
+                val source = bookRoot.resolve(name)
+                if (source.exists()) {
+                    runCatching {
+                        Files.move(source.toPath(), backup.resolve(name).toPath(), StandardCopyOption.REPLACE_EXISTING)
+                    }
+                }
+            }
+            bookRoot.deleteRecursively()
+            runCatching {
+                moveDirectory(backup, bookRoot)
+                bookRoot.resolve(PAYLOAD_REPLACEMENT_TARGET_FILENAME).delete()
+            }
+            throw HttpSyncException("Could not install changed payload: ${error.message}")
+        }
+    }
+
+    /** Repairs a process death at any point in the directory swap before books are listed. */
+    internal fun recoverInterruptedReplacements(booksDirectory: File) {
+        for (backup in booksDirectory.listFiles().orEmpty().filter {
+            it.isDirectory && it.name.startsWith(PAYLOAD_REPLACEMENT_BACKUP_PREFIX)
+        }) {
+            val targetName = runCatching {
+                backup.resolve(PAYLOAD_REPLACEMENT_TARGET_FILENAME).readText().trim()
+            }.getOrNull() ?: continue
+            if (targetName.isBlank() || targetName.startsWith(".") || File(targetName).name != targetName) continue
+            val target = booksDirectory.resolve(targetName)
+            if (target.exists()) {
+                for (child in replacementSidecars(backup)) {
+                    val destination = target.resolve(child.name)
+                    if (destination.exists()) destination.deleteRecursively()
+                    Files.move(child.toPath(), destination.toPath(), StandardCopyOption.REPLACE_EXISTING)
+                }
+                backup.deleteRecursively()
+            } else {
+                moveDirectory(backup, target)
+                target.resolve(PAYLOAD_REPLACEMENT_TARGET_FILENAME).delete()
+            }
+        }
+    }
+
+    private fun replacementSidecars(root: File): List<File> = root.listFiles().orEmpty().filter { child ->
+        (child.isDirectory && child.name in PAYLOAD_EXCLUDED_DIRS) ||
+            (child.isFile && child.name in PAYLOAD_REPLACEMENT_PRESERVED_FILES)
+    }
+
+    private fun moveDirectory(source: File, destination: File) {
+        try {
+            Files.move(source.toPath(), destination.toPath(), StandardCopyOption.ATOMIC_MOVE)
+        } catch (_: Exception) {
+            Files.move(source.toPath(), destination.toPath())
+        }
     }
 
     /**
@@ -195,7 +359,15 @@ class HttpSyncPayloadCodec(
             // a book, scrolling, chatting, etc.), the manifest's existence is the
             // authoritative signal that the user has already shipped a copy. We trust
             // that and stay quiet.
-            return@withContext false
+            // The server copy is authoritative for static book bytes. Persist its verified
+            // content hash so map checks never re-zip/re-hash this already-downloaded book.
+            val contentSha = ensurePayloadContentSha(bookRoot)
+            val forceReplacement = hasPayloadContentDirty(bookRoot) &&
+                remoteManifest.contentSha256 != contentSha
+            if (hasPayloadContentDirty(bookRoot) && remoteManifest.contentSha256 == contentSha) {
+                bookRoot.resolve(PAYLOAD_LOCAL_DIRTY_FILENAME).delete()
+            }
+            if (!forceReplacement) return@withContext false
         }
 
         val spoolDir = bookRoot.parentFile ?: bookRoot
@@ -205,7 +377,8 @@ class HttpSyncPayloadCodec(
             // multi-second zip + hash.
             val sha = zipDirectoryToFile(bookRoot, zipFile)
             val localSize = zipFile.length()
-            writeCachedSha(bookRoot.resolve(PAYLOAD_SHA_CACHE_FILENAME), sha)
+            val contentSha = computePayloadContentSha(bookRoot)
+            writeCachedSha(bookRoot.resolve(PAYLOAD_SHA_CACHE_FILENAME), contentSha)
 
             // PUT zip first so the manifest never points at a missing or stale blob.
             transport.putFile(
@@ -219,12 +392,14 @@ class HttpSyncPayloadCodec(
                 sizeBytes = localSize,
                 originalName = originalName,
                 format = format,
+                contentSha256 = contentSha,
             )
             transport.put(
                 key = keys.manifest,
                 contentType = "application/json; charset=utf-8",
                 body = json.encodeToString(HttpSyncPayloadManifest.serializer(), manifest).toByteArray(),
             )
+            bookRoot.resolve(PAYLOAD_LOCAL_DIRTY_FILENAME).delete()
             true
         } finally {
             zipFile.delete()
@@ -305,6 +480,10 @@ class HttpSyncPayloadCodec(
         // Failure here just means subsequent syncs will recompute. Not fatal.
     }
 
+    private companion object {
+        val SHA256_VALUE = Regex("^sha256:[0-9a-f]{64}$")
+    }
+
     /**
      * Inbound: fetches and unpacks the zip into [targetDir]. Caller is responsible for
      * creating the target directory and registering the book in [moe.antimony.hoshi.epub.BookRepository].
@@ -346,7 +525,17 @@ class HttpSyncPayloadCodec(
                 )
             }
             unzipInto(zipFile, targetDir)
-            manifest
+            // We just verified these exact downloaded bytes against the manifest. Keep the hash
+            // next to the unpacked book so every later sync is a sidecar read, not a recompute.
+            val contentSha = computePayloadContentSha(targetDir)
+            if (manifest.contentSha256 != null && manifest.contentSha256 != contentSha) {
+                throw HttpSyncException(
+                    "Payload content for $syncId failed sha256 check " +
+                        "(expected ${manifest.contentSha256}, got $contentSha).",
+                )
+            }
+            writeCachedSha(targetDir.resolve(PAYLOAD_SHA_CACHE_FILENAME), contentSha)
+            manifest.copy(contentSha256 = contentSha)
         } finally {
             zipFile.delete()
         }
@@ -370,6 +559,20 @@ class HttpSyncPayloadCodec(
         }.getOrElse { error ->
             throw HttpSyncException("Manifest for $syncId: malformed JSON (${error.message})")
         }
+    }
+
+    /** Publish a content hash only after it was computed from the verified remote ZIP. */
+    internal suspend fun publishVerifiedContentSha(
+        transport: HttpSyncKvTransport,
+        keys: HttpSyncPayloadKeys,
+        manifest: HttpSyncPayloadManifest,
+    ) {
+        require(manifest.contentSha256 != null)
+        transport.put(
+            key = keys.manifest,
+            contentType = "application/json; charset=utf-8",
+            body = json.encodeToString(HttpSyncPayloadManifest.serializer(), manifest).toByteArray(),
+        )
     }
 
     // ----- Zip helpers (internal so tests can target them) -------------------------------

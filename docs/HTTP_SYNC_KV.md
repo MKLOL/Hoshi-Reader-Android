@@ -1,16 +1,13 @@
-# Hoshi Sync v2 — KVS-style protocol (design doc)
+# Hoshi Sync — existing-KV map protocol
 
-**Status:** proposed; **author:** Dragos + Claude (hoshi-android side).
-**Server target:** `/Users/dragosristache/game-collection/` — meant for the other Claude
-working in that repo. This doc is the brief; the server side just needs to implement the
-endpoints below, the client (this repo) handles all schema and reconciliation.
+**Status:** implemented by the Android and iOS clients. No sync-specific backend endpoint
+or backend deployment is required; the clients use the existing generic `/v1/kv` API.
 
-This replaces the v1 blob-per-book protocol in `docs/HTTP_SYNC.md`. The motivation: v1
-sends the **whole** record (bookmark + entire ChatGPT history + metadata) on every push,
-so a 250-byte page-turn update re-uploads a 25 KB chat history. We want **incremental**:
-one page turn = one small write, one new chat message = one small write, and book
-payloads (.epub / mokuro folder) round-trip too so a new device gets the actual files,
-not just the position.
+The fast path adds two logical opaque per-user maps to the original per-book KV layout:
+`BookID -> static-content SHA256` and `BookID -> bookmark state`. The bookmark map is
+physically split into one small shard per installation because generic KV PUT has no CAS;
+each client only overwrites its own shard, then merges all shards by event timestamp. Book
+payloads (.epub / mokuro folder) still use their existing binary keys.
 
 The fix: the server stops knowing about books at all. It's a generic key/value blob
 store. All schema is client-side.
@@ -19,8 +16,8 @@ store. All schema is client-side.
 
 - **Server is dumb storage.** It learns nothing about bookmarks, chat, manga, EPUB.
   New client features need zero server changes.
-- **Incremental writes.** Page turns cost ~250 B. New chat entries cost ~500 B–2 KB.
-  Nothing is ever re-uploaded just because something else changed.
+- **Batched bookmark writes.** Every dirty EPUB/manga position is merged into one small
+  per-install bookmark-shard PUT at most five seconds after local persistence.
 - **Book payloads sync too.** Importing a book on phone A and reading it on phone B is
   one zip blob + a manifest entry; no per-file API.
 - **Append-only where we can get away with it.** Chat entries are write-once at unique
@@ -29,8 +26,8 @@ store. All schema is client-side.
 
 ## Non-goals
 
-- Real-time push / websockets. Polling on app resume + the existing every-N-page-turn
-  hook is enough.
+- Real-time push / websockets. One cheap metadata poll every five seconds while the app is active
+  is enough.
 - Server-side conflict resolution. Last-write-wins per key, client decides.
 - Server-side enforcement of hoshi schemas. The server only validates "is this a valid
   key, is the body within size limits, is the bearer token correct."
@@ -195,8 +192,10 @@ The Android client uses this layout under one shared root prefix `books/`:
 
 | Key | Content-Type | Schema | Mutability | Approx size |
 |---|---|---|---|---|
+| `sync/maps/books.json` | `application/json` | `{BookID: "sha256:..."}` | overwrite after book reconcile | O(number of books) |
+| `sync/maps/bookmarks/{deviceId}.json` | `application/json` | `{BookID: {etag, lastModified, value}}` | that installation's five-second batches | O(books read on device) |
 | `books/{syncId}/metadata` | `application/json` | `{title, contentType, shelfName?, shelfUpdatedAt?, importedAt, deletedAt?}` | overwrite | ~250 B |
-| `books/{syncId}/bookmark` | `application/json` | `{chapterIndex, progress, characterCount, lastModified}` | overwrite (every page turn batch) | ~250 B |
+| `books/{syncId}/bookmark` | `application/json` | legacy bookmark read during migration | old clients only | ~250 B |
 | `books/{syncId}/chat/{ts}-{nonce}` | `application/json` | `{bubbleText, prompt, model, response, timestampSeconds, screenshotImage?}` | **write-once** | ~500 B – 2 KB text-only; screenshot entries include the cropped PNG as base64 |
 | `books/{syncId}/payload.zip` | `application/zip` | zip of a Mokuro book directory | overwrite (rare; effectively immutable) | 10 MB – 200 MB |
 | `books/{syncId}/payload.manifest` | `application/json` | `{sha256, sizeBytes, originalName, format: "mokuro"}` | overwrite | ~150 B |
@@ -223,14 +222,27 @@ The Android client uses this layout under one shared root prefix `books/`:
 
 ## Sync algorithm (client-side, also informative)
 
-The client persists the last `books` and `bookmarks` map hashes (plus its key
-metadata cache). The legacy full reconciler still retains `lastSyncedAt` for
-compatibility, but it runs only after the books map changes. Two flows:
+The client persists the last map ETags and decoded map bodies. The legacy full
+reconciler retains `lastSyncedAt` for compatibility, but runs only for bootstrap, a
+book-map mismatch, or a changed non-map metadata ETag.
+
+### Request budget
+
+- Nothing changed: one `GET /v1/kv`; matching ETags end the sync. Listing all metadata also
+  catches older per-book clients and changed chats/settings without fetching unchanged bodies.
+- Any number of local bookmark changes: the list above plus one
+  `PUT /v1/kv/sync/maps/bookmarks/{deviceId}.json` containing the device shard.
+- Remote bookmark shard changed: the list plus one GET for that changed shard. Concurrent
+  devices never overwrite each other because their physical keys differ.
+- Book map changed: the small preflight returns immediately to the UI and launches the
+  existing binary/metadata reconcile in the background.
 
 ### Outbound (writes)
 
 - Page turn → after the local save, replace that BookID's durable outbox entry.
-  At most five seconds later, send every dirty book in one `POST /v2/exchange`.
+  At most five seconds later, merge every dirty book into one bookmark-shard PUT. The
+  outbox removes only the exact mutation acknowledged, so a page turn during the PUT
+  remains queued.
 - New chat reply persisted → `PUT books/{syncId}/chat/{ts}-{nonce}` with that one
   entry. Never re-uploaded.
 - Book import → upload the format-specific zip once (Mokuro `payload.*`, EPUB `epub.*`),
@@ -243,29 +255,48 @@ compatibility, but it runs only after the books map changes. Two flows:
 
 ### Inbound (reads)
 
-On app resume, manual sync, and each five-second dirty timer:
+On app resume, reader open, manual sync, and every five seconds while the app is active:
 
-1. `POST /v2/exchange` with the two cached map hashes and all dirty bookmarks.
-2. If only bookmarks changed, apply the returned bookmark map immediately.
-3. Only if the books map changed, reconcile the returned book-key index:
+1. List all KV metadata once and compare the returned ETags with the local cache.
+2. GET only a map whose ETag changed. Merge bookmark entries by event timestamp, using
+   revision and content hash only as deterministic tie-breakers, and apply newer remote
+   positions to the active EPUB or manga reader.
+3. PUT this installation's bookmark shard once if any number of local positions need publishing.
+4. If the books map or any non-map ETag changed, run the existing per-book reconcile:
    - `chat/{ts}-{nonce}` → if the local chat log doesn't have that exact key, fetch
      and append. Order in-memory by `timestampSeconds`.
    - `metadata` with `deletedAt` set → if local copy exists, delete it locally and do
-     not upload replacement book state over the tombstone. If no local copy exists,
+     not upload replacement book state over the tombstone. An open reader defers that
+     deletion without acknowledging it, then retries after close. If no local copy exists,
      treat the tombstone as handled so it does not pin the incremental cursor.
    - `metadata` with `shelfName` present → apply the book's shelf/folder placement if
      `shelfUpdatedAt` is not older than that book's local shelf placement.
-   - `payload.manifest` / `epub.manifest` → resolve the format-specific key family and,
-     when there is no local book, download and validate its matching zip. A legacy Android
-     EPUB stored in `payload.*` remains readable when its manifest declares `epub`.
+   - `payload.manifest` / `epub.manifest` → resolve the format-specific key family and
+     download a missing book. For an existing book, a later server SHA replaces only the
+     static payload while retaining bookmark, metadata, chat, statistics, and device audio.
+     A legacy Android EPUB stored in `payload.*` remains readable when its manifest declares
+     `epub`.
    - `sentences` → after its EPUB exists locally, validate the sync id, EPUB spine count,
      normalized sentence addresses and hashes, then atomically install
      `sentence_translations.json`.
-4. Advance `lastSyncedAt` to the max `lastModified` seen by that full reconcile.
+5. Advance `lastSyncedAt` and publish the authoritative maps after the full reconcile succeeds.
 
-Conflicts are last-write-wins per key, which is the right granularity because:
-- A bookmark conflict is "one user, two phones, both reading the same book at the
-  same time" — extremely rare; just take the newer one.
+### Upgrade and hash-cache safety
+
+Pre-map clients can already have every book downloaded but no
+`.payload.content.sha256.cache` sidecars. Their first map sync performs the old bidirectional
+reconcile once and computes a cross-platform hash of sorted static paths and bytes. Identical
+existing downloads therefore remain untouched; a real mismatch is not falsely marked current.
+Downloads and imports write the sidecar immediately. Later fast syncs only read it.
+
+Direct per-book bookmark keys from released clients are imported during bootstrap and any later
+edit to one triggers the legacy reconciler. Live two-way coexistence with an old app is not
+supported: all devices that should exchange new page turns must run the map-capable release. This
+is what keeps any number of bookmark changes to one shard PUT instead of N compatibility PUTs.
+
+Conflicts are resolved client-side:
+- Bookmark shards merge per BookID by event timestamp, with revision and content hash as
+  deterministic tie-breakers. No whole-map writer can erase another device's position.
 - Chat keys never conflict (unique nonce).
 - Payload conflicts are essentially "re-imported the same book on two devices at the
   same time" — even rarer; the second writer wins, both copies are effectively

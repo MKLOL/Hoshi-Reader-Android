@@ -1,6 +1,5 @@
 package moe.antimony.hoshi.epub
 
-
 import android.content.ContentResolver
 import android.net.Uri
 import androidx.documentfile.provider.DocumentFile
@@ -11,6 +10,11 @@ import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
+import moe.antimony.hoshi.features.sync.http.HttpSyncActiveBooks
+import moe.antimony.hoshi.features.sync.http.HttpSyncBookLocks
+import moe.antimony.hoshi.features.sync.http.HttpSyncPayloadCodec
+import moe.antimony.hoshi.features.sync.http.deriveSyncId
+import moe.antimony.hoshi.features.sync.http.syncIdForMetadata
 import moe.antimony.hoshi.importing.ImportFileType
 import moe.antimony.hoshi.importing.importDisplayName
 import moe.antimony.hoshi.importing.validateImportFile
@@ -26,8 +30,15 @@ class BookRepository(
     private val fileDataSource: BookFileDataSource = BookFileDataSource(filesDir, ioDispatcher),
     private val sidecarDataSource: BookSidecarDataSource = BookSidecarDataSource(ioDispatcher),
     private val clock: BookClock = SystemBookClock,
+    private val bookLocks: HttpSyncBookLocks = HttpSyncBookLocks(),
 ) : ReaderRouteBookRepository, SasayakiSidecarRepository {
-    private val importDataSource = BookImportDataSource(filesDir, fileDataSource, ioDispatcher = ioDispatcher)
+    private val importDataSource = BookImportDataSource(
+        filesDir = filesDir,
+        fileDataSource = fileDataSource,
+        ioDispatcher = ioDispatcher,
+        sidecarDataSource = sidecarDataSource,
+        bookLocks = bookLocks,
+    )
 
     val currentBookFile: File get() = fileDataSource.currentBookFile
     val booksDirectory: File get() = fileDataSource.booksDirectory
@@ -322,6 +333,8 @@ class BookImportDataSource(
     private val parser: EpubBookParser = EpubBookParser(),
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
     private val mokuroImporter: MokuroImporter = MokuroImporter(filesDir, ioDispatcher),
+    private val sidecarDataSource: BookSidecarDataSource = BookSidecarDataSource(ioDispatcher),
+    private val bookLocks: HttpSyncBookLocks = HttpSyncBookLocks(),
 ) {
     /**
      * Imports the picked file into a book directory and returns its root. The picked file's
@@ -417,7 +430,28 @@ class BookImportDataSource(
             .getOrThrow()
         val targetRoot = fileDataSource.createBookDirectoryForImportedTitle(parsedBook.title)
         return if (targetRoot.listFiles()?.isNotEmpty() == true) {
-            tempRoot.deleteRecursively()
+            // Re-importing the same title means replacing its immutable EPUB bytes while
+            // retaining bookmark/metadata/statistics sidecars. Returning the old directory
+            // here used to mark stale bytes as a new local payload and could upload them over
+            // the server's newer copy.
+            val codec = HttpSyncPayloadCodec(ioDispatcher)
+            val contentSha = codec.computePayloadContentSha(tempRoot)
+            val existingMetadata = sidecarDataSource.loadMetadata(targetRoot)
+            val syncId = existingMetadata?.let(::syncIdForMetadata)
+                ?: deriveSyncId(parsedBook.title, targetRoot.name)
+                ?: error("Unable to derive a sync identity for ${parsedBook.title}")
+            val replaced = bookLocks.withBookLock(targetRoot) {
+                HttpSyncActiveBooks.runIfInactive(syncId) {
+                    codec.installReplacement(targetRoot, tempRoot, contentSha)
+                    // Publish the local generation before releasing the same lock used by remote
+                    // installers. A download already waiting here must observe this and abort.
+                    codec.markPayloadContentDirty(targetRoot)
+                }
+            }
+            if (!replaced) {
+                tempRoot.deleteRecursively()
+                error("Cannot replace an EPUB while it is open in the reader.")
+            }
             targetRoot
         } else {
             targetRoot.deleteRecursively()

@@ -31,6 +31,123 @@ class HttpSyncPayloadTest {
     private val codec = HttpSyncPayloadCodec(ioDispatcher = Dispatchers.Unconfined)
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
 
+    @Test
+    fun upgradedExistingBookAdoptsShaWithoutTouchingOfflinePayload() {
+        val root = tempFolder.newFolder("upgraded-existing").apply {
+            resolve("mokuro.json").writeText("old static payload")
+            resolve("bookmark.json").writeText("saved position")
+        }
+        val sha = "sha256:" + "a".repeat(64)
+
+        codec.rememberPayloadSha(root, sha)
+
+        assertEquals("old static payload", root.resolve("mokuro.json").readText())
+        assertEquals("saved position", root.resolve("bookmark.json").readText())
+        assertEquals(sha, codec.cachedPayloadSha(root))
+    }
+
+    @Test
+    fun changedPayloadReplacementPreservesBookmarkAndPerDeviceState() {
+        val parent = tempFolder.newFolder("replacement-parent")
+        val root = parent.resolve("book").apply {
+            mkdirs()
+            resolve("mokuro.json").writeText("old payload")
+            resolve("old-page.png").writeText("old page")
+            resolve("bookmark.json").writeText("latest bookmark")
+            resolve("metadata.json").writeText("device metadata")
+            resolve("bookinfo.json").writeText("stale derived chapter map")
+            resolve("Sasayaki").mkdirs()
+            resolve("Sasayaki/audio.m4b").writeText("device audio")
+        }
+        val staging = parent.resolve("staging").apply {
+            mkdirs()
+            resolve("mokuro.json").writeText("new payload")
+            resolve("new-page.png").writeText("new page")
+        }
+        val sha = "sha256:" + "b".repeat(64)
+
+        codec.installReplacement(root, staging, sha)
+
+        assertEquals("new payload", root.resolve("mokuro.json").readText())
+        assertFalse(root.resolve("old-page.png").exists())
+        assertEquals("new page", root.resolve("new-page.png").readText())
+        assertEquals("latest bookmark", root.resolve("bookmark.json").readText())
+        assertEquals("device metadata", root.resolve("metadata.json").readText())
+        assertFalse(root.resolve("bookinfo.json").exists())
+        assertEquals("device audio", root.resolve("Sasayaki/audio.m4b").readText())
+        assertEquals(sha, codec.cachedPayloadSha(root))
+        assertFalse(parent.listFiles().orEmpty().any { it.name.startsWith(".hoshi-sync-backup-") })
+    }
+
+    @Test
+    fun startupRecoveryRestoresOriginalBookIfCrashHappenedBeforePublish() {
+        val parent = tempFolder.newFolder("recover-before-publish")
+        val backup = parent.resolve(".hoshi-sync-backup-test").apply {
+            mkdirs()
+            resolve(".payload.replacement.target").writeText("My Book")
+            resolve("metadata.json").writeText("metadata")
+            resolve("bookmark.json").writeText("latest bookmark")
+        }
+
+        codec.recoverInterruptedReplacements(parent)
+
+        val restored = parent.resolve("My Book")
+        assertFalse(backup.exists())
+        assertEquals("metadata", restored.resolve("metadata.json").readText())
+        assertEquals("latest bookmark", restored.resolve("bookmark.json").readText())
+        assertFalse(restored.resolve(".payload.replacement.target").exists())
+    }
+
+    @Test
+    fun startupRecoveryFinishesSidecarMergeIfCrashHappenedAfterPublish() {
+        val parent = tempFolder.newFolder("recover-after-publish")
+        val root = parent.resolve("My Book").apply {
+            mkdirs()
+            resolve("mokuro.json").writeText("new payload")
+        }
+        val backup = parent.resolve(".hoshi-sync-backup-test").apply {
+            mkdirs()
+            resolve(".payload.replacement.target").writeText("My Book")
+            resolve("metadata.json").writeText("metadata")
+            resolve("bookmark.json").writeText("latest bookmark")
+        }
+
+        codec.recoverInterruptedReplacements(parent)
+
+        assertFalse(backup.exists())
+        assertEquals("new payload", root.resolve("mokuro.json").readText())
+        assertEquals("metadata", root.resolve("metadata.json").readText())
+        assertEquals("latest bookmark", root.resolve("bookmark.json").readText())
+    }
+
+    @Test
+    fun contentHashIsStableCrossPlatformAndIgnoresMutableSidecars() {
+        val root = tempFolder.newFolder("content-hash-vector").apply {
+            resolve("a.txt").writeText("alpha")
+            resolve("dir").mkdirs()
+            resolve("dir/b.bin").writeBytes(byteArrayOf(0, 1, 2))
+            resolve("bookmark.json").writeText("ignored")
+            resolve("bookinfo.json").writeText("ignored derived data")
+        }
+
+        assertEquals(
+            "sha256:dc5ddd76880180e6f4f6d7d57bdae426df8910c9ec8c2ae30a978b1034438dc7",
+            codec.computePayloadContentSha(root),
+        )
+    }
+
+    @Test
+    fun contentHashNormalizesUnicodePathsAcrossFilesystems() {
+        val root = tempFolder.newFolder("content-hash-unicode").apply {
+            resolve("cafe\u0301.txt").writeText("x")
+        }
+
+        assertEquals(
+            "sha256:f844ecac6b5f73cd1bf8308089892b5668972d0d2f63141082804681ffea00ae",
+            codec.computePayloadContentSha(root),
+        )
+    }
+
     // ===== Zip / unzip round-trip ==============================================================
 
     @Test
@@ -603,6 +720,78 @@ class HttpSyncPayloadTest {
             "expected sha256 mismatch error, got '${ex.message}'",
             ex.message!!.contains("sha256", ignoreCase = true),
         )
+    }
+
+    @Test
+    fun downloadRejectsDeclaredContentHashThatDoesNotMatchVerifiedZip() = runBlocking {
+        val src = tempFolder.newFolder("declared-content-source").apply {
+            resolve("mokuro.json").writeText("real content")
+        }
+        val transport = FakeKvTransport()
+        codec.uploadIfChanged(
+            transport,
+            "declared_content",
+            src,
+            "Declared Content",
+            HttpSyncContentType.Mokuro,
+        )
+        val manifestKey = payloadManifestKey("declared_content")
+        val stored = transport.kv.getValue(manifestKey)
+        val manifest = json.decodeFromString(
+            HttpSyncPayloadManifest.serializer(),
+            stored.body.toString(Charsets.UTF_8),
+        )
+        transport.kv[manifestKey] = stored.copy(
+            body = json.encodeToString(
+                HttpSyncPayloadManifest.serializer(),
+                manifest.copy(contentSha256 = "sha256:" + "0".repeat(64)),
+            ).toByteArray(),
+        )
+
+        val target = tempFolder.newFolder("declared-content-target")
+        val ex = assertThrows(HttpSyncException::class.java) {
+            runBlocking { codec.downloadAndUnpack(transport, "declared_content", target) }
+        }
+        assertTrue(ex.message!!.contains("Payload content"))
+    }
+
+    @Test
+    fun oldManifestGetsContentHashOnlyFromVerifiedDownloadedBytes() = runBlocking {
+        val src = tempFolder.newFolder("legacy-manifest-source").apply {
+            resolve("mokuro.json").writeText("legacy remote content")
+        }
+        val transport = FakeKvTransport()
+        codec.uploadIfChanged(
+            transport,
+            "legacy_manifest",
+            src,
+            "Legacy Manifest",
+            HttpSyncContentType.Mokuro,
+        )
+        val manifestKey = payloadManifestKey("legacy_manifest")
+        val stored = transport.kv.getValue(manifestKey)
+        val oldManifest = json.decodeFromString(
+            HttpSyncPayloadManifest.serializer(),
+            stored.body.toString(Charsets.UTF_8),
+        ).copy(contentSha256 = null)
+        transport.kv[manifestKey] = stored.copy(
+            body = json.encodeToString(HttpSyncPayloadManifest.serializer(), oldManifest).toByteArray(),
+        )
+
+        val target = tempFolder.newFolder("legacy-manifest-target")
+        val verified = codec.downloadAndUnpack(transport, "legacy_manifest", target)
+
+        assertEquals(codec.computePayloadContentSha(target), verified.contentSha256)
+        codec.publishVerifiedContentSha(
+            transport,
+            HttpSyncPayloadKeys.legacy("legacy_manifest"),
+            verified,
+        )
+        val published = json.decodeFromString(
+            HttpSyncPayloadManifest.serializer(),
+            transport.kv.getValue(manifestKey).body.toString(Charsets.UTF_8),
+        )
+        assertEquals(verified.contentSha256, published.contentSha256)
     }
 
     @Test

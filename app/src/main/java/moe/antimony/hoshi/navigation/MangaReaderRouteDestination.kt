@@ -8,11 +8,14 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -23,6 +26,12 @@ import moe.antimony.hoshi.features.mangareader.MangaReaderLoadState
 import moe.antimony.hoshi.features.mangareader.MangaReaderLoader
 import moe.antimony.hoshi.features.mangareader.MangaReaderScreen
 import moe.antimony.hoshi.features.reader.ReaderSettings
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
+import moe.antimony.hoshi.features.sync.http.HttpSyncActiveBooks
 
 /**
  * Navigation entry point for the mokuro manga reader route (`AppRoute.MangaReaderRoute`).
@@ -45,6 +54,10 @@ internal fun MangaReaderRouteDestination(
     modifier: Modifier = Modifier,
 ) {
     val appContainer = LocalHoshiAppContainer.current
+    val lifecycleOwner = LocalLifecycleOwner.current
+    val syncScope = rememberCoroutineScope()
+    val activeBookLease = remember(bookId) { HttpSyncActiveBooks.Lease() }
+    var bookmarkReloadKey by remember(bookId) { mutableIntStateOf(0) }
     val systemDark = isSystemInDarkTheme()
     val backgroundModifier = modifier
         .fillMaxSize()
@@ -53,9 +66,36 @@ internal fun MangaReaderRouteDestination(
     val loader = remember(appContainer) {
         MangaReaderLoader(appContainer.bookRepository, appContainer.mokuroParser)
     }
-    val loadState by produceState<MangaReaderLoadState>(MangaReaderLoadState.Loading, bookId, loader) {
+    DisposableEffect(bookId, activeBookLease) {
+        onDispose {
+            appContainer.appScope.launch {
+                delay(ACTIVE_READER_CLOSE_GRACE_MS)
+                activeBookLease.release()
+                appContainer.httpSyncBookmarkScheduler.refreshAfterReaderClosed()
+            }
+        }
+    }
+    val loadState by produceState<MangaReaderLoadState>(
+        MangaReaderLoadState.Loading,
+        bookId,
+        loader,
+        bookmarkReloadKey,
+    ) {
         value = MangaReaderLoadState.Loading
-        value = loader.load(bookId)
+        value = loader.load(bookId) { syncId ->
+            activeBookLease.acquire(syncId)
+            appContainer.httpSyncBookmarkScheduler.refreshBeforeOpen()
+        }
+    }
+
+    DisposableEffect(lifecycleOwner, bookId) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                syncScope.launch { appContainer.httpSyncBookmarkScheduler.refreshBeforeOpen() }
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
     var dictionarySettings by remember { mutableStateOf(DictionarySettings()) }
@@ -78,18 +118,28 @@ internal fun MangaReaderRouteDestination(
         ) {
             Text(state.message)
         }
-        is MangaReaderLoadState.Ready -> MangaReaderScreen(
-            book = state.book,
-            bookRoot = state.bookRoot,
-            initialPageIndex = state.initialPageIndex,
-            repository = appContainer.bookRepository,
-            readerSettings = readerSettings,
-            onReaderSettingsChange = onReaderSettingsChange,
-            dictionarySettings = dictionarySettings,
-            onReaderKeyEventHandlerChange = onReaderKeyEventHandlerChange,
-            onBookmarkSaved = onBookmarkSaved,
-            onClose = onClose,
-            modifier = modifier.fillMaxSize(),
-        )
+        is MangaReaderLoadState.Ready -> {
+            val syncId = state.syncId
+            LaunchedEffect(syncId) {
+                appContainer.httpSyncBatchState.remoteBookmarkUpdates.collect { changedId ->
+                    if (changedId == syncId) bookmarkReloadKey += 1
+                }
+            }
+            MangaReaderScreen(
+                book = state.book,
+                bookRoot = state.bookRoot,
+                initialPageIndex = state.initialPageIndex,
+                repository = appContainer.bookRepository,
+                readerSettings = readerSettings,
+                onReaderSettingsChange = onReaderSettingsChange,
+                dictionarySettings = dictionarySettings,
+                onReaderKeyEventHandlerChange = onReaderKeyEventHandlerChange,
+                onBookmarkSaved = onBookmarkSaved,
+                onClose = onClose,
+                modifier = modifier.fillMaxSize(),
+            )
+        }
     }
 }
+
+private const val ACTIVE_READER_CLOSE_GRACE_MS = 1_000L

@@ -7,6 +7,15 @@ Semantic Versioning.
 
 ## [Unreleased]
 
+### Fixed
+- **HTTP bookmark sync no longer depends on a new server release.** Android and iOS use the
+  existing generic KV API, batch every dirty EPUB/manga position within five seconds, pull before
+  opening or resuming a reader and every five seconds while active, and finish an unchanged manual
+  sync with one metadata request. All participating devices must run this map-capable release;
+  legacy direct-key positions are imported during upgrade but are not dual-written afterward.
+  Per-install bookmark-map shards prevent concurrent devices from overwriting each other; upgraded
+  installs hash existing offline books once and defer changed payload replacement until readers close.
+
 ## [v0.11.2] - 2026-08-26
 
 ### Fixed
@@ -14,7 +23,7 @@ Semantic Versioning.
   A single exchange compares the per-user BookID→SHA and BookID→bookmark maps instead of
   polling every book. Every EPUB or manga page-position change is durably batched within
   five seconds, and a stale device cannot move a newer reading position backwards. Older
-  servers remain usable while the new exchange endpoint is being deployed.
+  clients fall back to the existing generic KV storage during rollout.
 
 ## [v0.11.1] - 2026-08-23
 

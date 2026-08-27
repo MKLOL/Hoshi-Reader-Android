@@ -49,11 +49,12 @@ object HttpSyncEngineDispatcher {
         reconciler: HttpSyncReconciler,
         v3Engine: V3SyncEngine,
         settings: HttpSyncSettings,
+        transport: HttpSyncKvTransport? = null,
         onProgress: suspend (HttpSyncProgress) -> Unit = {},
     ): HttpSyncResult = syncOnce(
         settings = settings,
-        v2 = { s, p -> reconciler.syncOnce(s, p) },
-        v3 = { s, p -> v3Engine.syncOnce(s, p) },
+        v2 = { s, p -> reconciler.syncOnce(s, transport, p) },
+        v3 = { s, p -> v3Engine.syncOnce(s, transport, p) },
         onProgress = onProgress,
     )
 

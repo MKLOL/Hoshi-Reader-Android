@@ -24,6 +24,9 @@ internal class ReaderRouteStateHolder(
         runCatching {
             val entry = repository.loadBookEntry(bookId)
                 ?: error("Book not found.")
+            // HTTP sync may atomically replace static EPUB bytes. Finish that refresh before
+            // parsing so the in-memory spine and the files underneath it are one version.
+            beforeBookmarkLoad(entry)
             val cachedBookInfo = repository.loadReaderBookInfo(entry.root)
             val parsedBook = parser.parse(entry.root, cachedBookInfo)
             val metadata = entry.metadata.copy(
@@ -41,7 +44,6 @@ internal class ReaderRouteStateHolder(
             if (cachedBookInfo != displayBook.bookInfo) {
                 repository.saveBookInfo(entry.root, displayBook.bookInfo)
             }
-            beforeBookmarkLoad(displayEntry)
             val bookmark = repository.loadBookmark(entry.root)
             ReaderRouteLoadState.Ready(
                 entry = displayEntry,

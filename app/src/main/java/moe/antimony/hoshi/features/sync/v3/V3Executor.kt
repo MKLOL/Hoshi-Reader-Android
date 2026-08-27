@@ -14,6 +14,7 @@ import moe.antimony.hoshi.features.ai.PRETRANSLATIONS_FILENAME
 import moe.antimony.hoshi.features.ai.EPUB_TRANSLATIONS_FILENAME
 import moe.antimony.hoshi.features.ai.EpubTranslationStore
 import moe.antimony.hoshi.features.ai.AiChatHistoryStore
+import moe.antimony.hoshi.features.sync.http.HttpSyncActiveBooks
 import moe.antimony.hoshi.features.sync.http.HttpSyncBookLocks
 import moe.antimony.hoshi.features.sync.http.HttpSyncBookmarkBlob
 import moe.antimony.hoshi.features.sync.http.HttpSyncChatEntryBlob
@@ -132,7 +133,12 @@ class V3Executor(
                         val targetRoot = action.root ?: rootBySyncId[action.syncId]
                         if (action.blob.deletedAt != null) {
                             if (targetRoot != null) {
-                                bookRepository.deleteBook(targetRoot)
+                                val removed = HttpSyncActiveBooks.runIfInactive(action.syncId) {
+                                    bookRepository.deleteBook(targetRoot)
+                                }
+                                if (!removed) {
+                                    throw IllegalStateException("Deletion deferred while this book is open.")
+                                }
                                 rootBySyncId.remove(action.syncId)
                             }
                             existingShelfState.remove(action.syncId)
@@ -153,7 +159,12 @@ class V3Executor(
                     is V3Action.DeleteLocalBook -> {
                         val targetRoot = if (action.root.exists()) action.root else rootBySyncId[action.syncId]
                         if (targetRoot != null && targetRoot.exists()) {
-                            bookRepository.deleteBook(targetRoot)
+                            val removed = HttpSyncActiveBooks.runIfInactive(action.syncId) {
+                                bookRepository.deleteBook(targetRoot)
+                            }
+                            if (!removed) {
+                                throw IllegalStateException("Deletion deferred while this book is open.")
+                            }
                             rootBySyncId.remove(action.syncId)
                             existingShelfState.remove(action.syncId)
                             shelfStateDirty = true
@@ -182,6 +193,11 @@ class V3Executor(
                             }
                         }
                     }
+                    is V3Action.ReplaceRemotePayload -> {
+                        if (replaceRemotePayload(transport, action, onProgress)) {
+                            appliedPayloads += 1
+                        }
+                    }
                     is V3Action.ApplyRemoteBookmark -> {
                         val targetRoot = resolveRoot(action.root, action.syncId, rootBySyncId)
                             ?: continue
@@ -197,9 +213,8 @@ class V3Executor(
                             val currentLocal = runCatching { bookRepository.loadBookmark(targetRoot) }
                                 .getOrNull()
                             val localStamp = currentLocal?.lastModified?.let(::appleSecondsToRfc3339)
-                            // Edit depth first (re-read from the revision store under the
-                            // lock — a reader-hook push may have bumped it mid-sync);
-                            // timestamps only break rev ties.
+                            // Event time first (re-read under the lock so a reader-hook push
+                            // cannot be lost); revision only breaks exact timestamp ties.
                             val localRev = revisionStore.current(booksRoot, key).localRev
                             if (compareRevisioned(
                                     localRev = localRev,
@@ -493,6 +508,79 @@ class V3Executor(
         }
     }
 
+    private suspend fun replaceRemotePayload(
+        transport: HttpSyncKvTransport,
+        action: V3Action.ReplaceRemotePayload,
+        onProgress: suspend (V3Progress) -> Unit,
+    ): Boolean {
+        if (moe.antimony.hoshi.features.sync.http.HttpSyncActiveBooks.contains(action.syncId)) {
+            return false
+        }
+        if (payloadCodec.hasPayloadContentDirty(action.root)) {
+            return payloadCodec.uploadIfChanged(
+                transport = transport,
+                syncId = action.syncId,
+                bookRoot = action.root,
+                originalName = action.manifest.originalName,
+                format = action.manifest.format,
+            )
+        }
+        val localSha = payloadCodec.cachedPayloadSha(action.root)
+            ?: payloadCodec.ensurePayloadContentSha(action.root)
+        if (action.manifest.contentSha256 != null &&
+            localSha == action.manifest.contentSha256
+        ) return false
+        val stagingRoot = createSyncImportStagingDirectory(bookRepository.booksDirectory)
+        try {
+            val manifest = withByteProgress(
+                onProgress = onProgress,
+                makeProgress = { transferred, total ->
+                    byteProgress(
+                        phase = V3Phase.ImportingPayloads,
+                        message = "Updating",
+                        title = action.syncId,
+                        transferred = transferred,
+                        total = total,
+                    )
+                },
+            ) { onByteProgress ->
+                payloadCodec.downloadAndUnpack(
+                    transport = transport,
+                    syncId = action.syncId,
+                    targetDir = stagingRoot,
+                    onByteProgress = onByteProgress,
+                    keys = action.payloadKeys,
+                    expectedFormat = action.manifest.format,
+                )
+            }
+            val actualContentType = bookContentType(stagingRoot)
+            require(actualContentType == manifest.format.toLocal()) {
+                "Payload for ${action.syncId} declares ${manifest.format} but unpacked as $actualContentType."
+            }
+            val parsedEpub = moe.antimony.hoshi.features.sync.http.validateSyncImportedBook(stagingRoot)
+            val verifiedRemoteSha = requireNotNull(manifest.contentSha256)
+            if (action.manifest.contentSha256 == null) {
+                payloadCodec.publishVerifiedContentSha(transport, action.payloadKeys, manifest)
+            }
+            if (localSha == verifiedRemoteSha) return false
+            return bookLocks.withBookLock(action.root) {
+                // Re-check after download and under the shared import/sync lock. A local import
+                // that won this race marks the generation dirty before releasing this lock.
+                if (payloadCodec.hasPayloadContentDirty(action.root)) return@withBookLock false
+                HttpSyncActiveBooks.runIfInactive(action.syncId) {
+                    payloadCodec.installReplacement(
+                        action.root,
+                        stagingRoot,
+                        verifiedRemoteSha,
+                    )
+                    parsedEpub?.let { bookRepository.saveBookInfo(action.root, it.bookInfo) }
+                }
+            }
+        } finally {
+            if (stagingRoot.exists()) stagingRoot.deleteRecursively()
+        }
+    }
+
     /**
      * Resolves a per-action `root`: if it points at a sentinel `/v3-pending/...` path
      * (from the planner), look the real one up in `rootBySyncId`. Otherwise return as-is.
@@ -602,6 +690,7 @@ class V3Executor(
         is V3Action.ApplyRemoteMetadata -> V3Phase.ApplyingMetadata
         is V3Action.DeleteLocalBook -> V3Phase.DeletingBooks
         is V3Action.ImportRemoteBook -> V3Phase.ImportingPayloads
+        is V3Action.ReplaceRemotePayload -> V3Phase.ImportingPayloads
         is V3Action.ApplyRemoteBookmark,
         is V3Action.ImportChat,
         is V3Action.ImportPretranslations,

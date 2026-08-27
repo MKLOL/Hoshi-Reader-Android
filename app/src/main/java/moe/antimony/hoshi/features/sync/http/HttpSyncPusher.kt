@@ -46,7 +46,7 @@ class HttpSyncPusher(
      *
      * Overwrite protection: device A reading page 50 while device B is at page 100 used to
      * clobber B's progress when A's reader hook fired. Now we fetch the remote bookmark
-     * first; if its edit chain is deeper (rev — timestamps only break rev ties), we apply
+     * first; if its reading event is newer (timestamp, then revision as a tie-breaker), we apply
      * it to the local file and return without pushing. Otherwise we push our local copy.
      */
     suspend fun pushBookmark(bookRoot: File, title: String, settings: HttpSyncSettings) =

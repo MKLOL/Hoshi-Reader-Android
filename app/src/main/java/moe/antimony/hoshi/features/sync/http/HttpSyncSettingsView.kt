@@ -137,13 +137,16 @@ fun HttpSyncSettingsView(
                             // Branches on loaded.useV3Sync. Default = v2 = production
                             // behavior. See HttpSyncEngineDispatcher for the v3 cutover
                             // safety net and the reader-hook TODO.
-                            HttpSyncEngineDispatcher.syncOnce(
-                                reconciler = reconciler,
-                                v3Engine = v3Engine,
-                                settings = loaded,
-                            ) { progress ->
-                                withContext(Dispatchers.Main.immediate) {
-                                    status = SyncStatus.Running(progress)
+                            appContainer.httpSyncFastSync.syncNow(loaded) { reconcileSettings, transport ->
+                                HttpSyncEngineDispatcher.syncOnce(
+                                    reconciler = reconciler,
+                                    v3Engine = v3Engine,
+                                    settings = reconcileSettings,
+                                    transport = transport,
+                                ) { progress ->
+                                    withContext(Dispatchers.Main.immediate) {
+                                        status = SyncStatus.Running(progress)
+                                    }
                                 }
                             }
                         }

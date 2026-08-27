@@ -84,7 +84,13 @@ class HttpSyncReaderHooks internal constructor(
     /** Call this from the reader's `onDispose` after the local-side flush has been scheduled. */
     fun onLeave() {
         if (queueBookmark != null) {
-            flushQueuedBookmarks?.invoke()
+            // Queue the bookmark in the same coroutine before starting the network flush. This
+            // includes a final debounced save that completed during disposal and avoids a race
+            // where flushNow observed the preceding outbox state.
+            persistenceScope.launch {
+                queueBookmark.invoke(bookRoot, title, persistedSyncIdProvider())
+                flushQueuedBookmarks?.invoke()
+            }
             return
         }
         flushBookmarkIfActivity()

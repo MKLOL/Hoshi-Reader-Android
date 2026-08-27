@@ -57,8 +57,8 @@ class V3PushOps(
      * Conditional bookmark PUT. Holds the per-book lock for the read-then-write so a
      * concurrent reader-hook push cannot interleave with apply or push.
      *
-     * Winner selection is edit-depth first (`rev`, via [compareRevisioned]); timestamps
-     * only break rev ties. Uploads are stamped with the revision store's current localRev
+     * Winner selection is event-time first (via [compareRevisioned]); `rev` breaks ties.
+     * Uploads are stamped with the revision store's current localRev
      * — a sync is a merge, not an edit, so nothing is bumped here (only the deliberate-edit
      * hooks bump). Same rules as the v2 reconciler's `pushBookmarkIfLocalNewer`.
      */

@@ -143,6 +143,12 @@ class V3LocalState(
                 importedAt = entry.metadata.importedAt,
                 bookmarkLocalRev = revisionRecords[bookmarkKey(syncId)]?.localRev ?: 0,
                 metadataLocalRev = revisionRecords[metadataKey(syncId)]?.localRev ?: 0,
+                payloadSha = runCatching {
+                    entry.root.resolve(moe.antimony.hoshi.features.sync.http.PAYLOAD_SHA_CACHE_FILENAME)
+                        .readText().trim()
+                }.getOrNull(),
+                payloadDirty = moe.antimony.hoshi.features.sync.http.HttpSyncPayloadCodec()
+                    .hasPayloadContentDirty(entry.root),
             )
         }
 

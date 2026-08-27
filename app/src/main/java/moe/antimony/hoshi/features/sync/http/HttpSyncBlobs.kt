@@ -56,8 +56,8 @@ data class HttpSyncMetadataBlob(
     val deletedAt: String? = null,
     /**
      * Edit-depth revision (Lamport counter). Each deliberate local edit sets
-     * `rev = max(localRev, lastSeenRemoteRev) + 1`; the deeper edit chain wins regardless of
-     * wall clocks. `null` (legacy blobs) is treated as 0; timestamps remain the tiebreaker.
+     * `rev = max(localRev, lastSeenRemoteRev) + 1`. The event timestamp chooses the winner;
+     * `rev` is the deterministic tie-breaker. `null` (legacy blobs) is treated as 0.
      * See [compareRevisioned] and [HttpSyncRevisionStore].
      */
     val rev: Int? = null,
@@ -68,7 +68,7 @@ data class HttpSyncBookmarkBlob(
     val chapterIndex: Int,
     val progress: Double,
     val characterCount: Int,
-    /** RFC 3339 UTC — LWW tiebreaker when pulling (used when `rev`s tie or are absent). */
+    /** RFC 3339 UTC — primary last-write-wins timestamp when pulling. */
     val lastModified: String,
     /** Edit-depth revision — see [HttpSyncMetadataBlob.rev]. `null` (legacy) == 0. */
     val rev: Int? = null,
@@ -303,14 +303,13 @@ internal fun maxRfc(left: String?, right: String?): String? = when {
 enum class SyncComparison { LOCAL_WINS, REMOTE_WINS, TIE }
 
 /**
- * Compares two revisioned blob states: edit-depth (`rev`, a per-key Lamport counter) first,
- * RFC 3339 timestamps as the tiebreaker. `null` revs (legacy blobs) count as 0, which preserves
- * the old pure-timestamp LWW ordering until both sides have written a revisioned blob.
+ * Compares two revisioned blob states by the user's event timestamp first. The revision is a
+ * deterministic tie-breaker only. This is intentionally safe for an upgraded client whose
+ * already-downloaded bookmark has no revision sidecar: a stale high server revision must never
+ * move a later local reading position backward.
  *
- * This is the rule that stops a stale device from clobbering: a device that last synced a month
- * ago carries low revs for every key it did NOT touch (so it can never overwrite fresher remote
- * state), while the one key it deliberately edited gets `max(localRev, lastSeenRemoteRev) + 1`
- * and wins exactly that key.
+ * This stops an upgraded device with no revision sidecar from losing a genuinely later bookmark
+ * to an older server blob that happens to carry a larger historical revision.
  *
  * Mirror of iOS `SyncCore.compareRevisioned` — both platforms must agree byte-for-byte on the
  * decision table (see SyncConformanceTest).
@@ -321,13 +320,13 @@ internal fun compareRevisioned(
     localStamp: String?,
     remoteStamp: String?,
 ): SyncComparison {
+    val cmp = compareRfc3339(localStamp, remoteStamp)
+    if (cmp != 0) return if (cmp > 0) SyncComparison.LOCAL_WINS else SyncComparison.REMOTE_WINS
     val lr = localRev ?: 0
     val rr = remoteRev ?: 0
-    if (lr != rr) return if (lr > rr) SyncComparison.LOCAL_WINS else SyncComparison.REMOTE_WINS
-    val cmp = compareRfc3339(localStamp, remoteStamp)
     return when {
-        cmp > 0 -> SyncComparison.LOCAL_WINS
-        cmp < 0 -> SyncComparison.REMOTE_WINS
+        lr > rr -> SyncComparison.LOCAL_WINS
+        lr < rr -> SyncComparison.REMOTE_WINS
         else -> SyncComparison.TIE
     }
 }

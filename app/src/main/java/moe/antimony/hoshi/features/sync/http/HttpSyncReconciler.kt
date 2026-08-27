@@ -83,10 +83,11 @@ class HttpSyncReconciler(
      */
     suspend fun syncOnce(
         settings: HttpSyncSettings,
+        transportOverride: HttpSyncKvTransport? = null,
         onProgress: suspend (HttpSyncProgress) -> Unit = {},
     ): HttpSyncResult = withContext(ioDispatcher) {
         require(settings.isConfigured) { "HTTP sync is not configured." }
-        val transport = transportFactory(settings)
+        val transport = transportOverride ?: transportFactory(settings)
 
         onProgress(HttpSyncProgress(message = "Preparing sync", detail = "Connecting to the HTTP sync server."))
         val inbound = pullChangedKeys(transport, settings.lastSyncedAt, onProgress)
@@ -510,11 +511,19 @@ class HttpSyncReconciler(
                         // cursor is not advanced past it) until the outbound push lands.
                         markUnhandled(meta)
                     } else {
-                        rootsBySyncId[parsed.syncId]?.let { bookRepository.deleteBook(it) }
-                        rootsBySyncId.remove(parsed.syncId)
-                        updatedShelfState.remove(parsed.syncId)
-                        deletedSyncIds += parsed.syncId
-                        markHandled(meta)
+                        val targetRoot = rootsBySyncId[parsed.syncId]
+                        val removed = targetRoot == null || HttpSyncActiveBooks.runIfInactive(parsed.syncId) {
+                            bookRepository.deleteBook(targetRoot)
+                        }
+                        if (!removed) {
+                            errors += "metadata ${parsed.syncId}: deletion deferred while this book is open"
+                            markUnhandled(meta)
+                        } else {
+                            rootsBySyncId.remove(parsed.syncId)
+                            updatedShelfState.remove(parsed.syncId)
+                            deletedSyncIds += parsed.syncId
+                            markHandled(meta)
+                        }
                     }
                 } else {
                     placementMetadataKeys += parsed to meta
@@ -567,10 +576,6 @@ class HttpSyncReconciler(
                 markHandled(meta)
                 continue
             }
-            if (parsed.syncId in rootsBySyncId.keys) {
-                markHandled(meta)
-                continue
-            }
             if (parsed.syncId in pendingTombstoneSyncIds) {
                 // User staged a delete locally but we haven't pushed the tombstone yet.
                 // Importing here would re-create the book, the subsequent push would see
@@ -580,6 +585,36 @@ class HttpSyncReconciler(
                 // import; the outbound pass in this same `syncOnce` will turn the remote
                 // metadata into a tombstone.
                 markHandled(meta)
+                continue
+            }
+            val existingRoot = rootsBySyncId[parsed.syncId]
+            if (existingRoot != null) {
+                runCatching {
+                    val keys = when (parsed.kind) {
+                        BookKeyKind.EpubManifest -> HttpSyncPayloadKeys.forFormat(HttpSyncContentType.Epub, parsed.syncId)
+                        else -> HttpSyncPayloadKeys.legacy(parsed.syncId)
+                    }
+                    val expectedFormat = if (parsed.kind == BookKeyKind.EpubManifest) {
+                        HttpSyncContentType.Epub
+                    } else {
+                        remoteContentTypeBySyncId[parsed.syncId]
+                    }
+                    if (refreshExistingBookPayload(
+                            transport = transport,
+                            syncId = parsed.syncId,
+                            bookRoot = existingRoot,
+                            keys = keys,
+                            expectedFormat = expectedFormat,
+                            onProgress = onProgress,
+                        )
+                    ) {
+                        downloadedPayloads += 1
+                    }
+                    markHandled(meta)
+                }.onFailure { e ->
+                    errors += "payload ${parsed.syncId}: ${e.message ?: e.javaClass.simpleName}"
+                    markUnhandled(meta)
+                }
                 continue
             }
             runCatching {
@@ -972,7 +1007,10 @@ class HttpSyncReconciler(
             ?: throw HttpSyncException("Metadata at ${meta.key}: missing.")
         if (remote.blob.deletedAt != null) {
             if (bookRoot != null) {
-                bookRepository.deleteBook(bookRoot)
+                val removed = HttpSyncActiveBooks.runIfInactive(syncId) {
+                    bookRepository.deleteBook(bookRoot)
+                }
+                if (!removed) throw HttpSyncException("Deletion deferred while this book is open.")
             }
             updatedShelfState.remove(syncId)
             return MetadataApplyResult.Deleted
@@ -1232,7 +1270,13 @@ class HttpSyncReconciler(
                 val tombstoneOverridden = remoteDeletedAt != null &&
                     localImportedAtOverridesRemoteDeletion(book.importedAt, remoteDeletedAt)
                 if (remoteDeletedAt != null && !tombstoneOverridden) {
-                    bookRepository.deleteBook(root)
+                    val removed = HttpSyncActiveBooks.runIfInactive(syncId) {
+                        bookRepository.deleteBook(root)
+                    }
+                    if (!removed) {
+                        errors += "$title: deletion deferred while this book is open"
+                        continue
+                    }
                     updatedShelfState.remove(syncId)
                     continue
                 }
@@ -1449,7 +1493,7 @@ class HttpSyncReconciler(
             }.getOrNull()
             if (remoteBlob != null) {
                 val localStamp = local.lastModified?.let(::appleSecondsToRfc3339)
-                // Edit depth first; timestamps only break rev ties (legacy blobs are rev 0).
+                // The actual edit timestamp wins; revision only makes equal-time decisions stable.
                 when (compareRevisioned(
                     localRev = localRev,
                     remoteRev = remoteBlob.rev,
@@ -1669,6 +1713,71 @@ class HttpSyncReconciler(
             // transaction. A malformed remote EPUB must not leave a ghost shelf directory.
             (publishedRoot ?: stagingRoot).deleteRecursively()
             throw e
+        }
+    }
+
+    /** Replace static book bytes only after a previously-verified SHA changes. */
+    private suspend fun refreshExistingBookPayload(
+        transport: HttpSyncKvTransport,
+        syncId: String,
+        bookRoot: File,
+        keys: HttpSyncPayloadKeys,
+        expectedFormat: HttpSyncContentType?,
+        onProgress: suspend (HttpSyncProgress) -> Unit,
+    ): Boolean {
+        // Reader saves do not participate in the sync book lock. Never rename its directory
+        // underneath a live reader; the route triggers another map pass as soon as it closes.
+        if (HttpSyncActiveBooks.contains(syncId)) return false
+        val remote = payloadCodec.fetchManifest(transport, syncId, keys) ?: return false
+        if (payloadCodec.hasPayloadContentDirty(bookRoot)) return false
+        val localSha = payloadCodec.cachedPayloadSha(bookRoot)
+            ?: payloadCodec.ensurePayloadContentSha(bookRoot)
+        if (remote.contentSha256 != null && localSha == remote.contentSha256) return false
+
+        val stagingRoot = createSyncImportStagingDirectory(bookRepository.booksDirectory)
+        try {
+            val manifest = withByteProgress(
+                onProgress = onProgress,
+                makeProgress = { transferred, total ->
+                    byteProgressOf("Updating", syncId, transferred, total)
+                },
+            ) { onByteProgress ->
+                payloadCodec.downloadAndUnpack(
+                    transport = transport,
+                    syncId = syncId,
+                    targetDir = stagingRoot,
+                    onByteProgress = onByteProgress,
+                    keys = keys,
+                    expectedFormat = expectedFormat,
+                )
+            }
+            val actualContentType = bookContentType(stagingRoot)
+            if (actualContentType != manifest.format.toLocal()) {
+                throw HttpSyncException(
+                    "Payload for $syncId declares ${manifest.format} but unpacked as $actualContentType.",
+                )
+            }
+            val parsedEpub = validateSyncImportedBook(stagingRoot)
+            val verifiedRemoteSha = requireNotNull(manifest.contentSha256)
+            if (remote.contentSha256 == null) {
+                payloadCodec.publishVerifiedContentSha(transport, keys, manifest)
+            }
+            if (localSha == verifiedRemoteSha) return false
+            return bookLocks.withBookLock(bookRoot) {
+                // A local same-title import may have completed while this payload downloaded.
+                // Its dirty generation is authoritative and must not be overwritten.
+                if (payloadCodec.hasPayloadContentDirty(bookRoot)) return@withBookLock false
+                HttpSyncActiveBooks.runIfInactive(syncId) {
+                    payloadCodec.installReplacement(
+                        bookRoot,
+                        stagingRoot,
+                        verifiedRemoteSha,
+                    )
+                    parsedEpub?.let { bookRepository.saveBookInfo(bookRoot, it.bookInfo) }
+                }
+            }
+        } finally {
+            if (stagingRoot.exists()) stagingRoot.deleteRecursively()
         }
     }
 }

@@ -10,6 +10,7 @@ import moe.antimony.hoshi.features.ai.AiChatEntry
 import moe.antimony.hoshi.features.ai.AiChatHistoryStore
 import moe.antimony.hoshi.features.sync.http.FakeKvTransport
 import moe.antimony.hoshi.features.sync.http.HttpSyncBookmarkBlob
+import moe.antimony.hoshi.features.sync.http.HttpSyncActiveBooks
 import moe.antimony.hoshi.features.sync.http.HttpSyncChatEntryBlob
 import moe.antimony.hoshi.features.sync.http.HttpSyncContentType
 import moe.antimony.hoshi.features.sync.http.HttpSyncException
@@ -319,6 +320,36 @@ class V3SyncEngineTest {
 
         assertEquals(emptyList<V3Error>(), result.errors)
         assertTrue("local book should have been deleted", repo.loadBookEntries().isEmpty())
+    }
+
+    @Test
+    fun defersRemoteTombstoneWhileReaderIsOpen() = runBlocking {
+        val repo = newRepo()
+        importMokuroBook(repo, "Active Remote")
+        val transport = FakeKvTransport()
+        transport.putJson(
+            metadataKey("active_remote"),
+            HttpSyncMetadataBlob.serializer(),
+            HttpSyncMetadataBlob(
+                title = "Active Remote",
+                contentType = HttpSyncContentType.Mokuro,
+                deletedAt = "2030-06-01T00:00:00Z",
+            ),
+            json,
+            lastModified = "2030-06-01T00:00:00Z",
+        )
+
+        HttpSyncActiveBooks.open("active_remote")
+        val result = try {
+            engineFor(repo, transport).syncOnce(configured)
+        } finally {
+            HttpSyncActiveBooks.close("active_remote")
+        }
+
+        assertTrue(result.errors.any {
+            it.message.contains("deletion deferred while this book is open", ignoreCase = true)
+        })
+        assertTrue(repo.loadBookEntries().any { it.metadata.title == "Active Remote" })
     }
 
     // --- error handling -------------------------------------------------------

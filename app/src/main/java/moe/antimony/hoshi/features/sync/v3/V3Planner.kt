@@ -37,6 +37,7 @@ class V3Planner {
         val applyRemoteMetadata = mutableListOf<V3Action.ApplyRemoteMetadata>()
         val deleteLocalBooks = mutableListOf<V3Action.DeleteLocalBook>()
         val importRemoteBooks = mutableListOf<V3Action.ImportRemoteBook>()
+        val replaceRemotePayloads = mutableListOf<V3Action.ReplaceRemotePayload>()
         val applyRemoteBookmarks = mutableListOf<V3Action.ApplyRemoteBookmark>()
         val importChats = mutableListOf<V3Action.ImportChat>()
         val importPretranslations = mutableListOf<V3Action.ImportPretranslations>()
@@ -194,6 +195,19 @@ class V3Planner {
                     continue
                 }
 
+                val remoteContentSha = r?.manifest?.contentSha256
+                if (!l.payloadDirty && r?.manifest != null &&
+                    (remoteContentSha == null || l.payloadSha == null || l.payloadSha != remoteContentSha)
+                ) {
+                    replaceRemotePayloads += V3Action.ReplaceRemotePayload(
+                        root = l.root,
+                        syncId = syncId,
+                        manifest = r.manifest,
+                        payloadKeys = r.payloadKeys
+                            ?: HttpSyncPayloadKeys.forFormat(r.manifest.format, syncId),
+                    )
+                }
+
                 // ── Bookmark LWW ──
                 // Bug 5: if the remote bookmark blob was present-but-malformed, refuse
                 // to push local over it — that would destroy the only copy of the
@@ -209,8 +223,8 @@ class V3Planner {
                 } else if (r?.bookmark != null) {
                     val localBookmark = l.bookmark
                     val localStampRfc = localBookmark?.lastModified?.let(::appleSecondsToRfc3339)
-                    // Edit depth (rev) first; timestamps only break rev ties. Legacy blobs
-                    // without rev keep the old pure-timestamp LWW behavior.
+                    // Event timestamp first; revision only breaks exact ties. This keeps legacy
+                    // clients without revision sidecars from being rolled backward.
                     when (compareRevisioned(
                         localRev = l.bookmarkLocalRev,
                         remoteRev = r.bookmark.rev,
@@ -406,7 +420,8 @@ class V3Planner {
                 } else if (
                     l.bookId.isNotEmpty() &&
                     (
-                        r?.manifest == null ||
+                        l.payloadDirty ||
+                            r?.manifest == null ||
                             (
                                 l.contentType == moe.antimony.hoshi.epub.ContentType.Epub &&
                                     r.payloadKeys == HttpSyncPayloadKeys.legacy(syncId)
@@ -467,6 +482,7 @@ class V3Planner {
             addAll(applyRemoteMetadata.sortedBy { it.syncId })
             addAll(deleteLocalBooks.sortedBy { it.syncId })
             addAll(importRemoteBooks.sortedBy { it.syncId })
+            addAll(replaceRemotePayloads.sortedBy { it.syncId })
             // Apply-remote bucket: bookmarks, chats (sorted by key for stable ordering),
             // ai settings at the end of the apply group.
             addAll(applyRemoteBookmarks.sortedBy { it.syncId })

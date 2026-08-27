@@ -48,6 +48,8 @@ class HttpSyncAutoPush(
     private val scope: CoroutineScope,
     private val pushDispatcher: CoroutineDispatcher = Dispatchers.IO,
     private val clock: () -> Long = System::currentTimeMillis,
+    private val onBooksChanged: () -> Unit = {},
+    private val queueBookmark: suspend (File, String?, String?) -> Unit = { _, _, _ -> },
     /** See [HttpSyncReaderHooks]'s parameter of the same name. */
     private val breakerResetSignal: () -> Long = { 0L },
 ) {
@@ -57,6 +59,7 @@ class HttpSyncAutoPush(
     }
     private val shelfStateStore = HttpSyncShelfStateStore(json)
     private val revisionStore = HttpSyncRevisionStore(json)
+    private val payloadCodec = HttpSyncPayloadCodec()
 
     private val booksRoot: File get() = bookRepository.booksDirectory
 
@@ -107,13 +110,17 @@ class HttpSyncAutoPush(
      * Mirrors iOS `HttpSyncManager.onBookImported`.
      */
     suspend fun onBookImported(
+        bookRoot: File,
         title: String?,
         contentType: ContentType,
         importedAt: String?,
         persistedSyncId: String? = null,
     ) {
         val syncId = persistedSyncId ?: deriveSyncId(title) ?: return
+        payloadCodec.ensurePayloadContentSha(bookRoot)
+        payloadCodec.markPayloadContentDirty(bookRoot)
         val localRev = revisionStore.bumpForLocalEdit(booksRoot, metadataKey(syncId))
+        onBooksChanged()
         val settings = activeSettings() ?: return
         launchPush("metadata") {
             pusher.pushMetadata(
@@ -144,6 +151,7 @@ class HttpSyncAutoPush(
         deletedAt: String,
     ) {
         val localRev = revisionStore.bumpForLocalEdit(booksRoot, metadataKey(syncId))
+        onBooksChanged()
         val settings = activeSettings() ?: return
         launchPush("tombstone") {
             pusher.pushMetadata(
@@ -171,11 +179,7 @@ class HttpSyncAutoPush(
      * timestamps alone.
      */
     suspend fun onBookmarkEdited(bookRoot: File, title: String?, persistedSyncId: String? = null) {
-        val resolvedTitle = title?.takeIf { deriveSyncId(it) != null } ?: return
-        val settings = activeSettings() ?: return
-        launchPush("bookmark") {
-            pusher.pushBookmark(bookRoot, resolvedTitle, settings, persistedSyncId)
-        }
+        queueBookmark(bookRoot, title, persistedSyncId)
     }
 
     /**

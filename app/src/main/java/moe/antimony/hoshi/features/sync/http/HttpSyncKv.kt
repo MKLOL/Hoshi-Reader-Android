@@ -80,54 +80,10 @@ data class HttpSyncKvFileFetched(
 )
 
 @Serializable
-data class HttpSyncExchangeWrite(
-    val key: String,
-    val baseEtag: String? = null,
-    val mutationId: String,
-    val contentType: String,
-    val bodyBase64: String,
-)
-
-@Serializable
-data class HttpSyncExchangeRequest(
-    val booksHash: String? = null,
-    val bookmarksHash: String? = null,
-    val writes: List<HttpSyncExchangeWrite> = emptyList(),
-)
-
-@Serializable
-data class HttpSyncExchangeKey(
-    val key: String,
-    val lastModified: String,
-    val etag: String,
-    val size: Int,
-    val contentType: String,
-    val bodyBase64: String? = null,
-)
-
-@Serializable
-data class HttpSyncExchangeWriteAck(
-    val key: String,
-    val mutationId: String,
-    val accepted: Boolean,
-    val etag: String? = null,
-)
-
-@Serializable
 data class HttpSyncBookmarkMapEntry(
     val etag: String,
     val lastModified: String,
     val value: HttpSyncBookmarkBlob? = null,
-)
-
-@Serializable
-data class HttpSyncExchangeResponse(
-    val booksHash: String,
-    val books: Map<String, String>? = null,
-    val bookmarksHash: String,
-    val bookmarks: Map<String, HttpSyncBookmarkMapEntry>? = null,
-    val bookKeys: List<HttpSyncExchangeKey>? = null,
-    val writeAcks: List<HttpSyncExchangeWriteAck> = emptyList(),
 )
 
 @Serializable
@@ -295,41 +251,6 @@ class HttpSyncKvClient(
             connection.disconnect()
         }
     }
-
-    /** One-call key-index refresh plus compare-and-set bookmark upload. */
-    suspend fun exchange(request: HttpSyncExchangeRequest): HttpSyncExchangeResponse =
-        withContext(ioDispatcher) {
-            val body = json.encodeToString(HttpSyncExchangeRequest.serializer(), request)
-                .toByteArray(Charsets.UTF_8)
-            val connection = openConnection(
-                "POST",
-                "/v2/exchange",
-                "application/json; charset=utf-8",
-            )
-            connection.doOutput = true
-            connection.setFixedLengthStreamingMode(body.size)
-            try {
-                val context = currentCoroutineContext()
-                connection.runCancellable {
-                    connection.outputStream.use { it.write(body) }
-                    context.ensureActive()
-                    val (code, raw) = readBody(connection)
-                    context.ensureActive()
-                    if (code !in 200..299) {
-                        throw HttpSyncException(parseError(code, raw), httpCode = code)
-                    }
-                    json.decodeFromString(HttpSyncExchangeResponse.serializer(), raw)
-                }
-            } catch (e: HttpSyncException) {
-                throw e
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                throw HttpSyncException(friendlyMessage(e))
-            } finally {
-                connection.disconnect()
-            }
-        }
 
     override suspend fun putFile(
         key: String,

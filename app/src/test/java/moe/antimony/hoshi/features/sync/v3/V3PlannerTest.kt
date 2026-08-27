@@ -45,6 +45,8 @@ class V3PlannerTest {
         chatEntries: List<AiChatEntry> = emptyList(),
         pendingDeletion: HttpSyncDeletedBookRecord? = null,
         importedAt: String? = null,
+        payloadSha: String? = null,
+        payloadDirty: Boolean = false,
     ) = V3LocalBook(
         bookId = bookId,
         syncId = syncId,
@@ -57,7 +59,50 @@ class V3PlannerTest {
         chatEntries = chatEntries,
         pendingDeletion = pendingDeletion,
         importedAt = importedAt,
+        payloadSha = payloadSha,
+        payloadDirty = payloadDirty,
     )
+
+    @Test
+    fun existingBookAdoptsOrReplacesRemotePayloadByRememberedSha() {
+        val manifest = HttpSyncPayloadManifest(
+            sha256 = "sha256:" + "b".repeat(64),
+            sizeBytes = 10,
+            originalName = "book",
+            format = HttpSyncContentType.Mokuro,
+            contentSha256 = "sha256:" + "c".repeat(64),
+        )
+        val remote = remoteSnapshot(listOf(remoteBook("book", manifest = manifest)))
+
+        val upgradePlan = planner.compute(
+            snapshot(local = listOf(localBook("book", payloadSha = null))),
+            remote,
+        )
+        assertEquals(1, upgradePlan.actions.filterIsInstance<V3Action.ReplaceRemotePayload>().size)
+
+        val changedPlan = planner.compute(
+            snapshot(local = listOf(localBook("book", payloadSha = "sha256:" + "a".repeat(64)))),
+            remote,
+        )
+        assertEquals(1, changedPlan.actions.filterIsInstance<V3Action.ReplaceRemotePayload>().size)
+
+        val unchangedPlan = planner.compute(
+            snapshot(local = listOf(localBook("book", payloadSha = manifest.contentSha256))),
+            remote,
+        )
+        assertTrue(unchangedPlan.actions.none { it is V3Action.ReplaceRemotePayload })
+
+        val reimportPlan = planner.compute(
+            snapshot(local = listOf(localBook(
+                "book",
+                payloadSha = manifest.contentSha256,
+                payloadDirty = true,
+            ))),
+            remote,
+        )
+        assertTrue(reimportPlan.actions.none { it is V3Action.ReplaceRemotePayload })
+        assertEquals(1, reimportPlan.actions.filterIsInstance<V3Action.PushPayload>().size)
+    }
 
     private fun remoteBook(
         syncId: String,

@@ -1253,10 +1253,8 @@ class HttpSyncTest {
 
     @Test
     fun pushBookmarkDoesNotOverwriteNewerServerBookmark() = runBlocking {
-        // Device A is stale on page 50; the server has page 100 from device B with a DEEPER
-        // edit chain (rev 5). pushBookmark bumps A's rev to 1 for this one local edit, but
-        // B's rev out-revisions it: refuse to clobber, pull instead. Edit depth decides;
-        // timestamps only break rev ties (same rule as iOS compareRevisioned).
+        // Device A is stale on page 50; the server has a later page-100 reading event.
+        // Refuse to clobber it and pull instead; revision only breaks timestamp ties.
         val repo = newBookRepository()
         val (root, _) = importMokuroBook(repo, "Stale Push")
         val staleApple = 800_000_000.0
@@ -1647,6 +1645,36 @@ class HttpSyncTest {
             transport.kv[metadataKey("stale_local_tomb")]!!.body.toString(Charsets.UTF_8),
         )
         assertEquals("2030-06-01T00:00:00Z", finalMeta.deletedAt)
+    }
+
+    @Test
+    fun remoteTombstoneIsDeferredWhileReaderIsOpen() = runBlocking {
+        val repo = newBookRepository()
+        val (root, _) = importMokuroBook(repo, "Active Tombstone")
+        val original = repo.loadMetadata(root)!!
+        repo.saveMetadata(root, original.copy(importedAt = "2030-05-01T00:00:00Z"))
+        val transport = FakeKvTransport()
+        transport.putJson(
+            key = metadataKey("active_tombstone"),
+            serializer = HttpSyncMetadataBlob.serializer(),
+            value = HttpSyncMetadataBlob(
+                title = "Active Tombstone",
+                contentType = HttpSyncContentType.Mokuro,
+                deletedAt = "2030-06-01T00:00:00Z",
+            ),
+            json = json,
+            lastModified = "2030-06-01T00:00:00Z",
+        )
+
+        HttpSyncActiveBooks.open("active_tombstone")
+        val result = try {
+            managerFor(repo, transport).syncOnce(configured)
+        } finally {
+            HttpSyncActiveBooks.close("active_tombstone")
+        }
+
+        assertTrue(result.errors.any { it.contains("deletion deferred while this book is open") })
+        assertTrue(repo.loadBookEntries().any { it.metadata.title == "Active Tombstone" })
     }
 
     /**

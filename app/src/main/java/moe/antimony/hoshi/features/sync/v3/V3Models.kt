@@ -68,6 +68,10 @@ data class V3LocalBook(
      */
     val bookmarkLocalRev: Int = 0,
     val metadataLocalRev: Int = 0,
+    /** Cached cross-platform static-content SHA; null before the one-time upgrade computation. */
+    val payloadSha: String? = null,
+    /** A user import changed immutable bytes and must win over the existing remote payload. */
+    val payloadDirty: Boolean = false,
 )
 
 /**
@@ -137,6 +141,12 @@ sealed interface V3Action {
         val payloadKeys: HttpSyncPayloadKeys = HttpSyncPayloadKeys.forFormat(manifest.format, syncId),
         val shelfName: String? = null,
         val shelfUpdatedAt: String? = null,
+    ) : V3Action
+    data class ReplaceRemotePayload(
+        val root: File,
+        override val syncId: String,
+        val manifest: HttpSyncPayloadManifest,
+        val payloadKeys: HttpSyncPayloadKeys,
     ) : V3Action
     data class ApplyRemoteBookmark(val root: File, override val syncId: String, val blob: HttpSyncBookmarkBlob) : V3Action
     data class ApplyRemoteMetadata(val root: File?, override val syncId: String, val blob: HttpSyncMetadataBlob) : V3Action

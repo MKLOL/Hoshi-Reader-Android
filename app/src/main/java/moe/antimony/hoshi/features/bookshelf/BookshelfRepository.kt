@@ -354,6 +354,7 @@ internal class AndroidBookshelfRepository(
         val autoPush = httpSyncAutoPush ?: return
         val metadata = bookRepository.loadMetadata(root) ?: return
         autoPush.onBookImported(
+            bookRoot = root,
             title = metadata.title,
             contentType = bookContentType(root),
             importedAt = metadata.importedAt,

@@ -8,6 +8,7 @@ import moe.antimony.hoshi.epub.Bookmark
 import moe.antimony.hoshi.mokuro.MokuroBook
 import moe.antimony.hoshi.mokuro.MokuroBookParser
 import java.io.File
+import moe.antimony.hoshi.features.sync.http.syncIdForMetadata
 
 /**
  * Loads a mokuro manga book for the reader route: resolves the book directory, parses
@@ -23,14 +24,20 @@ internal class MangaReaderLoader(
     private val parser: MokuroBookParser = MokuroBookParser(),
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
 ) {
-    suspend fun load(bookId: String): MangaReaderLoadState = withContext(ioDispatcher) {
+    suspend fun load(
+        bookId: String,
+        beforeParse: suspend (String?) -> Unit = {},
+    ): MangaReaderLoadState = withContext(ioDispatcher) {
         runCatching {
             val entry = repository.loadBookEntry(bookId) ?: error("Book not found.")
+            val syncId = syncIdForMetadata(entry.metadata)
+            beforeParse(syncId)
             val book = parser.parse(entry.root)
             val bookmark = repository.loadBookmark(entry.root)
             MangaReaderLoadState.Ready(
                 bookRoot = entry.root,
                 book = book,
+                syncId = syncId,
                 initialPageIndex = (bookmark?.chapterIndex ?: 0)
                     .coerceIn(0, book.pages.lastIndex.coerceAtLeast(0)),
             )
@@ -47,6 +54,7 @@ internal sealed interface MangaReaderLoadState {
         val bookRoot: File,
         val book: MokuroBook,
         val initialPageIndex: Int,
+        val syncId: String? = null,
     ) : MangaReaderLoadState
 
     data class Error(

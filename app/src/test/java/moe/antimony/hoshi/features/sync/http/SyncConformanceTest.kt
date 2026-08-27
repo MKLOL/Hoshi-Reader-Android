@@ -38,16 +38,15 @@ class SyncConformanceTest {
             RevCase("0 vs 0, newer local stamp → stamp fallback, local", 0, 0, newer, older, SyncComparison.LOCAL_WINS),
             RevCase("0 vs null, newer local stamp → stamp fallback, local", 0, null, newer, older, SyncComparison.LOCAL_WINS),
             RevCase("null vs 0, newer remote stamp → stamp fallback, remote", null, 0, older, newer, SyncComparison.REMOTE_WINS),
-            // Rev dominates the timestamps, in both directions.
-            RevCase("2 vs 1 → local (even with newer remote stamp)", 2, 1, older, newer, SyncComparison.LOCAL_WINS),
-            RevCase("1 vs 2 → remote (even with newer local stamp)", 1, 2, newer, older, SyncComparison.REMOTE_WINS),
+            // Event time dominates revision depth, including upgraded clients without sidecars.
+            RevCase("2 vs 1, newer remote stamp → remote", 2, 1, older, newer, SyncComparison.REMOTE_WINS),
+            RevCase("1 vs 2, newer local stamp → local", 1, 2, newer, older, SyncComparison.LOCAL_WINS),
             // Equal revs → timestamps break the tie.
             RevCase("same rev, newer local stamp → local", 3, 3, newer, older, SyncComparison.LOCAL_WINS),
             RevCase("same rev, newer remote stamp → remote", 3, 3, older, newer, SyncComparison.REMOTE_WINS),
             RevCase("same rev, same stamp → tie", 3, 3, newer, newer, SyncComparison.TIE),
-            // nil vs revisioned: nil == 0, so the revisioned side wins regardless of stamps.
-            RevCase("nil rev vs 3 → remote", null, 3, newer, older, SyncComparison.REMOTE_WINS),
-            RevCase("3 vs nil rev → local", 3, null, older, newer, SyncComparison.LOCAL_WINS),
+            RevCase("nil rev with newer local stamp → local", null, 3, newer, older, SyncComparison.LOCAL_WINS),
+            RevCase("newer remote stamp beats local rev", 3, null, older, newer, SyncComparison.REMOTE_WINS),
         )
         for (case in cases) {
             assertEquals(
@@ -72,9 +71,9 @@ class SyncConformanceTest {
      * applies. Each pre-rollout server key is exposed to this overwrite exactly once.
      */
     @Test
-    fun deliberateEditBeatsLegacyRevLessBlobDespiteNewerRemoteStamp() {
+    fun newerLegacyTimestampBeatsOlderRevisionedEdit() {
         assertEquals(
-            SyncComparison.LOCAL_WINS,
+            SyncComparison.REMOTE_WINS,
             compareRevisioned(
                 localRev = 1,
                 remoteRev = null,

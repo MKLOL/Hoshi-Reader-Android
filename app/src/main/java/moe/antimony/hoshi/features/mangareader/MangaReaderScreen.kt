@@ -889,8 +889,7 @@ internal fun MangaReaderScreen(
                     if (statistics != null) {
                         repository.saveStatistics(bookRoot, statistics)
                     }
-                    // FORK ADDITION: force-push the bookmark to the v2 KV sync server after
-                    // the local save, so leaving the reader doesn't lose accumulated turns.
+                    // onLeave queues this just-saved final position before flushing the map.
                     httpSyncHooks.onLeave()
                 }
             } else {
@@ -904,12 +903,6 @@ internal fun MangaReaderScreen(
                 httpSyncHooks.onLeave()
             }
         }
-    }
-    LaunchedEffect(book, bookRoot) {
-        // Record the opened page so "recent" ordering reflects the visit even if the reader
-        // is closed before turning a page. Routed through the same debounced + flush-on-exit
-        // path as page turns, so the open save and a quick page turn never race to disk.
-        scheduleBookmarkSave(pageIndex)
     }
     LaunchedEffect(book, bookRoot) {
         // Load this manga's ChatGPT history so the ⋯ menu can show it.

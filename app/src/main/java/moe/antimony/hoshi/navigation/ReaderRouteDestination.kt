@@ -9,6 +9,8 @@ import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.produceState
@@ -21,12 +23,18 @@ import androidx.compose.ui.graphics.Color
 import moe.antimony.hoshi.features.reader.ReaderSettings
 import moe.antimony.hoshi.features.reader.ReaderWebView
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import moe.antimony.hoshi.LocalHoshiAppContainer
 import moe.antimony.hoshi.epub.BookEntry
 import moe.antimony.hoshi.features.settings.collectAsLoadedSettings
 import moe.antimony.hoshi.features.sync.SyncDirection
 import moe.antimony.hoshi.features.sync.SyncResult
+import moe.antimony.hoshi.features.sync.http.syncIdForMetadata
+import moe.antimony.hoshi.features.sync.http.HttpSyncActiveBooks
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 
 @Composable
 internal fun ReaderRouteDestination(
@@ -47,6 +55,8 @@ internal fun ReaderRouteDestination(
         sasayakiSettings = sasayakiSettings,
     )
     val bookmarkScope = rememberCoroutineScope()
+    val activeBookLease = remember(bookId) { HttpSyncActiveBooks.Lease() }
+    val lifecycleOwner = LocalLifecycleOwner.current
     var reloadKey by remember(bookId) { mutableIntStateOf(0) }
     val autoSyncExportController = remember(bookId, appContainer) {
         ReaderAutoSyncExportController(appContainer.appScope)
@@ -55,6 +65,16 @@ internal fun ReaderRouteDestination(
     val readerLoadingBackground = Modifier.background(
         Color(readerSettings.backgroundColor(systemDarkTheme)),
     )
+    DisposableEffect(bookId, activeBookLease) {
+        onDispose {
+            // Keep replacement blocked through the final debounced bookmark write.
+            appContainer.appScope.launch {
+                delay(ACTIVE_READER_CLOSE_GRACE_MS)
+                activeBookLease.release()
+                appContainer.httpSyncBookmarkScheduler.refreshAfterReaderClosed()
+            }
+        }
+    }
     val routeState by produceState<ReaderRouteLoadState>(
         ReaderRouteLoadState.Loading,
         bookId,
@@ -62,6 +82,8 @@ internal fun ReaderRouteDestination(
         reloadKey,
     ) {
         value = stateHolder.load(bookId) { entry ->
+            activeBookLease.acquire(syncIdForMetadata(entry.metadata))
+            appContainer.httpSyncBookmarkScheduler.refreshBeforeOpen()
             val initialAutoSyncState = ReaderRouteAutoSyncState(
                 syncSettings = syncSettings ?: appContainer.syncSettingsRepository.settings.first(),
                 sasayakiSettings = sasayakiSettings ?: appContainer.sasayakiSettingsRepository.settings.first(),
@@ -79,6 +101,16 @@ internal fun ReaderRouteDestination(
                 }
             }
         }
+    }
+
+    DisposableEffect(lifecycleOwner, bookId) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                bookmarkScope.launch { appContainer.httpSyncBookmarkScheduler.refreshBeforeOpen() }
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
     suspend fun exportBook(entry: BookEntry) {
@@ -143,32 +175,42 @@ internal fun ReaderRouteDestination(
         ) {
             Text(state.message)
         }
-        is ReaderRouteLoadState.Ready -> ReaderWebView(
-            book = state.book,
-            bookRoot = state.bookRoot,
-            initialChapterIndex = state.bookmark?.chapterIndex ?: 0,
-            initialProgress = state.bookmark?.progress ?: 0.0,
-            readerSettings = readerSettings,
-            onReaderSettingsChange = onReaderSettingsChange,
-            onReaderKeyEventHandlerChange = onReaderKeyEventHandlerChange,
-            onSaveBookmark = { chapterIndex, progress, statistics ->
-                autoSyncExportController.launchSave {
-                    stateHolder.saveBookmark(
-                        state = state,
-                        chapterIndex = chapterIndex,
-                        progress = progress,
-                        statistics = statistics,
-                        onBookmarkSaved = onBookmarkSaved,
-                    )
+        is ReaderRouteLoadState.Ready -> {
+            val syncId = syncIdForMetadata(state.entry.metadata)
+            LaunchedEffect(syncId) {
+                appContainer.httpSyncBatchState.remoteBookmarkUpdates.collect { changedId ->
+                    if (changedId == syncId) reloadKey += 1
                 }
-                scheduleExport(state.entry)
-            },
-            onFlushAutoSyncExport = ::flushExport,
-            onForegroundAutoSyncImport = { importOnForeground(state.entry) },
-            onClose = onClose,
-            modifier = modifier.fillMaxSize(),
-        )
+            }
+            ReaderWebView(
+                book = state.book,
+                bookRoot = state.bookRoot,
+                initialChapterIndex = state.bookmark?.chapterIndex ?: 0,
+                initialProgress = state.bookmark?.progress ?: 0.0,
+                readerSettings = readerSettings,
+                onReaderSettingsChange = onReaderSettingsChange,
+                onReaderKeyEventHandlerChange = onReaderKeyEventHandlerChange,
+                onSaveBookmark = { chapterIndex, progress, statistics ->
+                    autoSyncExportController.launchSave {
+                        stateHolder.saveBookmark(
+                            state = state,
+                            chapterIndex = chapterIndex,
+                            progress = progress,
+                            statistics = statistics,
+                            onBookmarkSaved = onBookmarkSaved,
+                        )
+                    }
+                    scheduleExport(state.entry)
+                },
+                onFlushAutoSyncExport = ::flushExport,
+                onForegroundAutoSyncImport = { importOnForeground(state.entry) },
+                onClose = onClose,
+                modifier = modifier.fillMaxSize(),
+            )
+        }
     }
 }
+
+private const val ACTIVE_READER_CLOSE_GRACE_MS = 1_000L
 
 private const val ReaderAutoSyncLogTag = "HoshiReaderSync"

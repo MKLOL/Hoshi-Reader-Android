@@ -2,6 +2,7 @@ package moe.antimony.hoshi
 
 import android.content.ContentResolver
 import android.content.Context
+import android.provider.Settings
 import androidx.compose.runtime.staticCompositionLocalOf
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -43,9 +44,11 @@ import moe.antimony.hoshi.features.sync.SyncManager
 import moe.antimony.hoshi.features.sync.SyncSettingsRepository
 import moe.antimony.hoshi.features.sync.syncSettingsRepository
 import moe.antimony.hoshi.features.sync.http.HttpSyncAutoPush
-import moe.antimony.hoshi.features.sync.http.HttpSyncBatchKvTransport
 import moe.antimony.hoshi.features.sync.http.HttpSyncBatchState
 import moe.antimony.hoshi.features.sync.http.HttpSyncBookmarkScheduler
+import moe.antimony.hoshi.features.sync.http.HttpSyncEngineDispatcher
+import moe.antimony.hoshi.features.sync.http.HttpSyncFastSync
+import moe.antimony.hoshi.features.sync.http.HttpSyncFullCycleRunner
 import moe.antimony.hoshi.features.sync.http.HttpSyncPusher
 import moe.antimony.hoshi.features.sync.http.HttpSyncReconciler
 import moe.antimony.hoshi.features.sync.http.HttpSyncSettingsRepository
@@ -60,12 +63,21 @@ import moe.antimony.hoshi.features.update.updateDownloadStore
 import moe.antimony.hoshi.features.update.updateSettingsRepository
 import moe.antimony.hoshi.mokuro.MokuroBookParser
 import moe.antimony.hoshi.navigation.ReaderRouteStateHolder
+import java.nio.charset.StandardCharsets
+import java.util.UUID
 
 internal class HoshiAppContainer(context: Context) {
     private val appContext = context.applicationContext
     val appScope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
-    val bookRepository: BookRepository = BookRepository(appContext.filesDir)
+    // Shared by imports, readers, auto-push, and both HTTP reconcilers so directory swaps and
+    // sidecar writes for one book cannot interleave.
+    val httpSyncBookLocks: moe.antimony.hoshi.features.sync.http.HttpSyncBookLocks =
+        moe.antimony.hoshi.features.sync.http.HttpSyncBookLocks()
+    val bookRepository: BookRepository = BookRepository(
+        filesDir = appContext.filesDir,
+        bookLocks = httpSyncBookLocks,
+    )
     val dictionaryRepository: DictionaryRepository = DictionaryRepository(appContext.filesDir)
     // Shared between the bookshelf's metadata-sidecar write and the manga reader's load
     // path so opening a book parses mokuro.json once instead of twice. See MokuroBookParser.
@@ -92,10 +104,6 @@ internal class HoshiAppContainer(context: Context) {
     )
     val httpSyncSettingsRepository: HttpSyncSettingsRepository = appContext.httpSyncSettingsRepository()
     val aiChatSettingsRepository: AiChatSettingsRepository = appContext.aiChatSettingsRepository()
-    // Shared between the reader's auto-push and the manual reconciler so concurrent
-    // bookmark writes never race on the same book. See HttpSyncBookLocks.
-    val httpSyncBookLocks: moe.antimony.hoshi.features.sync.http.HttpSyncBookLocks =
-        moe.antimony.hoshi.features.sync.http.HttpSyncBookLocks()
     // Wallclock of the most recent successful manual Sync now. The reader hooks read it
     // to clear their circuit breaker on the next page turn after a successful manual sync.
     val httpSyncManualSyncSuccessAt: kotlinx.coroutines.flow.MutableStateFlow<Long> =
@@ -112,19 +120,13 @@ internal class HoshiAppContainer(context: Context) {
     val httpSyncBatchState: HttpSyncBatchState = HttpSyncBatchState(
         bookRepository = bookRepository,
         bookLocks = httpSyncBookLocks,
+        installationId = httpSyncInstallationId(appContext),
     )
-    // Fire-and-forget auto-push for metadata-class edits (shelf moves, deletes, imports,
-    // AI-settings edits). One instance so its circuit breaker is shared by every hook;
-    // a successful manual Sync now resets it via the same signal the reader hooks use.
-    val httpSyncAutoPush: HttpSyncAutoPush = HttpSyncAutoPush(
-        bookRepository = bookRepository,
-        pusher = httpSyncPusher,
-        reconciler = httpSyncReconciler,
-        currentSettings = { httpSyncSettingsRepository.settings.first() },
-        scope = appScope,
-        breakerResetSignal = { httpSyncManualSyncSuccessAt.value },
+    val httpSyncFullCycleRunner: HttpSyncFullCycleRunner = HttpSyncFullCycleRunner(appScope)
+    val httpSyncFastSync: HttpSyncFastSync = HttpSyncFastSync(
+        state = httpSyncBatchState,
+        fullCycleRunner = httpSyncFullCycleRunner,
     )
-
     // v3 engine ships side-by-side with v2 (HttpSyncReconciler). The "Sync now" UI
     // dispatches between them based on the HttpSyncSettings.useV3Sync flag (default v2).
     // Both write the same on-disk + remote state, so flipping mid-life is safe. See
@@ -133,15 +135,31 @@ internal class HoshiAppContainer(context: Context) {
         bookRepository = bookRepository,
         aiSettingsRepository = aiChatSettingsRepository,
         bookLocks = httpSyncBookLocks,
-        transportFactory = { settings ->
-            HttpSyncBatchKvTransport(settings, httpSyncBatchState)
-        },
     )
     val httpSyncBookmarkScheduler: HttpSyncBookmarkScheduler = HttpSyncBookmarkScheduler(
         state = httpSyncBatchState,
         currentSettings = { httpSyncSettingsRepository.settings.first() },
-        syncBooksNow = { settings -> v3SyncEngine.syncOnce(settings) },
+        syncBooksNow = { settings, transport ->
+            HttpSyncEngineDispatcher.syncOnce(
+                reconciler = httpSyncReconciler,
+                v3Engine = v3SyncEngine,
+                settings = settings,
+                transport = transport,
+            )
+        },
+        fullCycleRunner = httpSyncFullCycleRunner,
         scope = appScope,
+    )
+    // Fire-and-forget metadata writes plus a map refresh for new/replaced/deleted books.
+    val httpSyncAutoPush: HttpSyncAutoPush = HttpSyncAutoPush(
+        bookRepository = bookRepository,
+        pusher = httpSyncPusher,
+        reconciler = httpSyncReconciler,
+        currentSettings = { httpSyncSettingsRepository.settings.first() },
+        scope = appScope,
+        onBooksChanged = httpSyncBookmarkScheduler::refreshNow,
+        queueBookmark = httpSyncBookmarkScheduler::onBookmarkChanged,
+        breakerResetSignal = { httpSyncManualSyncSuccessAt.value },
     )
 
     init {
@@ -205,4 +223,22 @@ internal class HoshiAppContainer(context: Context) {
 
 internal val LocalHoshiAppContainer = staticCompositionLocalOf<HoshiAppContainer> {
     error("HoshiAppContainer is not provided.")
+}
+
+private fun httpSyncInstallationId(context: Context): String {
+    val androidId = Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID)
+    if (!androidId.isNullOrBlank()) {
+        return UUID.nameUUIDFromBytes(
+            "hoshi:$androidId".toByteArray(StandardCharsets.UTF_8),
+        ).toString()
+    }
+    val file = context.noBackupFilesDir.resolve("http_sync_installation_id")
+    val existing = runCatching { UUID.fromString(file.readText().trim()).toString() }.getOrNull()
+    if (existing != null) return existing
+    return UUID.randomUUID().toString().also { created ->
+        runCatching {
+            file.parentFile?.mkdirs()
+            file.writeText(created)
+        }
+    }
 }
