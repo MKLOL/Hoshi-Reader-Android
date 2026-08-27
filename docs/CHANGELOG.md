@@ -7,6 +7,8 @@ Semantic Versioning.
 
 ## [Unreleased]
 
+## [v0.11.3] - 2026-08-26
+
 ### Fixed
 - **HTTP bookmark sync no longer depends on a new server release.** Android and iOS use the
   existing generic KV API, batch every dirty EPUB/manga position within five seconds, pull before
