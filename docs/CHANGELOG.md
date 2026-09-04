@@ -14,6 +14,14 @@ Semantic Versioning.
   where your finger went down. Every drag then looked like a forward swipe: at the start of a
   chapter the reader refused to turn back and simply stopped moving, and near a chapter end a
   swipe could jump chapters on its own. Drags are now tracked from where they actually begin.
+- **The AI translation popup no longer hides the translation off the side of the card.** A tutor
+  reply's vocabulary/grammar table used fixed-width columns inside a sideways scroll, so a
+  four-column breakdown pushed the meaning/translation column off-screen entirely and left the
+  short columns beside it stretched apart by tall empty gaps. Table columns now share the card's
+  width in proportion to what they actually contain, rows are tight, and the card grows to most of
+  the screen the way iOS does — with only the reply scrolling, so the close button stays put. A
+  typical bubble translation and its breakdown now fit without scrolling in either direction.
+
 ## [v0.11.4] - 2026-09-04
 
 ### Fixed

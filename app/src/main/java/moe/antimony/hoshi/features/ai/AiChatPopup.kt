@@ -3,17 +3,20 @@ package moe.antimony.hoshi.features.ai
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
@@ -76,8 +79,24 @@ sealed interface AiChatUiState {
 }
 
 /**
+ * Fraction of the screen the card is allowed to grow to, matching iOS `MangaAiPopupView`
+ * (`geometry.size.height * 0.78`). A vocabulary breakdown is the whole point of the reply, so
+ * the card gets most of the page rather than a 380dp letterbox the user has to scroll.
+ */
+private const val AI_CHAT_CARD_HEIGHT_FRACTION = 0.78f
+
+/** iOS `maxCardWidth` for the phone idiom. */
+private val AI_CHAT_CARD_MAX_WIDTH = 520.dp
+
+/** iOS `sideMargin` for the phone idiom. */
+private val AI_CHAT_CARD_MARGIN = 16.dp
+
+/**
  * The ChatGPT response popup, shown above the manga page. Tapping outside the card or the
  * close button dismisses it; a failed request offers a retry.
+ *
+ * The title bar is pinned and only the reply scrolls, so the close button is always reachable
+ * however long the breakdown is — same split as iOS (`header` + `ScrollView`).
  *
  * Caller is expected to place this in a full-size [Box] with a high `zIndex` so it sits over
  * the page and the dictionary lookup popups.
@@ -91,7 +110,7 @@ fun AiChatPopupView(
     onAskLive: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
-    Box(
+    BoxWithConstraints(
         modifier = modifier
             .fillMaxSize()
             .clickable(
@@ -101,12 +120,15 @@ fun AiChatPopupView(
             ),
         contentAlignment = Alignment.Center,
     ) {
+        val cardMaxHeight = (maxHeight * AI_CHAT_CARD_HEIGHT_FRACTION).coerceAtLeast(320.dp)
         Surface(
             // Swallow taps on the card so they do not fall through to the dismiss layer.
             modifier = Modifier
-                .padding(24.dp)
-                .widthIn(max = 480.dp)
+                .windowInsetsPadding(WindowInsets.systemBars)
+                .padding(AI_CHAT_CARD_MARGIN)
+                .widthIn(max = AI_CHAT_CARD_MAX_WIDTH)
                 .fillMaxWidth()
+                .heightIn(max = cardMaxHeight)
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = null,
@@ -117,8 +139,11 @@ fun AiChatPopupView(
             tonalElevation = 3.dp,
             border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
         ) {
-            Column(modifier = Modifier.padding(20.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
+            Column {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(start = 20.dp, end = 6.dp, top = 10.dp),
+                ) {
                     Text(
                         text = when {
                             state is AiChatUiState.Loaded && state.pretranslated ->
@@ -134,26 +159,35 @@ fun AiChatPopupView(
                         Icon(Icons.Rounded.Close, contentDescription = "Close")
                     }
                 }
-                Spacer(Modifier.size(6.dp))
-                Text(
-                    text = state.bubbleText,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 3,
-                )
-                Spacer(Modifier.size(12.dp))
-                when (state) {
-                    is AiChatUiState.Loading -> LoadingBody(onDevice = state.onDevice)
-                    is AiChatUiState.Loaded -> ResponseBody(
-                        response = state.entry.response,
-                        debugInfo = state.entry.debugInfo,
-                        onAskLive = onAskLive,
+                Column(
+                    modifier = Modifier
+                        // `fill = false` so a one-line reply keeps the card small; a long
+                        // breakdown grows it to `cardMaxHeight` and scrolls from there.
+                        .weight(1f, fill = false)
+                        .verticalScroll(rememberScrollState())
+                        .padding(start = 20.dp, end = 20.dp, bottom = 20.dp),
+                ) {
+                    Spacer(Modifier.size(6.dp))
+                    Text(
+                        text = state.bubbleText,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 3,
                     )
-                    is AiChatUiState.Failed -> FailedBody(
-                        message = state.message,
-                        onRetry = onRetry,
-                        onDismiss = onDismiss,
-                    )
+                    Spacer(Modifier.size(12.dp))
+                    when (state) {
+                        is AiChatUiState.Loading -> LoadingBody(onDevice = state.onDevice)
+                        is AiChatUiState.Loaded -> ResponseBody(
+                            response = state.entry.response,
+                            debugInfo = state.entry.debugInfo,
+                            onAskLive = onAskLive,
+                        )
+                        is AiChatUiState.Failed -> FailedBody(
+                            message = state.message,
+                            onRetry = onRetry,
+                            onDismiss = onDismiss,
+                        )
+                    }
                 }
             }
         }
@@ -193,12 +227,9 @@ private fun LoadingBody(onDevice: Boolean) {
 private fun ResponseBody(response: String, debugInfo: String?, onAskLive: (() -> Unit)? = null) {
     Column {
         SelectionContainer {
-            MarkdownText(
-                markdown = response,
-                modifier = Modifier
-                    .heightIn(max = 380.dp)
-                    .verticalScroll(rememberScrollState()),
-            )
+            // The card body owns the scrolling; the reply just lays out at full width so a
+            // breakdown table can size its columns to the card.
+            MarkdownText(markdown = response, modifier = Modifier.fillMaxWidth())
         }
         if (onAskLive != null) {
             Spacer(Modifier.size(8.dp))
