@@ -2,9 +2,9 @@ package moe.antimony.hoshi.features.sync.http
 
 import moe.antimony.hoshi.epub.BookRepository
 import moe.antimony.hoshi.epub.ContentType
-import moe.antimony.hoshi.epub.GENERATED_COVER_FILENAME
 import moe.antimony.hoshi.epub.EpubBook
 import moe.antimony.hoshi.epub.EpubBookParser
+import moe.antimony.hoshi.epub.GENERATED_COVER_FILENAME
 import moe.antimony.hoshi.epub.bookContentType
 import moe.antimony.hoshi.mokuro.MokuroBookParser
 import java.io.File

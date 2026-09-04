@@ -783,15 +783,80 @@ class HttpSyncPayloadTest {
     }
 
     @Test
-    fun downloadWithRepairDisabledStillImportsButLeavesManifestAlone() = runBlocking {
-        val (transport, manifestKey, uploaded) = seedPoisonedManifest("declared_ro", "declared-ro-source")
+    fun downloadLeavesAManifestAloneWhenAnotherDevicePublishedDuringTheDownload() = runBlocking {
+        val (seeded, manifestKey, uploaded) = seedPoisonedManifest("declared_race", "declared-race-source")
+        // Between this device's manifest fetch and its repair, another device shipped a new
+        // archive. Repairing the stale manifest would point every device at the wrong bytes.
+        val newer = uploaded.copy(
+            sha256 = "sha256:" + "f".repeat(64),
+            sizeBytes = uploaded.sizeBytes + 1,
+            contentSha256 = "sha256:" + "e".repeat(64),
+        )
+        var manifestReads = 0
+        val manifestPuts = mutableListOf<HttpSyncPayloadManifest>()
+        val transport = object : HttpSyncKvTransport by seeded {
+            override suspend fun get(key: String): HttpSyncKvFetched? {
+                if (key != manifestKey) return seeded.get(key)
+                manifestReads += 1
+                if (manifestReads == 1) return seeded.get(key)
+                return HttpSyncKvFetched(
+                    body = json.encodeToString(HttpSyncPayloadManifest.serializer(), newer).toByteArray(),
+                    contentType = "application/json; charset=utf-8",
+                    lastModified = "2027-01-01T00:00:09Z",
+                    etag = "sha256:newer",
+                )
+            }
 
-        val target = tempFolder.newFolder("declared-ro-target")
-        val manifest = codec.downloadAndUnpack(transport, "declared_ro", target, repairManifest = false)
+            override suspend fun put(key: String, contentType: String, body: ByteArray): HttpSyncKvWriteResponse {
+                if (key == manifestKey) {
+                    manifestPuts += json.decodeFromString(HttpSyncPayloadManifest.serializer(), body.toString(Charsets.UTF_8))
+                }
+                return seeded.put(key, contentType, body)
+            }
+        }
+
+        val target = tempFolder.newFolder("declared-race-target")
+        val manifest = codec.downloadAndUnpack(transport, "declared_race", target)
 
         assertEquals("real content", target.resolve("mokuro.json").readText())
         assertEquals(uploaded.contentSha256, manifest.contentSha256)
-        assertEquals(POISONED_CONTENT_SHA, transport.storedManifest(manifestKey).contentSha256)
+        assertEquals("a manifest that moved on is never overwritten", emptyList<HttpSyncPayloadManifest>(), manifestPuts)
+        assertEquals("the repair re-reads the manifest first", 2, manifestReads)
+    }
+
+    @Test
+    fun uploadAndDownloadRememberTheArchiveShaBesideTheBook() = runBlocking {
+        val src = tempFolder.newFolder("archive-sha-source").apply {
+            resolve("mokuro.json").writeText("static content")
+        }
+        val transport = FakeKvTransport()
+        codec.uploadIfChanged(transport, "archive_sha", src, "Archive Sha", HttpSyncContentType.Mokuro)
+        val uploaded = transport.storedManifest(payloadManifestKey("archive_sha"))
+        assertEquals(uploaded.sha256, codec.cachedZipSha(src))
+
+        val target = tempFolder.newFolder("archive-sha-target")
+        codec.downloadAndUnpack(transport, "archive_sha", target)
+
+        assertEquals(uploaded.sha256, codec.cachedZipSha(target))
+        // The sidecar never travels in the archive or counts toward the content hash.
+        assertEquals(codec.computePayloadContentSha(src), codec.computePayloadContentSha(target))
+        assertEquals(uploaded.contentSha256, codec.computePayloadContentSha(target))
+    }
+
+    @Test
+    fun contentHashOrdersPathsByUtf8BytesNotUtf16Units() {
+        // U+FF5C sorts after U+20000 in UTF-16 code units but before it in UTF-8 bytes, which is
+        // also Swift's code-point order. iOS asserts this exact value in
+        // Tests/Regression/test_payload_content_hash.py; change both or neither.
+        val root = tempFolder.newFolder("content-hash-non-bmp").apply {
+            resolve("\uFF5C.txt").writeText("a")
+            resolve("\uD840\uDC00.txt").writeText("b")
+        }
+
+        assertEquals(
+            "sha256:1bdde4f0c05aede5c689f0d21f6524bbc4479a795416930c129a33a10733ce8f",
+            codec.computePayloadContentSha(root),
+        )
     }
 
     @Test

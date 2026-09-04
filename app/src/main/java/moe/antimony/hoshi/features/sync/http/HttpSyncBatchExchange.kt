@@ -378,6 +378,9 @@ class HttpSyncBatchState(
             if (localEntry != null && compareBookmarkEntries(remoteEntry, localEntry) <= 0) continue
             val blob = remoteEntry.value ?: continue
             val root = roots[syncId] ?: continue
+            // A shard entry with an unparseable stamp is skipped, as on iOS; it must not abort
+            // the whole pass (and it cannot be "newer" than anything real).
+            val appliedStamp = runCatching { rfc3339ToAppleSecondsStrict(blob.lastModified) }.getOrNull() ?: continue
             bookLocks.withBookLock(root) {
                 // Re-read under the lock: a page turn may have landed after readLocalBookmarks().
                 val current = bookRepository.loadBookmark(root)
@@ -402,7 +405,7 @@ class HttpSyncBatchState(
                         chapterIndex = blob.chapterIndex,
                         progress = blob.progress,
                         characterCount = blob.characterCount,
-                        lastModified = rfc3339ToAppleSecondsStrict(blob.lastModified),
+                        lastModified = appliedStamp,
                     ),
                 )
                 revisionStore.noteRemote(booksRoot, bookmarkKey(syncId), blob.rev, appliedLocally = true)

@@ -529,6 +529,12 @@ class V3Executor(
             ?: payloadCodec.ensurePayloadContentSha(action.root)
         val remoteSha = action.manifest.contentSha256
         if (remoteSha != null && cachedSha == remoteSha) return false
+        // The server still points at the exact archive this install uploaded or installed, so
+        // the content-hash disagreement is a derivation difference between clients, never new
+        // content. Chasing it with a download would have two clients that hash differently
+        // trade the same archive back and forth forever. (A manifest with no content hash at
+        // all is still downloaded once so the verified hash gets published.)
+        if (remoteSha != null && action.manifest.sha256 == payloadCodec.cachedZipSha(action.root)) return false
         // The cached baseline disagrees with the server. Re-derive it from the bytes on disk
         // before paying for a download: a stale or mis-derived sidecar is far cheaper to fix
         // locally than a multi-hundred-MB replacement that installs identical content.

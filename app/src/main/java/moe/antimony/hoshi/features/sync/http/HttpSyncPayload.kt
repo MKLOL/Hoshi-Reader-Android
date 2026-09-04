@@ -1,5 +1,6 @@
 package moe.antimony.hoshi.features.sync.http
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -92,6 +93,7 @@ internal val PAYLOAD_EXCLUDED_FILES: Set<String> = setOf(
     // it must stay out of the cross-platform content hash.
     GENERATED_COVER_FILENAME,
     PAYLOAD_SHA_CACHE_FILENAME,
+    PAYLOAD_ZIP_SHA_CACHE_FILENAME,
     LEGACY_PAYLOAD_SHA_CACHE_FILENAME,
     PAYLOAD_LOCAL_DIRTY_FILENAME,
     PAYLOAD_REPLACEMENT_TARGET_FILENAME,
@@ -108,8 +110,12 @@ internal val PAYLOAD_EXCLUDED_DIRS: Set<String> = setOf("Sasayaki")
 
 // Derived from static EPUB bytes. It remains excluded from uploads, but a replacement must
 // regenerate it rather than carry chapter offsets from the old payload forward.
-private val PAYLOAD_REPLACEMENT_PRESERVED_FILES = PAYLOAD_EXCLUDED_FILES -
-    setOf("bookinfo.json", PAYLOAD_SHA_CACHE_FILENAME, PAYLOAD_REPLACEMENT_TARGET_FILENAME)
+private val PAYLOAD_REPLACEMENT_PRESERVED_FILES = PAYLOAD_EXCLUDED_FILES - setOf(
+    "bookinfo.json",
+    PAYLOAD_SHA_CACHE_FILENAME,
+    PAYLOAD_ZIP_SHA_CACHE_FILENAME,
+    PAYLOAD_REPLACEMENT_TARGET_FILENAME,
+)
 
 /**
  * Sidecar that caches the last-computed payload sha so subsequent syncs of an unchanged
@@ -117,6 +123,13 @@ private val PAYLOAD_REPLACEMENT_PRESERVED_FILES = PAYLOAD_EXCLUDED_FILES -
  * bookmark / chat sidecars is fine — like them, it never travels in the zip itself.
  */
 internal const val PAYLOAD_SHA_CACHE_FILENAME: String = ".payload.content.sha256.cache"
+
+/**
+ * Sidecar recording the sha256 of the archive this install last uploaded or installed. While
+ * the server's manifest still points at that exact archive, a content-hash disagreement can only
+ * be a derivation difference between clients, never new content, so no download is owed.
+ */
+internal const val PAYLOAD_ZIP_SHA_CACHE_FILENAME: String = ".payload.zip.sha256.cache"
 private const val LEGACY_PAYLOAD_SHA_CACHE_FILENAME: String = ".payload.sha256.cache"
 private const val PAYLOAD_LOCAL_DIRTY_FILENAME: String = ".payload.content.local_dirty"
 private const val PAYLOAD_REPLACEMENT_TARGET_FILENAME = ".payload.replacement.target"
@@ -173,6 +186,15 @@ class HttpSyncPayloadCodec(
         bookRoot.resolve(PAYLOAD_SHA_CACHE_FILENAME).readText().trim()
     }.getOrNull()?.takeIf { SHA256_VALUE.matches(it) }
 
+    /** sha256 of the archive this install last uploaded or installed for the book, if known. */
+    internal fun cachedZipSha(bookRoot: File): String? = runCatching {
+        bookRoot.resolve(PAYLOAD_ZIP_SHA_CACHE_FILENAME).readText().trim()
+    }.getOrNull()?.takeIf { SHA256_VALUE.matches(it) }
+
+    private fun rememberZipSha(bookRoot: File, sha: String) {
+        runCatching { writeSidecarAtomically(bookRoot.resolve(PAYLOAD_ZIP_SHA_CACHE_FILENAME), sha) }
+    }
+
     /**
      * Writes a verified content-hash baseline after an import/download or one-time upgrade hash.
      */
@@ -206,20 +228,18 @@ class HttpSyncPayloadCodec(
         val files = bookRoot.walkTopDown().filter { file ->
             file.isFile && file.name !in PAYLOAD_EXCLUDED_FILES &&
                 !file.isInsideExcludedDir(bookRoot) &&
-                // Root-level only: a file directly under the book root has itself as parent.
-                !(file.parentFile == bookRoot && file.name in excludedRootFiles)
-        }.sortedBy { file ->
-            Normalizer.normalize(
-                file.relativeTo(bookRoot).path.replace(File.separatorChar, '/'),
-                Normalizer.Form.NFC,
-            )
-        }.toList()
-        for (file in files) {
-            val path = Normalizer.normalize(
-                file.relativeTo(bookRoot).path.replace(File.separatorChar, '/'),
-                Normalizer.Form.NFC,
-            )
-                .toByteArray(Charsets.UTF_8)
+                // Root-level candidates only, compared in the same NFC form the hash uses.
+                !(file.parentFile == bookRoot && nfc(file.name) in excludedRootFiles)
+        }.map { file ->
+            file to nfc(file.relativeTo(bookRoot).invariantSeparatorsPath).toByteArray(Charsets.UTF_8)
+        }
+            // Order by the UTF-8 bytes of the NFC path. Kotlin's String order is UTF-16 code
+            // units, which disagrees with byte order for characters outside the BMP (a title
+            // mixing ｜ and 𠀀 sorted differently here than on iOS); Swift orders by code point,
+            // which is byte order.
+            .sortedWith { a, b -> compareUnsignedBytes(a.second, b.second) }
+            .toList()
+        for ((file, path) in files) {
             digest.update(ByteBuffer.allocate(4).putInt(path.size).array())
             digest.update(path)
             digest.update(ByteBuffer.allocate(8).putLong(file.length()).array())
@@ -417,6 +437,7 @@ class HttpSyncPayloadCodec(
                 contentType = "application/json; charset=utf-8",
                 body = json.encodeToString(HttpSyncPayloadManifest.serializer(), manifest).toByteArray(),
             )
+            rememberZipSha(bookRoot, sha)
             bookRoot.resolve(PAYLOAD_LOCAL_DIRTY_FILENAME).delete()
             true
         } finally {
@@ -478,9 +499,9 @@ class HttpSyncPayloadCodec(
      * Pre-[GENERATED_COVER_FILENAME] builds materialized a receiver-side cover straight into the
      * book root (mokuro and EPUB alike), where it poisons the content hash against the origin's
      * manifest forever. If ignoring exactly one candidate root file makes the hash match the
-     * manifest, the file cannot have come from the payload: rename it to the excluded name and
-     * cache the now-matching sha instead of re-downloading the entire archive. The caller
-     * repoints the book's metadata cover path.
+     * manifest, the local content then provably equals the origin's: rename that file to the
+     * excluded name and cache the now-matching sha instead of re-downloading the entire
+     * archive. The caller repoints the book's metadata cover path.
      */
     internal suspend fun migrateLegacyGeneratedCover(
         bookRoot: File,
@@ -492,12 +513,15 @@ class HttpSyncPayloadCodec(
             val legacy = bookRoot.resolve(name)
             if (!legacy.isFile) continue
             val shaWithoutCover = runCatching {
-                computePayloadContentSha(bookRoot, excludedRootFiles = setOf(name))
+                computePayloadContentSha(bookRoot, excludedRootFiles = setOf(nfc(name)))
             }.getOrNull() ?: continue
             if (shaWithoutCover != expectedSha) continue
             val target = bookRoot.resolve(GENERATED_COVER_FILENAME)
-            target.delete()
-            if (!legacy.renameTo(target)) return@withContext false
+            try {
+                Files.move(legacy.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING)
+            } catch (_: Exception) {
+                return@withContext false
+            }
             writeCachedSha(bookRoot.resolve(PAYLOAD_SHA_CACHE_FILENAME), expectedSha)
             return@withContext true
         }
@@ -545,7 +569,6 @@ class HttpSyncPayloadCodec(
         onByteProgress: ((bytesTransferred: Long, totalBytes: Long) -> Unit)? = null,
         keys: HttpSyncPayloadKeys = HttpSyncPayloadKeys.legacy(syncId),
         expectedFormat: HttpSyncContentType? = null,
-        repairManifest: Boolean = true,
     ): HttpSyncPayloadManifest = withContext(ioDispatcher) {
         val manifest = fetchManifest(transport, syncId, keys)
             ?: throw HttpSyncException("No payload manifest for $syncId.")
@@ -574,28 +597,45 @@ class HttpSyncPayloadCodec(
                 )
             }
             unzipInto(zipFile, targetDir)
-            // The zip sha256 above is the integrity check. The content hash is only the
-            // cross-platform change detector, derived from those same verified bytes, so a
-            // manifest that declares a different (or no) content hash was published by a client
-            // whose derivation was wrong — iOS builds through 0.11.3 hashed staging paths with a
-            // random per-download prefix. Correct the manifest in place instead of failing every
-            // download of a perfectly good archive; a failed repair just repeats next sync.
+            // The archive sha256 above is the integrity check; the content hash is a change
+            // detector derived from those verified bytes. A manifest that disagrees was written
+            // by a client whose derivation differed (iOS builds through 0.11.3 did), so it is
+            // corrected rather than treated as corruption.
             val contentSha = computePayloadContentSha(targetDir)
             val verified = manifest.copy(contentSha256 = contentSha)
-            if (repairManifest && manifest.contentSha256 != contentSha) {
-                try {
-                    publishVerifiedContentSha(transport, keys, verified)
-                } catch (e: kotlinx.coroutines.CancellationException) {
-                    throw e
-                } catch (_: Exception) {
-                    // The archive is verified and unpacked; only the server-side note is stale.
-                }
+            if (manifest.contentSha256 != contentSha) {
+                repairManifest(transport, syncId, keys, verifiedAgainst = manifest, verified = verified)
             }
-            // Keep the hash next to the unpacked book so every later sync is a sidecar read.
+            // Keep both hashes next to the unpacked book so later syncs are sidecar reads.
             writeCachedSha(targetDir.resolve(PAYLOAD_SHA_CACHE_FILENAME), contentSha)
+            rememberZipSha(targetDir, manifest.sha256)
             verified
         } finally {
             zipFile.delete()
+        }
+    }
+
+    /**
+     * Republishes [verified] only while the server still holds exactly [verifiedAgainst], the
+     * manifest the archive was checked against. Another device may have published a new archive
+     * during this download; overwriting its manifest with the old sha256 and size would break
+     * the book for every device until that publisher syncs again. A failed repair just repeats
+     * on the next sync.
+     */
+    private suspend fun repairManifest(
+        transport: HttpSyncKvTransport,
+        syncId: String,
+        keys: HttpSyncPayloadKeys,
+        verifiedAgainst: HttpSyncPayloadManifest,
+        verified: HttpSyncPayloadManifest,
+    ) {
+        try {
+            if (fetchManifest(transport, syncId, keys) != verifiedAgainst) return
+            publishVerifiedContentSha(transport, keys, verified)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            // The archive is verified and unpacked; only the server-side note is stale.
         }
     }
 
@@ -751,3 +791,15 @@ class HttpSyncPayloadCodec(
 }
 
 private const val STREAM_BUFFER_SIZE = 64 * 1024
+
+private fun nfc(value: String): String = Normalizer.normalize(value, Normalizer.Form.NFC)
+
+/** Unsigned lexicographic byte order — the cross-platform order of hashed payload paths. */
+private fun compareUnsignedBytes(a: ByteArray, b: ByteArray): Int {
+    val shared = minOf(a.size, b.size)
+    for (i in 0 until shared) {
+        val d = (a[i].toInt() and 0xff) - (b[i].toInt() and 0xff)
+        if (d != 0) return d
+    }
+    return a.size - b.size
+}
