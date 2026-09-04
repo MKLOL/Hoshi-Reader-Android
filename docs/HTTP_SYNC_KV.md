@@ -412,6 +412,15 @@ Notes for the server implementer:
   mount for v2: `/api/book_sync/v1/kv/...` so the two protocols can cohabit during
   migration. The repo CLAUDE.md should say how to register a new blueprint.
 
+## Testing against a real server
+
+`tools/sync-test-server/sync_test_server.py` implements this exact API (see its README). The
+Android integration suites under `app/src/test/.../sync/integration/` boot it and run the
+production engines and `HttpSyncKvClient` over real HTTP as part of the normal unit-test run; the
+iOS repo runs its `HoshiReaderTests` bundle against the same server, seeded with the corpus the
+Android client publishes. Any change to this document must keep `test_sync_test_server.py` and
+both integration suites green.
+
 ## Migration
 
 The Android client is the only client. v2 client ships, on first launch:

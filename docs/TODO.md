@@ -168,6 +168,8 @@ page images) that reuses the bookshelf, dictionary lookup, and Anki mining.
 
 ## Required Validation
 
+- HTTP sync: `./gradlew :app:testDebugUnitTest --tests 'moe.antimony.hoshi.features.sync.integration.*'` runs the production engines against the real `tools/sync-test-server` over HTTP (needs `python3`); the iOS repo's `python3 -m unittest Tests.Regression.test_sync_integration` does the same for iOS in the simulator. Both must pass before any sync release.
+
 On a fresh machine, run `./bootstrap.sh` (macOS/Homebrew) to install the JDK 21, Android
 SDK 36 + NDK + CMake, and Rust + cargo-ndk toolchain, then `source ./.bootstrap-env` before
 any Gradle command (it exports `ANDROID_NDK_HOME`, which the Rust/UniFFI build needs).
