@@ -52,10 +52,7 @@ class SyncCorpusSnapshotTest {
         assertEquals(emptyList<String>(), outcome.errors)
         assertEquals(2, outcome.uploadedPayloads)
 
-        server.client().put(
-            pretranslationsKey(SyncCorpus.MANGA_SYNC_ID), "application/json",
-            """{"kind":"mokuro","syncId":"${SyncCorpus.MANGA_SYNC_ID}","entries":{"p0b0":{"text":"${SyncCorpus.BUBBLE_TEXT}","translation":"Hello"}}}""".toByteArray(),
-        )
+        server.client().put(pretranslationsKey(SyncCorpus.MANGA_SYNC_ID), "application/json", SyncCorpus.pretranslationsBlobJson().toByteArray())
         val sentences = HttpSyncSentencesBlob(
             kind = "epub", syncId = SyncCorpus.NOVEL_SYNC_ID, title = SyncCorpus.NOVEL_TITLE, model = "m", promptId = "p",
             generatedAt = "2026-09-01T00:00:00Z", spineCount = 1,

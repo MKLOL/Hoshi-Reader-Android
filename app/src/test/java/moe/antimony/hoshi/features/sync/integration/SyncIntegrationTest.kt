@@ -3,6 +3,7 @@ package moe.antimony.hoshi.features.sync.integration
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import moe.antimony.hoshi.features.ai.AiChatEntry
+import moe.antimony.hoshi.features.ai.PretranslationStore
 import moe.antimony.hoshi.features.sync.http.HttpSyncContentType
 import moe.antimony.hoshi.features.sync.http.HttpSyncPayloadManifest
 import moe.antimony.hoshi.features.sync.http.HttpSyncSentenceEntry
@@ -109,7 +110,7 @@ class SyncIntegrationTest(private val engineA: SyncEngine, private val engineB: 
         assertEquals("both payloads uploaded", 2, first.uploadedPayloads)
 
         // The desktop tools publish these; every device must receive them.
-        server.client().put(pretranslationsKey(SyncCorpus.MANGA_SYNC_ID), "application/json", PRETRANSLATIONS.toByteArray())
+        server.client().put(pretranslationsKey(SyncCorpus.MANGA_SYNC_ID), "application/json", SyncCorpus.pretranslationsBlobJson().toByteArray())
         val sentences = HttpSyncSentencesBlob(
             kind = "epub", syncId = SyncCorpus.NOVEL_SYNC_ID, title = SyncCorpus.NOVEL_TITLE, model = "m", promptId = "p",
             generatedAt = "2026-09-01T00:00:00Z", spineCount = 1,
@@ -154,7 +155,8 @@ class SyncIntegrationTest(private val engineA: SyncEngine, private val engineB: 
         }
         val mangaB = b.book(SyncCorpus.MANGA_SYNC_ID)
         assertEquals(listOf("Hello"), b.history.load(mangaB.root).entries.map { it.response })
-        assertEquals(PRETRANSLATIONS, mangaB.root.resolve("pretranslations.json").readText())
+        assertEquals(SyncCorpus.pretranslationsBlobJson(), mangaB.root.resolve("pretranslations.json").readText())
+        assertEquals("Hello", PretranslationStore.lookup(mangaB.root, "p0b0", SyncCorpus.BUBBLE_TEXT)?.translation)
         val novelB = b.book(SyncCorpus.NOVEL_SYNC_ID)
         assertTrue("sentence translations landed", novelB.root.resolve("sentence_translations.json").readText().contains("To eat."))
         assertTrue("EPUB progress is derivable before first open", (b.repo.loadBookInfo(novelB.root)?.characterCount ?: 0) > 0)
@@ -313,5 +315,4 @@ class SyncIntegrationTest(private val engineA: SyncEngine, private val engineB: 
         assertSamePayload(a, manga, b, b.books().single().root)
     }
 
-    private val PRETRANSLATIONS = """{"kind":"mokuro","syncId":"${SyncCorpus.MANGA_SYNC_ID}","entries":{"p0b0":{"text":"${SyncCorpus.BUBBLE_TEXT}","translation":"Hello"}}}"""
 }

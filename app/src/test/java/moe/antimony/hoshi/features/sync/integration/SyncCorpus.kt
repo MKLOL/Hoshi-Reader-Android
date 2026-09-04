@@ -3,7 +3,11 @@ package moe.antimony.hoshi.features.sync.integration
 import moe.antimony.hoshi.epub.BookMetadata
 import moe.antimony.hoshi.epub.BookRepository
 import moe.antimony.hoshi.epub.Bookmark
+import kotlinx.serialization.json.Json
+import moe.antimony.hoshi.features.ai.PretranslationStore
 import moe.antimony.hoshi.features.sync.http.HttpSyncPayloadCodec
+import moe.antimony.hoshi.features.sync.http.PretranslationEntryBlob
+import moe.antimony.hoshi.features.sync.http.PretranslationsBlob
 import moe.antimony.hoshi.features.sync.http.deriveSyncId
 import java.io.File
 import java.security.MessageDigest
@@ -107,10 +111,26 @@ internal object SyncCorpus {
               </metadata>
               <manifest>
                 <item id="cover-image" href="images/cover.jpg" media-type="image/jpeg" properties="cover-image"/>
+                <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+                <item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
                 <item id="chapter" href="chapter.xhtml" media-type="application/xhtml+xml"/>
               </manifest>
-              <spine><itemref idref="chapter"/></spine>
+              <spine toc="ncx"><itemref idref="chapter"/></spine>
             </package>""".trimIndent(),
+        )
+        // Real books ship both navigation documents; iOS's EPUBKit refuses a book without an NCX.
+        root.resolve("OEBPS/toc.ncx").writeText(
+            """<?xml version="1.0" encoding="UTF-8"?>
+            <ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1">
+              <head><meta name="dtb:uid" content="integration-novel"/></head>
+              <docTitle><text>$title</text></docTitle>
+              <navMap><navPoint id="np1" playOrder="1"><navLabel><text>Chapter 1</text></navLabel><content src="chapter.xhtml"/></navPoint></navMap>
+            </ncx>""".trimIndent(),
+        )
+        root.resolve("OEBPS/nav.xhtml").writeText(
+            """<?xml version="1.0" encoding="UTF-8"?>
+            <html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><title>$title</title></head>
+            <body><nav epub:type="toc"><ol><li><a href="chapter.xhtml">Chapter 1</a></li></ol></nav></body></html>""".trimIndent(),
         )
         root.resolve("OEBPS/chapter.xhtml").writeText(
             """<?xml version="1.0" encoding="UTF-8"?>
@@ -136,6 +156,26 @@ internal object SyncCorpus {
         val codec = HttpSyncPayloadCodec()
         codec.ensurePayloadContentSha(root)
         codec.markPayloadContentDirty(root)
+    }
+
+    /**
+     * The offline bubble-translation blob exactly as the desktop tool and both clients define it
+     * (`PretranslationsBlob`), addressed by mokuro block and guarded by the text hash.
+     */
+    fun pretranslationsBlobJson(syncId: String = MANGA_SYNC_ID, title: String = MANGA_TITLE, pageCount: Int = 3): String {
+        val entries = (0 until pageCount).associate { page ->
+            "p${page}b0" to PretranslationEntryBlob(
+                text = BUBBLE_TEXT,
+                hash = PretranslationStore.textHash(BUBBLE_TEXT),
+                translation = "Hello",
+                explanation = "A greeting.",
+            )
+        }
+        val blob = PretranslationsBlob(
+            version = 1, syncId = syncId, title = title, model = "integration-model",
+            promptId = "integration-prompt", generatedAt = "2026-09-01T00:00:00Z", entries = entries,
+        )
+        return Json { encodeDefaults = true }.encodeToString(PretranslationsBlob.serializer(), blob)
     }
 
     fun bookmark(chapter: Int, appleSeconds: Double): Bookmark =
