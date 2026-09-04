@@ -20,6 +20,10 @@ Semantic Versioning.
   sync on a fresh device imported the books and then showed the older position stored next to
   each book; the newest position from your other devices only arrived on a later background
   pass. Sync now applies it as soon as the books exist.
+- **Devices no longer re-download a book they already hold just because another platform
+  hashed it differently.** A disagreement about a book's content hash while the server still
+  points at the same archive is now ignored, and a manifest is only corrected when nothing else
+  changed it in the meantime.
 
 ## [v0.11.4] - 2026-09-04
 
