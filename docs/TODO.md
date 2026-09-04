@@ -223,6 +223,8 @@ For reader text layout regressions, verify Appearance -> Layout changes such as 
 
 For continuous reader layout regressions, verify vertical-writing Horizontal Padding and horizontal-writing Vertical Padding inset the current visible viewport rather than only the chapter ends, and continuous reader chrome only re-enters focus mode from a new drag gesture after tapping to reveal controls.
 
+For continuous reader gesture regressions, verify a long drag that reverses direction still scrolls, that dragging backwards at the start of a chapter reaches the previous chapter's end, and that lifting a finger mid-chapter never turns a chapter on its own.
+
 For reader popup settings regressions, verify changing every Popup section control while a continuous reader is open does not rebuild the WebView and does not stop scroll progress updates.
 
 For localization changes, run `./gradlew :app:testDebugUnitTest --tests moe.antimony.hoshi.LocalizationResourceTest` and keep `docs/TRANSLATING.md` aligned with supported locale resource directories.

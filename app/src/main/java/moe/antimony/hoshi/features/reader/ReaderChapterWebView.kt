@@ -110,6 +110,7 @@ internal fun ChapterWebView(
     val currentWebViewRestoreEpoch = rememberUpdatedState(webViewRestoreEpoch)
     val currentOnRestoreStarted = rememberUpdatedState(onRestoreStarted)
     val currentOnRestoreCompleted = rememberUpdatedState(onRestoreCompleted)
+    val currentReaderSettings = rememberUpdatedState(readerSettings)
     var lastContinuousProgressUpdate by remember { mutableStateOf(0L) }
     var continuousScrollSaveRequestId by remember { mutableStateOf(0L) }
     val chapter = book.chapters[chapterPosition.index]
@@ -216,6 +217,77 @@ internal fun ChapterWebView(
             null,
         )
     }
+    // Reader gestures are stateful: the pointer-down origin recorded on ACTION_DOWN is what
+    // ACTION_UP measures the drag against. Continuous scrolling reports progress on every scroll
+    // change, which recomposes the reader and re-runs the AndroidView update block, so a listener
+    // built inside that block would be replaced mid-drag and would measure the rest of the gesture
+    // from (0, 0). Keep one instance per reader and read the changing inputs through state.
+    val continuousScrollTouchListener = remember {
+        ContinuousScrollTouchListener(
+            settings = { currentReaderSettings.value },
+            shouldIgnoreReaderGesture = { webView, event ->
+                webView.shouldIgnoreReaderGesture(
+                    event = event,
+                    isWebViewRestoring = currentIsWebViewRestoring.value,
+                    popups = currentReaderPopupFrames.value,
+                )
+            },
+            onTap = { webView, x, y ->
+                webView.selectReaderTextAt(x, y) { currentOnReaderTapOutside.value() }
+            },
+            onScrollGesture = { currentOnReaderInteraction.value() },
+            onNextChapter = { webView ->
+                currentOnReaderInteraction.value()
+                currentOnClearLookupPopup.value()
+                val changed = currentOnNextChapter.value()
+                if (changed) webView.hideForReaderRestore()
+                changed
+            },
+            onPreviousChapter = { webView ->
+                currentOnReaderInteraction.value()
+                currentOnClearLookupPopup.value()
+                val changed = currentOnPreviousChapter.value()
+                if (changed) webView.hideForReaderRestore()
+                changed
+            },
+        )
+    }
+    val swipePageTouchListener = remember {
+        object : SwipePageTouchListener() {
+            override fun shouldIgnoreReaderGesture(event: MotionEvent): Boolean {
+                val webView = readerWebView as? HoshiReaderWebView ?: return true
+                return webView.shouldIgnoreReaderGesture(
+                    event = event,
+                    isWebViewRestoring = currentIsWebViewRestoring.value,
+                    popups = currentReaderPopupFrames.value,
+                )
+            }
+
+            override fun onTap(x: Float, y: Float) {
+                readerWebView?.selectReaderTextAt(x, y) { currentOnReaderTapOutside.value() }
+            }
+
+            override fun onLeftSwipe() = navigatePage(ReaderSwipeDirection.Left)
+
+            override fun onRightSwipe() = navigatePage(ReaderSwipeDirection.Right)
+
+            private fun navigatePage(swipeDirection: ReaderSwipeDirection) {
+                val webView = readerWebView ?: return
+                currentOnReaderInteraction.value()
+                currentOnClearLookupPopup.value()
+                webView.navigatePageForDirection(
+                    direction = readerNavigationDirectionForSwipe(
+                        isVerticalWriting = currentReaderSettings.value.verticalWriting,
+                        swipeDirection = swipeDirection,
+                    ),
+                    onNextChapter = currentOnNextChapter.value,
+                    onPreviousChapter = currentOnPreviousChapter.value,
+                    onDisplayedProgress = currentOnDisplayProgress.value,
+                    onSaveProgress = currentOnSaveBookmark.value,
+                )
+            }
+        }
+    }
     AndroidView(
         modifier = modifier
             .onSizeChanged(onReaderViewportSizeChanged)
@@ -270,56 +342,8 @@ internal fun ChapterWebView(
             }
         },
         update = { webView ->
-            fun selectAt(x: Float, y: Float) {
-                val density = webView.resources.displayMetrics.density
-                webView.evaluateJavascript(
-                    ReaderSelectionCommand.SelectText(
-                        x = androidPixelsToCssPixels(x, density),
-                        y = androidPixelsToCssPixels(y, density),
-                        maxLength = MAX_SELECTION_LENGTH,
-                    ).source,
-                ) { result ->
-                    val selectionResult = ReaderSelectionResult.fromWebViewResult(result)
-                    when {
-                        selectionResult.isImageTap || selectionResult.isLinkTap || selectionResult.isTranslationTap -> Unit
-                        selectionResult.selectedNothing -> currentOnReaderTapOutside.value()
-                    }
-                }
-            }
-            fun shouldIgnoreReaderGestureEvent(event: MotionEvent): Boolean {
-                if (currentIsWebViewRestoring.value || webView.isNativeSelectionActionModeActive()) {
-                    return true
-                }
-                val density = webView.resources.displayMetrics.density
-                return readerLookupPopupTouchBlocksReaderGesture(
-                    popups = currentReaderPopupFrames.value,
-                    x = androidPixelsToCssPixels(event.x, density).toDouble(),
-                    y = androidPixelsToCssPixels(event.y, density).toDouble(),
-                )
-            }
             if (readerSettings.continuousMode) {
-                webView.setOnTouchListener(
-                    ContinuousScrollTouchListener(
-                        settings = readerSettings,
-                        shouldIgnoreReaderGesture = ::shouldIgnoreReaderGestureEvent,
-                        onTap = ::selectAt,
-                        onScrollGesture = currentOnReaderInteraction.value,
-                        onNextChapter = {
-                            currentOnReaderInteraction.value()
-                            currentOnClearLookupPopup.value()
-                            val changed = currentOnNextChapter.value()
-                            if (changed) webView.hideForReaderRestore()
-                            changed
-                        },
-                        onPreviousChapter = {
-                            currentOnReaderInteraction.value()
-                            currentOnClearLookupPopup.value()
-                            val changed = currentOnPreviousChapter.value()
-                            if (changed) webView.hideForReaderRestore()
-                            changed
-                        },
-                    ),
-                )
+                webView.setOnTouchListener(continuousScrollTouchListener)
                 webView.setOnScrollChangeListener { _, _, _, _, _ ->
                     val now = SystemClock.uptimeMillis()
                     if (now - lastContinuousProgressUpdate < CONTINUOUS_PROGRESS_THROTTLE_MS) return@setOnScrollChangeListener
@@ -362,46 +386,7 @@ internal fun ChapterWebView(
             } else {
                 readerPendingProgressSaveCallbacks.remove(webView)?.let(webView::removeCallbacks)
                 webView.setOnScrollChangeListener(null)
-                webView.setOnTouchListener(object : SwipePageTouchListener() {
-                    override fun shouldIgnoreReaderGesture(event: MotionEvent): Boolean =
-                        shouldIgnoreReaderGestureEvent(event)
-
-                    override fun onTap(x: Float, y: Float) {
-                        selectAt(x, y)
-                    }
-
-                    override fun onLeftSwipe() {
-                        currentOnReaderInteraction.value()
-                        currentOnClearLookupPopup.value()
-                        val direction = readerNavigationDirectionForSwipe(
-                            isVerticalWriting = readerSettings.verticalWriting,
-                            swipeDirection = ReaderSwipeDirection.Left,
-                        )
-                        webView.navigatePageForDirection(
-                            direction = direction,
-                            onNextChapter = currentOnNextChapter.value,
-                            onPreviousChapter = currentOnPreviousChapter.value,
-                            onDisplayedProgress = currentOnDisplayProgress.value,
-                            onSaveProgress = currentOnSaveBookmark.value,
-                        )
-                    }
-
-                    override fun onRightSwipe() {
-                        currentOnReaderInteraction.value()
-                        currentOnClearLookupPopup.value()
-                        val direction = readerNavigationDirectionForSwipe(
-                            isVerticalWriting = readerSettings.verticalWriting,
-                            swipeDirection = ReaderSwipeDirection.Right,
-                        )
-                        webView.navigatePageForDirection(
-                            direction = direction,
-                            onNextChapter = currentOnNextChapter.value,
-                            onPreviousChapter = currentOnPreviousChapter.value,
-                            onDisplayedProgress = currentOnDisplayProgress.value,
-                            onSaveProgress = currentOnSaveBookmark.value,
-                        )
-                    }
-                })
+                webView.setOnTouchListener(swipePageTouchListener)
             }
             webView.evaluateJavascript(readerAppearanceScript, null)
             if (!readerWebViewReadyToLoad(webViewViewportSize)) return@AndroidView
@@ -904,104 +889,187 @@ internal fun WebView.flushPendingProgressSave() {
 }
 
 private class ContinuousScrollTouchListener(
-    private val settings: ReaderSettings,
-    private val shouldIgnoreReaderGesture: (MotionEvent) -> Boolean,
-    private val onTap: (Float, Float) -> Unit,
+    private val settings: () -> ReaderSettings,
+    private val shouldIgnoreReaderGesture: (HoshiReaderWebView, MotionEvent) -> Boolean,
+    private val onTap: (HoshiReaderWebView, Float, Float) -> Unit,
     private val onScrollGesture: () -> Unit,
-    private val onNextChapter: () -> Boolean,
-    private val onPreviousChapter: () -> Boolean,
+    private val onNextChapter: (HoshiReaderWebView) -> Boolean,
+    private val onPreviousChapter: (HoshiReaderWebView) -> Boolean,
 ) : View.OnTouchListener {
-    private var downX = 0f
-    private var downY = 0f
-    private var downTime = 0L
-    private var currentGestureIgnored = false
-    private val focusTracker = ReaderContinuousScrollFocusTracker()
+    private val tracker = ReaderContinuousScrollGestureTracker(
+        tapSlop = CONTINUOUS_READER_TAP_SLOP,
+        maxTapDurationMs = CONTINUOUS_READER_MAX_TAP_DURATION_MS,
+    )
 
     override fun onTouch(view: View, event: MotionEvent): Boolean {
-        val webView = view as? WebView ?: return false
-        if (shouldIgnoreReaderGesture(event)) {
-            currentGestureIgnored = true
+        val webView = view as? HoshiReaderWebView ?: return false
+        if (shouldIgnoreReaderGesture(webView, event)) {
+            tracker.suppressCurrentGesture()
             return false
         }
         when (event.actionMasked) {
-            MotionEvent.ACTION_DOWN -> {
-                downX = event.x
-                downY = event.y
-                downTime = event.eventTime
-                currentGestureIgnored = false
-                focusTracker.onDown()
-            }
-            MotionEvent.ACTION_CANCEL -> {
-                currentGestureIgnored = false
-                focusTracker.onCancel()
-            }
-            MotionEvent.ACTION_MOVE -> {
-                if (focusTracker.onMove(event.x - downX, event.y - downY)) {
-                    onScrollGesture()
-                }
-            }
+            MotionEvent.ACTION_DOWN -> tracker.onDown(event.x, event.y, event.eventTime)
+            MotionEvent.ACTION_CANCEL -> tracker.onCancel()
+            MotionEvent.ACTION_MOVE -> if (tracker.onMove(event.x, event.y)) onScrollGesture()
             MotionEvent.ACTION_UP -> {
-                if (currentGestureIgnored) {
-                    currentGestureIgnored = false
-                    focusTracker.onCancel()
-                    return false
+                val readerSettings = settings()
+                val result = tracker.onUp(
+                    x = event.x,
+                    y = event.y,
+                    eventTime = event.eventTime,
+                    verticalWriting = readerSettings.verticalWriting,
+                    chapterSwipeDistancePx = readerSettings.chapterSwipeDistance *
+                        webView.resources.displayMetrics.density,
+                )
+                when (result) {
+                    is ReaderContinuousScrollGestureTracker.Result.Tap -> onTap(webView, result.x, result.y)
+                    is ReaderContinuousScrollGestureTracker.Result.ChapterSwipe ->
+                        turnChapterAtBoundary(webView, result.direction, readerSettings.verticalWriting)
+                    ReaderContinuousScrollGestureTracker.Result.None -> Unit
                 }
-                val dx = event.x - downX
-                val dy = event.y - downY
-                val elapsedMs = event.eventTime - downTime
-                if (
-                    elapsedMs <= CONTINUOUS_READER_MAX_TAP_DURATION_MS &&
-                    abs(dx) < CONTINUOUS_READER_TAP_SLOP &&
-                    abs(dy) < CONTINUOUS_READER_TAP_SLOP
-                ) {
-                    onTap(event.x, event.y)
-                    return false
-                }
-                handleBoundarySwipe(webView, dx, dy)
-                focusTracker.onCancel()
             }
         }
         return false
     }
 
-    private fun handleBoundarySwipe(webView: WebView, dx: Float, dy: Float) {
-        val threshold = settings.chapterSwipeDistance * webView.resources.displayMetrics.density
-        if (settings.verticalWriting) {
-            if (abs(dx) < threshold || abs(dx) < abs(dy)) return
-            when {
-                dx > 0 && !webView.canScrollHorizontally(-1) -> onNextChapter()
-                dx < 0 && !webView.canScrollHorizontally(1) -> onPreviousChapter()
-            }
-        } else {
-            if (abs(dy) < threshold || abs(dy) < abs(dx)) return
-            when {
-                dy < 0 && !webView.canScrollVertically(1) -> onNextChapter()
-                dy > 0 && !webView.canScrollVertically(-1) -> onPreviousChapter()
-            }
+    private fun turnChapterAtBoundary(
+        webView: HoshiReaderWebView,
+        direction: ReaderNavigationDirection,
+        verticalWriting: Boolean,
+    ) {
+        when (direction) {
+            ReaderNavigationDirection.Forward ->
+                if (!webView.canScrollReaderForward(verticalWriting)) onNextChapter(webView)
+            ReaderNavigationDirection.Backward ->
+                if (!webView.canScrollReaderBackward(verticalWriting)) onPreviousChapter(webView)
         }
     }
-
 }
 
 private const val CONTINUOUS_READER_TAP_SLOP = 12f
 private const val CONTINUOUS_READER_MAX_TAP_DURATION_MS = 500L
 
-internal class ReaderContinuousScrollFocusTracker {
+/**
+ * Gesture state machine for the continuous reader.
+ *
+ * Every gesture is measured against the pointer-down origin recorded by [onDown]: a drag shorter
+ * than [tapSlop] is a tap, and a longer one is a chapter swipe whose reading direction comes from
+ * its dominant axis. Moves and lifts that arrive without a matching [onDown] are reported as
+ * [Result.None] instead of being measured against a zeroed origin, which would turn every drag
+ * into a rightward (vertical writing) or downward (horizontal writing) swipe and make backward
+ * chapter turns unreachable.
+ */
+internal class ReaderContinuousScrollGestureTracker(
+    private val tapSlop: Float,
+    private val maxTapDurationMs: Long,
+) {
+    private var downX = 0f
+    private var downY = 0f
+    private var downTime = 0L
+    private var hasDown = false
     private var scrollGestureStarted = false
 
-    fun onDown() {
+    fun onDown(x: Float, y: Float, eventTime: Long) {
+        downX = x
+        downY = y
+        downTime = eventTime
+        hasDown = true
         scrollGestureStarted = false
+    }
+
+    /** True once, when the pointer first travels far enough for the gesture to count as a drag. */
+    fun onMove(x: Float, y: Float): Boolean {
+        if (!hasDown || scrollGestureStarted) return false
+        if (abs(x - downX) < tapSlop && abs(y - downY) < tapSlop) return false
+        scrollGestureStarted = true
+        return true
+    }
+
+    fun onUp(
+        x: Float,
+        y: Float,
+        eventTime: Long,
+        verticalWriting: Boolean,
+        chapterSwipeDistancePx: Float,
+    ): Result {
+        if (!hasDown) return Result.None
+        val dx = x - downX
+        val dy = y - downY
+        val elapsedMs = eventTime - downTime
+        onCancel()
+        if (elapsedMs <= maxTapDurationMs && abs(dx) < tapSlop && abs(dy) < tapSlop) {
+            return Result.Tap(x, y)
+        }
+        return chapterSwipe(dx, dy, verticalWriting, chapterSwipeDistancePx)
     }
 
     fun onCancel() {
+        hasDown = false
         scrollGestureStarted = false
     }
 
-    fun onMove(dx: Float, dy: Float): Boolean {
-        if (scrollGestureStarted) return false
-        if (abs(dx) < CONTINUOUS_READER_TAP_SLOP && abs(dy) < CONTINUOUS_READER_TAP_SLOP) return false
-        scrollGestureStarted = true
-        return true
+    fun suppressCurrentGesture() {
+        onCancel()
+    }
+
+    private fun chapterSwipe(
+        dx: Float,
+        dy: Float,
+        verticalWriting: Boolean,
+        chapterSwipeDistancePx: Float,
+    ): Result {
+        // Vertical writing scrolls sideways and reads right to left, so dragging right advances.
+        // Horizontal writing scrolls down, so dragging up advances.
+        val travel = if (verticalWriting) dx else dy
+        val crossTravel = if (verticalWriting) dy else dx
+        if (abs(travel) < chapterSwipeDistancePx || abs(travel) < abs(crossTravel)) return Result.None
+        val forward = if (verticalWriting) travel > 0f else travel < 0f
+        return Result.ChapterSwipe(
+            if (forward) ReaderNavigationDirection.Forward else ReaderNavigationDirection.Backward,
+        )
+    }
+
+    sealed class Result {
+        data object None : Result()
+        data class Tap(val x: Float, val y: Float) : Result()
+        data class ChapterSwipe(val direction: ReaderNavigationDirection) : Result()
+    }
+}
+
+private fun WebView.canScrollReaderForward(verticalWriting: Boolean): Boolean =
+    if (verticalWriting) canScrollHorizontally(-1) else canScrollVertically(1)
+
+private fun WebView.canScrollReaderBackward(verticalWriting: Boolean): Boolean =
+    if (verticalWriting) canScrollHorizontally(1) else canScrollVertically(-1)
+
+private fun HoshiReaderWebView.shouldIgnoreReaderGesture(
+    event: MotionEvent,
+    isWebViewRestoring: Boolean,
+    popups: List<ReaderLookupPopupFramePayload>,
+): Boolean {
+    if (isWebViewRestoring || isNativeSelectionActionModeActive()) return true
+    val density = resources.displayMetrics.density
+    return readerLookupPopupTouchBlocksReaderGesture(
+        popups = popups,
+        x = androidPixelsToCssPixels(event.x, density).toDouble(),
+        y = androidPixelsToCssPixels(event.y, density).toDouble(),
+    )
+}
+
+private fun WebView.selectReaderTextAt(x: Float, y: Float, onSelectedNothing: () -> Unit) {
+    val density = resources.displayMetrics.density
+    evaluateJavascript(
+        ReaderSelectionCommand.SelectText(
+            x = androidPixelsToCssPixels(x, density),
+            y = androidPixelsToCssPixels(y, density),
+            maxLength = MAX_SELECTION_LENGTH,
+        ).source,
+    ) { result ->
+        val selectionResult = ReaderSelectionResult.fromWebViewResult(result)
+        when {
+            selectionResult.isImageTap || selectionResult.isLinkTap || selectionResult.isTranslationTap -> Unit
+            selectionResult.selectedNothing -> onSelectedNothing()
+        }
     }
 }
 

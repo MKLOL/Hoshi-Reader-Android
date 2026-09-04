@@ -7,6 +7,13 @@ Semantic Versioning.
 
 ## [Unreleased]
 
+### Fixed
+- **The continuous reader no longer gets stuck when you scroll one way and then back.** Scrolling
+  reports your reading position, and that could replace the reader's touch handling in the middle
+  of a drag, so the rest of the swipe was measured from the corner of the screen instead of from
+  where your finger went down. Every drag then looked like a forward swipe: at the start of a
+  chapter the reader refused to turn back and simply stopped moving, and near a chapter end a
+  swipe could jump chapters on its own. Drags are now tracked from where they actually begin.
 ## [v0.11.4] - 2026-09-04
 
 ### Fixed

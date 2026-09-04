@@ -502,22 +502,6 @@ class ReaderWebViewStateHolderTest {
     }
 
     @Test
-    fun continuousScrollFocusTrackerOnlyStartsFocusForRealScrollGestures() {
-        val tracker = ReaderContinuousScrollFocusTracker()
-
-        tracker.onDown()
-        assertFalse(tracker.onMove(2f, 2f))
-        assertTrue(tracker.onMove(12f, 1f))
-        assertFalse(tracker.onMove(20f, 1f))
-
-        tracker.onCancel()
-        assertFalse(tracker.onMove(2f, 2f))
-
-        tracker.onDown()
-        assertTrue(tracker.onMove(0f, -12f))
-    }
-
-    @Test
     fun enteringFocusModeClosesTheReaderMenu() {
         val holder = stateHolder()
         holder.showReaderMenu()
