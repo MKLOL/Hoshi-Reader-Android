@@ -5,13 +5,11 @@ import moe.antimony.hoshi.epub.BookRepository
 import moe.antimony.hoshi.epub.Bookmark
 import kotlinx.serialization.json.Json
 import moe.antimony.hoshi.features.ai.PretranslationStore
-import moe.antimony.hoshi.features.sync.http.HttpSyncPayloadCodec
 import moe.antimony.hoshi.features.sync.http.PretranslationEntryBlob
 import moe.antimony.hoshi.features.sync.http.PretranslationsBlob
 import moe.antimony.hoshi.features.sync.http.deriveSyncId
 import java.io.File
 import java.security.MessageDigest
-import java.time.Instant
 import java.util.Base64
 import java.util.UUID
 import kotlin.random.Random
@@ -44,8 +42,8 @@ internal object SyncCorpus {
 
     /**
      * Materializes a mokuro volume the way the importer leaves it on disk: `images/NNNN.jpg`,
-     * `mokuro.json`, an import-time root cover copy, metadata with a persisted sync id, and
-     * the payload-dirty marker `HttpSyncAutoPush.onBookImported` sets.
+     * `mokuro.json`, an import-time root cover copy, and metadata with a persisted sync id.
+     * The bookshelf's post-import hook is the device's job ([SyncDevice.importManga]).
      */
     suspend fun importManga(
         repo: BookRepository,
@@ -139,24 +137,24 @@ internal object SyncCorpus {
         root.resolve("OEBPS/images/cover.jpg").writeBytes(pageJpegs[0])
     }
 
+    /** Import-time metadata. Fixed id and timestamp so the published corpus is reproducible. */
     private suspend fun registerImport(repo: BookRepository, root: File, title: String, cover: String?) {
         repo.saveMetadata(
             root,
             BookMetadata(
-                id = UUID.randomUUID().toString(),
+                id = UUID.nameUUIDFromBytes(title.toByteArray(Charsets.UTF_8)).toString(),
                 title = title,
                 cover = cover,
                 folder = root.name,
                 lastAccess = 0.0,
                 syncId = deriveSyncId(title),
-                importedAt = Instant.now().toString(),
+                importedAt = IMPORTED_AT,
             ),
         )
-        // What HttpSyncAutoPush.onBookImported does before its metadata push.
-        val codec = HttpSyncPayloadCodec()
-        codec.ensurePayloadContentSha(root)
-        codec.markPayloadContentDirty(root)
     }
+
+    /** The corpus's fixed import stamp; see [registerImport]. */
+    const val IMPORTED_AT = "2026-09-01T00:00:00Z"
 
     /**
      * The offline bubble-translation blob exactly as the desktop tool and both clients define it

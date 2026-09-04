@@ -8,7 +8,6 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
-import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.ClassRule
@@ -74,10 +73,9 @@ class RealServerKvClientTest {
     fun missingKeyIsNullAndWrongTokenIs401() = runBlocking {
         assertNull(server.client().get("books/never/bookmark"))
         val wrong = HttpSyncKvClient(server.baseUrl, "wrong-token")
-        val error = assertThrows(HttpSyncException::class.java) {
-            runBlocking { wrong.get("books/never/bookmark") }
-        }
-        assertTrue(error.message!!, error.message!!.contains("401"))
+        val error = runCatching { wrong.get("books/never/bookmark") }.exceptionOrNull()
+        assertTrue("expected HttpSyncException, got $error", error is HttpSyncException)
+        assertTrue(error!!.message!!, error.message!!.contains("401"))
     }
 
     @Test

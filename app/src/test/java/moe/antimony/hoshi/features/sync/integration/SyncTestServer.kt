@@ -1,6 +1,7 @@
 package moe.antimony.hoshi.features.sync.integration
 
 import kotlinx.coroutines.Dispatchers
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -70,6 +71,19 @@ class SyncTestServer private constructor(
 
     fun clearRequests() {
         post("/_test/requests/clear")
+    }
+
+    /**
+     * Arms the server to answer the next [count] API requests whose path starts with
+     * [pathPrefix] (and whose method is [method], when given) with [status].
+     */
+    fun failNext(pathPrefix: String, status: Int, count: Int = 1, method: String? = null) {
+        val methodField = method?.let { ""","method":"$it"""" }.orEmpty()
+        post(
+            "/_test/fail_next",
+            """{"pathPrefix":"$pathPrefix","status":$status,"count":$count$methodField}""".toByteArray(Charsets.UTF_8),
+            "application/json; charset=utf-8",
+        )
     }
 
     /** Every request the server handled since the last [clearRequests] / [reset]. */
@@ -180,7 +194,16 @@ class SyncTestServer private constructor(
 }
 
 @Serializable
-data class RecordedRequest(val method: String, val path: String, val status: Int, val size: Int) {
+data class RecordedRequest(
+    val method: String,
+    val path: String,
+    val status: Int,
+    /** Bytes in the server's response body (not the request's). */
+    @SerialName("size") val responseBytes: Int,
+) {
+    /** The listing every sync pass starts with. */
+    val isListing: Boolean
+        get() = method == "GET" && (path == "/v1/kv" || path.startsWith("/v1/kv?"))
     val isPayloadUpload: Boolean
         get() = (method == "PUT" && (path.endsWith("/payload.zip") || path.endsWith("/epub.zip"))) ||
             path == "/v1/kv-multipart/start"
