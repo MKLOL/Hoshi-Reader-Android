@@ -2,6 +2,7 @@ package moe.antimony.hoshi.features.sync.http
 
 import moe.antimony.hoshi.epub.BookRepository
 import moe.antimony.hoshi.epub.ContentType
+import moe.antimony.hoshi.epub.GENERATED_COVER_FILENAME
 import moe.antimony.hoshi.epub.EpubBook
 import moe.antimony.hoshi.epub.EpubBookParser
 import moe.antimony.hoshi.epub.bookContentType
@@ -45,7 +46,35 @@ internal suspend fun resolveSyncImportedCoverPath(
             ContentType.Epub -> epubParser.parse(bookRoot).coverHref
         }
     }.getOrNull() ?: return null
-    return bookRepository.metadataCoverPath(bookRoot, coverHref)
+    return bookRepository.syncedCoverPath(bookRoot, coverHref)
+}
+
+/**
+ * Repairs a book whose pre-fix build materialized a receiver-side cover into the root (poisoning
+ * its content hash). Returns true when the payload actually matches [expectedSha] once that one
+ * file is set aside — the cover is renamed to the hash-excluded name, metadata is repointed, and
+ * the caller must skip the payload replacement it was about to run.
+ */
+internal suspend fun migrateLegacyGeneratedCoverAndRepoint(
+    payloadCodec: HttpSyncPayloadCodec,
+    bookRepository: BookRepository,
+    bookRoot: File,
+    expectedSha: String,
+): Boolean {
+    val metadata = bookRepository.loadMetadata(bookRoot)
+    val candidates = buildList {
+        add("cover.jpg")
+        val name = metadata?.cover?.substringAfterLast('/')
+        if (!name.isNullOrEmpty() && name !in this) add(name)
+    }
+    if (!payloadCodec.migrateLegacyGeneratedCover(bookRoot, expectedSha, candidates)) return false
+    metadata?.let {
+        bookRepository.saveMetadata(
+            bookRoot,
+            it.copy(cover = "Books/${bookRoot.name}/$GENERATED_COVER_FILENAME"),
+        )
+    }
+    return true
 }
 
 /**

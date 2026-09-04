@@ -2,6 +2,8 @@ package moe.antimony.hoshi.features.sync.http
 
 import kotlinx.coroutines.runBlocking
 import moe.antimony.hoshi.epub.BookRepository
+import moe.antimony.hoshi.epub.GENERATED_COVER_FILENAME
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -41,11 +43,13 @@ class SyncImportCoverTest {
 
         val result = resolveSyncImportedCoverPath(repo, bookRoot)
 
-        // metadataCoverPath copies the cover to <bookRoot>/<basename> and returns the
-        // shelf-relative form.
-        assertEquals("Books/${bookRoot.name}/p0.jpg", result)
+        // syncedCoverPath materializes the cover under the hash-excluded generated name and
+        // returns the shelf-relative form; a payload-visible basename copy would change the
+        // book's content hash against the origin's manifest.
+        assertEquals("Books/${bookRoot.name}/$GENERATED_COVER_FILENAME", result)
         assertTrue(coverSource.isFile)
-        assertTrue(bookRoot.resolve("p0.jpg").isFile)
+        assertTrue(bookRoot.resolve(GENERATED_COVER_FILENAME).isFile)
+        assertFalse(bookRoot.resolve("p0.jpg").exists())
     }
 
     @Test

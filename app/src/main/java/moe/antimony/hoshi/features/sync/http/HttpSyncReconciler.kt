@@ -1690,7 +1690,7 @@ class HttpSyncReconciler(
             val targetRoot = publishSyncImportDirectory(stagingRoot, bookRepository.booksDirectory)
             publishedRoot = targetRoot
             val coverPath = if (parsedEpub != null) {
-                bookRepository.metadataCoverPath(targetRoot, parsedEpub.coverHref)
+                bookRepository.syncedCoverPath(targetRoot, parsedEpub.coverHref)
             } else {
                 resolveSyncImportedCoverPath(bookRepository, targetRoot)
             }
@@ -1730,9 +1730,18 @@ class HttpSyncReconciler(
         if (HttpSyncActiveBooks.contains(syncId)) return false
         val remote = payloadCodec.fetchManifest(transport, syncId, keys) ?: return false
         if (payloadCodec.hasPayloadContentDirty(bookRoot)) return false
-        val localSha = payloadCodec.cachedPayloadSha(bookRoot)
+        val cachedSha = payloadCodec.cachedPayloadSha(bookRoot)
             ?: payloadCodec.ensurePayloadContentSha(bookRoot)
-        if (remote.contentSha256 != null && localSha == remote.contentSha256) return false
+        val remoteSha = remote.contentSha256
+        if (remoteSha != null && cachedSha == remoteSha) return false
+        // The cached baseline disagrees with the server. Re-derive it from the bytes on disk
+        // before paying for a download: a stale or mis-derived sidecar is far cheaper to fix
+        // locally than a multi-hundred-MB replacement that installs identical content.
+        val localSha = payloadCodec.refreshPayloadContentSha(bookRoot)
+        if (remoteSha != null && localSha == remoteSha) return false
+        if (remoteSha != null &&
+            migrateLegacyGeneratedCoverAndRepoint(payloadCodec, bookRepository, bookRoot, remoteSha)
+        ) return false
 
         val stagingRoot = createSyncImportStagingDirectory(bookRepository.booksDirectory)
         try {
@@ -1758,10 +1767,9 @@ class HttpSyncReconciler(
                 )
             }
             val parsedEpub = validateSyncImportedBook(stagingRoot)
+            // downloadAndUnpack already republished the manifest if its declared hash was
+            // missing or wrong, so the remote note now matches this verified value.
             val verifiedRemoteSha = requireNotNull(manifest.contentSha256)
-            if (remote.contentSha256 == null) {
-                payloadCodec.publishVerifiedContentSha(transport, keys, manifest)
-            }
             if (localSha == verifiedRemoteSha) return false
             return bookLocks.withBookLock(bookRoot) {
                 // A local same-title import may have completed while this payload downloaded.

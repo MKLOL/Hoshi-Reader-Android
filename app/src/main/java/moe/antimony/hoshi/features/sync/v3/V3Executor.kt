@@ -484,7 +484,7 @@ class V3Executor(
             // Parse/cover resolution is deliberately inside the cleanup boundary: malformed
             // remote bytes must never leave a ghost shelf directory behind.
             val coverPath = if (parsedEpub != null) {
-                bookRepository.metadataCoverPath(targetRoot, parsedEpub.coverHref)
+                bookRepository.syncedCoverPath(targetRoot, parsedEpub.coverHref)
             } else {
                 resolveSyncImportedCoverPath(bookRepository, targetRoot)
             }
@@ -525,10 +525,19 @@ class V3Executor(
                 format = action.manifest.format,
             )
         }
-        val localSha = payloadCodec.cachedPayloadSha(action.root)
+        val cachedSha = payloadCodec.cachedPayloadSha(action.root)
             ?: payloadCodec.ensurePayloadContentSha(action.root)
-        if (action.manifest.contentSha256 != null &&
-            localSha == action.manifest.contentSha256
+        val remoteSha = action.manifest.contentSha256
+        if (remoteSha != null && cachedSha == remoteSha) return false
+        // The cached baseline disagrees with the server. Re-derive it from the bytes on disk
+        // before paying for a download: a stale or mis-derived sidecar is far cheaper to fix
+        // locally than a multi-hundred-MB replacement that installs identical content.
+        val localSha = payloadCodec.refreshPayloadContentSha(action.root)
+        if (remoteSha != null && localSha == remoteSha) return false
+        if (remoteSha != null &&
+            moe.antimony.hoshi.features.sync.http.migrateLegacyGeneratedCoverAndRepoint(
+                payloadCodec, bookRepository, action.root, remoteSha,
+            )
         ) return false
         val stagingRoot = createSyncImportStagingDirectory(bookRepository.booksDirectory)
         try {
@@ -558,10 +567,9 @@ class V3Executor(
                 "Payload for ${action.syncId} declares ${manifest.format} but unpacked as $actualContentType."
             }
             val parsedEpub = moe.antimony.hoshi.features.sync.http.validateSyncImportedBook(stagingRoot)
+            // downloadAndUnpack already republished the manifest if its declared hash was
+            // missing or wrong, so the remote note now matches this verified value.
             val verifiedRemoteSha = requireNotNull(manifest.contentSha256)
-            if (action.manifest.contentSha256 == null) {
-                payloadCodec.publishVerifiedContentSha(transport, action.payloadKeys, manifest)
-            }
             if (localSha == verifiedRemoteSha) return false
             return bookLocks.withBookLock(action.root) {
                 // Re-check after download and under the shared import/sync lock. A local import

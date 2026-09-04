@@ -1,6 +1,6 @@
 # Hoshi Android Agent TODO
 
-Last updated: 2026-08-26
+Last updated: 2026-09-04
 
 This file is the short operational handoff for future agents.
 
@@ -98,6 +98,7 @@ This file is the short operational handoff for future agents.
 
 ### Sync
 
+- HTTP sync payload content hash: iOS builds through 0.11.3 published mis-derived `contentSha256` manifests, so every download failed the content check; the 22 server manifests were repaired on 2026-09-04. Both clients now correct a wrong manifest hash on download and re-hash from disk before any replacement. Cross-platform golden vectors: `HttpSyncPayloadTest.contentHashMatchesCrossPlatformGoldenVector` and iOS `Tests/Regression/test_payload_content_hash.py` (compiles the real Swift function); change fixtures on both or neither.
 - Preserve the shared lifecycle-aware loaded-settings collection pattern when adding settings pages so controls do not flash default values before saved preferences load.
 - Keep reader auto-export save/upload work on a scope that survives reader route disposal so close and background flushes can finish after navigation.
 - Keep HTTP Sync `payload.zip` upload/download file-backed; large Mokuro manga must not be materialized as a single `ByteArray` in production sync paths.

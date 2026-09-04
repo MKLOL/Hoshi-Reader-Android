@@ -5,6 +5,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import moe.antimony.hoshi.epub.GENERATED_COVER_FILENAME
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.nio.ByteBuffer
@@ -87,6 +88,9 @@ internal val PAYLOAD_EXCLUDED_FILES: Set<String> = setOf(
     "highlights.json",
     "pretranslations.json",     // synced as …/pretranslations
     "sentence_translations.json", // synced as …/sentences
+    // Cover materialized by a sync receiver for a payload that shipped none (both platforms);
+    // it must stay out of the cross-platform content hash.
+    GENERATED_COVER_FILENAME,
     PAYLOAD_SHA_CACHE_FILENAME,
     LEGACY_PAYLOAD_SHA_CACHE_FILENAME,
     PAYLOAD_LOCAL_DIRTY_FILENAME,
@@ -184,12 +188,26 @@ class HttpSyncPayloadCodec(
         }
     }
 
-    internal fun computePayloadContentSha(bookRoot: File): String {
+    /**
+     * Recomputes the content hash from the files on disk, ignoring the cache sidecar, and
+     * rewrites the sidecar. Callers use it before replacing a book whose *cached* hash
+     * disagrees with the server: a stale or mis-derived sidecar must never cost a
+     * multi-hundred-MB download that installs identical bytes.
+     */
+    internal suspend fun refreshPayloadContentSha(bookRoot: File): String = withContext(ioDispatcher) {
+        computePayloadContentSha(bookRoot).also {
+            writeCachedSha(bookRoot.resolve(PAYLOAD_SHA_CACHE_FILENAME), it)
+        }
+    }
+
+    internal fun computePayloadContentSha(bookRoot: File, excludedRootFiles: Set<String> = emptySet()): String {
         require(bookRoot.isDirectory) { "Book root is not a directory: $bookRoot" }
         val digest = MessageDigest.getInstance("SHA-256")
         val files = bookRoot.walkTopDown().filter { file ->
             file.isFile && file.name !in PAYLOAD_EXCLUDED_FILES &&
-                !file.isInsideExcludedDir(bookRoot)
+                !file.isInsideExcludedDir(bookRoot) &&
+                // Root-level only: a file directly under the book root has itself as parent.
+                !(file.parentFile == bookRoot && file.name in excludedRootFiles)
         }.sortedBy { file ->
             Normalizer.normalize(
                 file.relativeTo(bookRoot).path.replace(File.separatorChar, '/'),
@@ -456,6 +474,36 @@ class HttpSyncPayloadCodec(
         return false
     }
 
+    /**
+     * Pre-[GENERATED_COVER_FILENAME] builds materialized a receiver-side cover straight into the
+     * book root (mokuro and EPUB alike), where it poisons the content hash against the origin's
+     * manifest forever. If ignoring exactly one candidate root file makes the hash match the
+     * manifest, the file cannot have come from the payload: rename it to the excluded name and
+     * cache the now-matching sha instead of re-downloading the entire archive. The caller
+     * repoints the book's metadata cover path.
+     */
+    internal suspend fun migrateLegacyGeneratedCover(
+        bookRoot: File,
+        expectedSha: String,
+        candidateNames: List<String>,
+    ): Boolean = withContext(ioDispatcher) {
+        for (name in candidateNames) {
+            if (name.isEmpty() || name == GENERATED_COVER_FILENAME || name.contains('/')) continue
+            val legacy = bookRoot.resolve(name)
+            if (!legacy.isFile) continue
+            val shaWithoutCover = runCatching {
+                computePayloadContentSha(bookRoot, excludedRootFiles = setOf(name))
+            }.getOrNull() ?: continue
+            if (shaWithoutCover != expectedSha) continue
+            val target = bookRoot.resolve(GENERATED_COVER_FILENAME)
+            target.delete()
+            if (!legacy.renameTo(target)) return@withContext false
+            writeCachedSha(bookRoot.resolve(PAYLOAD_SHA_CACHE_FILENAME), expectedSha)
+            return@withContext true
+        }
+        false
+    }
+
     private fun writeCachedSha(cacheFile: File, sha: String) {
         runCatching {
             cacheFile.writeText(sha)
@@ -497,6 +545,7 @@ class HttpSyncPayloadCodec(
         onByteProgress: ((bytesTransferred: Long, totalBytes: Long) -> Unit)? = null,
         keys: HttpSyncPayloadKeys = HttpSyncPayloadKeys.legacy(syncId),
         expectedFormat: HttpSyncContentType? = null,
+        repairManifest: Boolean = true,
     ): HttpSyncPayloadManifest = withContext(ioDispatcher) {
         val manifest = fetchManifest(transport, syncId, keys)
             ?: throw HttpSyncException("No payload manifest for $syncId.")
@@ -525,17 +574,26 @@ class HttpSyncPayloadCodec(
                 )
             }
             unzipInto(zipFile, targetDir)
-            // We just verified these exact downloaded bytes against the manifest. Keep the hash
-            // next to the unpacked book so every later sync is a sidecar read, not a recompute.
+            // The zip sha256 above is the integrity check. The content hash is only the
+            // cross-platform change detector, derived from those same verified bytes, so a
+            // manifest that declares a different (or no) content hash was published by a client
+            // whose derivation was wrong — iOS builds through 0.11.3 hashed staging paths with a
+            // random per-download prefix. Correct the manifest in place instead of failing every
+            // download of a perfectly good archive; a failed repair just repeats next sync.
             val contentSha = computePayloadContentSha(targetDir)
-            if (manifest.contentSha256 != null && manifest.contentSha256 != contentSha) {
-                throw HttpSyncException(
-                    "Payload content for $syncId failed sha256 check " +
-                        "(expected ${manifest.contentSha256}, got $contentSha).",
-                )
+            val verified = manifest.copy(contentSha256 = contentSha)
+            if (repairManifest && manifest.contentSha256 != contentSha) {
+                try {
+                    publishVerifiedContentSha(transport, keys, verified)
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                    // The archive is verified and unpacked; only the server-side note is stale.
+                }
             }
+            // Keep the hash next to the unpacked book so every later sync is a sidecar read.
             writeCachedSha(targetDir.resolve(PAYLOAD_SHA_CACHE_FILENAME), contentSha)
-            manifest.copy(contentSha256 = contentSha)
+            verified
         } finally {
             zipFile.delete()
         }

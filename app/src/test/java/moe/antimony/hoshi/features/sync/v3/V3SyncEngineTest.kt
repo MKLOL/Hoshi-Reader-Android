@@ -220,10 +220,13 @@ class V3SyncEngineTest {
             "cover path must be populated after v3 sync import",
             imported.metadata.cover,
         )
+        // Receiver-generated covers live under the hash-excluded generated name so they never
+        // change the book's payload content hash.
         assertEquals(
-            "Books/${imported.root.name}/0001.jpg",
+            "Books/${imported.root.name}/${moe.antimony.hoshi.epub.GENERATED_COVER_FILENAME}",
             imported.metadata.cover,
         )
+        assertFalse("payload-visible cover copy must not be created", imported.root.resolve("0001.jpg").exists())
         val coverFile = repo.coverFile(imported)
         assertNotNull("repo must resolve metadata.cover to a real file", coverFile)
         assertTrue("cover file exists", coverFile!!.isFile)

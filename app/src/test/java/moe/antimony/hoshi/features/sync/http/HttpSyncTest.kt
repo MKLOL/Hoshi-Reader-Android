@@ -1093,12 +1093,15 @@ class HttpSyncTest {
             "cover path must be populated after sync import so the bookshelf renders a thumbnail",
             imported.metadata.cover,
         )
-        // `metadataCoverPath` copies the cover to the book root and returns an iOS-style
-        // `Books/{folder}/{name}` path. The exact value here is the implementation's contract.
+        // `syncedCoverPath` materializes a receiver-side cover under the hash-excluded
+        // generated name (never a payload-visible basename) and returns an iOS-style
+        // `Books/{folder}/{name}` path. The exact value here is the implementation's contract:
+        // a receiver-generated file must never change the book's payload content hash.
         assertEquals(
-            "Books/${imported.root.name}/0001.jpg",
+            "Books/${imported.root.name}/${moe.antimony.hoshi.epub.GENERATED_COVER_FILENAME}",
             imported.metadata.cover,
         )
+        assertFalse("payload-visible cover copy must not be created", imported.root.resolve("0001.jpg").exists())
         // The cover file must actually resolve to bytes on disk via the repository's
         // bookshelf-loader path; otherwise the cover slot would still render blank.
         val coverFile = repo.coverFile(imported)

@@ -3,6 +3,7 @@ package moe.antimony.hoshi.features.sync.http
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
+import moe.antimony.hoshi.epub.GENERATED_COVER_FILENAME
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -30,6 +31,11 @@ class HttpSyncPayloadTest {
 
     private val codec = HttpSyncPayloadCodec(ioDispatcher = Dispatchers.Unconfined)
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
+
+    private companion object {
+        /** A manifest content hash no archive can reproduce. */
+        const val POISONED_CONTENT_SHA = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    }
 
     @Test
     fun upgradedExistingBookAdoptsShaWithoutTouchingOfflinePayload() {
@@ -722,37 +728,128 @@ class HttpSyncPayloadTest {
         )
     }
 
-    @Test
-    fun downloadRejectsDeclaredContentHashThatDoesNotMatchVerifiedZip() = runBlocking {
-        val src = tempFolder.newFolder("declared-content-source").apply {
+    /**
+     * Seeds a book whose server manifest carries a content hash nobody can reproduce from the
+     * archive — what every iOS build through 0.11.3 published. Returns the transport, the
+     * manifest key, and the manifest as the uploader originally wrote it.
+     */
+    private suspend fun seedPoisonedManifest(
+        syncId: String,
+        folder: String,
+    ): Triple<FakeKvTransport, String, HttpSyncPayloadManifest> {
+        val src = tempFolder.newFolder(folder).apply {
             resolve("mokuro.json").writeText("real content")
         }
         val transport = FakeKvTransport()
-        codec.uploadIfChanged(
-            transport,
-            "declared_content",
-            src,
-            "Declared Content",
-            HttpSyncContentType.Mokuro,
-        )
-        val manifestKey = payloadManifestKey("declared_content")
+        codec.uploadIfChanged(transport, syncId, src, "Declared Content", HttpSyncContentType.Mokuro)
+        val manifestKey = payloadManifestKey(syncId)
         val stored = transport.kv.getValue(manifestKey)
-        val manifest = json.decodeFromString(
+        val uploaded = json.decodeFromString(
             HttpSyncPayloadManifest.serializer(),
             stored.body.toString(Charsets.UTF_8),
         )
         transport.kv[manifestKey] = stored.copy(
             body = json.encodeToString(
                 HttpSyncPayloadManifest.serializer(),
-                manifest.copy(contentSha256 = "sha256:" + "0".repeat(64)),
+                uploaded.copy(contentSha256 = POISONED_CONTENT_SHA),
             ).toByteArray(),
         )
+        return Triple(transport, manifestKey, uploaded)
+    }
+
+    private fun FakeKvTransport.storedManifest(key: String): HttpSyncPayloadManifest =
+        json.decodeFromString(HttpSyncPayloadManifest.serializer(), kv.getValue(key).body.toString(Charsets.UTF_8))
+
+    @Test
+    fun downloadRepairsDeclaredContentHashThatDoesNotMatchVerifiedZip() = runBlocking {
+        val (transport, manifestKey, uploaded) = seedPoisonedManifest("declared_content", "declared-content-source")
+        val trueContentSha = requireNotNull(uploaded.contentSha256)
 
         val target = tempFolder.newFolder("declared-content-target")
-        val ex = assertThrows(HttpSyncException::class.java) {
-            runBlocking { codec.downloadAndUnpack(transport, "declared_content", target) }
+        val manifest = codec.downloadAndUnpack(transport, "declared_content", target)
+
+        // The archive's own sha256 already proved the bytes; the content hash is derived from
+        // them. A new device must import the book, cache the true hash, and correct the server
+        // note so every other device stops tripping over it too.
+        assertEquals("real content", target.resolve("mokuro.json").readText())
+        assertEquals(trueContentSha, manifest.contentSha256)
+        assertEquals(trueContentSha, codec.cachedPayloadSha(target))
+        val repaired = transport.storedManifest(manifestKey)
+        assertEquals(trueContentSha, repaired.contentSha256)
+        assertEquals(uploaded.sha256, repaired.sha256)
+        assertEquals(uploaded.sizeBytes, repaired.sizeBytes)
+        assertEquals(uploaded.originalName, repaired.originalName)
+        assertEquals(uploaded.format, repaired.format)
+    }
+
+    @Test
+    fun downloadWithRepairDisabledStillImportsButLeavesManifestAlone() = runBlocking {
+        val (transport, manifestKey, uploaded) = seedPoisonedManifest("declared_ro", "declared-ro-source")
+
+        val target = tempFolder.newFolder("declared-ro-target")
+        val manifest = codec.downloadAndUnpack(transport, "declared_ro", target, repairManifest = false)
+
+        assertEquals("real content", target.resolve("mokuro.json").readText())
+        assertEquals(uploaded.contentSha256, manifest.contentSha256)
+        assertEquals(POISONED_CONTENT_SHA, transport.storedManifest(manifestKey).contentSha256)
+    }
+
+    @Test
+    fun downloadManifestRepairFailureDoesNotFailTheImport() = runBlocking {
+        val (seeded, manifestKey, uploaded) = seedPoisonedManifest("declared_flaky", "declared-flaky-source")
+        val transport = object : HttpSyncKvTransport by seeded {
+            override suspend fun put(key: String, contentType: String, body: ByteArray): HttpSyncKvWriteResponse {
+                if (key == manifestKey) throw HttpSyncException("server rejected write")
+                return seeded.put(key, contentType, body)
+            }
         }
-        assertTrue(ex.message!!.contains("Payload content"))
+
+        val target = tempFolder.newFolder("declared-flaky-target")
+        val manifest = codec.downloadAndUnpack(transport, "declared_flaky", target)
+
+        assertEquals("real content", target.resolve("mokuro.json").readText())
+        assertEquals(uploaded.contentSha256, manifest.contentSha256)
+        assertEquals(uploaded.contentSha256, codec.cachedPayloadSha(target))
+    }
+
+    @Test
+    fun contentHashMatchesCrossPlatformGoldenVector() {
+        val root = tempFolder.newFolder("content-hash-golden").apply {
+            resolve("a.txt").writeText("alpha")
+            resolve("dir/sub").mkdirs()
+            resolve("dir/b.bin").writeBytes(byteArrayOf(0, 1, 2))
+            resolve("dir/sub/c.txt").writeText("gamma")
+            resolve("cafe\u0301.txt").writeText("x")
+            resolve("bookmark.json").writeText("ignored")
+            resolve(GENERATED_COVER_FILENAME).writeText("ignored")
+            resolve(PAYLOAD_SHA_CACHE_FILENAME).writeText("sha256:" + "0".repeat(64))
+            resolve("Sasayaki").mkdirs()
+            resolve("Sasayaki/audio.m4b").writeText("ignored")
+        }
+
+        // iOS asserts this exact value against its compiled Swift implementation in
+        // Tests/Regression/test_payload_content_hash.py. Change both or neither: every synced
+        // book's manifest is compared against this derivation on every device.
+        assertEquals(
+            "sha256:d87d77783cc9317975bcb60eec51c6bbba63f1457ee004aa95fd56e90fd07131",
+            codec.computePayloadContentSha(root),
+        )
+    }
+
+    @Test
+    fun refreshPayloadContentShaIgnoresStaleCacheAndRewritesIt() = runBlocking {
+        val root = tempFolder.newFolder("refresh-sha").apply {
+            resolve("mokuro.json").writeText("static content")
+        }
+        val truth = codec.computePayloadContentSha(root)
+        codec.rememberPayloadSha(root, POISONED_CONTENT_SHA)
+        assertEquals(POISONED_CONTENT_SHA, codec.cachedPayloadSha(root))
+        assertEquals(POISONED_CONTENT_SHA, codec.ensurePayloadContentSha(root))
+
+        assertEquals(truth, codec.refreshPayloadContentSha(root))
+
+        assertEquals(truth, codec.cachedPayloadSha(root))
+        assertEquals(truth, codec.ensurePayloadContentSha(root))
     }
 
     @Test

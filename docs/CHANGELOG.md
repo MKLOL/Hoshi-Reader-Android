@@ -7,6 +7,16 @@ Semantic Versioning.
 
 ## [Unreleased]
 
+### Fixed
+- **Sync no longer rejects every downloaded book on a new device.** iOS builds through 0.11.3
+  published a wrongly derived content hash for each synced book, so a freshly set-up phone failed
+  the "sha256 check" on every archive it downloaded and nothing synced. The archive's own sha256
+  remains the integrity check; a manifest whose content hash disagrees with the verified archive
+  is now corrected on the server instead of aborting the import, and a book whose cached hash
+  disagrees with the server is re-hashed from disk before any replacement download. A cover the
+  app generates for a synced book no longer changes that book's hash either, which had made
+  some synced books re-download on every sync.
+
 ## [v0.11.3] - 2026-08-26
 
 ### Fixed

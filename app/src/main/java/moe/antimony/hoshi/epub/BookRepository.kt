@@ -24,6 +24,14 @@ import java.time.Instant
 import java.util.UUID
 import java.util.zip.ZipInputStream
 
+/**
+ * Cover file materialized by a sync receiver for a book whose payload shipped none. The name is
+ * excluded from the cross-platform payload content hash (see `PAYLOAD_EXCLUDED_FILES`) so a
+ * receiver-generated file never makes local content look different from the origin's. Must stay
+ * identical to iOS `FileNames.generatedCover`.
+ */
+internal const val GENERATED_COVER_FILENAME: String = ".generated_cover.jpg"
+
 class BookRepository(
     filesDir: File,
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
@@ -94,6 +102,9 @@ class BookRepository(
 
     override suspend fun metadataCoverPath(bookRoot: File, coverHref: String?): String? =
         fileDataSource.metadataCoverPath(bookRoot, coverHref)
+
+    suspend fun syncedCoverPath(bookRoot: File, coverHref: String?): String? =
+        fileDataSource.syncedCoverPath(bookRoot, coverHref)
 
     suspend fun deleteBook(
         bookRoot: File,
@@ -299,6 +310,30 @@ class BookFileDataSource(
             source.copyTo(destination, overwrite = true)
         }
         "Books/${root.name}/${destination.name}"
+    }
+
+    /**
+     * Sync-install variant of [metadataCoverPath]. A root-level copy that arrived inside the
+     * payload is origin content and is reused as-is; otherwise the cover is materialized under
+     * the hash-excluded [GENERATED_COVER_FILENAME] so the receiver's payload content keeps
+     * matching the origin's manifest. (The import-time [metadataCoverPath] copy is different:
+     * it happens before upload, travels in the zip, and is therefore consistent everywhere.)
+     */
+    suspend fun syncedCoverPath(bookRoot: File, coverHref: String?): String? = withContext(ioDispatcher) {
+        val cover = coverHref?.takeIf { it.isNotBlank() } ?: return@withContext null
+        val source = resolveCoverFile(bookRoot, cover) ?: return@withContext null
+        val root = bookRoot.canonicalFile
+        val shipped = root.resolve(source.name).canonicalFile
+        if (shipped.path == root.path || !shipped.path.startsWith(root.path + File.separator)) {
+            return@withContext null
+        }
+        if (shipped.isFile) return@withContext "Books/${root.name}/${shipped.name}"
+        val generated = root.resolve(GENERATED_COVER_FILENAME)
+        if (!generated.isFile) {
+            runCatching { source.copyTo(generated, overwrite = false) }.getOrNull()
+                ?: return@withContext null
+        }
+        "Books/${root.name}/$GENERATED_COVER_FILENAME"
     }
 
     private fun resolveCoverFile(bookRoot: File, cover: String): File? {
