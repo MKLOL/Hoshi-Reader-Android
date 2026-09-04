@@ -183,8 +183,19 @@ segment   = 1*64 ( ALPHA / DIGIT / "_" / "-" / "." )
 total length ≤ 512 bytes
 ```
 
-Anything else → `400`. The server doesn't care what the segments **mean** — but
+Anything else → `400`. A segment consisting only of dots (`.`, `..`) is also rejected even
+though the character class admits it. The server doesn't care what the segments **mean** — but
 keeping the grammar tight makes nginx logs readable and protects against `..` shenanigans.
+
+`prefix` matching on `GET /v1/kv` is **byte-exact and case-sensitive**: `books/a_b/` matches
+`books/a_b/chat/…` and nothing else. Clients list chat keys per book with such prefixes and
+sync ids contain underscores, so a SQL `LIKE`-based implementation over-matches.
+
+> **Known production divergence (observed 2026-09-04).** The live server matched
+> `prefix=__probe/a_b/` against the key `__probe/A_B/x`, i.e. prefix matching there is
+> ASCII-case-insensitive (`LIKE` semantics); `_` did not act as a wildcard. Sync ids that differ
+> only by letter case would therefore share chat listings until the server is fixed to the
+> byte-exact rule above. The test server implements the rule as specified.
 
 ## Client-side conventions (informative; server doesn't enforce)
 
@@ -376,8 +387,11 @@ def list_kv():
     since = request.args.get("since")
     cursor = request.args.get("cursor")  # opaque: just the last key returned, ordered
     limit = min(int(request.args.get("limit", 500)), 2000)
-    sql = "SELECT key, last_modified, etag, size, content_type FROM kv WHERE key LIKE ? || '%'"
-    args = [prefix]
+    # Prefix matching is byte-exact and case-sensitive. NOT `LIKE`: SQLite's LIKE is
+    # ASCII-case-insensitive and treats `_`/`%` in the pattern as wildcards, and sync ids
+    # contain underscores, so `books/a_b/chat/` would also match `books/aXb/chat/...`.
+    sql = "SELECT key, last_modified, etag, size, content_type FROM kv WHERE key >= ? AND key < ?"
+    args = [prefix, prefix[:-1] + chr(ord(prefix[-1]) + 1) if prefix else "\uffff"]
     if since:
         sql += " AND last_modified > ?"; args.append(since)
     if cursor:
