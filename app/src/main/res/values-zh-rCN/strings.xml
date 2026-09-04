@@ -32,6 +32,8 @@
     <string name="action_sign_out">退出登录</string>
     <string name="action_copy_code">复制代码</string>
     <string name="action_scan">扫描</string>
+    <string name="action_retry">重试</string>
+    <string name="action_dismiss">关闭</string>
     <string name="loading">正在加载...</string>
     <string name="none" comment="Generic empty value label, intentionally matching bookshelf_no_shelf.">无</string>
     <string name="dialog_error_title">错误</string>
@@ -53,6 +55,15 @@
     <string name="ai_chat_history_yomitan_matched_format">匹配：%1$s</string>
     <string name="ai_chat_backend_pretranslated">预翻译</string>
     <string name="ai_chat_ask_live_instead">改用 ChatGPT 询问</string>
+    <string name="ai_chat_backend_chatgpt">ChatGPT</string>
+    <string name="ai_chat_backend_on_device">设备端翻译</string>
+    <string name="ai_chat_status_asking_chatgpt">正在询问 ChatGPT…</string>
+    <string name="ai_chat_status_translating_on_device">正在设备端翻译…</string>
+    <plurals name="ai_chat_generation_speed_format">
+        <item quantity="other">⚡ %1$.1f tok/s · %2$d 个 token</item>
+    </plurals>
+    <string name="ai_chat_history_title">ChatGPT 记录</string>
+    <string name="ai_chat_history_empty">这本漫画还没有 ChatGPT 对话。</string>
     <string name="ai_translation_settings_loading">翻译功能仍在加载，请稍后再点一次。</string>
     <string name="ai_translation_configuration_missing">请在“设置 → ChatGPT”中设置 OpenAI API 密钥，或开启设备端翻译以离线使用。</string>
     <string name="ai_translation_failed">翻译失败。</string>

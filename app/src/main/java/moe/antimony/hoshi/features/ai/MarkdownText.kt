@@ -37,6 +37,8 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import java.text.BreakIterator
+import kotlin.math.ceil
 import org.commonmark.ext.gfm.strikethrough.Strikethrough
 import org.commonmark.ext.gfm.strikethrough.StrikethroughExtension
 import org.commonmark.ext.gfm.tables.TableBlock
@@ -276,7 +278,10 @@ private val TABLE_CELL_HORIZONTAL_PADDING = 6.dp
 /** Top/bottom padding inside a table cell — tight, so a short row is one compact line. */
 private val TABLE_CELL_VERTICAL_PADDING = 3.dp
 
-/** No column is squeezed narrower than this, however greedy its neighbours are. */
+/**
+ * Last-resort floor, used only when even the columns' longest words cannot all fit: below this
+ * a column is unreadable whatever we do.
+ */
 private val TABLE_MIN_COLUMN_CONTENT_WIDTH = 52.dp
 
 @Composable
@@ -350,14 +355,18 @@ private fun TableBlockView(table: TableBlock, color: Color, codeBackground: Colo
  * Column widths for one table, in the same order as the cells.
  *
  * Each column's "wanted" width is its widest cell laid out without wrapping (the CSS
- * `max-content` idea). When they all fit, that is what they get. When they don't, every column
- * shrinks in proportion to what it wanted, so a long meaning column keeps most of the space and a
- * one-word reading column gives it up — bounded below by [TABLE_MIN_COLUMN_CONTENT_WIDTH] so
- * nothing collapses to an unreadable sliver.
+ * `max-content` idea), and its floor is that column's widest unbreakable run (`min-content`), so
+ * no column is ever narrower than the longest word it has to show. When the wanted widths all
+ * fit, that is what the columns get. When they don't, every column shrinks in proportion to what
+ * it wanted — never past its floor — so a long meaning column keeps most of the space and a
+ * one-word reading column gives it up.
  *
- * The floor is deliberately a flat minimum rather than each column's longest unbreakable word:
- * reserving room for "punctuation" or a romaji reading takes that room from the meaning column,
- * which is the one the reader is actually here for, and pushes the table off the screen again.
+ * Only when the min-content widths themselves don't fit (a very narrow card, or a table with many
+ * columns) does the floor fall back to a flat [TABLE_MIN_COLUMN_CONTENT_WIDTH] capped at an equal
+ * share, because some wrapping is then unavoidable and the meaning column is the one the reader is
+ * actually here for. While the min-content widths do fit, that equal-share cap is deliberately not
+ * applied: the floors are affordable by construction, and capping them would let a column drop
+ * back below its longest word and break a word in half.
  *
  * Not a @Composable: the result is memoised per (table, available width).
  */
@@ -370,52 +379,139 @@ private fun tableColumnWidths(
     headerStyle: TextStyle,
     density: Density,
 ): List<Dp> {
-    val cellPadding = TABLE_CELL_HORIZONTAL_PADDING * 2
-    val wanted = MutableList(columnCount) { 0.dp }
+    val cellPadding = (TABLE_CELL_HORIZONTAL_PADDING * 2).value
+    val availableWidth = available.value
+    val wanted = MutableList(columnCount) { 0f }
+    val minContent = MutableList(columnCount) { 0f }
+    // One table's cells repeat plenty of short words; measuring each distinct one once keeps the
+    // per-token pass cheap even for a long Japanese sentence, where every character is a token.
+    val tokenWidths = HashMap<Pair<Boolean, String>, Float>()
     for (row in rows) {
         val style = if (row.isHeader) headerStyle else bodyStyle
         for (columnIndex in 0 until columnCount) {
             val cell = row.cells.getOrNull(columnIndex) ?: continue
             if (cell.text.isEmpty()) continue
-            val measured = measurer.measure(text = cell.text, style = style, softWrap = false)
-            val maxContent = with(density) { measured.size.width.toDp() } + cellPadding
+            val maxContent = measurer.contentWidth(cell.text, style, density) + cellPadding
             if (maxContent > wanted[columnIndex]) wanted[columnIndex] = maxContent
+            var widestToken = 0f
+            for (range in minContentTokenRanges(cell.text.text)) {
+                // Slice the annotated string, not the plain text: a bold or code-styled word is
+                // wider than the same characters in the body style.
+                val token = cell.text.subSequence(range.first, range.last + 1)
+                val tokenWidth = tokenWidths.getOrPut(row.isHeader to token.text) {
+                    measurer.contentWidth(token, style, density)
+                }
+                if (tokenWidth > widestToken) widestToken = tokenWidth
+            }
+            val cellMinContent = (widestToken + cellPadding).coerceAtMost(maxContent)
+            if (cellMinContent > minContent[columnIndex]) minContent[columnIndex] = cellMinContent
         }
     }
-    val total = wanted.fold(0.dp) { sum, width -> sum + width }
-    if (available <= 0.dp || total <= available) return wanted
+    val floors = if (minContent.sum() <= availableWidth) {
+        minContent
+    } else {
+        val flatFloor = minOf(
+            TABLE_MIN_COLUMN_CONTENT_WIDTH.value + cellPadding,
+            availableWidth / columnCount,
+        )
+        MutableList(columnCount) { minOf(minContent[it], flatFloor) }
+    }
+    return shareColumnWidths(wanted, floors, availableWidth).map { it.dp }
+}
 
-    // `available / columnCount` keeps the floors affordable when the card is very narrow.
-    val floor = minOf(TABLE_MIN_COLUMN_CONTENT_WIDTH + cellPadding, available / columnCount)
-    val floors = MutableList(columnCount) { minOf(wanted[it], floor) }
+/**
+ * Shares [available] between columns that want [wanted] and can shrink no further than [floors].
+ *
+ * Pure arithmetic in dp, split out from the measuring above so it can be unit tested: the
+ * measuring needs a real text measurer, the share-out is where the table either fits the card or
+ * doesn't. Returns [wanted] unchanged when everything fits (or when the width isn't known yet);
+ * otherwise the widths always add up to [available].
+ */
+internal fun shareColumnWidths(
+    wanted: List<Float>,
+    floors: List<Float>,
+    available: Float,
+): List<Float> {
+    if (wanted.isEmpty()) return emptyList()
+    val total = wanted.sum()
+    if (available <= 0f || total <= available) return wanted
 
-    val out = MutableList(columnCount) { 0.dp }
-    val pinned = BooleanArray(columnCount)
+    // A floor above what a column wants — or a set of floors that cannot all fit — would hand out
+    // more than `available`, so clamp before sharing: the table has to fit the card either way.
+    val clamped = List(wanted.size) {
+        floors.getOrElse(it) { 0f }.coerceIn(0f, wanted[it])
+    }
+    val clampedTotal = clamped.sum()
+    val effective = if (clampedTotal > available) {
+        clamped.map { it * (available / clampedTotal) }
+    } else {
+        clamped
+    }
+
+    val out = MutableList(wanted.size) { 0f }
+    val pinned = BooleanArray(wanted.size)
     var remaining = available
     var flexible = total
     // Pin every column the proportional share would starve, then re-share the rest among the
-    // others. Each pass pins at least one column, so this runs at most `columnCount` times.
+    // others. Each pass pins at least one column, so this runs at most `wanted.size` times.
     var pinnedAny = true
-    while (pinnedAny && flexible > 0.dp) {
+    while (pinnedAny && flexible > 0f) {
         pinnedAny = false
         val scale = remaining / flexible
-        for (columnIndex in 0 until columnCount) {
-            if (pinned[columnIndex] || wanted[columnIndex] * scale >= floors[columnIndex]) continue
-            pinned[columnIndex] = true
-            out[columnIndex] = floors[columnIndex]
-            remaining -= floors[columnIndex]
-            flexible -= wanted[columnIndex]
+        for (index in wanted.indices) {
+            if (pinned[index] || wanted[index] * scale >= effective[index]) continue
+            pinned[index] = true
+            out[index] = effective[index]
+            remaining -= effective[index]
+            flexible -= wanted[index]
             pinnedAny = true
         }
     }
-    val scale = if (flexible > 0.dp && remaining > 0.dp) remaining / flexible else 0f
-    for (columnIndex in 0 until columnCount) {
-        if (!pinned[columnIndex]) {
-            out[columnIndex] = (wanted[columnIndex] * scale).coerceAtLeast(floors[columnIndex])
+    val scale = if (flexible > 0f && remaining > 0f) remaining / flexible else 0f
+    for (index in wanted.indices) {
+        if (!pinned[index]) {
+            out[index] = (wanted[index] * scale).coerceAtLeast(effective[index])
         }
     }
     return out
 }
+
+/**
+ * The runs of [text] that have to stay on one line: words for Latin text, single characters for
+ * Japanese, which the line breaker is free to split almost anywhere. Ranges are inclusive and
+ * exclude the whitespace a break opportunity trails, so they can slice the styled cell text.
+ *
+ * [BreakIterator] is the same UAX #14 line-breaking model the platform's own text layout uses, so
+ * the widest run it reports is the narrowest the column can be without breaking a word in half.
+ */
+internal fun minContentTokenRanges(text: String): List<IntRange> {
+    if (text.isEmpty()) return emptyList()
+    val iterator = BreakIterator.getLineInstance()
+    iterator.setText(text)
+    val out = mutableListOf<IntRange>()
+    var start = iterator.first()
+    var end = iterator.next()
+    while (end != BreakIterator.DONE) {
+        var last = end - 1
+        while (last >= start && text[last].isWhitespace()) last--
+        if (last >= start) out += start..last
+        start = end
+        end = iterator.next()
+    }
+    return out
+}
+
+/**
+ * Width of [text] laid out on one line, in dp.
+ *
+ * Rounded up, not truncated: a fractional pixel of shortfall is enough for the layout to wrap the
+ * last character onto a line of its own.
+ */
+private fun TextMeasurer.contentWidth(
+    text: AnnotatedString,
+    style: TextStyle,
+    density: Density,
+): Float = ceil(measure(text = text, style = style, softWrap = false).size.width / density.density)
 
 private class RenderedCell(val text: AnnotatedString, val alignment: TextAlign?)
 

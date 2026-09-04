@@ -40,6 +40,7 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.viewinterop.AndroidView
 import java.io.File
+import java.lang.ref.WeakReference
 import java.util.UUID
 import java.util.WeakHashMap
 import kotlin.math.abs
@@ -217,6 +218,14 @@ internal fun ChapterWebView(
             null,
         )
     }
+    // Appearance (colours, e-ink mode, writing direction) is pushed into the page only when it
+    // actually changes. It used to be re-evaluated from the AndroidView update block, which
+    // continuous scrolling re-runs on every reported position — up to 20 times a second during a
+    // drag — for a script that had nothing new to say.
+    LaunchedEffect(readerWebView, readerAppearanceScript, readerPageReadyKey) {
+        val webView = readerWebView ?: return@LaunchedEffect
+        webView.evaluateJavascript(readerAppearanceScript, null)
+    }
     // Reader gestures are stateful: the pointer-down origin recorded on ACTION_DOWN is what
     // ACTION_UP measures the drag against. Continuous scrolling reports progress on every scroll
     // change, which recomposes the reader and re-runs the AndroidView update block, so a listener
@@ -288,10 +297,75 @@ internal fun ChapterWebView(
             }
         }
     }
+    // Like the touch listener above: one instance for the reader's lifetime. The scroll listener
+    // reads everything that changes through state holders, so it never has to be rebuilt, and the
+    // update block below re-registers listeners only when the reading mode actually changes.
+    val continuousScrollListener = remember {
+        View.OnScrollChangeListener { scrolledView, _, _, _, _ ->
+            val webView = scrolledView as? WebView ?: return@OnScrollChangeListener
+            val now = SystemClock.uptimeMillis()
+            if (now - lastContinuousProgressUpdate < CONTINUOUS_PROGRESS_THROTTLE_MS) {
+                return@OnScrollChangeListener
+            }
+            lastContinuousProgressUpdate = now
+            if (currentIsWebViewRestoring.value) return@OnScrollChangeListener
+            val restoreEpoch = currentWebViewRestoreEpoch.value
+            continuousScrollSaveRequestId += 1L
+            val requestId = continuousScrollSaveRequestId
+            webView.cancelPendingProgressSave()
+            currentOnClearLookupPopup.value()
+            webView.evaluateJavascript(ReaderPaginationScripts.progressInvocation()) { progressResult ->
+                if (continuousScrollSaveRequestId != requestId) return@evaluateJavascript
+                ReaderPaginationScripts.doubleResult(progressResult)?.let { progress ->
+                    when (readerProgressPersistenceAction(ReaderProgressPersistenceEvent.ContinuousScrollChanged)) {
+                        ReaderProgressPersistenceAction.DisplayOnly -> {
+                            currentOnContinuousScrollDisplayProgress.value(progress, restoreEpoch)
+                        }
+                        ReaderProgressPersistenceAction.SaveBookmark -> {
+                            currentOnContinuousScrollProgress.value(progress, restoreEpoch)
+                        }
+                    }
+                    // The pending-save map is keyed weakly by WebView, so the callback filed under
+                    // a WebView must not hold that WebView: a strong reference from the value back
+                    // to the key keeps the entry — and the whole reader WebView — alive forever.
+                    val webViewRef = WeakReference(webView)
+                    lateinit var saveCallback: Runnable
+                    saveCallback = Runnable {
+                        if (continuousScrollSaveRequestId != requestId) return@Runnable
+                        val savedWebView = webViewRef.get()
+                        if (savedWebView != null &&
+                            readerPendingProgressSaveCallbacks[savedWebView] === saveCallback
+                        ) {
+                            readerPendingProgressSaveCallbacks.remove(savedWebView)
+                        }
+                        when (readerProgressPersistenceAction(ReaderProgressPersistenceEvent.ContinuousScrollIdle)) {
+                            ReaderProgressPersistenceAction.DisplayOnly -> currentOnDisplayProgress.value(progress)
+                            ReaderProgressPersistenceAction.SaveBookmark -> {
+                                currentOnContinuousScrollProgress.value(progress, restoreEpoch)
+                            }
+                        }
+                    }
+                    readerPendingProgressSaveCallbacks[webView] = saveCallback
+                    webView.postDelayed(saveCallback, CONTINUOUS_SCROLL_SAVE_IDLE_DELAY_MS)
+                }
+            }
+        }
+    }
+    // Plain object, not Compose state: the update block runs during layout, and a snapshot write
+    // from there would invalidate the very pass that made it.
+    val listenerWiring = remember { ReaderWebViewListenerWiring() }
     AndroidView(
         modifier = modifier
             .onSizeChanged(onReaderViewportSizeChanged)
             .background(Color(readerSettings.backgroundColor(systemDark))),
+        onRelease = { webView ->
+            // Runs the pending save rather than dropping it (the reader flushes on dispose too,
+            // and whichever runs first wins), then leaves nothing behind in the process-wide map.
+            webView.flushPendingProgressSave()
+            webView.setOnScrollChangeListener(null)
+            webView.setOnTouchListener(null)
+            listenerWiring.reset()
+        },
         factory = { context ->
             HoshiReaderWebView(context).apply {
                 applyHoshiWebViewSecurityDefaults()
@@ -342,53 +416,16 @@ internal fun ChapterWebView(
             }
         },
         update = { webView ->
-            if (readerSettings.continuousMode) {
-                webView.setOnTouchListener(continuousScrollTouchListener)
-                webView.setOnScrollChangeListener { _, _, _, _, _ ->
-                    val now = SystemClock.uptimeMillis()
-                    if (now - lastContinuousProgressUpdate < CONTINUOUS_PROGRESS_THROTTLE_MS) return@setOnScrollChangeListener
-                    lastContinuousProgressUpdate = now
-                    if (currentIsWebViewRestoring.value) return@setOnScrollChangeListener
-                    val restoreEpoch = currentWebViewRestoreEpoch.value
-                    continuousScrollSaveRequestId += 1L
-                    val requestId = continuousScrollSaveRequestId
-                    readerPendingProgressSaveCallbacks.remove(webView)?.let(webView::removeCallbacks)
-                    currentOnClearLookupPopup.value()
-                    webView.evaluateJavascript(ReaderPaginationScripts.progressInvocation()) { progressResult ->
-                        if (continuousScrollSaveRequestId != requestId) return@evaluateJavascript
-                        ReaderPaginationScripts.doubleResult(progressResult)?.let { progress ->
-                            when (readerProgressPersistenceAction(ReaderProgressPersistenceEvent.ContinuousScrollChanged)) {
-                                ReaderProgressPersistenceAction.DisplayOnly -> {
-                                    currentOnContinuousScrollDisplayProgress.value(progress, restoreEpoch)
-                                }
-                                ReaderProgressPersistenceAction.SaveBookmark -> {
-                                    currentOnContinuousScrollProgress.value(progress, restoreEpoch)
-                                }
-                            }
-                            lateinit var saveCallback: Runnable
-                            saveCallback = Runnable {
-                                if (continuousScrollSaveRequestId != requestId) return@Runnable
-                                if (readerPendingProgressSaveCallbacks[webView] == saveCallback) {
-                                    readerPendingProgressSaveCallbacks.remove(webView)
-                                }
-                                when (readerProgressPersistenceAction(ReaderProgressPersistenceEvent.ContinuousScrollIdle)) {
-                                    ReaderProgressPersistenceAction.DisplayOnly -> currentOnDisplayProgress.value(progress)
-                                    ReaderProgressPersistenceAction.SaveBookmark -> {
-                                        currentOnContinuousScrollProgress.value(progress, restoreEpoch)
-                                    }
-                                }
-                            }
-                            readerPendingProgressSaveCallbacks[webView] = saveCallback
-                            webView.postDelayed(saveCallback, CONTINUOUS_SCROLL_SAVE_IDLE_DELAY_MS)
-                        }
-                    }
+            if (listenerWiring.needsWiring(webView, readerSettings.continuousMode)) {
+                if (readerSettings.continuousMode) {
+                    webView.setOnTouchListener(continuousScrollTouchListener)
+                    webView.setOnScrollChangeListener(continuousScrollListener)
+                } else {
+                    webView.cancelPendingProgressSave()
+                    webView.setOnScrollChangeListener(null)
+                    webView.setOnTouchListener(swipePageTouchListener)
                 }
-            } else {
-                readerPendingProgressSaveCallbacks.remove(webView)?.let(webView::removeCallbacks)
-                webView.setOnScrollChangeListener(null)
-                webView.setOnTouchListener(swipePageTouchListener)
             }
-            webView.evaluateJavascript(readerAppearanceScript, null)
             if (!readerWebViewReadyToLoad(webViewViewportSize)) return@AndroidView
             if (webView.tag != loadKey) {
                 webView.tag = loadKey
@@ -886,6 +923,35 @@ internal fun WebView.flushPendingProgressSave() {
     val progressCallback = readerPendingProgressSaveCallbacks.remove(this) ?: return
     removeCallbacks(progressCallback)
     progressCallback.run()
+}
+
+/** Drops a queued idle save without running it — the next scroll will queue a fresher one. */
+private fun WebView.cancelPendingProgressSave() {
+    val progressCallback = readerPendingProgressSaveCallbacks.remove(this) ?: return
+    removeCallbacks(progressCallback)
+}
+
+/**
+ * What the reader last wired onto its WebView, so the `AndroidView` update block can skip the
+ * work when nothing changed. Continuous scrolling recomposes the reader on every reported
+ * position, and re-registering listeners mid-drag is how a gesture used to lose its origin.
+ */
+private class ReaderWebViewListenerWiring {
+    private var view: WebView? = null
+    private var continuousMode: Boolean? = null
+
+    /** True (and records the new state) when [webView] is not already wired for [continuous]. */
+    fun needsWiring(webView: WebView, continuous: Boolean): Boolean {
+        if (view === webView && continuousMode == continuous) return false
+        view = webView
+        continuousMode = continuous
+        return true
+    }
+
+    fun reset() {
+        view = null
+        continuousMode = null
+    }
 }
 
 private class ContinuousScrollTouchListener(

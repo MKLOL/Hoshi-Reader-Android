@@ -8,19 +8,14 @@ Semantic Versioning.
 ## [Unreleased]
 
 ### Fixed
-- **The continuous reader no longer gets stuck when you scroll one way and then back.** Scrolling
-  reports your reading position, and that could replace the reader's touch handling in the middle
-  of a drag, so the rest of the swipe was measured from the corner of the screen instead of from
-  where your finger went down. Every drag then looked like a forward swipe: at the start of a
-  chapter the reader refused to turn back and simply stopped moving, and near a chapter end a
-  swipe could jump chapters on its own. Drags are now tracked from where they actually begin.
-- **The AI translation popup no longer hides the translation off the side of the card.** A tutor
-  reply's vocabulary/grammar table used fixed-width columns inside a sideways scroll, so a
-  four-column breakdown pushed the meaning/translation column off-screen entirely and left the
-  short columns beside it stretched apart by tall empty gaps. Table columns now share the card's
-  width in proportion to what they actually contain, rows are tight, and the card grows to most of
-  the screen the way iOS does — with only the reply scrolling, so the close button stays put. A
-  typical bubble translation and its breakdown now fit without scrolling in either direction.
+- **The continuous reader no longer gets stuck after you scroll one way and then back.** Part of a
+  swipe could be measured from the corner of the screen instead of from where your finger went
+  down, so the reader stopped responding to drags in the other direction. Drags are now tracked
+  from where they actually begin.
+- **The AI translation popup's word-by-word breakdown now fits the card.** The table used to push
+  the meaning column off the side of the popup behind a sideways scroll; its columns now share the
+  card's width without splitting words in half, and the card is sized like the iOS one, with the
+  title bar pinned while the reply scrolls under it.
 - **A new install lands on your latest reading positions after a single Sync now.** The first
   sync on a fresh device imported the books and then showed the older position stored next to
   each book; the newest position from your other devices only arrived on a later background

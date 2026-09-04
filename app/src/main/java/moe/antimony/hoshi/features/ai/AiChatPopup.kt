@@ -8,15 +8,12 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
@@ -24,6 +21,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -41,6 +39,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import moe.antimony.hoshi.R
 import moe.antimony.hoshi.features.ai.offline.OfflineLlmManager
@@ -49,6 +48,8 @@ import moe.antimony.hoshi.features.dictionary.LookupPopupItem
 import moe.antimony.hoshi.features.dictionary.LookupPopupOptions
 import moe.antimony.hoshi.features.dictionary.createLookupPopupItem
 import moe.antimony.hoshi.features.reader.ReaderSelectionData
+import moe.antimony.hoshi.features.reader.rememberStableNavigationBarPadding
+import moe.antimony.hoshi.features.reader.rememberStableStatusBarPadding
 
 /** UI state for the manga ChatGPT popup. Null (in the caller) means no popup is shown. */
 sealed interface AiChatUiState {
@@ -79,11 +80,14 @@ sealed interface AiChatUiState {
 }
 
 /**
- * Fraction of the screen the card is allowed to grow to, matching iOS `MangaAiPopupView`
+ * Fraction of the screen the card takes, matching iOS `MangaAiPopupView`
  * (`geometry.size.height * 0.78`). A vocabulary breakdown is the whole point of the reply, so
  * the card gets most of the page rather than a 380dp letterbox the user has to scroll.
  */
 private const val AI_CHAT_CARD_HEIGHT_FRACTION = 0.78f
+
+/** iOS `targetHeight` floor for the phone idiom: a short screen still gets a usable card. */
+private val AI_CHAT_CARD_MIN_HEIGHT = 320.dp
 
 /** iOS `maxCardWidth` for the phone idiom. */
 private val AI_CHAT_CARD_MAX_WIDTH = 520.dp
@@ -120,15 +124,27 @@ fun AiChatPopupView(
             ),
         contentAlignment = Alignment.Center,
     ) {
-        val cardMaxHeight = (maxHeight * AI_CHAT_CARD_HEIGHT_FRACTION).coerceAtLeast(320.dp)
+        // iOS sizes the card once, from the screen: `min(availableHeight, max(320, height *
+        // 0.78))`, where `availableHeight` is the screen minus the safe areas and the card's own
+        // margins. One fixed height means the header and the reply stay where they are instead of
+        // the card resizing itself around every reply.
+        val topInset = rememberStableStatusBarPadding()
+        val bottomInset = rememberStableNavigationBarPadding()
+        // The stable insets, not the live ones: the reader hides and shows the system bars, and
+        // the card must not jump when it does.
+        val availableHeight =
+            (maxHeight - topInset - bottomInset - AI_CHAT_CARD_MARGIN * 2).coerceAtLeast(1.dp)
+        val targetHeight =
+            (maxHeight * AI_CHAT_CARD_HEIGHT_FRACTION).coerceAtLeast(AI_CHAT_CARD_MIN_HEIGHT)
+        val cardHeight = minOf(availableHeight, targetHeight)
         Surface(
             // Swallow taps on the card so they do not fall through to the dismiss layer.
             modifier = Modifier
-                .windowInsetsPadding(WindowInsets.systemBars)
+                .padding(top = topInset, bottom = bottomInset)
                 .padding(AI_CHAT_CARD_MARGIN)
                 .widthIn(max = AI_CHAT_CARD_MAX_WIDTH)
                 .fillMaxWidth()
-                .heightIn(max = cardMaxHeight)
+                .height(cardHeight)
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = null,
@@ -142,28 +158,35 @@ fun AiChatPopupView(
             Column {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.padding(start = 20.dp, end = 6.dp, top = 10.dp),
+                    modifier = Modifier
+                        .padding(start = 20.dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
                 ) {
                     Text(
                         text = when {
                             state is AiChatUiState.Loaded && state.pretranslated ->
                                 stringResource(R.string.ai_chat_backend_pretranslated)
-                            state.onDevice -> "On-device translation"
-                            else -> "ChatGPT"
+                            state.onDevice -> stringResource(R.string.ai_chat_backend_on_device)
+                            else -> stringResource(R.string.ai_chat_backend_chatgpt)
                         },
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.SemiBold,
                         modifier = Modifier.weight(1f),
                     )
                     IconButton(onClick = onDismiss) {
-                        Icon(Icons.Rounded.Close, contentDescription = "Close")
+                        Icon(
+                            Icons.Rounded.Close,
+                            contentDescription = stringResource(R.string.action_close),
+                        )
                     }
                 }
+                // iOS puts a `Divider()` between the pinned header and the scrolling body, so the
+                // reply visibly scrolls under the title rather than past a floating close button.
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                 Column(
                     modifier = Modifier
-                        // `fill = false` so a one-line reply keeps the card small; a long
-                        // breakdown grows it to `cardMaxHeight` and scrolls from there.
-                        .weight(1f, fill = false)
+                        // The card height is fixed, so the reply owns whatever is left below the
+                        // header and scrolls inside it.
+                        .weight(1f)
                         .verticalScroll(rememberScrollState())
                         .padding(start = 20.dp, end = 20.dp, bottom = 20.dp),
                 ) {
@@ -202,7 +225,13 @@ private fun LoadingBody(onDevice: Boolean) {
         Spacer(Modifier.size(12.dp))
         Column {
             Text(
-                text = if (onDevice) "Translating on-device…" else "Asking ChatGPT…",
+                text = stringResource(
+                    if (onDevice) {
+                        R.string.ai_chat_status_translating_on_device
+                    } else {
+                        R.string.ai_chat_status_asking_chatgpt
+                    },
+                ),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -210,8 +239,9 @@ private fun LoadingBody(onDevice: Boolean) {
             val live = progress
             if (onDevice && live != null && live.tokens > 0) {
                 Text(
-                    text = "⚡ %.1f tok/s · %d tokens".format(
-                        java.util.Locale.US,
+                    text = pluralStringResource(
+                        R.plurals.ai_chat_generation_speed_format,
+                        live.tokens,
                         live.tokensPerSecond,
                         live.tokens,
                     ),
@@ -267,7 +297,11 @@ private fun FailedBody(message: String, onRetry: () -> Unit, onDismiss: () -> Un
             onClick = if (isMissingKey) onDismiss else onRetry,
             modifier = Modifier.align(Alignment.End),
         ) {
-            Text(if (isMissingKey) "Dismiss" else "Retry")
+            Text(
+                stringResource(
+                    if (isMissingKey) R.string.action_dismiss else R.string.action_retry,
+                ),
+            )
         }
     }
 }
@@ -291,7 +325,7 @@ internal fun AiChatHistoryView(
     modifier: Modifier = Modifier,
 ) {
     moe.antimony.hoshi.features.settings.SettingsDetailScaffold(
-        title = "ChatGPT history",
+        title = stringResource(R.string.ai_chat_history_title),
         onClose = onClose,
         modifier = modifier,
     ) { innerPadding ->
@@ -303,7 +337,7 @@ internal fun AiChatHistoryView(
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
-                    text = "No ChatGPT chats for this manga yet.",
+                    text = stringResource(R.string.ai_chat_history_empty),
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
