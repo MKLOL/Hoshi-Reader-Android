@@ -7,6 +7,8 @@ Semantic Versioning.
 
 ## [Unreleased]
 
+## [v0.11.4] - 2026-09-04
+
 ### Fixed
 - **Sync no longer rejects every downloaded book on a new device.** iOS builds through 0.11.3
   published a wrongly derived content hash for each synced book, so a freshly set-up phone failed
