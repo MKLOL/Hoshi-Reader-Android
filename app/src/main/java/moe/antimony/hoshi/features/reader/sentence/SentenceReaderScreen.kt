@@ -215,18 +215,22 @@ private fun SentenceReaderContent(
         if (popups.isEmpty()) highlight = null
     }
 
+    // What a tap anywhere outside the popup does: the reader's "tap outside", minus the web view.
+    fun dismissPopups() {
+        popups = emptyList()
+        highlight = null
+    }
     fun move(next: SentencePosition?) {
         if (next == null) return
         position = next
         translationExpanded = false
-        popups = emptyList()
-        highlight = null
+        dismissPopups()
     }
     val next = position?.let { SentenceNavigation.next(book, it) }
     val previous = position?.let { SentenceNavigation.previous(book, it) }
     BackHandler {
         when {
-            popups.isNotEmpty() -> popups = emptyList()
+            popups.isNotEmpty() -> dismissPopups()
             showAppearance -> showAppearance = false
             else -> onClose()
         }
@@ -239,7 +243,10 @@ private fun SentenceReaderContent(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .onGloballyPositioned { screenOrigin = it.positionInRoot() },
+            .onGloballyPositioned { screenOrigin = it.positionInRoot() }
+            // Only taps no child claimed reach here: empty header space, the page beside the
+            // sentence, the translation panel. Buttons, words and the popup itself keep priority.
+            .pointerInput(Unit) { detectTapGestures { dismissPopups() } },
     ) {
         Column(
             modifier = Modifier
@@ -295,6 +302,7 @@ private fun SentenceReaderContent(
                         fontFamily = fontFamily,
                         fontSizeSp = readerSettings.fontSize * 1.1f,
                         screenOrigin = { screenOrigin },
+                        onTapOutside = ::dismissPopups,
                         onWordTap = { selection ->
                             scope.launch {
                                 val lookup = withContext(Dispatchers.IO) {
@@ -461,6 +469,8 @@ private fun SentenceText(
     fontFamily: FontFamily,
     fontSizeSp: Float,
     screenOrigin: () -> Offset,
+    /** A tap inside the text's box that lands on no word: margin, the gap after the last line. */
+    onTapOutside: () -> Unit,
     onWordTap: (ReaderSelectionData) -> Unit,
 ) {
     val density = LocalDensity.current
@@ -493,13 +503,22 @@ private fun SentenceText(
             .onGloballyPositioned { origin = it.positionInRoot() }
             .pointerInput(sentence) {
                 detectTapGestures { tap ->
-                    val current = layout ?: return@detectTapGestures
-                    if (text.isEmpty()) return@detectTapGestures
+                    val current = layout
+                    if (current == null || text.isEmpty()) {
+                        onTapOutside()
+                        return@detectTapGestures
+                    }
                     val line = current.getLineForVerticalPosition(tap.y)
-                    if (tap.x > current.getLineRight(line) || tap.x < current.getLineLeft(line)) return@detectTapGestures
+                    if (tap.x > current.getLineRight(line) || tap.x < current.getLineLeft(line)) {
+                        onTapOutside()
+                        return@detectTapGestures
+                    }
                     val offset = current.getOffsetForPosition(tap).coerceIn(0, text.length - 1)
                     val query = text.substring(offset).take(MAX_TAP_QUERY_CHARS)
-                    if (query.isBlank()) return@detectTapGestures
+                    if (query.isBlank()) {
+                        onTapOutside()
+                        return@detectTapGestures
+                    }
                     val box = current.getBoundingBox(offset)
                     val shift = origin - screenOrigin()
                     val rect = with(density) {
