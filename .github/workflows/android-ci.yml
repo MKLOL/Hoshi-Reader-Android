@@ -76,6 +76,13 @@ jobs:
       - name: Restore Gradle cache
         uses: gradle/actions/setup-gradle@v4
 
+      - name: Check the sync test server contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 --version
+          python3 tools/sync-test-server/test_sync_test_server.py
+
       - name: Test, lint, and assemble debug APK
         shell: bash
         run: ./gradlew --no-daemon test lint assembleDebug

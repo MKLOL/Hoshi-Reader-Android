@@ -87,6 +87,12 @@ android {
         }
     }
 
+    testOptions {
+        // Failure paths log through android.util.Log; a stubbed Log must not turn a real
+        // sync error into "Method not mocked" inside a JVM unit test.
+        unitTests.isReturnDefaultValues = true
+    }
+
     buildTypes {
         debug {
             applicationIdSuffix = ".debug"
