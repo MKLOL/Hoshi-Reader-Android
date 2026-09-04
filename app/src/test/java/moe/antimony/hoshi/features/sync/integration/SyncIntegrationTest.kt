@@ -209,6 +209,30 @@ class SyncIntegrationTest(private val engineA: SyncEngine, private val engineB: 
     }
 
     @Test
+    fun pageTurnedThroughTheBookmarkMapReachesAFreshInstallInOneSync() = runBlocking {
+        val (a, _) = publishLibraryAndSyncFreshDevice()
+        val rootA = a.book(SyncCorpus.MANGA_SYNC_ID).root
+
+        // A reads on: the reader path, i.e. the durable outbox + the five-second map exchange,
+        // never the legacy per-book key.
+        a.turnPage(rootA, SyncCorpus.MANGA_TITLE, SyncCorpus.bookmark(chapter = 7, appleSeconds = 800_000_500.0))
+        assertTrue("A's install shard holds the position", server.etags().keys.any { it.contains("bookmarks") && it != bookmarkKey(SyncCorpus.MANGA_SYNC_ID) })
+
+        // A brand-new install must land on that position after a single "Sync now".
+        val c = device("C", engineB)
+        val fresh = c.sync()
+        assertClean(fresh)
+        assertEquals(7, c.repo.loadBookmark(c.book(SyncCorpus.MANGA_SYNC_ID).root)!!.chapterIndex)
+
+        // …and the reader-open gate has nothing newer to add.
+        c.beforeOpen()
+        assertEquals(7, c.repo.loadBookmark(c.book(SyncCorpus.MANGA_SYNC_ID).root)!!.chapterIndex)
+        // A device that already had the book converges on its next sync too.
+        assertClean(a.sync())
+        assertEquals(7, a.repo.loadBookmark(rootA)!!.chapterIndex)
+    }
+
+    @Test
     fun reimportedBookReplacesTheRemotePayloadAndOtherDevicesKeepTheirSidecars() = runBlocking {
         val (a, b) = publishLibraryAndSyncFreshDevice()
         val rootA = a.book(SyncCorpus.NOVEL_SYNC_ID).root

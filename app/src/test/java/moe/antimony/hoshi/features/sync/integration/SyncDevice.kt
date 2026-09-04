@@ -8,6 +8,10 @@ import moe.antimony.hoshi.epub.BookEntry
 import moe.antimony.hoshi.epub.BookRepository
 import moe.antimony.hoshi.features.ai.AiChatHistoryStore
 import moe.antimony.hoshi.features.sync.http.HttpSyncAutoPush
+import moe.antimony.hoshi.features.sync.http.HttpSyncBatchState
+import moe.antimony.hoshi.features.sync.http.HttpSyncEngineDispatcher
+import moe.antimony.hoshi.features.sync.http.HttpSyncFastSync
+import moe.antimony.hoshi.features.sync.http.HttpSyncFullCycleRunner
 import moe.antimony.hoshi.features.sync.http.HttpSyncKvClient
 import moe.antimony.hoshi.features.sync.http.HttpSyncKvTransport
 import moe.antimony.hoshi.features.sync.http.HttpSyncPayloadCodec
@@ -18,6 +22,7 @@ import moe.antimony.hoshi.features.sync.http.PAYLOAD_EXCLUDED_DIRS
 import moe.antimony.hoshi.features.sync.http.PAYLOAD_EXCLUDED_FILES
 import moe.antimony.hoshi.features.sync.v3.V3SyncEngine
 import java.io.File
+import java.util.UUID
 
 /** Which "Sync now" engine a simulated install runs. Production defaults to [V3]; [V2] is the rollback path. */
 enum class SyncEngine { V2, V3 }
@@ -89,31 +94,55 @@ class SyncDevice(
         pushDispatcher = Dispatchers.IO,
     )
 
-    /** One "Sync now", exactly as the settings screen runs it, including cursor persistence for v2. */
-    suspend fun sync(): SyncOutcome = when (engine) {
-        SyncEngine.V2 -> {
-            val result = reconciler.syncOnce(settings.copy(lastSyncedAt = cursor))
-            result.newLastSyncedAt?.let { cursor = it }
-            SyncOutcome(
-                uploadedPayloads = result.uploadedPayloads,
-                downloadedPayloads = result.downloadedPayloads,
-                uploadedBookmarks = result.uploadedBookmarks,
-                downloadedBookmarks = result.downloadedBookmarks,
-                downloadedChatEntries = result.downloadedChatEntries,
-                errors = result.errors,
+    /** The bookmark-map layer every production sync goes through (five-second exchange + maps). */
+    val batchState = HttpSyncBatchState(
+        bookRepository = repo,
+        installationId = UUID.randomUUID().toString(),
+    )
+    private val fastSync = HttpSyncFastSync(
+        state = batchState,
+        fullCycleRunner = HttpSyncFullCycleRunner(pushScope),
+        transportFactory = transportFactory,
+    )
+
+    /**
+     * One "Sync now", exactly as the settings screen runs it: the map preflight, then the
+     * engine selected by [SyncEngine] through [HttpSyncEngineDispatcher], then map publication —
+     * including cursor persistence for v2.
+     */
+    suspend fun sync(): SyncOutcome {
+        val result = fastSync.syncNow(settings.copy(lastSyncedAt = cursor)) { reconcileSettings, transport ->
+            HttpSyncEngineDispatcher.syncOnce(
+                reconciler = reconciler,
+                v3Engine = v3,
+                settings = reconcileSettings,
+                transport = transport,
             )
         }
-        SyncEngine.V3 -> {
-            val result = v3.syncOnce(settings)
-            SyncOutcome(
-                uploadedPayloads = result.pushed.payloads,
-                downloadedPayloads = result.applied.payloads,
-                uploadedBookmarks = result.pushed.bookmarks,
-                downloadedBookmarks = result.applied.bookmarks,
-                downloadedChatEntries = result.applied.chatEntries,
-                errors = result.errors.map { e -> listOfNotNull(e.syncId, e.action).joinToString(":") + ": " + e.message },
-            )
-        }
+        result.newLastSyncedAt?.let { cursor = it }
+        return SyncOutcome(
+            uploadedPayloads = result.uploadedPayloads,
+            downloadedPayloads = result.downloadedPayloads,
+            uploadedBookmarks = result.uploadedBookmarks,
+            downloadedBookmarks = result.downloadedBookmarks,
+            downloadedChatEntries = result.downloadedChatEntries,
+            errors = result.errors,
+        )
+    }
+
+    /**
+     * A page turn as the reader persists it: the position is queued into the durable outbox and
+     * the next five-second map exchange uploads this install's shard.
+     */
+    suspend fun turnPage(root: File, title: String, bookmark: moe.antimony.hoshi.epub.Bookmark) {
+        repo.saveBookmark(root, bookmark)
+        batchState.queueBookmark(root, title, repo.loadMetadata(root)?.syncId)
+        batchState.syncMaps(transportFactory(settings))
+    }
+
+    /** The reader-open gate: one cheap map exchange before a book is displayed. */
+    suspend fun beforeOpen() {
+        batchState.syncMaps(transportFactory(settings))
     }
 
     /** Waits for every fire-and-forget push the hooks launched. */

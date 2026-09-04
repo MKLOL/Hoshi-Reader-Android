@@ -21,6 +21,10 @@ Semantic Versioning.
   width in proportion to what they actually contain, rows are tight, and the card grows to most of
   the screen the way iOS does — with only the reply scrolling, so the close button stays put. A
   typical bubble translation and its breakdown now fit without scrolling in either direction.
+- **A new install lands on your latest reading positions after a single Sync now.** The first
+  sync on a fresh device imported the books and then showed the older position stored next to
+  each book; the newest position from your other devices only arrived on a later background
+  pass. Sync now applies it as soon as the books exist.
 
 ## [v0.11.4] - 2026-09-04
 

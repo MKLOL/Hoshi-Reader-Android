@@ -302,6 +302,15 @@ class HttpSyncBatchState(
             val before = synchronized(stateLock) { loadStateLocked() }
             val pendingSnapshot = synchronized(stateLock) { loadPendingLocked() }
             val localEntries = bookRepository.loadBookEntries()
+            // The preflight fetched every shard before the reconcile imported remote-only books,
+            // so it could not place their positions yet. Apply the newest known position to the
+            // books that exist now; otherwise a fresh install's first "Sync now" leaves each
+            // imported book at the older legacy-key position until the next map pass.
+            val applied = applyRemoteWinners(
+                mergeShards(before.bookmarkShards.values),
+                readLocalBookmarks(localEntries),
+                localEntries,
+            )
             val localBookmarks = readLocalBookmarks(localEntries)
             val owned = mergeBookmarkMaps(before.ownedBookmarks, localBookmarks)
             // A successful full reconcile has materialized a SHA sidecar for every live payload.
@@ -344,7 +353,7 @@ class HttpSyncBatchState(
                 val completed = pendingSnapshot.associate { it.key to it.mutationId }
                 savePendingLocked(loadPendingLocked().filterNot { completed[it.key] == it.mutationId })
             }
-            HttpSyncMapChanges(uploadedBookmarks = localBookmarks.size)
+            HttpSyncMapChanges(uploadedBookmarks = localBookmarks.size, downloadedBookmarks = applied)
         }
 
     /** Snapshot after reconcile; a changed ETag requires one stabilizing pass before ack. */
@@ -578,14 +587,16 @@ class HttpSyncFullCycleRunner(private val scope: CoroutineScope) {
 class HttpSyncFastSync(
     private val state: HttpSyncBatchState,
     private val fullCycleRunner: HttpSyncFullCycleRunner,
+    /** Production builds the real client; integration tests point it at a local server. */
+    private val transportFactory: (HttpSyncSettings) -> HttpSyncKvTransport = { settings ->
+        HttpSyncKvClient(settings.baseUrl, settings.bearerToken)
+    },
 ) {
     suspend fun syncNow(
         settings: HttpSyncSettings,
         fullSync: suspend (HttpSyncSettings, HttpSyncKvTransport) -> HttpSyncResult,
     ): HttpSyncResult {
-        val client = HttpSyncWriteTrackingTransport(
-            HttpSyncKvClient(settings.baseUrl, settings.bearerToken),
-        )
+        val client = HttpSyncWriteTrackingTransport(transportFactory(settings))
         val maps = state.syncMaps(client)
         if (!maps.needsBootstrap && !maps.booksChanged && !maps.otherChanged) {
             return emptyResult(
@@ -608,7 +619,10 @@ class HttpSyncFastSync(
                 val after = state.observeLegacyEtags(client)
                 val expected = client.expectedLegacyEtags(maps.observedLegacyEtags)
                 if (after == expected) {
-                    state.publishMaps(client, expected)
+                    val published = state.publishMaps(client, expected)
+                    return@run reconciled.copy(
+                        downloadedBookmarks = reconciled.downloadedBookmarks + published.downloadedBookmarks,
+                    )
                 }
             }
             reconciled
