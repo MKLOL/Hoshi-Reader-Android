@@ -179,7 +179,7 @@ object EpubTranslationStore {
             .take(8)
             .joinToString("") { "%02x".format(it) }
 
-    private fun isMatchableCodePoint(codePoint: Int): Boolean =
+    internal fun isMatchableCodePoint(codePoint: Int): Boolean =
         codePoint in '0'.code..'9'.code ||
             codePoint in 'A'.code..'Z'.code ||
             codePoint in 'a'.code..'z'.code ||

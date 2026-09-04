@@ -2,6 +2,9 @@ package moe.antimony.hoshi.features.reader.sentence
 
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.builtins.MapSerializer
 import kotlinx.serialization.builtins.serializer
@@ -19,18 +22,23 @@ class SentenceReaderPositionStore(
     private val file = File(filesDir, FILE_NAME)
     private val json = Json { ignoreUnknownKeys = true }
     private val serializer = MapSerializer(String.serializer(), SentencePosition.serializer())
+    // Saves are read-modify-write on one file: two quick swipes must not interleave and keep the
+    // older position, and a save that has started must finish even if its effect is cancelled.
+    private val mutex = Mutex()
 
     suspend fun load(bookId: String): SentencePosition? = withContext(ioDispatcher) {
-        readAll()[bookId]
+        mutex.withLock { readAll()[bookId] }
     }
 
-    suspend fun save(bookId: String, position: SentencePosition) = withContext(ioDispatcher) {
-        val next = readAll() + (bookId to position)
-        val temp = File(file.parentFile, "$FILE_NAME.tmp")
-        temp.writeText(json.encodeToString(serializer, next))
-        if (!temp.renameTo(file)) {
-            file.writeText(json.encodeToString(serializer, next))
-            temp.delete()
+    suspend fun save(bookId: String, position: SentencePosition) = withContext(ioDispatcher + NonCancellable) {
+        mutex.withLock {
+            val next = readAll() + (bookId to position)
+            val temp = File(file.parentFile, "$FILE_NAME.tmp")
+            temp.writeText(json.encodeToString(serializer, next))
+            if (!temp.renameTo(file)) {
+                file.writeText(json.encodeToString(serializer, next))
+                temp.delete()
+            }
         }
     }
 

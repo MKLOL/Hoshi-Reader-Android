@@ -106,6 +106,79 @@ class EpubSentenceSegmenterTest {
     }
 
     @Test
+    fun entitiesDecodeExactlyLikeHtmlUnescape() {
+        // Legacy semicolon-less names, the longest-prefix rule, numeric references without `;`,
+        // and the standard's replacements for invalid references, all as Python's html.unescape.
+        assertEquals("a&b", EpubSentenceSegmenter.decodeEntities("a&ampb"))
+        assertEquals("¬it;", EpubSentenceSegmenter.decodeEntities("&notit;"))
+        assertEquals("€\ufffd", EpubSentenceSegmenter.decodeEntities("&#128;&#0;&#x1;"))
+        assertEquals("&\r", EpubSentenceSegmenter.decodeEntities("&amp\r"))
+        assertEquals("&" + "a".repeat(40) + ";", EpubSentenceSegmenter.decodeEntities("&" + "a".repeat(40) + ";"))
+        assertEquals("\ufffd\ufffd\ufffd", EpubSentenceSegmenter.decodeEntities("&#x110000;&#xD800;&#99999999999999999999;"))
+        assertEquals("\t\nA", EpubSentenceSegmenter.decodeEntities("&Tab;&NewLine;&#65;"))
+        assertEquals("café ¥", EpubSentenceSegmenter.decodeEntities("caf&eacute; &yen;"))
+    }
+
+    @Test
+    fun compatibilityIdeographsAreMatchableLikeTheTool() {
+        // U+FA11 is in the tool's \p{Unified_Ideograph}; the reader's display filter drops it, and
+        // using that filter shifted every address after it by one.
+        val sentences = EpubSentenceSegmenter.segment(0, chapter("<p>山﨑さん。次。</p>"))
+
+        assertEquals(listOf("c0s0", "c0s4"), sentences.map { it.id })
+        assertEquals(listOf(4, 1), sentences.map { it.length })
+        assertEquals(2, EpubSentenceSegmenter.matchableCount("山﨑さん", 2))
+    }
+
+    @Test
+    fun html5NamedEntitiesDecodeInsideSentences() {
+        val sentences = EpubSentenceSegmenter.segment(0, chapter("<p>caf&eacute; は良い。&yen;100だ。次の文。</p>"))
+
+        assertEquals(listOf("café は良い。", "¥100だ。", "次の文。"), sentences.map { it.text })
+        assertEquals(listOf("c0s0", "c0s6", "c0s10"), sentences.map { it.id })
+    }
+
+    @Test
+    fun legacyAndNumericEntitiesFollowHtmlUnescapeInsideSentences() {
+        val sentences = EpubSentenceSegmenter.segment(0, chapter("<p>a&ampb。&#12354&#x3042;&notit;。&#128;&#0;&#x1;x。</p>"))
+
+        assertEquals(listOf("a&b。", "ああ¬it;。", "€\ufffdx。"), sentences.map { it.text })
+        assertEquals(listOf("c0s0", "c0s2", "c0s6"), sentences.map { it.id })
+        assertEquals(listOf(2, 4, 1), sentences.map { it.length })
+    }
+
+    @Test
+    fun scriptAndStyleContentIsRawText() {
+        // A `<` inside a script used to start a tag that swallowed `</script>`, and with the skip
+        // never closed the whole chapter vanished.
+        val html = "<html><head><script>for(i=0;i<n;i++){}</script></head><body><p>本文。</p>" +
+            "<script>if (a < b) {}</script><p>次。</p><style>a>b{}</style><p>三。</p></body></html>"
+        val sentences = EpubSentenceSegmenter.segment(0, html)
+
+        assertEquals(listOf("本文。", "次。", "三。"), sentences.map { it.text })
+        assertEquals(listOf("c0s0", "c0s2", "c0s3"), sentences.map { it.id })
+        assertEquals(listOf(1, 3, 5), sentences.map { it.paragraph })
+    }
+
+    @Test
+    fun strayLessThanIsTextAndCdataAndCommentsAreSkipped() {
+        val html = chapter("<p>if a < b then。次。</p><p>第一<![CDATA[x > y]]>章。<!-- 。 -->終。</p>")
+        val sentences = EpubSentenceSegmenter.segment(0, html)
+
+        assertEquals(listOf("if a < b then。", "次。", "第一章。", "終。"), sentences.map { it.text })
+        assertEquals(listOf("c0s0", "c0s8", "c0s9", "c0s12"), sentences.map { it.id })
+    }
+
+    @Test
+    fun theFirstHeadingIsTheChapterTitleFallback() {
+        val chapter = EpubSentenceSegmenter.chapter(0, chapter("<h1>第一章　　朝</h1><p>本文。</p><h2>二</h2>"))
+
+        assertEquals("第一章 朝", chapter.heading)
+        assertEquals(listOf("第一章 朝", "本文。", "二"), chapter.sentences.map { it.text })
+        assertEquals("", EpubSentenceSegmenter.chapter(0, chapter("<p>見出しなし。</p>")).heading)
+    }
+
+    @Test
     fun textBeforeBodyIsIgnoredButABodylessFragmentIsNot() {
         assertEquals(listOf("本文。"), EpubSentenceSegmenter.segment(0, chapter("<p>本文。</p>")).map { it.text })
         assertEquals(listOf("断片。"), EpubSentenceSegmenter.segment(0, "<p>断片。</p>").map { it.text })

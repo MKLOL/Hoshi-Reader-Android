@@ -73,10 +73,16 @@ internal class SentenceReaderLoader(
                     val html = if (!readable) "" else chapter.html.ifEmpty {
                         book.readResource(chapter.href)?.toString(Charsets.UTF_8).orEmpty()
                     }
+                    val text = if (html.isEmpty()) {
+                        SentenceChapterText(emptyList(), "")
+                    } else {
+                        EpubSentenceSegmenter.chapter(chapter.spineIndex ?: index, html)
+                    }
                     SentenceChapter(
                         chapterIndex = index,
-                        title = titles[chapter.href.substringBefore('#')],
-                        sentences = if (html.isEmpty()) emptyList() else EpubSentenceSegmenter.segment(chapter.spineIndex ?: index, html),
+                        // The TOC label, else the chapter's first heading, as iOS and the tool do.
+                        title = tocTitle(chapter.href.substringBefore('#'), titles) ?: text.heading.takeIf { it.isNotEmpty() },
+                        sentences = text.sentences,
                     )
                 },
             )
@@ -84,6 +90,13 @@ internal class SentenceReaderLoader(
 
         private fun moe.antimony.hoshi.epub.EpubChapter.isNavigation(): Boolean =
             properties.orEmpty().split(' ').any { it == "nav" }
+
+        /**
+         * The iOS Chapters sheet's rule (`ChapterListViewModel.findSpineIndex`): an exact match
+         * first, otherwise the TOC path and the manifest path may differ by a leading folder.
+         */
+        private fun tocTitle(path: String, titles: Map<String, String>): String? =
+            titles[path] ?: titles.entries.firstOrNull { path.endsWith(it.key) || it.key.endsWith(path) }?.value
 
         private fun tocTitles(items: List<EpubTocItem>): Map<String, String> {
             val out = linkedMapOf<String, String>()

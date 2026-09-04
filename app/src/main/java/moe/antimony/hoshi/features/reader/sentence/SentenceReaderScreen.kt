@@ -48,6 +48,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -73,6 +74,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import moe.antimony.hoshi.LocalHoshiAppContainer
@@ -170,6 +172,9 @@ private fun SentenceReaderContent(
     var translationExpanded by remember { mutableStateOf(false) }
     var popups by remember { mutableStateOf<List<LookupPopupItem>>(emptyList()) }
     var highlight by remember { mutableStateOf<IntRange?>(null) }
+    // The lookup in flight, so a swipe or a dismissal cancels it instead of letting a stale
+    // result open the previous sentence's popup over the new one.
+    var lookupJob by remember { mutableStateOf<Job?>(null) }
     var showAppearance by remember { mutableStateOf(false) }
     val sasayakiSettings by appContainer.sasayakiSettingsRepository.settings
         .collectAsState(initial = SasayakiSettings())
@@ -185,7 +190,7 @@ private fun SentenceReaderContent(
     val statusBarTop = with(density) { WindowInsets.statusBars.getTop(this).toDp().value }
     val lookupOptions = LookupPopupOptions(
         isVertical = false,
-        isFullWidth = false,
+        isFullWidth = readerSettings.popupFullWidth,
         width = readerSettings.popupWidth,
         height = readerSettings.popupHeight,
         swipeToDismiss = readerSettings.popupSwipeToDismiss,
@@ -217,6 +222,8 @@ private fun SentenceReaderContent(
 
     // What a tap anywhere outside the popup does: the reader's "tap outside", minus the web view.
     fun dismissPopups() {
+        lookupJob?.cancel()
+        lookupJob = null
         popups = emptyList()
         highlight = null
     }
@@ -256,7 +263,7 @@ private fun SentenceReaderContent(
             SentenceHeader(
                 title = state.title,
                 chapterTitle = position?.let { book.chapters.getOrNull(it.chapter)?.title },
-                counter = position?.let { "${book.ordinal(it)} / ${book.totalSentences}" },
+                counter = position?.let { stringResource(R.string.sentence_mode_counter, book.ordinal(it), book.totalSentences) },
                 foreground = foreground,
                 onClose = onClose,
                 onAppearance = { showAppearance = true },
@@ -301,10 +308,12 @@ private fun SentenceReaderContent(
                         foreground = foreground,
                         fontFamily = fontFamily,
                         fontSizeSp = readerSettings.fontSize * 1.1f,
+                        lineHeightMultiplier = readerSettings.lineHeight.toFloat(),
                         screenOrigin = { screenOrigin },
                         onTapOutside = ::dismissPopups,
                         onWordTap = { selection ->
-                            scope.launch {
+                            lookupJob?.cancel()
+                            lookupJob = scope.launch {
                                 val lookup = withContext(Dispatchers.IO) {
                                     createLookupPopupItem(selection = selection, options = lookupOptions)
                                 }
@@ -468,12 +477,18 @@ private fun SentenceText(
     foreground: Color,
     fontFamily: FontFamily,
     fontSizeSp: Float,
+    lineHeightMultiplier: Float,
     screenOrigin: () -> Offset,
     /** A tap inside the text's box that lands on no word: margin, the gap after the last line. */
     onTapOutside: () -> Unit,
     onWordTap: (ReaderSelectionData) -> Unit,
 ) {
     val density = LocalDensity.current
+    // The pointerInput block below is keyed on the sentence and outlives recompositions, so it
+    // must read the newest callbacks (and through them the newest lookup options), not the ones
+    // captured when the sentence first appeared.
+    val currentOnTapOutside by rememberUpdatedState(onTapOutside)
+    val currentOnWordTap by rememberUpdatedState(onWordTap)
     var layout by remember(sentence) { mutableStateOf<TextLayoutResult?>(null) }
     var origin by remember { mutableStateOf(Offset.Zero) }
     val text = sentence.text
@@ -493,7 +508,7 @@ private fun SentenceText(
             color = foreground,
             fontFamily = fontFamily,
             fontSize = fontSizeSp.sp,
-            lineHeight = (fontSizeSp * 1.7f).sp,
+            lineHeight = (fontSizeSp * lineHeightMultiplier).sp,
             fontWeight = FontWeight.Normal,
             textAlign = TextAlign.Start,
         ),
@@ -505,18 +520,18 @@ private fun SentenceText(
                 detectTapGestures { tap ->
                     val current = layout
                     if (current == null || text.isEmpty()) {
-                        onTapOutside()
+                        currentOnTapOutside()
                         return@detectTapGestures
                     }
                     val line = current.getLineForVerticalPosition(tap.y)
                     if (tap.x > current.getLineRight(line) || tap.x < current.getLineLeft(line)) {
-                        onTapOutside()
+                        currentOnTapOutside()
                         return@detectTapGestures
                     }
                     val offset = current.getOffsetForPosition(tap).coerceIn(0, text.length - 1)
                     val query = text.substring(offset).take(MAX_TAP_QUERY_CHARS)
                     if (query.isBlank()) {
-                        onTapOutside()
+                        currentOnTapOutside()
                         return@detectTapGestures
                     }
                     val box = current.getBoundingBox(offset)
@@ -529,7 +544,7 @@ private fun SentenceText(
                             height = box.height.toDp().value.toDouble(),
                         )
                     }
-                    onWordTap(
+                    currentOnWordTap(
                         ReaderSelectionData(
                             text = query,
                             sentence = text,

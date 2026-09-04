@@ -529,6 +529,7 @@
     <string name="sentence_mode_previous">上一句</string>
     <string name="sentence_mode_next">下一句</string>
     <string name="sentence_mode_chapter_progress">第 %1$d 章，共 %2$d 章</string>
+    <string name="sentence_mode_counter">%1$d / %2$d</string>
     <string name="sentence_mode_empty">这本书没有可读取的文本。</string>
     <string name="sentence_mode_font_smaller">缩小文字</string>
     <string name="sentence_mode_font_larger">放大文字</string>
