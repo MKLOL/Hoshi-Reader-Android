@@ -383,6 +383,25 @@ class SyncIntegrationTest(private val engineA: SyncEngine, private val engineB: 
     }
 
     @Test
+    fun aForeignContentHashNeverRedownloadsAnArchiveThisDeviceAlreadyHolds() = runBlocking {
+        // Another platform hashing the same bytes differently must not make devices chase the
+        // archive they already hold: the archive sha256 says nothing changed, so nothing moves.
+        val (a, b) = publishLibraryAndSyncFreshDevice()
+        val key = payloadManifestKey(SyncCorpus.MANGA_SYNC_ID)
+        val foreign = manifest(key).copy(contentSha256 = "sha256:" + "d".repeat(64))
+        putManifest(key, foreign)
+        server.clearRequests()
+
+        assertClean(a.sync())
+        assertClean(b.sync())
+        assertClean(b.sync())
+
+        assertEquals(emptyList<RecordedRequest>(), server.requests().filter { it.isPayloadDownload })
+        assertEquals("no device rewrote the other platform's note", foreign.contentSha256, manifest(key).contentSha256)
+        assertSamePayload(a, a.book(SyncCorpus.MANGA_SYNC_ID).root, b, b.book(SyncCorpus.MANGA_SYNC_ID).root)
+    }
+
+    @Test
     fun deletingABookPropagatesAsATombstone() = runBlocking {
         val (a, b) = publishLibraryAndSyncFreshDevice()
 
