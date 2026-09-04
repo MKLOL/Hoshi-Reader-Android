@@ -44,12 +44,17 @@ internal object SyncCorpus {
      * Materializes a mokuro volume the way the importer leaves it on disk: `images/NNNN.jpg`,
      * `mokuro.json`, an import-time root cover copy, and metadata with a persisted sync id.
      * The bookshelf's post-import hook is the device's job ([SyncDevice.importManga]).
+     *
+     * With [shipCover] false the root cover copy is left out, as a volume published by a client
+     * that keeps its shelf cover elsewhere arrives: receivers must then materialize their own
+     * cover outside the payload's content hash.
      */
     suspend fun importManga(
         repo: BookRepository,
         title: String = MANGA_TITLE,
         pageCount: Int = 3,
         extraBytesPerPage: Int = 0,
+        shipCover: Boolean = true,
     ): File {
         require(pageCount in 1..pageJpegs.size * 10)
         val root = repo.createBookDirectoryForImportedTitle(title)
@@ -72,7 +77,7 @@ internal object SyncCorpus {
             """{"version":"0.1.8","title":"$title","volume":"$title","title_uuid":"11111111-1111-1111-1111-111111111111",""" +
                 """"volume_uuid":"22222222-2222-2222-2222-222222222222","pages":[$pages]}""",
         )
-        val cover = repo.metadataCoverPath(root, "images/0001.jpg")
+        val cover = if (shipCover) repo.metadataCoverPath(root, "images/0001.jpg") else null
         registerImport(repo, root, title, cover)
         return root
     }

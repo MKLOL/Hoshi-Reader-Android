@@ -4,13 +4,16 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.builtins.MapSerializer
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
+import moe.antimony.hoshi.epub.GENERATED_COVER_FILENAME
 import moe.antimony.hoshi.features.ai.AiChatEntry
 import moe.antimony.hoshi.features.ai.PretranslationStore
 import moe.antimony.hoshi.features.sync.http.BOOKMARKS_MAP_PREFIX
 import moe.antimony.hoshi.features.sync.http.HttpSyncBookmarkBlob
 import moe.antimony.hoshi.features.sync.http.HttpSyncBookmarkMapEntry
 import moe.antimony.hoshi.features.sync.http.HttpSyncPayloadManifest
+import moe.antimony.hoshi.features.sync.http.PAYLOAD_ZIP_SHA_CACHE_FILENAME
 import moe.antimony.hoshi.features.sync.http.bookmarkKey
+import moe.antimony.hoshi.features.sync.http.deriveSyncId
 import moe.antimony.hoshi.features.sync.http.epubManifestKey
 import moe.antimony.hoshi.features.sync.http.epubZipKey
 import moe.antimony.hoshi.features.sync.http.metadataKey
@@ -87,7 +90,14 @@ class SyncIntegrationTest(private val engineA: SyncEngine, private val engineB: 
         json.decodeFromString(HttpSyncPayloadManifest.serializer(), server.client().get(key)!!.body.toString(Charsets.UTF_8))
 
     private suspend fun putManifest(key: String, manifest: HttpSyncPayloadManifest) {
-        server.client().put(key, "application/json; charset=utf-8", json.encodeToString(HttpSyncPayloadManifest.serializer(), manifest).toByteArray())
+        putManifestBytes(key, json.encodeToString(HttpSyncPayloadManifest.serializer(), manifest))
+    }
+
+    /** Another client's encoder: the same manifest, different bytes, so a different etag. */
+    private val prettyJson = Json { encodeDefaults = true; prettyPrint = true }
+
+    private suspend fun putManifestBytes(key: String, body: String) {
+        server.client().put(key, "application/json; charset=utf-8", body.toByteArray())
     }
 
     private suspend fun bookmarkShard(key: String): Map<String, HttpSyncBookmarkMapEntry> =
@@ -399,6 +409,95 @@ class SyncIntegrationTest(private val engineA: SyncEngine, private val engineB: 
         assertEquals(emptyList<RecordedRequest>(), server.requests().filter { it.isPayloadDownload })
         assertEquals("no device rewrote the other platform's note", foreign.contentSha256, manifest(key).contentSha256)
         assertSamePayload(a, a.book(SyncCorpus.MANGA_SYNC_ID).root, b, b.book(SyncCorpus.MANGA_SYNC_ID).root)
+    }
+
+    @Test
+    fun aBookHeldBeforeTheArchiveBaselineExistedIsVerifiedOnceThenNeverChased() = runBlocking {
+        // A imported and uploaded this book on a build that kept no record of the archive it
+        // shipped. Another platform then publishes its own derivation of the same archive's
+        // content hash: one verification download is unavoidable, but it must leave the
+        // baseline behind on the real book directory, or every later flip costs the archive again.
+        val (a, _) = publishLibraryAndSyncFreshDevice()
+        val rootA = a.book(SyncCorpus.MANGA_SYNC_ID).root
+        assertTrue(rootA.resolve(PAYLOAD_ZIP_SHA_CACHE_FILENAME).delete())
+        val key = payloadManifestKey(SyncCorpus.MANGA_SYNC_ID)
+        val good = manifest(key)
+        val foreign = good.copy(contentSha256 = "sha256:" + "d".repeat(64))
+        val filesBefore = a.payloadFiles(rootA)
+
+        putManifest(key, foreign)
+        server.clearRequests()
+        assertClean(a.sync())
+        assertEquals("the archive is verified once", 1, server.requests().count { it.isPayloadDownload })
+        assertSameFiles(filesBefore, a.payloadFiles(rootA))
+        assertEquals("the verified archive is remembered beside the book", good.sha256, a.codec.cachedZipSha(rootA))
+
+        // The other platform flips the note back to its derivation of the unchanged archive.
+        putManifest(key, foreign)
+        server.clearRequests()
+        assertClean(a.sync())
+        assertClean(a.sync())
+        assertEquals(emptyList<RecordedRequest>(), server.requests().filter { it.isPayloadDownload })
+        assertEquals("the other platform's note is left alone", foreign.contentSha256, manifest(key).contentSha256)
+        assertSameFiles(filesBefore, a.payloadFiles(rootA))
+    }
+
+    @Test
+    fun aStaleContentCacheIsRepairedFromDiskAndRemembersTheArchive() = runBlocking {
+        // A pre-baseline install whose content sidecar no longer describes its bytes (every
+        // sidecar written by iOS builds through 0.11.3) sees another client rewrite the manifest
+        // byte-differently without changing it. Re-hashing from disk settles it locally, and
+        // that agreement is proof enough to remember the archive.
+        val (_, b) = publishLibraryAndSyncFreshDevice()
+        val rootB = b.book(SyncCorpus.NOVEL_SYNC_ID).root
+        val key = epubManifestKey(SyncCorpus.NOVEL_SYNC_ID)
+        val good = manifest(key)
+        assertTrue(rootB.resolve(PAYLOAD_ZIP_SHA_CACHE_FILENAME).delete())
+        b.codec.rememberPayloadSha(rootB, "sha256:" + "e".repeat(64))
+
+        putManifestBytes(key, prettyJson.encodeToString(HttpSyncPayloadManifest.serializer(), good))
+        server.clearRequests()
+        assertClean(b.sync())
+        assertEquals(emptyList<RecordedRequest>(), server.requests().filter { it.isPayloadDownload })
+        assertEquals("the content sidecar is re-derived from disk", good.contentSha256, b.codec.cachedPayloadSha(rootB))
+        assertEquals("the archive is remembered without a download", good.sha256, b.codec.cachedZipSha(rootB))
+
+        putManifest(key, good.copy(contentSha256 = "sha256:" + "d".repeat(64)))
+        server.clearRequests()
+        assertClean(b.sync())
+        assertEquals("a foreign hash is now recognised as the held archive", emptyList<RecordedRequest>(), server.requests().filter { it.isPayloadDownload })
+    }
+
+    @Test
+    fun aMangaShippedWithoutARootCoverGetsAReceiverCoverOutsideTheContentHash() = runBlocking {
+        // A volume whose publisher kept no cover copy in the book directory: the receiver must
+        // show a shelf cover without adding a file that would make its content hash disagree
+        // with the origin's manifest on every later sync.
+        val title = "Integration Manga Without Cover"
+        val syncId = deriveSyncId(title)!!
+        val a = device("A", engineA)
+        val origin = a.importManga(title = title, shipCover = false)
+        assertFalse("the corpus variant really ships no root cover", origin.resolve("0001.jpg").exists())
+        val push = a.sync()
+        assertClean(push)
+        assertEquals(1, push.uploadedPayloads)
+
+        val b = device("B", engineB)
+        val pull = b.sync()
+        assertClean(pull)
+        assertEquals(1, pull.downloadedPayloads)
+        val copy = b.book(syncId)
+        assertEquals("the cover is materialized under the hash-excluded name", "Books/${copy.root.name}/$GENERATED_COVER_FILENAME", copy.metadata.cover)
+        assertTrue("cover file exists", b.repo.coverFile(copy)!!.isFile)
+        assertSamePayload(a, origin, b, copy.root)
+        val remote = manifest(payloadManifestKey(syncId))
+        assertEquals("recomputed hash still equals the manifest with the cover in place", remote.contentSha256, b.codec.computePayloadContentSha(copy.root))
+        assertEquals(remote.contentSha256, b.codec.cachedPayloadSha(copy.root))
+
+        server.clearRequests()
+        assertClean(b.sync())
+        assertClean(a.sync())
+        assertEquals("nothing moves once both hold the book", emptyList<RecordedRequest>(), server.requests().filter { it.isPayloadDownload || it.isPayloadUpload || it.isManifestWrite })
     }
 
     @Test

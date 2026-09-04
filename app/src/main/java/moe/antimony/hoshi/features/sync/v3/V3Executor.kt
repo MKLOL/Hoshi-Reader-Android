@@ -539,7 +539,12 @@ class V3Executor(
         // before paying for a download: a stale or mis-derived sidecar is far cheaper to fix
         // locally than a multi-hundred-MB replacement that installs identical content.
         val localSha = payloadCodec.refreshPayloadContentSha(action.root)
-        if (remoteSha != null && localSha == remoteSha) return false
+        if (remoteSha != null && localSha == remoteSha) {
+            // The bytes on disk are the archive the manifest describes, so a book that predates
+            // the archive sidecar gains the baseline the guard above needs.
+            payloadCodec.rememberZipSha(action.root, action.manifest.sha256)
+            return false
+        }
         if (remoteSha != null &&
             moe.antimony.hoshi.features.sync.http.migrateLegacyGeneratedCoverAndRepoint(
                 payloadCodec, bookRepository, action.root, remoteSha,
@@ -576,7 +581,12 @@ class V3Executor(
             // downloadAndUnpack already republished the manifest if its declared hash was
             // missing or wrong, so the remote note now matches this verified value.
             val verifiedRemoteSha = requireNotNull(manifest.contentSha256)
-            if (localSha == verifiedRemoteSha) return false
+            if (localSha == verifiedRemoteSha) {
+                // Staging is discarded below; the real book root holds this exact archive, so
+                // remember it there or the next foreign hash costs this download again.
+                payloadCodec.rememberZipSha(action.root, manifest.sha256)
+                return false
+            }
             return bookLocks.withBookLock(action.root) {
                 // Re-check after download and under the shared import/sync lock. A local import
                 // that won this race marks the generation dirty before releasing this lock.

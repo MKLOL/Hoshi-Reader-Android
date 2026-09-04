@@ -304,7 +304,7 @@ private fun TableBlockView(table: TableBlock, color: Color, codeBackground: Colo
             .fillMaxWidth()
             .padding(vertical = 4.dp),
     ) {
-        val widths = remember(rows, columnCount, maxWidth, bodyStyle, headerStyle) {
+        val widths = remember(rows, columnCount, maxWidth, bodyStyle, headerStyle, density) {
             tableColumnWidths(
                 rows = rows,
                 columnCount = columnCount,

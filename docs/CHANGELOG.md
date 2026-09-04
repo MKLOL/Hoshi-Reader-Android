@@ -29,8 +29,10 @@ Semantic Versioning.
   pass. Sync now applies it as soon as the books exist.
 - **Devices no longer re-download a book they already hold just because another platform
   hashed it differently.** A disagreement about a book's content hash while the server still
-  points at the same archive is now ignored, and a manifest is only corrected when nothing else
-  changed it in the meantime.
+  points at the same archive is now ignored. A book that was on the device before this version
+  is checked against the server's archive once (one download that installs nothing) and
+  remembered from then on, and a manifest is only corrected when nothing else changed it in the
+  meantime.
 
 ## [v0.11.4] - 2026-09-04
 

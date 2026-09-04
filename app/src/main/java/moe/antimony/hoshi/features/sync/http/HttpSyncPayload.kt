@@ -191,7 +191,14 @@ class HttpSyncPayloadCodec(
         bookRoot.resolve(PAYLOAD_ZIP_SHA_CACHE_FILENAME).readText().trim()
     }.getOrNull()?.takeIf { SHA256_VALUE.matches(it) }
 
-    private fun rememberZipSha(bookRoot: File, sha: String) {
+    /**
+     * Records the archive [bookRoot]'s content is known to equal. Uploads and installs write it
+     * beside the unpacked book; callers that prove an already-held book matches the server's
+     * archive without installing anything (a verify-only download, or a local re-hash that
+     * agrees with the manifest) must record it too, or a book that predates this sidecar never
+     * gains the baseline that stops cross-platform hash disagreements from re-downloading it.
+     */
+    internal fun rememberZipSha(bookRoot: File, sha: String) {
         runCatching { writeSidecarAtomically(bookRoot.resolve(PAYLOAD_ZIP_SHA_CACHE_FILENAME), sha) }
     }
 
@@ -570,8 +577,9 @@ class HttpSyncPayloadCodec(
         keys: HttpSyncPayloadKeys = HttpSyncPayloadKeys.legacy(syncId),
         expectedFormat: HttpSyncContentType? = null,
     ): HttpSyncPayloadManifest = withContext(ioDispatcher) {
-        val manifest = fetchManifest(transport, syncId, keys)
+        val fetchedManifest = transport.get(keys.manifest)
             ?: throw HttpSyncException("No payload manifest for $syncId.")
+        val manifest = decodeManifest(syncId, fetchedManifest)
         if (expectedFormat != null && manifest.format != expectedFormat) {
             throw HttpSyncException(
                 "Payload manifest for $syncId declares ${manifest.format}, " +
@@ -604,7 +612,7 @@ class HttpSyncPayloadCodec(
             val contentSha = computePayloadContentSha(targetDir)
             val verified = manifest.copy(contentSha256 = contentSha)
             if (manifest.contentSha256 != contentSha) {
-                repairManifest(transport, syncId, keys, verifiedAgainst = manifest, verified = verified)
+                repairManifest(transport, keys, verifiedAgainst = fetchedManifest.body, verified = verified)
             }
             // Keep both hashes next to the unpacked book so later syncs are sidecar reads.
             writeCachedSha(targetDir.resolve(PAYLOAD_SHA_CACHE_FILENAME), contentSha)
@@ -616,21 +624,24 @@ class HttpSyncPayloadCodec(
     }
 
     /**
-     * Republishes [verified] only while the server still holds exactly [verifiedAgainst], the
-     * manifest the archive was checked against. Another device may have published a new archive
-     * during this download; overwriting its manifest with the old sha256 and size would break
-     * the book for every device until that publisher syncs again. A failed repair just repeats
-     * on the next sync.
+     * Republishes [verified] only while the server still serves byte-for-byte the manifest the
+     * archive was checked against ([verifiedAgainst], its raw body). Another device may have
+     * published a new archive during this download; overwriting its manifest with the old sha256
+     * and size would break the book for every device until that publisher syncs again. The raw
+     * bytes are compared rather than decoded fields so a rewrite this client cannot represent
+     * (an unknown field, a different note) is never clobbered either. The KV API has no
+     * conditional PUT, so this re-fetch is the narrowest window available. A failed repair just
+     * repeats on the next sync.
      */
     private suspend fun repairManifest(
         transport: HttpSyncKvTransport,
-        syncId: String,
         keys: HttpSyncPayloadKeys,
-        verifiedAgainst: HttpSyncPayloadManifest,
+        verifiedAgainst: ByteArray,
         verified: HttpSyncPayloadManifest,
     ) {
         try {
-            if (fetchManifest(transport, syncId, keys) != verifiedAgainst) return
+            val current = transport.get(keys.manifest) ?: return
+            if (!current.body.contentEquals(verifiedAgainst)) return
             publishVerifiedContentSha(transport, keys, verified)
         } catch (e: CancellationException) {
             throw e
@@ -649,7 +660,11 @@ class HttpSyncPayloadCodec(
         keys: HttpSyncPayloadKeys = HttpSyncPayloadKeys.legacy(syncId),
     ): HttpSyncPayloadManifest? {
         val fetched = transport.get(keys.manifest) ?: return null
-        return runCatching {
+        return decodeManifest(syncId, fetched)
+    }
+
+    private fun decodeManifest(syncId: String, fetched: HttpSyncKvFetched): HttpSyncPayloadManifest =
+        runCatching {
             json.decodeFromString(
                 HttpSyncPayloadManifest.serializer(),
                 fetched.body.toString(Charsets.UTF_8),
@@ -657,7 +672,6 @@ class HttpSyncPayloadCodec(
         }.getOrElse { error ->
             throw HttpSyncException("Manifest for $syncId: malformed JSON (${error.message})")
         }
-    }
 
     /** Publish a content hash only after it was computed from the verified remote ZIP. */
     internal suspend fun publishVerifiedContentSha(

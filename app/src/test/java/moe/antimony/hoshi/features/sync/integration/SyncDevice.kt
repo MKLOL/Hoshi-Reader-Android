@@ -154,7 +154,12 @@ class SyncDevice(
         title: String = SyncCorpus.MANGA_TITLE,
         pageCount: Int = 3,
         extraBytesPerPage: Int = 0,
-    ): File = registerImport(SyncCorpus.importManga(repo, title, pageCount, extraBytesPerPage), title, ContentType.Mokuro)
+        shipCover: Boolean = true,
+    ): File = registerImport(
+        SyncCorpus.importManga(repo, title, pageCount, extraBytesPerPage, shipCover),
+        title,
+        ContentType.Mokuro,
+    )
 
     /** A user import: the corpus novel on disk, then the hook the bookshelf fires afterwards. */
     suspend fun importNovel(
