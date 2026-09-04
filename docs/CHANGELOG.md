@@ -7,6 +7,8 @@ Semantic Versioning.
 
 ## [Unreleased]
 
+## [v0.11.5] - 2026-09-04
+
 ### Added
 - **Sentence mode for EPUBs (experimental).** From the reader menu, read one sentence at a time
   laid out horizontally. Swipe or use the arrows to move between sentences, tap a word for the
