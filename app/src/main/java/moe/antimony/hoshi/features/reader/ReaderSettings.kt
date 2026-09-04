@@ -158,6 +158,20 @@ data class ReaderSettings(
     fun backgroundColorCss(systemDark: Boolean): String =
         backgroundColor(systemDark).toReaderCssColor(includeAlpha = !eInkMode && theme == ReaderTheme.Custom)
 
+    /** The reading text color as ARGB, the native counterpart of [textColorCss]. */
+    fun textColor(systemDark: Boolean): Long {
+        if (eInkMode) {
+            return if (usesDarkInterface(systemDark)) 0xFFFFFFFF else 0xFF000000
+        }
+        return when (theme) {
+            ReaderTheme.System -> if (systemDark) 0xFFFFFFFF else if (systemLightSepia) 0xFF332A1B else 0xFF000000
+            ReaderTheme.Light -> 0xFF000000
+            ReaderTheme.Dark -> 0xFFFFFFFF
+            ReaderTheme.Sepia -> if (sepiaInvertInDark && systemDark) 0xFFF2E2C9 else 0xFF332A1B
+            ReaderTheme.Custom -> customTextColor
+        }
+    }
+
     fun textColorCss(systemDark: Boolean): String {
         if (eInkMode) {
             return if (usesDarkInterface(systemDark)) "#fff" else "#000"

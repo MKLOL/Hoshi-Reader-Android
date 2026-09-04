@@ -19,7 +19,7 @@ internal fun String.filteredReaderText(): String {
     }
 }
 
-private fun Int.isReaderMatchableCodePoint(): Boolean =
+internal fun Int.isReaderMatchableCodePoint(): Boolean =
     when (this) {
         in '0'.code..'9'.code,
         in 'A'.code..'Z'.code,

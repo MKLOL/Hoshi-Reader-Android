@@ -116,6 +116,8 @@ fun ReaderWebView(
     onForegroundAutoSyncImport: () -> Unit = {},
     onTextSelected: (ReaderSelectionData) -> Int? = { null },
     onClose: () -> Unit,
+    /** Opens sentence mode for this book; `null` hides the menu entry. */
+    onOpenSentenceMode: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     var webView by remember { mutableStateOf<WebView?>(null) }
@@ -1568,6 +1570,12 @@ fun ReaderWebView(
                 stateHolder::openSasayakiFromMenu
             } else {
                 null
+            },
+            onSentenceMode = onOpenSentenceMode?.let { open ->
+                {
+                    stateHolder.dismissReaderMenu()
+                    open()
+                }
             },
             metrics = bottomChromeMetrics,
             modifier = Modifier.align(Alignment.BottomCenter),

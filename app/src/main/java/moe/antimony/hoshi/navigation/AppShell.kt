@@ -43,6 +43,7 @@ import moe.antimony.hoshi.features.reader.ReaderAppearanceScreen
 import moe.antimony.hoshi.features.reader.ReaderBehaviorScreen
 import moe.antimony.hoshi.features.reader.ReaderFontManager
 import moe.antimony.hoshi.features.reader.ReaderSettings
+import moe.antimony.hoshi.features.reader.sentence.SentenceReaderScreen
 import moe.antimony.hoshi.features.sasayaki.SasayakiMatchView
 import moe.antimony.hoshi.features.sasayaki.SasayakiSettings
 import moe.antimony.hoshi.features.settings.AdvancedSettingsView
@@ -225,6 +226,16 @@ fun AppShell(
                             onReaderKeyEventHandlerChange = currentOnReaderKeyEventHandlerChange,
                             onBookmarkSaved = readerBookmarkRefreshState::markDirty,
                             onClose = ::closeReaderRoute,
+                            onOpenSentenceMode = { backStack.openSentenceReaderRoute(route.bookId) },
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                    }
+                    is AppRoute.SentenceReaderRoute -> {
+                        SentenceReaderScreen(
+                            bookId = route.bookId,
+                            readerSettings = currentReaderSettings,
+                            onReaderSettingsChange = currentOnReaderSettingsChange,
+                            onClose = ::popRoute,
                             modifier = Modifier.fillMaxSize(),
                         )
                     }

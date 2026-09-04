@@ -45,6 +45,7 @@ internal fun ReaderRouteDestination(
     onReaderKeyEventHandlerChange: (((KeyEvent) -> Boolean)?) -> Unit,
     onBookmarkSaved: () -> Unit,
     onClose: () -> Unit,
+    onOpenSentenceMode: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     val appContainer = LocalHoshiAppContainer.current
@@ -205,6 +206,7 @@ internal fun ReaderRouteDestination(
                 onFlushAutoSyncExport = ::flushExport,
                 onForegroundAutoSyncImport = { importOnForeground(state.entry) },
                 onClose = onClose,
+                onOpenSentenceMode = onOpenSentenceMode,
                 modifier = modifier.fillMaxSize(),
             )
         }

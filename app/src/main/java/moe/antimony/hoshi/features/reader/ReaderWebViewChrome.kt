@@ -26,6 +26,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.List
+import androidx.compose.material.icons.automirrored.rounded.ShortText
 import androidx.compose.material.icons.automirrored.rounded.ShowChart
 import androidx.compose.material.icons.rounded.BorderColor
 import androidx.compose.material.icons.rounded.FastForward
@@ -382,6 +383,7 @@ internal fun BoxScope.ReaderBottomChrome(
     onSasayaki: (() -> Unit)?,
     metrics: ReaderBottomChromeMetrics,
     modifier: Modifier = Modifier,
+    onSentenceMode: (() -> Unit)? = null,
 ) {
     val controlsHeightDp = metrics.buttonSizeDp
     val bottomChromeHeightDp = 8 + controlsHeightDp + metrics.bottomPaddingDp + metrics.bottomSafeAreaDp
@@ -400,6 +402,7 @@ internal fun BoxScope.ReaderBottomChrome(
             onAppearance = onAppearance,
             onStatistics = onStatistics,
             onSasayaki = onSasayaki,
+            onSentenceMode = onSentenceMode,
             modifier = Modifier
                 .align(Alignment.BottomEnd)
                 .padding(end = metrics.horizontalPaddingDp.dp, bottom = metrics.menuBottomOffsetDp.dp),
@@ -618,6 +621,7 @@ private fun ReaderMenuCard(
     onAppearance: () -> Unit,
     onStatistics: (() -> Unit)?,
     onSasayaki: (() -> Unit)?,
+    onSentenceMode: (() -> Unit)?,
     modifier: Modifier = Modifier,
 ) {
     Surface(
@@ -648,6 +652,7 @@ private fun ReaderMenuCard(
             readerBottomMenuVisualOrder(
                 showStatistics = onStatistics != null,
                 showSasayaki = onSasayaki != null,
+                showSentenceMode = onSentenceMode != null,
             ).forEachIndexed { index, destination ->
                 if (index > 0) {
                     HorizontalDivider(
@@ -724,6 +729,20 @@ private fun ReaderMenuCard(
                         colors = colors,
                         metrics = metrics,
                         onClick = onSasayaki ?: return@forEachIndexed,
+                    )
+
+                    ReaderMenuDestination.SentenceMode -> ReaderMenuItem(
+                        text = stringResource(R.string.reader_sentence_mode),
+                        icon = {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Rounded.ShortText,
+                                contentDescription = null,
+                                tint = Color(colors.menuContent),
+                            )
+                        },
+                        colors = colors,
+                        metrics = metrics,
+                        onClick = onSentenceMode ?: return@forEachIndexed,
                     )
                 }
             }

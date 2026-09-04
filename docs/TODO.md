@@ -41,6 +41,8 @@ This file is the short operational handoff for future agents.
 
 ### Reader And Lookup
 
+- Sentence mode (experimental, EPUB only, `features/reader/sentence/`): segments chapters exactly like `tools/pretranslate` (`EpubSentenceSegmenterTest` pins the rules) so stored sentence translations resolve; device-validate word-tap popups and swipe navigation on a real book before promoting it out of experimental.
+
 - Use `docs/IOS_UPSTREAM_SYNC_QUEUE.md` as the current iOS upstream sync queue; checked through `61306c7`, with popup scaling/vertical anchors, reader image/selection follow-up fixes, Dictionary pull-to-clear/auto-update, Anki/IPA glossary behavior, and TTU/Google Drive bookdata sync pending.
 - Completed `docs/IOS_UPSTREAM_SYNC_QUEUE.md` slice 1: continuous reader padding now belongs to the visible viewport, vertical paginated columns resolve from page height, and chapter HTML receives an early XHTML-safe viewport while retaining the fast `loadUrl` chapter path.
 - Completed `docs/IOS_UPSTREAM_SYNC_QUEUE.md` slice 2: large reader images and SVG image media now use iOS-style tap handling, Blur Images first-tap reveal, fullscreen zoom with anchored raster-image gestures, safe-area-aware controls and bounded panning, and copy/save/share controls.

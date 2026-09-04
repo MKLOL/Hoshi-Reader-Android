@@ -102,6 +102,7 @@ enum class ReaderMenuDestination {
     Chapters,
     Highlights,
     Statistics,
+    SentenceMode,
     Sasayaki,
 }
 
@@ -283,8 +284,11 @@ fun readerBottomChromeMetrics(): ReaderBottomChromeMetrics =
 fun readerBottomMenuVisualOrder(
     showStatistics: Boolean,
     showSasayaki: Boolean,
+    showSentenceMode: Boolean = false,
 ): List<ReaderMenuDestination> = buildList {
     if (showSasayaki) add(ReaderMenuDestination.Sasayaki)
+    // Android-only experiment, so it sits above the iOS-ordered entries rather than among them.
+    if (showSentenceMode) add(ReaderMenuDestination.SentenceMode)
     if (showStatistics) add(ReaderMenuDestination.Statistics)
     add(ReaderMenuDestination.Highlights)
     add(ReaderMenuDestination.Chapters)

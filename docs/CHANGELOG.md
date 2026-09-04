@@ -7,6 +7,13 @@ Semantic Versioning.
 
 ## [Unreleased]
 
+### Added
+- **Sentence mode for EPUBs (experimental).** From the reader menu, read one sentence at a time
+  laid out horizontally. Swipe or use the arrows to move between sentences, tap a word for the
+  dictionary popup, and expand the panel underneath to see the sentence's pre-translation when
+  the book has one. Your place in sentence mode is remembered separately from the reader's
+  bookmark.
+
 ### Fixed
 - **The continuous reader no longer gets stuck after you scroll one way and then back.** Part of a
   swipe could be measured from the corner of the screen instead of from where your finger went

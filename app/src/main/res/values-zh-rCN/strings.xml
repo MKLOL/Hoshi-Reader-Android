@@ -522,4 +522,14 @@
     <string name="sasayaki_matching">正在匹配...</string>
     <string name="sasayaki_current_match">当前匹配</string>
     <string name="sasayaki_match_rate">匹配率</string>
+    <string name="reader_sentence_mode">逐句模式</string>
+    <string name="sentence_mode_translation">翻译</string>
+    <string name="sentence_mode_translation_missing">这句还没有预翻译。</string>
+    <string name="sentence_mode_toggle_translation">显示或隐藏翻译</string>
+    <string name="sentence_mode_previous">上一句</string>
+    <string name="sentence_mode_next">下一句</string>
+    <string name="sentence_mode_chapter_progress">第 %1$d 章，共 %2$d 章</string>
+    <string name="sentence_mode_empty">这本书没有可读取的文本。</string>
+    <string name="sentence_mode_font_smaller">缩小文字</string>
+    <string name="sentence_mode_font_larger">放大文字</string>
 </resources>

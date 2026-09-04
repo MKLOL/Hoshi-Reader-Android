@@ -574,6 +574,25 @@ class ReaderChromeTest {
     }
 
     @Test
+    fun bottomMenuShowsSentenceModeAboveTheIosOrderedEntriesOnlyWhenAvailable() {
+        assertEquals(
+            listOf(
+                ReaderMenuDestination.Sasayaki,
+                ReaderMenuDestination.SentenceMode,
+                ReaderMenuDestination.Statistics,
+                ReaderMenuDestination.Highlights,
+                ReaderMenuDestination.Chapters,
+                ReaderMenuDestination.Appearance,
+            ),
+            readerBottomMenuVisualOrder(showStatistics = true, showSasayaki = true, showSentenceMode = true),
+        )
+        assertEquals(
+            readerBottomMenuVisualOrder(showStatistics = true, showSasayaki = true),
+            readerBottomMenuVisualOrder(showStatistics = true, showSasayaki = true, showSentenceMode = false),
+        )
+    }
+
+    @Test
     fun usesThemeMatchedChromeColors() {
         assertEquals(0xFAF8F0E2L, readerChromeColors(ReaderSettings(theme = ReaderTheme.Sepia), systemDark = true).buttonContainer)
         assertEquals(0xE6141414L, readerChromeColors(ReaderSettings(theme = ReaderTheme.Dark), systemDark = false).buttonContainer)

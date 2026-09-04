@@ -32,6 +32,12 @@ sealed interface AppRoute : NavKey {
         val bookId: String,
     ) : AppRoute
 
+    /** Experimental one-sentence-at-a-time view of an EPUB, opened from the reader's menu. */
+    @Serializable
+    data class SentenceReaderRoute(
+        val bookId: String,
+    ) : AppRoute
+
     @Serializable
     data class SasayakiMatchRoute(
         val bookId: String,
