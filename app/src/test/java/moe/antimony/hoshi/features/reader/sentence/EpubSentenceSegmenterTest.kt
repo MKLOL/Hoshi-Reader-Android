@@ -24,6 +24,18 @@ class EpubSentenceSegmenterTest {
     }
 
     @Test
+    fun aTerminatorOnlySwallowsBracketsInItsOwnTextRun() {
+        // `html.parser` hands the tool one run per stretch of text between tags, so a closing
+        // bracket wrapped in its own inline element starts the next sentence. Ids and hashes are
+        // unaffected (brackets are not matchable), but the shown text must match iOS and the tool.
+        val sentences = EpubSentenceSegmenter.segment(0, chapter("<p>「あ！<em>」</em>と<span>言った</span>。</p>"))
+
+        assertEquals(listOf("「あ！", "」と言った。"), sentences.map { it.text })
+        assertEquals(listOf("c0s0", "c0s1"), sentences.map { it.id })
+        assertEquals(listOf(1, 4), sentences.map { it.length })
+    }
+
+    @Test
     fun asciiPeriodIsNotATerminator() {
         val sentences = EpubSentenceSegmenter.segment(0, chapter("<p>Ver. 2.5 が出た。</p>"))
 

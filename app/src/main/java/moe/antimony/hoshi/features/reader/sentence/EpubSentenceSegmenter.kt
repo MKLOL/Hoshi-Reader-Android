@@ -53,8 +53,13 @@ object EpubSentenceSegmenter {
     fun segment(spine: Int, html: String): List<ReaderSentence> = segmentParts(spine, extractParts(html))
 
     /**
-     * Turns chapter HTML into text runs with `null` marking a block boundary. Tolerant of the
-     * markup real books ship (unclosed tags, stray `<`), like the tool's stdlib parser.
+     * Turns chapter HTML into text runs with `null` marking a block boundary.
+     *
+     * A run is delimited by *any* tag, not by element boundaries: that is what `html.parser` hands
+     * the tool, and it matters because a terminator only swallows the trailing brackets that sit
+     * in its own run, so `<p>「あ！<em>」</em></p>` is two sentences on every platform.
+     *
+     * Tolerant of the markup real books ship (unclosed tags, stray `<`), like the tool's parser.
      */
     internal fun extractParts(html: String): List<String?> {
         val parts = mutableListOf<String?>()
@@ -83,6 +88,7 @@ object EpubSentenceSegmenter {
                 i = next
                 continue
             }
+            flushText() // any markup ends the current text run, exactly like html.parser
             if (html.startsWith("<!--", i)) {
                 val end = html.indexOf("-->", i + 4)
                 i = if (end < 0) n else end + 3
