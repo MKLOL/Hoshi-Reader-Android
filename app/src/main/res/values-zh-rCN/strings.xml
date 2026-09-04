@@ -60,6 +60,7 @@
     <string name="ai_chat_status_asking_chatgpt">正在询问 ChatGPT…</string>
     <string name="ai_chat_status_translating_on_device">正在设备端翻译…</string>
     <plurals name="ai_chat_generation_speed_format">
+        <item quantity="one">⚡ %1$.1f tok/s · %2$d 个 token</item>
         <item quantity="other">⚡ %1$.1f tok/s · %2$d 个 token</item>
     </plurals>
     <string name="ai_chat_history_title">ChatGPT 记录</string>
