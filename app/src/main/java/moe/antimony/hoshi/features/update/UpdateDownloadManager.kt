@@ -39,8 +39,7 @@ internal class AndroidUpdateDownloadManager(
             DownloadManager.STATUS_RUNNING,
             -> UpdateDownloadStatus.Downloading(downloadId)
             DownloadManager.STATUS_SUCCESSFUL -> {
-                val valid = file.isFile &&
-                    (record.sha256 == null || file.sha256Hex().equals(record.sha256, ignoreCase = true))
+                val valid = record.downloadIsInstallable(file)
                 if (valid) {
                     store.markDownloaded(downloadId)
                     UpdateDownloadStatus.Downloaded(file)
@@ -127,7 +126,7 @@ internal class UpdateDownloadCompleteReceiver : BroadcastReceiver() {
                         return@launch
                     }
                     val file = AndroidUpdateDownloadManager(appContext, store).updateFile(record.fileName)
-                    val valid = record.sha256 == null || file.sha256Hex().equals(record.sha256, ignoreCase = true)
+                    val valid = record.downloadIsInstallable(file)
                     if (valid) {
                         store.markDownloaded(downloadId)
                     } else {
@@ -140,6 +139,36 @@ internal class UpdateDownloadCompleteReceiver : BroadcastReceiver() {
             }
         }
     }
+}
+
+/**
+ * Whether a finished download may be installed.
+ *
+ * When GitHub published an asset digest ([UpdateDownloadRecord.sha256]) the bytes are
+ * verified against it. When it did not, we only trust bytes fetched straight from GitHub's
+ * own origin: the app also downloads through CN mirror hosts, and a mirror could return
+ * arbitrary bytes, so an unverifiable mirror download is treated as a verification failure
+ * (rejected) rather than installed on the strength of Android's install-time signature check
+ * alone. The happy path where a digest IS present is unchanged.
+ */
+private suspend fun UpdateDownloadRecord.downloadIsInstallable(file: File): Boolean {
+    if (!file.isFile) return false
+    val expected = sha256
+    return if (expected != null) {
+        file.sha256Hex().equals(expected, ignoreCase = true)
+    } else {
+        downloadUrl.isCanonicalGitHubDownloadUrl()
+    }
+}
+
+private fun String?.isCanonicalGitHubDownloadUrl(): Boolean {
+    val host = this
+        ?.let { runCatching { Uri.parse(it).host }.getOrNull() }
+        ?.lowercase()
+        ?: return false
+    return host == "github.com" ||
+        host == "api.github.com" ||
+        host == "objects.githubusercontent.com"
 }
 
 private fun DownloadManager.queryStatus(downloadId: Long): Int? {

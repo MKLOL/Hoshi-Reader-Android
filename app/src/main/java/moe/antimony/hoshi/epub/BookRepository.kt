@@ -580,7 +580,29 @@ class BookSidecarDataSource(
 
     private suspend fun <T> saveJson(bookRoot: File, fileName: String, serializer: KSerializer<T>, value: T) = withContext(ioDispatcher) {
         bookRoot.mkdirs()
-        bookRoot.resolve(fileName).writeText(json.encodeToString(serializer, value))
+        val target = bookRoot.resolve(fileName)
+        val text = json.encodeToString(serializer, value)
+        // Atomic write: encode into a temp sibling, then rename over the target. A bare
+        // truncating writeText leaves a torn (or empty) sidecar if the process is killed or
+        // storage fills mid-write; loadJson then reads it as absent and silently loses data
+        // (e.g. every shelf placement, or the stable id/syncId). POSIX rename within one
+        // directory is atomic; mirrors iOS Data.write(options: .atomic) in Core/BookStorage.swift.
+        val tmp = File(bookRoot, "$fileName.tmp")
+        try {
+            tmp.writeText(text)
+        } catch (error: Throwable) {
+            tmp.delete()
+            throw error
+        }
+        if (!tmp.renameTo(target)) {
+            // Rename can fail on exotic filesystems; fall back to delete + rename, then to a
+            // plain write (no worse than the previous behavior) as the last resort.
+            target.delete()
+            if (!tmp.renameTo(target)) {
+                tmp.delete()
+                target.writeText(text)
+            }
+        }
     }
 }
 

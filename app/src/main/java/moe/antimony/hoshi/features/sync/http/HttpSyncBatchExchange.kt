@@ -730,8 +730,10 @@ class HttpSyncBookmarkScheduler(
             }
             scheduleFullReconcile(changes, reconcileSettings, client)
         } else {
-            fullRetryDeferredForReader = false
-            fullRetryAfterMillis = 0L
+            synchronized(jobLock) {
+                fullRetryDeferredForReader = false
+                fullRetryAfterMillis = 0L
+            }
         }
     }
 

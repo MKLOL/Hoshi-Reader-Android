@@ -874,7 +874,7 @@ class HttpSyncReconciler(
         if (target.isFile && target.length() == remoteSize.toLong()) {
             return false
         }
-        val fetched = transport.get(meta.key)
+        val fetched = transport.getBounded(meta.key, MAX_EPUB_SENTENCES_BLOB_BYTES)
             ?: throw HttpSyncException("Offline translations at ${meta.key}: listed key is missing.")
         val body = fetched.body.toString(Charsets.UTF_8)
         val blob = runCatching {
