@@ -13,17 +13,28 @@ data class ReaderSentence(
     val length: Int,
     val text: String,
     val paragraph: Int,
+    /** Furigana over runs of [text], for display only; the tool never sees readings. */
+    val ruby: List<RubyAnnotation> = emptyList(),
 ) {
     /** The pre-translation tool's address for this sentence: chapter + normalized start. */
     val id: String
         get() = "c${spine}s$start"
 }
 
+/** A `<ruby>` base inside a sentence: [start] and [length] are UTF-16 units into the sentence text. */
+data class RubyAnnotation(val start: Int, val length: Int, val reading: String)
+
 /** A segmented chapter plus the first heading it contains, the tool's fallback chapter title. */
 data class SentenceChapterText(val sentences: List<ReaderSentence>, val heading: String)
 
-/** The tool's text runs: strings between markup, `null` for a block boundary. */
-internal data class ChapterExtraction(val parts: List<String?>, val heading: String)
+/**
+ * One of the tool's text runs. [groups] is the ruby group of each code point (`-1` for none), or
+ * `null` when the run carries no furigana at all; group ids index [ChapterExtraction.readings].
+ */
+internal class TextRun(val text: String, val groups: IntArray?)
+
+/** The tool's text runs, `null` for a block boundary, plus the readings the runs refer to. */
+internal data class ChapterExtraction(val parts: List<TextRun?>, val heading: String, val readings: List<String>)
 
 /**
  * Splits chapter HTML into the exact sentences the desktop pre-translation tool addresses
@@ -70,7 +81,7 @@ object EpubSentenceSegmenter {
 
     fun chapter(spine: Int, html: String): SentenceChapterText {
         val extraction = extractParts(html)
-        return SentenceChapterText(segmentParts(spine, extraction.parts), extraction.heading)
+        return SentenceChapterText(segmentParts(spine, extraction.parts, extraction.readings), extraction.heading)
     }
 
     /**
@@ -79,7 +90,7 @@ object EpubSentenceSegmenter {
      * same way the tool's stdlib parser is.
      */
     internal fun extractParts(html: String): ChapterExtraction {
-        val parts = mutableListOf<String?>()
+        val parts = mutableListOf<TextRun?>()
         val text = StringBuilder()
         val skipStack = ArrayDeque<String>()
         // A fragment with no <body> at all is all body: the tool never sees one, but the reader
@@ -88,18 +99,45 @@ object EpubSentenceSegmenter {
         var heading = ""
         val headingChunks = StringBuilder()
         var headingDepth = 0
+        // Furigana ride along for display: text inside <ruby> forms a base group until its <rt>
+        // supplies the reading. Offsets are untouched, the tool skips <rt> and so do we.
+        val readings = mutableListOf<String>()
+        var rubyDepth = 0
+        var pendingGroup = -1
+        val rtText = StringBuilder()
 
         // The tool's handle_data: text only counts inside <body> and outside skipped subtrees.
         fun emit(data: String) {
             if (skipStack.isNotEmpty() || !inBody) return
-            parts += data
+            val groups = if (rubyDepth > 0) {
+                if (pendingGroup < 0) {
+                    pendingGroup = readings.size
+                    readings += ""
+                }
+                IntArray(data.codePointCount(0, data.length)) { pendingGroup }
+            } else {
+                null
+            }
+            parts += TextRun(data, groups)
             if (headingDepth > 0) headingChunks.append(data)
         }
 
         fun flushText() {
             if (text.isNotEmpty()) {
-                emit(decodeEntities(text.toString()))
+                val decoded = decodeEntities(text.toString())
+                if (skipStack.lastOrNull() == "rt") rtText.append(decoded) else emit(decoded)
                 text.setLength(0)
+            }
+        }
+
+        // An <rt> closed, explicitly or by a sibling or </ruby>: its text is the reading of the
+        // base group collected before it. A reading with no base is dropped.
+        fun finishRt() {
+            val reading = collapseWhitespace(rtText.toString())
+            rtText.setLength(0)
+            if (pendingGroup >= 0) {
+                if (readings[pendingGroup].isEmpty()) readings[pendingGroup] = reading
+                pendingGroup = -1
             }
         }
 
@@ -140,12 +178,18 @@ object EpubSentenceSegmenter {
                     if (name == "body") inBody = true
                     if (name in SKIP_TAGS) {
                         if (selfClosing) continue // a self-closing skip tag has no content
-                        if (name in FURIGANA_TAGS && skipStack.lastOrNull() in FURIGANA_TAGS) skipStack.removeLast()
+                        if (name in FURIGANA_TAGS && skipStack.lastOrNull() in FURIGANA_TAGS) {
+                            if (skipStack.removeLast() == "rt") finishRt()
+                        }
                         skipStack.addLast(name)
                         if (name in RAW_TEXT_TAGS) i = rawTextEnd(html, i, name)
                         continue
                     }
                     if (skipStack.isNotEmpty()) continue
+                    if (name == "ruby" && !selfClosing) {
+                        rubyDepth += 1
+                        pendingGroup = -1
+                    }
                     if (name in BLOCK_TAGS) boundary()
                     // A self-closing heading has no text and must not leave the depth raised.
                     if (!selfClosing && name in HEADING_TAGS && heading.isEmpty()) headingDepth += 1
@@ -163,13 +207,21 @@ object EpubSentenceSegmenter {
                     val name = tagName(raw)
                     if (name in SKIP_TAGS) {
                         if (name in skipStack) {
-                            while (skipStack.isNotEmpty() && skipStack.removeLast() != name) { /* unwind */ }
+                            while (skipStack.isNotEmpty()) {
+                                val popped = skipStack.removeLast()
+                                if (popped == "rt") finishRt()
+                                if (popped == name) break
+                            }
                         }
                         continue
                     }
                     if (name == "ruby") {
                         // </ruby> closes any <rt>/<rp> still open, as every browser does.
-                        while (skipStack.lastOrNull() in FURIGANA_TAGS) skipStack.removeLast()
+                        while (skipStack.lastOrNull() in FURIGANA_TAGS) {
+                            if (skipStack.removeLast() == "rt") finishRt()
+                        }
+                        if (rubyDepth > 0) rubyDepth -= 1
+                        pendingGroup = -1
                     }
                     if (skipStack.isNotEmpty()) continue
                     if (name in BLOCK_TAGS) boundary()
@@ -189,7 +241,7 @@ object EpubSentenceSegmenter {
             }
         }
         flushText()
-        return ChapterExtraction(parts, heading)
+        return ChapterExtraction(parts, heading, readings)
     }
 
     private fun Char.isAsciiLetter(): Boolean = this in 'a'..'z' || this in 'A'..'Z'
@@ -231,46 +283,52 @@ object EpubSentenceSegmenter {
         }
     }
 
-    internal fun segmentParts(spine: Int, parts: List<String?>): List<ReaderSentence> {
+    internal fun segmentParts(
+        spine: Int,
+        parts: List<TextRun?>,
+        readings: List<String> = emptyList(),
+    ): List<ReaderSentence> {
         val sentences = mutableListOf<ReaderSentence>()
         var normalizedCount = 0
-        // One entry per code point, so an over-long split lands on a character boundary.
+        // One entry per code point, so an over-long split lands on a character boundary; the
+        // parallel list carries each code point's ruby group.
         var buffer = mutableListOf<String>()
+        var bufferGroups = mutableListOf<Int>()
         var bufferStart: Int? = null
         var bufferLength = 0
         var paragraph = 0
         var lastSoftBreak = -1
 
-        fun collapsed(chars: List<String>): String = collapseWhitespace(chars.joinToString(""))
-
         fun flush() {
             val start = bufferStart
             if (start != null && bufferLength > 0) {
-                val text = collapsed(buffer)
+                val (text, ruby) = collapse(buffer, bufferGroups, readings)
                 if (text.isNotEmpty()) {
-                    sentences += ReaderSentence(spine, start, bufferLength, text, paragraph)
+                    sentences += ReaderSentence(spine, start, bufferLength, text, paragraph, ruby)
                 }
             }
             buffer = mutableListOf()
+            bufferGroups = mutableListOf()
             bufferStart = null
             bufferLength = 0
             lastSoftBreak = -1
         }
 
         fun splitOverlong() {
-            val (head, tail) = if (lastSoftBreak in 1 until buffer.size - 1) {
-                buffer.subList(0, lastSoftBreak + 1).toList() to buffer.subList(lastSoftBreak + 1, buffer.size).toList()
-            } else {
-                buffer.toList() to emptyList()
-            }
+            val headEnd = if (lastSoftBreak in 1 until buffer.size - 1) lastSoftBreak + 1 else buffer.size
+            val head = buffer.subList(0, headEnd).toList()
+            val headGroups = bufferGroups.subList(0, headEnd).toList()
+            val tail = buffer.subList(headEnd, buffer.size).toList()
+            val tailGroups = bufferGroups.subList(headEnd, buffer.size).toList()
             val headLength = head.count { it.isMatchable() }
-            val text = collapsed(head)
+            val (text, ruby) = collapse(head, headGroups, readings)
             val start = bufferStart
             if (text.isNotEmpty() && headLength > 0 && start != null) {
-                sentences += ReaderSentence(spine, start, headLength, text, paragraph)
+                sentences += ReaderSentence(spine, start, headLength, text, paragraph, ruby)
             }
             val tailMatchable = tail.count { it.isMatchable() }
             buffer = tail.toMutableList()
+            bufferGroups = tailGroups.toMutableList()
             bufferLength = tailMatchable
             bufferStart = if (start != null && tailMatchable > 0) start + headLength else null
             lastSoftBreak = -1
@@ -282,12 +340,14 @@ object EpubSentenceSegmenter {
                 paragraph += 1
                 continue
             }
-            val chars = part.codePointStrings()
+            val chars = part.text.codePointStrings()
+            val groups = part.groups
             var position = 0
             while (position < chars.size) {
                 val char = chars[position]
-                position += 1
                 buffer += char
+                bufferGroups += groups?.get(position) ?: -1
+                position += 1
                 if (char.isMatchable()) {
                     if (bufferStart == null) bufferStart = normalizedCount
                     normalizedCount += 1
@@ -298,8 +358,9 @@ object EpubSentenceSegmenter {
                 if (char.length == 1 && char[0] in SENTENCE_TERMINATORS) {
                     while (position < chars.size && chars[position].let { it.length == 1 && it[0] in TRAILING_CHARS }) {
                         val trailing = chars[position]
-                        position += 1
                         buffer += trailing
+                        bufferGroups += groups?.get(position) ?: -1
+                        position += 1
                         if (trailing.isMatchable()) {
                             normalizedCount += 1
                             bufferLength += 1
@@ -313,6 +374,49 @@ object EpubSentenceSegmenter {
         }
         flush()
         return sentences
+    }
+
+    /**
+     * The sentence text ([collapseWhitespace] of the buffer) plus its furigana, whose offsets are
+     * UTF-16 units into that collapsed text. A base whose group never got a reading is dropped.
+     */
+    private fun collapse(
+        chars: List<String>,
+        groups: List<Int>,
+        readings: List<String>,
+    ): Pair<String, List<RubyAnnotation>> {
+        val out = StringBuilder()
+        val outGroups = ArrayList<Int>(chars.size)
+        var pendingSpace = false
+        for (i in chars.indices) {
+            val char = chars[i]
+            if (char.length == 1 && char[0].isPythonSpace()) {
+                pendingSpace = out.isNotEmpty()
+            } else {
+                if (pendingSpace) {
+                    out.append(' ')
+                    outGroups += -1
+                }
+                pendingSpace = false
+                out.append(char)
+                repeat(char.length) { outGroups += groups[i] }
+            }
+        }
+        val ruby = mutableListOf<RubyAnnotation>()
+        var i = 0
+        while (i < outGroups.size) {
+            val group = outGroups[i]
+            if (group < 0) {
+                i++
+                continue
+            }
+            var j = i
+            while (j < outGroups.size && outGroups[j] == group) j++
+            val reading = readings.getOrNull(group).orEmpty()
+            if (reading.isNotEmpty()) ruby += RubyAnnotation(i, j - i, reading)
+            i = j
+        }
+        return out.toString() to ruby
     }
 
     /** Matchable characters before [charOffset] in [text]: how far into the sentence a tap landed. */
@@ -350,7 +454,7 @@ object EpubSentenceSegmenter {
         val out = StringBuilder(text.length)
         var pendingSpace = false
         for (char in text) {
-            if (char.isWhitespace() || char == '\u0085') {
+            if (char.isPythonSpace()) {
                 pendingSpace = out.isNotEmpty()
             } else {
                 if (pendingSpace) out.append(' ')
@@ -360,6 +464,9 @@ object EpubSentenceSegmenter {
         }
         return out.toString()
     }
+
+    /** Python `str.isspace` for one UTF-16 unit: Java's whitespace plus NEL. */
+    private fun Char.isPythonSpace(): Boolean = isWhitespace() || this == '\u0085'
 
     /**
      * Python's `html.unescape`, which the tool's parser applies to every text run: named

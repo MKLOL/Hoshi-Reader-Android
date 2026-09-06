@@ -91,6 +91,12 @@ import moe.antimony.hoshi.features.reader.ReaderSelectionData
 import moe.antimony.hoshi.features.reader.ReaderSelectionRect
 import moe.antimony.hoshi.features.reader.ReaderSettings
 import moe.antimony.hoshi.features.sasayaki.SasayakiSettings
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.text.drawText
+import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.text.style.LineHeightStyle
+import kotlin.math.max
+import kotlin.math.min
 
 /** Longest query handed to the dictionary from a tap; the scan-length setting trims it further. */
 private const val MAX_TAP_QUERY_CHARS = 32
@@ -309,6 +315,7 @@ private fun SentenceReaderContent(
                         fontFamily = fontFamily,
                         fontSizeSp = readerSettings.fontSize * 1.1f,
                         lineHeightMultiplier = readerSettings.lineHeight.toFloat(),
+                        showFurigana = !readerSettings.hideFurigana,
                         screenOrigin = { screenOrigin },
                         onTapOutside = ::dismissPopups,
                         onWordTap = { selection ->
@@ -478,6 +485,7 @@ private fun SentenceText(
     fontFamily: FontFamily,
     fontSizeSp: Float,
     lineHeightMultiplier: Float,
+    showFurigana: Boolean,
     screenOrigin: () -> Offset,
     /** A tap inside the text's box that lands on no word: margin, the gap after the last line. */
     onTapOutside: () -> Unit,
@@ -492,6 +500,8 @@ private fun SentenceText(
     var layout by remember(sentence) { mutableStateOf<TextLayoutResult?>(null) }
     var origin by remember { mutableStateOf(Offset.Zero) }
     val text = sentence.text
+    val furigana = if (showFurigana) sentence.ruby else emptyList()
+    val textMeasurer = rememberTextMeasurer()
     val annotated: AnnotatedString = remember(text, highlight, foreground) {
         buildAnnotatedString {
             append(text)
@@ -502,20 +512,75 @@ private fun SentenceText(
             }
         }
     }
+    val plainStyle = TextStyle(
+        color = foreground,
+        fontFamily = fontFamily,
+        fontSize = fontSizeSp.sp,
+        fontWeight = FontWeight.Normal,
+        textAlign = TextAlign.Start,
+    )
+    val readingStyle = plainStyle.copy(fontSize = (fontSizeSp * RUBY_SIZE_FACTOR).sp)
+    // Furigana are drawn in the leading above each line, exactly where a browser puts them: the
+    // text is untouched (offsets, taps and the highlight keep working), the line grows so a
+    // reading fits, and all of the line's extra space is put above the glyphs.
+    val rubyMetrics = remember(furigana.isEmpty(), plainStyle, readingStyle) {
+        if (furigana.isEmpty()) {
+            null
+        } else {
+            RubyMetrics(
+                glyphHeight = textMeasurer.measure("漢字", plainStyle).size.height.toFloat(),
+                readingHeight = textMeasurer.measure("かな", readingStyle).size.height.toFloat(),
+            )
+        }
+    }
+    val readingLayouts = remember(furigana, readingStyle) {
+        furigana.map { textMeasurer.measure(it.reading, readingStyle, softWrap = false, maxLines = 1) }
+    }
+    val lineHeight = with(density) {
+        val configured = fontSizeSp.sp.toPx() * lineHeightMultiplier
+        val needed = rubyMetrics?.let { it.glyphHeight + it.readingHeight * RUBY_ROOM_FACTOR } ?: 0f
+        max(configured, needed).toSp()
+    }
+    val style = plainStyle.copy(
+        lineHeight = lineHeight,
+        lineHeightStyle = if (rubyMetrics == null) {
+            null
+        } else {
+            LineHeightStyle(alignment = LineHeightStyle.Alignment.Bottom, trim = LineHeightStyle.Trim.None)
+        },
+    )
     Text(
         text = annotated,
-        style = TextStyle(
-            color = foreground,
-            fontFamily = fontFamily,
-            fontSize = fontSizeSp.sp,
-            lineHeight = (fontSizeSp * lineHeightMultiplier).sp,
-            fontWeight = FontWeight.Normal,
-            textAlign = TextAlign.Start,
-        ),
+        style = style,
         onTextLayout = { layout = it },
         modifier = Modifier
             .fillMaxWidth()
             .onGloballyPositioned { origin = it.positionInRoot() }
+            .drawWithContent {
+                drawContent()
+                val current = layout ?: return@drawWithContent
+                val metrics = rubyMetrics ?: return@drawWithContent
+                furigana.forEachIndexed { index, ruby ->
+                    val end = (ruby.start + ruby.length).coerceAtMost(text.length)
+                    if (ruby.start < 0 || ruby.start >= end) return@forEachIndexed
+                    // A base that wraps keeps its reading over the part on the first line.
+                    val line = current.getLineForOffset(ruby.start)
+                    val lineEnd = current.getLineEnd(line, visibleEnd = true).coerceAtMost(end)
+                    if (lineEnd <= ruby.start) return@forEachIndexed
+                    var left = Float.MAX_VALUE
+                    var right = -Float.MAX_VALUE
+                    for (offset in ruby.start until lineEnd) {
+                        val box = current.getBoundingBox(offset)
+                        left = min(left, box.left)
+                        right = max(right, box.right)
+                    }
+                    val reading = readingLayouts.getOrNull(index) ?: return@forEachIndexed
+                    val glyphTop = current.getLineBottom(line) - metrics.glyphHeight
+                    val x = (left + right) / 2f - reading.size.width / 2f
+                    val y = glyphTop - reading.size.height + metrics.readingHeight * RUBY_OVERLAP_FACTOR
+                    drawText(reading, topLeft = Offset(x, y))
+                }
+            }
             .pointerInput(sentence) {
                 detectTapGestures { tap ->
                     val current = layout
@@ -557,6 +622,18 @@ private fun SentenceText(
             },
     )
 }
+
+/** Heights of one line of base text and of one line of reading text, in pixels. */
+private class RubyMetrics(val glyphHeight: Float, val readingHeight: Float)
+
+/** Furigana are half the base size, as in the web reader. */
+private const val RUBY_SIZE_FACTOR = 0.5f
+
+/** How much of a reading's box must fit above the glyph box for the line to be tall enough. */
+private const val RUBY_ROOM_FACTOR = 0.75f
+
+/** How far a reading may sink into the glyph box's own top padding, so it sits close to the base. */
+private const val RUBY_OVERLAP_FACTOR = 0.3f
 
 @Composable
 private fun TranslationPanel(

@@ -170,6 +170,54 @@ class EpubSentenceSegmenterTest {
     }
 
     @Test
+    fun furiganaRideAlongAsRubyAnnotationsWithoutTouchingOffsets() {
+        val html = chapter(
+            "<p>「<ruby>今日<rt>きょう</rt></ruby>も<ruby>学校<rt>がっこう</rt></ruby>か……」と、" +
+                "<ruby>私<rt>わたし</rt></ruby>は<ruby>小<rt>ちい</rt></ruby>さくつぶやいた。</p>",
+        )
+        val sentence = EpubSentenceSegmenter.segment(0, html).single()
+
+        assertEquals("「今日も学校か……」と、私は小さくつぶやいた。", sentence.text)
+        assertEquals(listOf("c0s0"), listOf(sentence.id))
+        assertEquals(
+            listOf(RubyAnnotation(1, 2, "きょう"), RubyAnnotation(4, 2, "がっこう"), RubyAnnotation(12, 1, "わたし"), RubyAnnotation(14, 1, "ちい")),
+            sentence.ruby,
+        )
+        for (ruby in sentence.ruby) {
+            assertTrue("base sits on the reading", sentence.text.substring(ruby.start, ruby.start + ruby.length) in setOf("今日", "学校", "私", "小"))
+        }
+    }
+
+    @Test
+    fun rubyPairsRpAndUnclosedRtFollowTheBrowser() {
+        // Sibling <rt>s pair with the base before each; <rp> is not a reading; an <rt> left open
+        // is closed by </ruby>; a base with no <rt> gets no annotation; whitespace before the
+        // base is collapsed away so the offsets point at the shown text.
+        val html = chapter(
+            "<p>　<ruby>漢<rt>かん</rt>字<rt>じ</rt></ruby>を<ruby>読<rp>(</rp><rt>よ</rt><rp>)</rp></ruby>む。" +
+                "<ruby>今<rt>いま</ruby>から<ruby>行</ruby>く。</p>",
+        )
+        val sentences = EpubSentenceSegmenter.segment(0, html)
+
+        assertEquals(listOf("漢字を読む。", "今から行く。"), sentences.map { it.text })
+        assertEquals(
+            listOf(RubyAnnotation(0, 1, "かん"), RubyAnnotation(1, 1, "じ"), RubyAnnotation(3, 1, "よ")),
+            sentences[0].ruby,
+        )
+        assertEquals(listOf(RubyAnnotation(0, 1, "いま")), sentences[1].ruby)
+    }
+
+    @Test
+    fun rubyAnnotationsSurviveTheOverlongSplit() {
+        val clause = "あ".repeat(250)
+        val html = chapter("<p>$clause、<ruby>$clause<rt>よみ</rt></ruby>、$clause。</p>")
+        val sentences = EpubSentenceSegmenter.segment(0, html)
+
+        assertEquals(3, sentences.size)
+        assertEquals(listOf(emptyList(), listOf(RubyAnnotation(0, 250, "よみ")), emptyList()), sentences.map { it.ruby })
+    }
+
+    @Test
     fun theFirstHeadingIsTheChapterTitleFallback() {
         val chapter = EpubSentenceSegmenter.chapter(0, chapter("<h1>第一章　　朝</h1><p>本文。</p><h2>二</h2>"))
 
