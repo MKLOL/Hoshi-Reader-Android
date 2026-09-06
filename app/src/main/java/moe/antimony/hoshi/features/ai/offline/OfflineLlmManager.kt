@@ -1,6 +1,7 @@
 package moe.antimony.hoshi.features.ai.offline
 
 import android.content.Context
+import moe.antimony.hoshi.R
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -189,11 +190,11 @@ object OfflineLlmManager {
             val resumeFrom = if (partFile.exists()) partFile.length() else 0L
             _downloadState.value =
                 ModelDownloadState.Downloading(model, resumeFrom, model.approxSizeBytes)
-            downloadTo(model, partFile, onProgress)
+            downloadTo(context, model, partFile, onProgress)
             // Only a fully-streamed file is ever given the real name.
             if (finalFile.exists()) finalFile.delete()
             if (!partFile.renameTo(finalFile)) {
-                throw IllegalStateException("Could not finalize the downloaded file.")
+                throw IllegalStateException(context.getString(R.string.offline_error_finalize_failed))
             }
             _downloadState.value = ModelDownloadState.Completed(model)
             _downloadedRevision.value++
@@ -203,7 +204,7 @@ object OfflineLlmManager {
             throw e
         } catch (e: Exception) {
             // Network/IO failure: keep the .part file so Retry resumes from here.
-            _downloadState.value = ModelDownloadState.Failed(model, friendlyMessage(e))
+            _downloadState.value = ModelDownloadState.Failed(model, friendlyMessage(context, e))
         }
     }
 
@@ -297,7 +298,7 @@ object OfflineLlmManager {
         if (preferred != null && isDownloaded(context, preferred)) return preferred
         return downloadedModels(context).firstOrNull()
             ?: throw LlamaModelException(
-                "No on-device model downloaded yet. Download one in Settings → ChatGPT.",
+                context.getString(R.string.offline_error_no_model_downloaded),
             )
     }
 
@@ -316,7 +317,12 @@ object OfflineLlmManager {
      * 416 → the partial file already holds everything, so it's complete. Follows redirects to the
      * CDN, emits throttled progress (UI + [onProgress]), and honors cancellation between chunks.
      */
-    private suspend fun downloadTo(model: LlmModel, partFile: File, onProgress: (Long, Long) -> Unit) {
+    private suspend fun downloadTo(
+        context: Context,
+        model: LlmModel,
+        partFile: File,
+        onProgress: (Long, Long) -> Unit,
+    ) {
         val existing = if (partFile.exists()) partFile.length() else 0L
         val connection = (URL(model.downloadUrl).openConnection() as HttpURLConnection).apply {
             requestMethod = "GET"
@@ -334,7 +340,9 @@ object OfflineLlmManager {
             }
             val resuming = code == HttpURLConnection.HTTP_PARTIAL
             if (code != HttpURLConnection.HTTP_OK && !resuming) {
-                throw IllegalStateException("Download failed (HTTP $code).")
+                throw IllegalStateException(
+                    context.getString(R.string.offline_error_download_failed_http_format, code),
+                )
             }
             // Content-Length is the *remaining* bytes on a 206, the full size on a 200, or absent
             // (-1) on a chunked response; fall back to the catalog's advertised size for a total.
@@ -383,6 +391,7 @@ object OfflineLlmManager {
     }
 
     /** Maps a thrown exception to a short, user-facing message. */
-    private fun friendlyMessage(e: Exception): String =
-        e.message?.takeIf { it.isNotBlank() } ?: "Download failed. Check your connection and retry."
+    private fun friendlyMessage(context: Context, e: Exception): String =
+        e.message?.takeIf { it.isNotBlank() }
+            ?: context.getString(R.string.offline_error_download_failed_generic)
 }

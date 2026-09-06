@@ -125,7 +125,17 @@ class MokuroImporter(
                     "(an .html-only export without a .mokuro JSON is not supported).",
             )
         val sourceRoot = mokuroFile.parentFile ?: staging
-        val rawSidecar = json.parseToJsonElement(mokuroFile.readText()).jsonObject
+        // A malformed .mokuro surfaces as either a SerializationException (invalid JSON) or, for a
+        // top-level array/primitive, an IllegalArgumentException from `.jsonObject`. Both extend
+        // IllegalArgumentException; turn them into a friendly MokuroImportException like the other
+        // failure modes here instead of leaking a cryptic parser message.
+        val rawSidecar = try {
+            json.parseToJsonElement(mokuroFile.readText()).jsonObject
+        } catch (e: IllegalArgumentException) {
+            throw MokuroImportException(
+                "The .mokuro file is not valid JSON — it may be corrupt or incomplete.",
+            )
+        }
 
         val pages = rawSidecar["pages"]?.jsonArray
             ?: throw MokuroImportException("The .mokuro file has no \"pages\" — it may be corrupt.")

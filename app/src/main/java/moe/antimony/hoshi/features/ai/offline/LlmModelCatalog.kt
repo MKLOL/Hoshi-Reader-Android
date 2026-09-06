@@ -1,9 +1,14 @@
 package moe.antimony.hoshi.features.ai.offline
 
+import androidx.annotation.StringRes
+import moe.antimony.hoshi.R
+
 /**
  * A downloadable GGUF model hosted on Hugging Face.
  *
  * @property id stable internal id persisted in settings (see [OfflineTranslationSettings]).
+ * @property displayNameRes localized display name resource shown in the UI / notification.
+ * @property descriptionRes localized description resource shown in the settings UI.
  * @property repo Hugging Face `owner/name` repository slug.
  * @property fileName the GGUF file inside that repo; also the on-disk file name.
  * @property approxSizeBytes advertised download size, used for the progress bar and the
@@ -12,8 +17,8 @@ package moe.antimony.hoshi.features.ai.offline
  */
 data class LlmModel(
     val id: String,
-    val displayName: String,
-    val description: String,
+    @StringRes val displayNameRes: Int,
+    @StringRes val descriptionRes: Int,
     val repo: String,
     val fileName: String,
     val approxSizeBytes: Long,
@@ -34,9 +39,8 @@ object LlmModelCatalog {
     /** Purpose-built Japanese→English translator. Best translation, but translation only. */
     val GEMMA_TRANSLATE_Q8 = LlmModel(
         id = "gemma-2-2b-jpn-it-translate-q8",
-        displayName = "Gemma 2 2B JP→EN (translate only)",
-        description = "Purpose-built Japanese→English translation — best translation quality, " +
-            "fast (~3.3 GB), but does NOT explain grammar/vocabulary.",
+        displayNameRes = R.string.offline_model_gemma_translate_name,
+        descriptionRes = R.string.offline_model_gemma_translate_desc,
         repo = "webbigdata/gemma-2-2b-jpn-it-translate-gguf",
         fileName = "gemma-2-2b-jpn-it-translate-Q8_0.gguf",
         approxSizeBytes = 3_354_000_000L,
@@ -53,9 +57,8 @@ object LlmModelCatalog {
      */
     val QWEN_9B_Q4 = LlmModel(
         id = "qwen3.5-9b-q4km",
-        displayName = "Qwen3.5 9B (translate + explain)",
-        description = "Best offline explanations of grammar & vocabulary. ~6.2 GB and SLOW " +
-            "on-device — only for high-RAM devices (12 GB+). Reasoning model; expect a wait.",
+        displayNameRes = R.string.offline_model_qwen_9b_name,
+        descriptionRes = R.string.offline_model_qwen_9b_desc,
         repo = "bartowski/Qwen_Qwen3.5-9B-GGUF",
         fileName = "Qwen_Qwen3.5-9B-Q4_K_M.gguf",
         approxSizeBytes = 6_169_000_000L,
@@ -65,9 +68,8 @@ object LlmModelCatalog {
     /** General model big enough to also EXPLAIN grammar/vocab, the mainstream "strong phone" pick. */
     val QWEN_4B_Q4 = LlmModel(
         id = "qwen3.5-4b-q4km",
-        displayName = "Qwen3.5 4B (translate + explain)",
-        description = "General model that also explains grammar & vocabulary, not just " +
-            "translates. ~3 GB; needs a strong phone/tablet (8 GB+ RAM). Reasoning model.",
+        displayNameRes = R.string.offline_model_qwen_4b_name,
+        descriptionRes = R.string.offline_model_qwen_4b_desc,
         repo = "bartowski/Qwen_Qwen3.5-4B-GGUF",
         fileName = "Qwen_Qwen3.5-4B-Q4_K_M.gguf",
         approxSizeBytes = 3_013_000_000L,
@@ -77,9 +79,8 @@ object LlmModelCatalog {
     /** Lightweight model — good middle ground for low-RAM / e-ink devices. */
     val QWEN_2B_Q4 = LlmModel(
         id = "qwen3.5-2b-q4km",
-        displayName = "Qwen3.5 2B (lightweight)",
-        description = "Smaller multilingual model. ~1.4 GB, faster, good for low-RAM / e-ink " +
-            "devices.",
+        displayNameRes = R.string.offline_model_qwen_2b_name,
+        descriptionRes = R.string.offline_model_qwen_2b_desc,
         repo = "bartowski/Qwen_Qwen3.5-2B-GGUF",
         fileName = "Qwen_Qwen3.5-2B-Q4_K_M.gguf",
         approxSizeBytes = 1_396_000_000L,
@@ -89,8 +90,8 @@ object LlmModelCatalog {
     /** Tiny model for verifying the download/load/translate pipeline end-to-end. */
     val QWEN_0_8B_Q4 = LlmModel(
         id = "qwen3.5-0.8b-q4km",
-        displayName = "Qwen3.5 0.8B (test/tiny)",
-        description = "Tiny model for testing the pipeline. ~580 MB, lowest quality.",
+        displayNameRes = R.string.offline_model_qwen_0_8b_name,
+        descriptionRes = R.string.offline_model_qwen_0_8b_desc,
         repo = "bartowski/Qwen_Qwen3.5-0.8B-GGUF",
         fileName = "Qwen_Qwen3.5-0.8B-Q4_K_M.gguf",
         approxSizeBytes = 580_000_000L,

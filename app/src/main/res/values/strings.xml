@@ -535,4 +535,70 @@
     <string name="sentence_mode_empty">This book has no readable text.</string>
     <string name="sentence_mode_font_smaller">Smaller text</string>
     <string name="sentence_mode_font_larger">Larger text</string>
+    <!-- ChatGPT / AI translation settings (features/ai/AiChatSettingsView) -->
+    <string name="ai_settings_translation_model">Translation model</string>
+    <string name="ai_settings_model_intro">Pick a model. Cheaper and Chinese providers (DeepSeek, Qwen, Kimi) and Anthropic (Claude) are included alongside OpenAI.</string>
+    <string name="ai_settings_model_id">Model id</string>
+    <string name="ai_settings_model_routes_format">Routes to %1$s.</string>
+    <string name="ai_settings_model_any_openai">Any model id works. Unrecognised ids are sent to OpenAI.</string>
+    <string name="ai_settings_model_any_routes_format">Any model id works. Routes to %1$s.</string>
+    <string name="ai_settings_provider_api_key_format">%1$s API key</string>
+    <string name="ai_settings_api_key_help_format">Stored only on this device, never synced. Each provider keeps its own key. Get a key at %1$s</string>
+    <string name="ai_settings_hide_api_key">Hide API key</string>
+    <string name="ai_settings_show_api_key">Show API key</string>
+    <string name="ai_settings_bubble_prompt">Bubble prompt</string>
+    <string name="ai_settings_bubble_prompt_supporting">Sent before the speech bubble\'s OCR text.</string>
+    <string name="ai_settings_image_prompt">Image prompt</string>
+    <string name="ai_settings_image_prompt_supporting">Sent with cropped screenshot translations.</string>
+    <string name="ai_settings_custom_model">Custom…</string>
+    <!-- Offline on-device translation (features/ai/offline) -->
+    <string name="offline_translation_title">Offline translation (no internet)</string>
+    <string name="offline_translation_description">Translate speech bubbles fully on-device using a downloaded model. No API key or connection needed. Quality is lower than ChatGPT.</string>
+    <string name="offline_translation_use_toggle">Use on-device translation</string>
+    <string name="offline_translation_model_label">Model</string>
+    <string name="offline_translation_downloaded">Downloaded</string>
+    <string name="offline_translation_another_downloading">Another model is downloading…</string>
+    <string name="offline_translation_download_help">Downloads once over the network — it keeps going with the screen off and resumes from where it left off if interrupted — then works offline.</string>
+    <string name="offline_translation_app_build_format">App build %1$s · %2$s</string>
+    <string name="offline_model_gemma_translate_name">Gemma 2 2B JP→EN (translate only)</string>
+    <string name="offline_model_gemma_translate_desc">Purpose-built Japanese→English translation — best translation quality, fast (~3.3 GB), but does NOT explain grammar/vocabulary.</string>
+    <string name="offline_model_qwen_9b_name">Qwen3.5 9B (translate + explain)</string>
+    <string name="offline_model_qwen_9b_desc">Best offline explanations of grammar &amp; vocabulary. ~6.2 GB and SLOW on-device — only for high-RAM devices (12 GB+). Reasoning model; expect a wait.</string>
+    <string name="offline_model_qwen_4b_name">Qwen3.5 4B (translate + explain)</string>
+    <string name="offline_model_qwen_4b_desc">General model that also explains grammar &amp; vocabulary, not just translates. ~3 GB; needs a strong phone/tablet (8 GB+ RAM). Reasoning model.</string>
+    <string name="offline_model_qwen_2b_name">Qwen3.5 2B (lightweight)</string>
+    <string name="offline_model_qwen_2b_desc">Smaller multilingual model. ~1.4 GB, faster, good for low-RAM / e-ink devices.</string>
+    <string name="offline_model_qwen_0_8b_name">Qwen3.5 0.8B (test/tiny)</string>
+    <string name="offline_model_qwen_0_8b_desc">Tiny model for testing the pipeline. ~580 MB, lowest quality.</string>
+    <string name="offline_download_notification_title">Downloading translation model</string>
+    <string name="offline_download_notification_body_format">%1$s — %2$d%%</string>
+    <string name="offline_download_channel_name">Model downloads</string>
+    <string name="offline_error_finalize_failed">Could not finalize the downloaded file.</string>
+    <string name="offline_error_no_model_downloaded">No on-device model downloaded yet. Download one in Settings → ChatGPT.</string>
+    <string name="offline_error_download_failed_http_format">Download failed (HTTP %1$d).</string>
+    <string name="offline_error_download_failed_generic">Download failed. Check your connection and retry.</string>
+    <!-- Manga reader chrome and go-to-page dialog (features/mangareader/MangaReaderScreen) -->
+    <string name="manga_reader_next_page">Next page</string>
+    <string name="manga_reader_previous_page">Previous page</string>
+    <string name="manga_reader_close">Close manga reader</string>
+    <string name="manga_reader_more_options">More options</string>
+    <string name="manga_reader_take_screenshot">Take screenshot</string>
+    <string name="manga_reader_go_to_page_menu">Go to page…</string>
+    <string name="manga_reader_go_to_page_title">Go to page</string>
+    <string name="manga_reader_go_to_page_label_format">Page (1–%1$d)</string>
+    <string name="manga_reader_go">Go</string>
+    <!-- Manga statistics sheet (features/mangareader/MangaStatisticsSheet) -->
+    <string name="manga_statistics_title">Manga Statistics</string>
+    <string name="manga_statistics_page_of_format">Page %1$d of %2$d</string>
+    <string name="manga_statistics_loading">Loading statistics...</string>
+    <string name="manga_statistics_off">Statistics are off.</string>
+    <string name="manga_statistics_pages_remaining">Pages Remaining</string>
+    <string name="manga_statistics_time_to_finish">Time to Finish</string>
+    <string name="manga_statistics_pages_read">Pages Read</string>
+    <string name="manga_statistics_pace">Pace</string>
+    <string name="manga_statistics_reading_time">Reading Time</string>
+    <!-- Manga screenshot crop overlay + clipboard (features/mangareader) -->
+    <string name="manga_screenshot_translate">Translate</string>
+    <string name="manga_clipboard_bubble_copied">Bubble text copied</string>
+    <string name="manga_clipboard_label">Manga text</string>
 </resources>

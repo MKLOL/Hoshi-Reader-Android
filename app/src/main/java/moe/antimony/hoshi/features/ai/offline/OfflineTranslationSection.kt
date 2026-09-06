@@ -19,12 +19,14 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.launch
 import moe.antimony.hoshi.BuildConfig
 import moe.antimony.hoshi.LocalHoshiAppContainer
+import moe.antimony.hoshi.R
 import moe.antimony.hoshi.features.ai.offline.OfflineLlmManager.ModelDownloadState
 import java.util.Locale
 import kotlin.math.max
@@ -63,12 +65,11 @@ fun OfflineTranslationSection(modifier: Modifier = Modifier) {
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         Text(
-            text = "Offline translation (no internet)",
+            text = stringResource(R.string.offline_translation_title),
             style = MaterialTheme.typography.titleMedium,
         )
         Text(
-            text = "Translate speech bubbles fully on-device using a downloaded model. No API " +
-                "key or connection needed. Quality is lower than ChatGPT.",
+            text = stringResource(R.string.offline_translation_description),
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -79,7 +80,7 @@ fun OfflineTranslationSection(modifier: Modifier = Modifier) {
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                text = "Use on-device translation",
+                text = stringResource(R.string.offline_translation_use_toggle),
                 style = MaterialTheme.typography.bodyLarge,
                 modifier = Modifier.weight(1f),
             )
@@ -94,7 +95,7 @@ fun OfflineTranslationSection(modifier: Modifier = Modifier) {
         }
 
         Text(
-            text = "Model",
+            text = stringResource(R.string.offline_translation_model_label),
             style = MaterialTheme.typography.titleSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -132,14 +133,17 @@ fun OfflineTranslationSection(modifier: Modifier = Modifier) {
         )
 
         Text(
-            text = "Downloads once over the network — it keeps going with the screen off and " +
-                "resumes from where it left off if interrupted — then works offline.",
+            text = stringResource(R.string.offline_translation_download_help),
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         // Build identifier so you can confirm which APK is installed (commit hash).
         Text(
-            text = "App build ${BuildConfig.VERSION_NAME} · ${BuildConfig.GIT_SHA}",
+            text = stringResource(
+                R.string.offline_translation_app_build_format,
+                BuildConfig.VERSION_NAME,
+                BuildConfig.GIT_SHA,
+            ),
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -172,7 +176,7 @@ private fun ModelRow(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
-                    text = model.displayName,
+                    text = stringResource(model.displayNameRes),
                     style = MaterialTheme.typography.bodyLarge,
                     modifier = Modifier.weight(1f),
                     overflow = TextOverflow.Ellipsis,
@@ -180,14 +184,14 @@ private fun ModelRow(
                 )
                 if (downloaded) {
                     Text(
-                        text = "Downloaded",
+                        text = stringResource(R.string.offline_translation_downloaded),
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.primary,
                     )
                 }
             }
             Text(
-                text = model.description,
+                text = stringResource(model.descriptionRes),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -235,20 +239,20 @@ private fun DownloadControl(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 TextButton(onClick = onCancel) {
-                    Text("Cancel")
+                    Text(stringResource(R.string.action_cancel))
                 }
             }
 
             downloaded -> {
                 TextButton(onClick = onDelete) {
-                    Text("Delete")
+                    Text(stringResource(R.string.action_delete))
                 }
             }
 
             downloadState is ModelDownloadState.Downloading -> {
                 // Only one download runs at a time; a different model is currently downloading.
                 Text(
-                    text = "Another model is downloading…",
+                    text = stringResource(R.string.offline_translation_another_downloading),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -261,13 +265,13 @@ private fun DownloadControl(
                     color = MaterialTheme.colorScheme.error,
                 )
                 Button(onClick = onDownload) {
-                    Text("Retry")
+                    Text(stringResource(R.string.action_retry))
                 }
             }
 
             else -> {
                 Button(onClick = onDownload) {
-                    Text("Download")
+                    Text(stringResource(R.string.action_download))
                 }
             }
         }

@@ -25,7 +25,9 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import moe.antimony.hoshi.R
 
 @Composable
 internal fun MangaScreenshotCropOverlay(
@@ -132,7 +134,7 @@ internal fun MangaScreenshotCropOverlay(
                 .padding(horizontal = 10.dp, vertical = 8.dp),
         ) {
             TextButton(onClick = onCancel) {
-                Text("Cancel")
+                Text(stringResource(R.string.action_cancel))
             }
             Button(
                 enabled = currentRect != null,
@@ -140,7 +142,7 @@ internal fun MangaScreenshotCropOverlay(
                     currentRect?.let(onConfirm)
                 },
             ) {
-                Text("Translate")
+                Text(stringResource(R.string.manga_screenshot_translate))
             }
         }
     }

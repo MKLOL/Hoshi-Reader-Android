@@ -12,6 +12,7 @@ import android.os.IBinder
 import android.os.PowerManager
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
+import moe.antimony.hoshi.R
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -45,6 +46,12 @@ class ModelDownloadService : Service() {
 
         val model = intent?.getStringExtra(EXTRA_MODEL_ID)?.let { LlmModelCatalog.byId(it) }
         if (model == null) {
+            // This start arrived via startForegroundService (see [start]), so Android 8+ demands
+            // a startForeground() call within a few seconds even on this dead-end path — skipping
+            // it risks a RemoteServiceException. Post a minimal foreground notification, then tear
+            // the foreground state down immediately before stopping.
+            startForegroundCompat(buildPlaceholderNotification())
+            stopForegroundCompat()
             stopSelfResult(startId)
             return START_NOT_STICKY
         }
@@ -118,12 +125,33 @@ class ModelDownloadService : Service() {
         val indeterminate = total <= 0L
         val percent = if (indeterminate) 0 else ((downloaded * 100) / total).toInt().coerceIn(0, 100)
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("Downloading translation model")
-            .setContentText("${model.displayName} — $percent%")
+            .setContentTitle(getString(R.string.offline_download_notification_title))
+            .setContentText(
+                getString(
+                    R.string.offline_download_notification_body_format,
+                    getString(model.displayNameRes),
+                    percent,
+                ),
+            )
             .setSmallIcon(android.R.drawable.stat_sys_download)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .setProgress(100, percent, indeterminate)
+            .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
+            .build()
+    }
+
+    /**
+     * A bare foreground notification for the invalid-model early return in [onStartCommand],
+     * where there is no [LlmModel] to describe. Only exists to satisfy the startForeground()
+     * obligation before the service stops itself.
+     */
+    private fun buildPlaceholderNotification(): Notification {
+        ensureChannel()
+        return NotificationCompat.Builder(this, CHANNEL_ID)
+            .setContentTitle(getString(R.string.offline_download_notification_title))
+            .setSmallIcon(android.R.drawable.stat_sys_download)
+            .setOngoing(false)
             .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
             .build()
     }
@@ -135,7 +163,7 @@ class ModelDownloadService : Service() {
             manager.createNotificationChannel(
                 NotificationChannel(
                     CHANNEL_ID,
-                    "Model downloads",
+                    getString(R.string.offline_download_channel_name),
                     NotificationManager.IMPORTANCE_LOW,
                 ),
             )

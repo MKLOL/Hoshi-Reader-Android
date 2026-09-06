@@ -29,8 +29,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import moe.antimony.hoshi.R
 import moe.antimony.hoshi.epub.ReadingStatistics
 import moe.antimony.hoshi.features.reader.ReaderBottomPanel
 import moe.antimony.hoshi.features.reader.ReaderStatisticsState
@@ -82,24 +84,26 @@ internal fun MangaStatisticsSheet(
             } else {
                 item {
                     MangaStatisticsSection(
-                        title = "Session",
+                        title = stringResource(R.string.reader_statistics_session),
                         icon = Icons.Rounded.Timer,
                         statistic = state.session,
                         accentColor = MaterialTheme.colorScheme.primary,
                         extraRows = listOf(
-                            "Pages Remaining" to mangaRemainingPages(pageIndex, pageCount).toString(),
-                            "Time to Finish" to formatDurationSeconds(
-                                mangaSecondsRemaining(
-                                    remainingPages = mangaRemainingPages(pageIndex, pageCount),
-                                    speed = state.session.lastReadingSpeed,
+                            stringResource(R.string.manga_statistics_pages_remaining) to
+                                mangaRemainingPages(pageIndex, pageCount).toString(),
+                            stringResource(R.string.manga_statistics_time_to_finish) to
+                                formatDurationSeconds(
+                                    mangaSecondsRemaining(
+                                        remainingPages = mangaRemainingPages(pageIndex, pageCount),
+                                        speed = state.session.lastReadingSpeed,
+                                    ),
                                 ),
-                            ),
                         ),
                     )
                 }
                 item {
                     MangaStatisticsSection(
-                        title = "Today",
+                        title = stringResource(R.string.reader_statistics_today),
                         icon = Icons.Rounded.QueryStats,
                         statistic = state.today,
                         accentColor = MaterialTheme.colorScheme.tertiary,
@@ -107,7 +111,7 @@ internal fun MangaStatisticsSheet(
                 }
                 item {
                     MangaStatisticsSection(
-                        title = "All Time",
+                        title = stringResource(R.string.reader_statistics_all_time),
                         icon = Icons.Rounded.QueryStats,
                         statistic = state.allTime,
                         accentColor = MaterialTheme.colorScheme.secondary,
@@ -138,12 +142,16 @@ private fun MangaStatisticsHeader(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = "Manga Statistics",
+                        text = stringResource(R.string.manga_statistics_title),
                         style = MaterialTheme.typography.titleLarge,
                         fontWeight = FontWeight.SemiBold,
                     )
                     Text(
-                        text = "Page ${(pageIndex + 1).coerceIn(1, pageCount.coerceAtLeast(1))} of $pageCount",
+                        text = stringResource(
+                            R.string.manga_statistics_page_of_format,
+                            (pageIndex + 1).coerceIn(1, pageCount.coerceAtLeast(1)),
+                            pageCount,
+                        ),
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -152,7 +160,11 @@ private fun MangaStatisticsHeader(
                     IconButton(onClick = onToggleTracking) {
                         Icon(
                             imageVector = if (isTracking) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
-                            contentDescription = if (isTracking) "Pause statistics" else "Start statistics",
+                            contentDescription = if (isTracking) {
+                                stringResource(R.string.reader_statistics_pause)
+                            } else {
+                                stringResource(R.string.reader_statistics_start)
+                            },
                         )
                     }
                 }
@@ -182,7 +194,7 @@ private fun MangaStatisticsLoadingCard() {
         ) {
             CircularProgressIndicator()
             Text(
-                text = "Loading statistics...",
+                text = stringResource(R.string.manga_statistics_loading),
                 style = MaterialTheme.typography.bodyLarge,
                 modifier = Modifier.padding(start = 16.dp),
             )
@@ -204,12 +216,12 @@ private fun MangaStatisticsDisabledCard(onEnableStatistics: () -> Unit) {
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                text = "Statistics are off.",
+                text = stringResource(R.string.manga_statistics_off),
                 style = MaterialTheme.typography.bodyLarge,
                 modifier = Modifier.weight(1f),
             )
             Button(onClick = onEnableStatistics) {
-                Text("Enable")
+                Text(stringResource(R.string.action_enable))
             }
         }
     }
@@ -250,11 +262,20 @@ private fun MangaStatisticsSection(
                     modifier = Modifier.padding(start = 10.dp),
                 )
             }
-            MangaStatisticRow("Pages Read", statistic.charactersRead.toString())
+            MangaStatisticRow(
+                stringResource(R.string.manga_statistics_pages_read),
+                statistic.charactersRead.toString(),
+            )
             MangaStatisticsDivider()
-            MangaStatisticRow("Pace", formatMangaReadingPace(statistic.lastReadingSpeed))
+            MangaStatisticRow(
+                stringResource(R.string.manga_statistics_pace),
+                formatMangaReadingPace(statistic.lastReadingSpeed),
+            )
             MangaStatisticsDivider()
-            MangaStatisticRow("Reading Time", formatDurationSeconds(statistic.readingTime))
+            MangaStatisticRow(
+                stringResource(R.string.manga_statistics_reading_time),
+                formatDurationSeconds(statistic.readingTime),
+            )
             extraRows.forEach { (label, value) ->
                 MangaStatisticsDivider()
                 MangaStatisticRow(label, value)

@@ -69,6 +69,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
@@ -99,6 +100,7 @@ import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import moe.antimony.hoshi.LocalHoshiAppContainer
+import moe.antimony.hoshi.R
 import moe.antimony.hoshi.epub.BookRepository
 import moe.antimony.hoshi.epub.ReadingStatistics
 import moe.antimony.hoshi.features.ai.AiChatEntry
@@ -1114,7 +1116,7 @@ internal fun MangaReaderScreen(
 
             MangaReaderPageTurnButton(
                 imageVector = Icons.AutoMirrored.Rounded.KeyboardArrowLeft,
-                contentDescription = "Next page",
+                contentDescription = stringResource(R.string.manga_reader_next_page),
                 darkInterface = readerSettings.usesDarkInterface(systemDark),
                 enabled = pageIndex < pageCount - 1,
                 onClick = { navigate(ReaderNavigationDirection.Forward) },
@@ -1136,7 +1138,7 @@ internal fun MangaReaderScreen(
             )
             MangaReaderPageTurnButton(
                 imageVector = Icons.AutoMirrored.Rounded.KeyboardArrowRight,
-                contentDescription = "Previous page",
+                contentDescription = stringResource(R.string.manga_reader_previous_page),
                 darkInterface = readerSettings.usesDarkInterface(systemDark),
                 enabled = pageIndex > 0,
                 onClick = { navigate(ReaderNavigationDirection.Backward) },
@@ -1237,13 +1239,13 @@ private fun MangaGoToPageDialog(
     val parsed = input.toIntOrNull()?.takeIf { it in 1..pageCount }
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Go to page") },
+        title = { Text(stringResource(R.string.manga_reader_go_to_page_title)) },
         text = {
             OutlinedTextField(
                 value = input,
                 onValueChange = { new -> input = new.filter { it.isDigit() }.take(6) },
                 singleLine = true,
-                label = { Text("Page (1–$pageCount)") },
+                label = { Text(stringResource(R.string.manga_reader_go_to_page_label_format, pageCount)) },
                 keyboardOptions = KeyboardOptions(
                     keyboardType = KeyboardType.Number,
                     imeAction = ImeAction.Go,
@@ -1257,10 +1259,10 @@ private fun MangaGoToPageDialog(
             TextButton(
                 onClick = { parsed?.let(onConfirm) },
                 enabled = parsed != null,
-            ) { Text("Go") }
+            ) { Text(stringResource(R.string.manga_reader_go)) }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Cancel") }
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) }
         },
     )
 }
@@ -1282,7 +1284,7 @@ private fun MangaReaderCloseButton(
     ) {
         Icon(
             imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
-            contentDescription = "Close manga reader",
+            contentDescription = stringResource(R.string.manga_reader_close),
             tint = contentColor,
         )
     }
@@ -1318,7 +1320,7 @@ private fun MangaReaderOverflowMenu(
         ) {
             Icon(
                 imageVector = Icons.Rounded.MoreVert,
-                contentDescription = "More options",
+                contentDescription = stringResource(R.string.manga_reader_more_options),
                 tint = contentColor,
             )
         }
@@ -1328,7 +1330,7 @@ private fun MangaReaderOverflowMenu(
         ) {
             if (showTakeScreenshot) {
                 DropdownMenuItem(
-                    text = { Text("Take screenshot") },
+                    text = { Text(stringResource(R.string.manga_reader_take_screenshot)) },
                     enabled = takeScreenshotEnabled,
                     onClick = {
                         menuExpanded = false
@@ -1337,21 +1339,21 @@ private fun MangaReaderOverflowMenu(
                 )
             }
             DropdownMenuItem(
-                text = { Text("Go to page…") },
+                text = { Text(stringResource(R.string.manga_reader_go_to_page_menu)) },
                 onClick = {
                     menuExpanded = false
                     onShowGoToPage()
                 },
             )
             DropdownMenuItem(
-                text = { Text("Statistics") },
+                text = { Text(stringResource(R.string.reader_statistics)) },
                 onClick = {
                     menuExpanded = false
                     onShowStatistics()
                 },
             )
             DropdownMenuItem(
-                text = { Text("ChatGPT history") },
+                text = { Text(stringResource(R.string.ai_chat_history_title)) },
                 onClick = {
                     menuExpanded = false
                     onShowAiHistory()
@@ -1380,7 +1382,7 @@ private fun MangaReaderScreenshotButton(
     ) {
         Icon(
             imageVector = Icons.Rounded.Screenshot,
-            contentDescription = "Take screenshot",
+            contentDescription = stringResource(R.string.manga_reader_take_screenshot),
             tint = contentColor.copy(alpha = if (enabled) 1f else 0.38f),
         )
     }

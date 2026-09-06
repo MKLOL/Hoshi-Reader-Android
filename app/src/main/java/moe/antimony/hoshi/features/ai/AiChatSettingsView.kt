@@ -33,6 +33,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
@@ -44,6 +45,7 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
 import moe.antimony.hoshi.LocalHoshiAppContainer
+import moe.antimony.hoshi.R
 import moe.antimony.hoshi.features.ai.offline.OfflineTranslationSection
 import moe.antimony.hoshi.features.settings.SettingsDetailScaffold
 
@@ -64,7 +66,11 @@ fun AiChatSettingsScreen(
     val appScope = LocalHoshiAppContainer.current.appScope
     val settings by repository.settings.collectAsStateWithLifecycle(initialValue = null)
 
-    SettingsDetailScaffold(title = "Translation model", onClose = onClose, modifier = modifier) { innerPadding ->
+    SettingsDetailScaffold(
+        title = stringResource(R.string.ai_settings_translation_model),
+        onClose = onClose,
+        modifier = modifier,
+    ) { innerPadding ->
         val loaded = settings ?: return@SettingsDetailScaffold
         AiChatSettingsContent(
             settings = loaded,
@@ -187,8 +193,7 @@ private fun AiChatSettingsContent(
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         Text(
-            text = "Pick a model. Cheaper and Chinese providers (DeepSeek, Qwen, Kimi) and Anthropic " +
-                "(Claude) are included alongside OpenAI.",
+            text = stringResource(R.string.ai_settings_model_intro),
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -200,7 +205,11 @@ private fun AiChatSettingsContent(
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 Text(
-                    text = currentModelLabel(selectedModelId, customModel),
+                    text = currentModelLabel(
+                        selectedModelId,
+                        customModel,
+                        stringResource(R.string.ai_settings_custom_model),
+                    ),
                     modifier = Modifier.fillMaxWidth(),
                 )
                 Icon(Icons.Rounded.ArrowDropDown, contentDescription = null)
@@ -247,16 +256,16 @@ private fun AiChatSettingsContent(
                 // the dropdown label and the provider stay in agreement.
                 selectedModelId = if (ChatModelCatalog.isKnownModel(typed)) typed else CUSTOM_MODEL_TAG
             },
-            label = { Text("Model id") },
+            label = { Text(stringResource(R.string.ai_settings_model_id)) },
             singleLine = true,
             supportingText = {
                 Text(
                     if (ChatModelCatalog.isKnownModel(effectiveModel)) {
-                        "Routes to ${provider.displayName}."
+                        stringResource(R.string.ai_settings_model_routes_format, provider.displayName)
                     } else if (provider.id == ChatModelCatalog.openAI.id) {
-                        "Any model id works. Unrecognised ids are sent to OpenAI."
+                        stringResource(R.string.ai_settings_model_any_openai)
                     } else {
-                        "Any model id works. Routes to ${provider.displayName}."
+                        stringResource(R.string.ai_settings_model_any_routes_format, provider.displayName)
                     },
                 )
             },
@@ -269,11 +278,10 @@ private fun AiChatSettingsContent(
                 apiKey = value
                 apiKeyEdited = true
             },
-            label = { Text("${provider.displayName} API key") },
+            label = { Text(stringResource(R.string.ai_settings_provider_api_key_format, provider.displayName)) },
             singleLine = true,
             supportingText = {
-                Text("Stored only on this device, never synced. Each provider keeps its own key. " +
-                    "Get a key at ${provider.keysUrl}")
+                Text(stringResource(R.string.ai_settings_api_key_help_format, provider.keysUrl))
             },
             visualTransformation = if (apiKeyVisible) {
                 VisualTransformation.None
@@ -288,7 +296,11 @@ private fun AiChatSettingsContent(
                         } else {
                             Icons.Rounded.Visibility
                         },
-                        contentDescription = if (apiKeyVisible) "Hide API key" else "Show API key",
+                        contentDescription = if (apiKeyVisible) {
+                            stringResource(R.string.ai_settings_hide_api_key)
+                        } else {
+                            stringResource(R.string.ai_settings_show_api_key)
+                        },
                     )
                 }
             },
@@ -297,16 +309,16 @@ private fun AiChatSettingsContent(
         OutlinedTextField(
             value = promptText,
             onValueChange = { value -> promptText = value },
-            label = { Text("Bubble prompt") },
-            supportingText = { Text("Sent before the speech bubble's OCR text.") },
+            label = { Text(stringResource(R.string.ai_settings_bubble_prompt)) },
+            supportingText = { Text(stringResource(R.string.ai_settings_bubble_prompt_supporting)) },
             minLines = 4,
             modifier = Modifier.fillMaxWidth(),
         )
         OutlinedTextField(
             value = imagePromptText,
             onValueChange = { value -> imagePromptText = value },
-            label = { Text("Image prompt") },
-            supportingText = { Text("Sent with cropped screenshot translations.") },
+            label = { Text(stringResource(R.string.ai_settings_image_prompt)) },
+            supportingText = { Text(stringResource(R.string.ai_settings_image_prompt_supporting)) },
             minLines = 4,
             modifier = Modifier.fillMaxWidth(),
         )
@@ -315,9 +327,13 @@ private fun AiChatSettingsContent(
     }
 }
 
-private fun currentModelLabel(selectedModelId: String, customModel: String): String =
+private fun currentModelLabel(
+    selectedModelId: String,
+    customModel: String,
+    customPlaceholder: String,
+): String =
     if (selectedModelId == CUSTOM_MODEL_TAG) {
-        if (customModel.isBlank()) "Custom…" else customModel
+        if (customModel.isBlank()) customPlaceholder else customModel
     } else {
         ChatModelCatalog.optionForModelId(selectedModelId)?.displayName ?: selectedModelId
     }

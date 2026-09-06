@@ -7,6 +7,7 @@ import android.os.Handler
 import android.os.Looper
 import android.webkit.JavascriptInterface
 import android.widget.Toast
+import moe.antimony.hoshi.R
 
 /**
  * JavaScript bridge that copies a whole mokuro speech bubble's OCR text to the system
@@ -27,8 +28,14 @@ internal class MangaClipboardBridge(context: Context) {
         mainHandler.post {
             val clipboard = appContext.getSystemService(Context.CLIPBOARD_SERVICE)
                 as? ClipboardManager ?: return@post
-            clipboard.setPrimaryClip(ClipData.newPlainText("Manga text", trimmed))
-            Toast.makeText(appContext, "Bubble text copied", Toast.LENGTH_SHORT).show()
+            clipboard.setPrimaryClip(
+                ClipData.newPlainText(appContext.getString(R.string.manga_clipboard_label), trimmed),
+            )
+            Toast.makeText(
+                appContext,
+                appContext.getString(R.string.manga_clipboard_bubble_copied),
+                Toast.LENGTH_SHORT,
+            ).show()
         }
     }
 
