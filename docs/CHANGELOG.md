@@ -11,6 +11,19 @@ Semantic Versioning.
 - **Sentence mode shows furigana.** Words that carry furigana in the book now show them above the
   text in sentence mode too, half-size like the reader, and the reader's "Hide furigana" setting
   applies there as well. Sentence addresses, word taps and translations are unaffected.
+- **The Simplified Chinese app now covers more screens.** The ChatGPT settings, the offline
+  translation section and the manga reader's menus and dialogs were showing in English; they are
+  now translated.
+
+### Fixed
+- **Your library and reading data are safer if the app is killed while saving.** Bookmarks,
+  metadata, shelves, statistics and highlights are now written atomically, so a crash or a full
+  disk mid-save can no longer leave an empty file that reads back as lost data.
+- **Long reading sessions no longer build up memory from the lookup popup.** Each dictionary
+  popup is now released when it closes instead of being kept around for the whole session.
+- **A word looked up from inside an open popup no longer briefly freezes the screen.**
+- **The updater will not install an update whose bytes it cannot verify.** When a download comes
+  from a mirror and carries no checksum, it is rejected instead of trusted.
 
 ## [v0.11.5] - 2026-09-04
 
