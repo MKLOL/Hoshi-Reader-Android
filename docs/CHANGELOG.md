@@ -7,6 +7,8 @@ Semantic Versioning.
 
 ## [Unreleased]
 
+## [v0.11.6] - 2026-09-06
+
 ### Changed
 - **Sentence mode shows furigana.** Words that carry furigana in the book now show them above the
   text in sentence mode too, half-size like the reader, and the reader's "Hide furigana" setting
