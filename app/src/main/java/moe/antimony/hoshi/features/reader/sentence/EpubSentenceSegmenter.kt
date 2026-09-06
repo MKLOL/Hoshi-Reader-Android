@@ -403,6 +403,11 @@ object EpubSentenceSegmenter {
             }
         }
         val ruby = mutableListOf<RubyAnnotation>()
+        // A ruby base group normally forms one contiguous run here, so its reading is emitted once.
+        // Guard against a group id recurring within a single sentence (e.g. a base that straddled an
+        // overlong-split boundary, or was broken up by collapsed whitespace): emit the full-reading
+        // annotation only for the first run of each id so the same reading is never duplicated.
+        val emittedGroups = HashSet<Int>()
         var i = 0
         while (i < outGroups.size) {
             val group = outGroups[i]
@@ -413,7 +418,7 @@ object EpubSentenceSegmenter {
             var j = i
             while (j < outGroups.size && outGroups[j] == group) j++
             val reading = readings.getOrNull(group).orEmpty()
-            if (reading.isNotEmpty()) ruby += RubyAnnotation(i, j - i, reading)
+            if (reading.isNotEmpty() && emittedGroups.add(group)) ruby += RubyAnnotation(i, j - i, reading)
             i = j
         }
         return out.toString() to ruby

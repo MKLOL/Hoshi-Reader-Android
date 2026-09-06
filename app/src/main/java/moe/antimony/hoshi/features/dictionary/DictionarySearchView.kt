@@ -243,8 +243,8 @@ fun DictionarySearchView(
                         searchViewModel.closePopups()
                     },
                     onOpenLink = context::openPopupExternalLink,
-                    onTextSelected = { selection ->
-                        searchViewModel.openRootPopup(selection, popupOptions)
+                    onTextSelected = { selection, reply ->
+                        reply(searchViewModel.openRootPopup(selection, popupOptions))
                     },
                     onSelectionRectsLoaded = { rects ->
                         rootHighlightRects = rects

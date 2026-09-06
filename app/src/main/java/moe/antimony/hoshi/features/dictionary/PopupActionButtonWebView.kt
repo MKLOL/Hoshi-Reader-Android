@@ -66,6 +66,18 @@ internal class PopupActionButtonWebView @JvmOverloads constructor(
         buttons.clear()
     }
 
+    /**
+     * Stops any in-flight load, drops the JS bridge (which retains the popup callbacks and, via the
+     * context, the Activity) and the overlaid action buttons, then destroys the native render
+     * context. Call once when the host is removed; the view must not be reused afterwards.
+     */
+    fun release() {
+        stopLoading()
+        clearActionButtons()
+        removeJavascriptInterface("HoshiPopup")
+        destroy()
+    }
+
     override fun scrollTo(x: Int, y: Int) {
         super.scrollTo(0, y)
         refreshActionButtonClipping()

@@ -40,12 +40,21 @@ import moe.antimony.hoshi.features.reader.ReaderFontManager
 import moe.antimony.hoshi.features.reader.ReaderSelectionData
 import moe.antimony.hoshi.features.reader.ReaderSelectionRect
 import moe.antimony.hoshi.webview.applyHoshiWebViewSecurityDefaults
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
 
 private const val PopupSelectionEInkLineSizeCssPx = 1.5f
+
+// The native dictionary query (JNI) for a word tapped inside an open popup must not run on the main
+// thread. A single shared background thread serializes these lookups (preserving order); the result
+// is applied back on the main thread. It is process-wide so per-popup hosts never spawn threads.
+private val popupChildLookupExecutor: ExecutorService = Executors.newSingleThreadExecutor { runnable ->
+    Thread(runnable, "hoshi-popup-child-lookup").apply { isDaemon = true }
+}
 
 @Composable
 internal fun LookupPopupAndroidStack(
@@ -83,6 +92,7 @@ internal fun LookupPopupAndroidStack(
     AndroidView(
         modifier = modifier,
         factory = { controller.view },
+        onRelease = { controller.release() },
         update = {
             controller.update(
                 popups = popups,
@@ -181,6 +191,13 @@ private class LookupPopupOverlayController(
         lastUpdate?.let(::applyUpdate)
     }
 
+    fun release() {
+        // Destroy every remaining popup WebView when the overlay leaves composition so no native
+        // render context survives the reader teardown.
+        childHosts.values.forEach { it.release() }
+        childHosts.clear()
+    }
+
     private fun applyUpdate(update: OverlayUpdate) {
         // The overlay sits above the reader WebView. When no popup is visible it must leave the
         // input path entirely; some stylus implementations do not pass through a visible full-size
@@ -198,7 +215,9 @@ private class LookupPopupOverlayController(
         val childPopups = update.popups
         val childKeys = childPopups.mapTo(mutableSetOf()) { it.id }
         childHosts.keys.filterNot(childKeys::contains).forEach { key ->
-            childHosts.remove(key)?.let { view.removeView(it) }
+            // release() removes the host from the overlay and destroys its WebView so the popup's
+            // native context and JS bridge are not leaked as popups come and go during reading.
+            childHosts.remove(key)?.release()
         }
         childPopups.forEachIndexed { childIndex, popup ->
             val index = childIndex
@@ -376,6 +395,16 @@ private class LookupPopupHostView(
         alpha = 0f
     }
 
+    /**
+     * Removes this host from the overlay and destroys its WebView so the popup's native render
+     * context and JS bridge are reclaimed instead of leaking across a reading session. A fresh host
+     * is created per popup id, so a released host is never reused.
+     */
+    fun release() {
+        (parent as? ViewGroup)?.removeView(this)
+        webView.release()
+    }
+
     fun update(
         popup: LookupPopupItem,
         index: Int,
@@ -497,19 +526,25 @@ private class LookupPopupHostView(
                 if (isPopupActive) dismiss(index, allPopups, onPopupsChange, onRootPopupDismissed)
             },
             onOpenLink = context::openPopupExternalLink,
-            onTextSelected = { selection ->
+            onTextSelected = { selection, reply ->
                 if (!isPopupActive) {
-                    null
+                    reply(null)
                 } else {
-                    val nextPopups = closeChildPopups(allPopups, index)
-                    val lookup = lookupChildPopup(selection)
-                    if (lookup == null) {
-                        selectionHighlightView.update(emptyList(), state.darkMode, state.eInkMode)
-                        null
-                    } else {
-                        val (childPopup, highlightCount) = lookup
-                        onPopupsChange(nextPopups + childPopup.withoutRootInsets())
-                        highlightCount
+                    // Run the native dictionary query off the main thread, then apply the resulting
+                    // child popup and report the highlight count back on the main thread. Selecting a
+                    // word inside an open popup must not block the UI thread on the JNI lookup.
+                    popupChildLookupExecutor.execute {
+                        val lookup = lookupChildPopup(selection)
+                        post {
+                            if (lookup == null) {
+                                selectionHighlightView.update(emptyList(), state.darkMode, state.eInkMode)
+                                reply(null)
+                            } else {
+                                val (childPopup, highlightCount) = lookup
+                                onPopupsChange(closeChildPopups(allPopups, index) + childPopup.withoutRootInsets())
+                                reply(highlightCount)
+                            }
+                        }
                     }
                 }
             },

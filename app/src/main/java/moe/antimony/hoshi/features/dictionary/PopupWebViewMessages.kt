@@ -34,7 +34,7 @@ internal class PopupWebViewCallbacks(
     val onTapOutside: () -> Unit = {},
     val onSwipeDismiss: () -> Unit = {},
     val onOpenLink: (String) -> Unit = {},
-    val onTextSelected: (ReaderSelectionData) -> Int? = { null },
+    val onTextSelected: (ReaderSelectionData, (Int?) -> Unit) -> Unit = { _, reply -> reply(null) },
     val onSelectionRectsLoaded: ((List<ReaderSelectionRect>) -> Unit)? = null,
     val onLookupRedirect: (String) -> List<LookupResult> = { query -> LookupEngine.lookup(query) },
     val onLookupRedirected: (Int) -> Unit = {},
@@ -300,23 +300,29 @@ internal class PopupWebViewBridge(
             }
             "textSelected" -> payload.optJSONObject("body")?.toSelectionData(selectionOffsetHolder.offsetX, selectionOffsetHolder.offsetY)?.let { selection ->
                 mainHandler.post {
-                    val highlightCount = callbacks.onTextSelected(selection) ?: return@post
-                    val onSelectionRectsLoaded = callbacks.onSelectionRectsLoaded
-                    if (onSelectionRectsLoaded == null) {
-                        webView.evaluateJavascript("window.hoshiSelection.highlightSelection($highlightCount)", null)
-                        return@post
-                    }
-                    webView.evaluateJavascript("JSON.stringify(window.hoshiSelection.selectionRects($highlightCount))") { result ->
-                        onSelectionRectsLoaded(
-                            ReaderSelectionBridgePayload.rectsFromJavascriptResult(result).map { rect ->
-                                ReaderSelectionRect(
-                                    x = selectionOffsetHolder.highlightOffsetX + rect.x,
-                                    y = selectionOffsetHolder.highlightOffsetY + rect.y,
-                                    width = rect.width,
-                                    height = rect.height,
-                                )
-                            },
-                        )
+                    // onTextSelected reports its highlight count asynchronously: the reader runs the
+                    // native lookup on a background thread and replies on the main thread, so the
+                    // highlight is applied here once the popup lookup completes.
+                    callbacks.onTextSelected(selection) { highlightCount ->
+                        if (highlightCount != null) {
+                            val onSelectionRectsLoaded = callbacks.onSelectionRectsLoaded
+                            if (onSelectionRectsLoaded == null) {
+                                webView.evaluateJavascript("window.hoshiSelection.highlightSelection($highlightCount)", null)
+                            } else {
+                                webView.evaluateJavascript("JSON.stringify(window.hoshiSelection.selectionRects($highlightCount))") { result ->
+                                    onSelectionRectsLoaded(
+                                        ReaderSelectionBridgePayload.rectsFromJavascriptResult(result).map { rect ->
+                                            ReaderSelectionRect(
+                                                x = selectionOffsetHolder.highlightOffsetX + rect.x,
+                                                y = selectionOffsetHolder.highlightOffsetY + rect.y,
+                                                width = rect.width,
+                                                height = rect.height,
+                                            )
+                                        },
+                                    )
+                                }
+                            }
+                        }
                     }
                 }
             }
