@@ -7,6 +7,8 @@ Semantic Versioning.
 
 ## [Unreleased]
 
+## [v0.11.8] - 2026-09-08
+
 ### Added
 - **About now links directly to the latest release for manual downloads.** The link stays
   available even when the built-in update check or download fails.
