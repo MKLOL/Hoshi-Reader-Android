@@ -7,6 +7,8 @@ Semantic Versioning.
 
 ## [Unreleased]
 
+## [v0.11.7] - 2026-09-08
+
 ### Fixed
 - **Rapidly tapping words no longer crashes the dictionary popup.** Closing or replacing a
   popup now discards its pending updates and nested lookups, including while reading manga.
