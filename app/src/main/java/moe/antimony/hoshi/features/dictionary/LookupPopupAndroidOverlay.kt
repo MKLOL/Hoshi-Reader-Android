@@ -40,8 +40,13 @@ import moe.antimony.hoshi.features.reader.ReaderFontManager
 import moe.antimony.hoshi.features.reader.ReaderSelectionData
 import moe.antimony.hoshi.features.reader.ReaderSelectionRect
 import moe.antimony.hoshi.webview.applyHoshiWebViewSecurityDefaults
-import java.util.concurrent.ExecutorService
-import java.util.concurrent.Executors
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
@@ -50,11 +55,9 @@ import kotlin.math.roundToInt
 private const val PopupSelectionEInkLineSizeCssPx = 1.5f
 
 // The native dictionary query (JNI) for a word tapped inside an open popup must not run on the main
-// thread. A single shared background thread serializes these lookups (preserving order); the result
-// is applied back on the main thread. It is process-wide so per-popup hosts never spawn threads.
-private val popupChildLookupExecutor: ExecutorService = Executors.newSingleThreadExecutor { runnable ->
-    Thread(runnable, "hoshi-popup-child-lookup").apply { isDaemon = true }
-}
+// thread. Serialize child lookups off the UI thread; each host cancels superseded requests and
+// cancels its scope on release, so a completed JNI call cannot revive a dismissed popup.
+private val popupChildLookupDispatcher = Dispatchers.IO.limitedParallelism(1)
 
 @Composable
 internal fun LookupPopupAndroidStack(
@@ -192,6 +195,9 @@ private class LookupPopupOverlayController(
     }
 
     fun release() {
+        lastUpdate = null
+        view.onOverlaySizeChanged = {}
+        view.onOutsideStylusTouch = {}
         // Destroy every remaining popup WebView when the overlay leaves composition so no native
         // render context survives the reader teardown.
         childHosts.values.forEach { it.release() }
@@ -370,6 +376,8 @@ private class LookupPopupHostView(
     private var backCount = 0
     private var forwardCount = 0
     private var currentFrame: PopupFrameDp? = null
+    private val lookupScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private var childLookupJob: Job? = null
 
     init {
         addView(
@@ -401,6 +409,7 @@ private class LookupPopupHostView(
      * is created per popup id, so a released host is never reused.
      */
     fun release() {
+        lookupScope.cancel()
         (parent as? ViewGroup)?.removeView(this)
         webView.release()
     }
@@ -453,6 +462,7 @@ private class LookupPopupHostView(
             )
         }
         if (clearSelectionSignal != popup.clearSelectionSignal) {
+            childLookupJob?.cancel()
             clearSelectionSignal = popup.clearSelectionSignal
             selectionHighlightView.update(emptyList(), state.darkMode, state.eInkMode)
             webView.evaluateJavascript("window.hoshiSelection.clearSelection()", null)
@@ -519,6 +529,7 @@ private class LookupPopupHostView(
         val state = popup.state
         return PopupWebViewCallbacks(
             onTapOutside = {
+                childLookupJob?.cancel()
                 selectionHighlightView.update(emptyList(), state.darkMode, state.eInkMode)
                 if (isPopupActive) onPopupsChange(closeChildPopups(allPopups, index))
             },
@@ -527,23 +538,24 @@ private class LookupPopupHostView(
             },
             onOpenLink = context::openPopupExternalLink,
             onTextSelected = { selection, reply ->
+                childLookupJob?.cancel()
                 if (!isPopupActive) {
                     reply(null)
                 } else {
                     // Run the native dictionary query off the main thread, then apply the resulting
                     // child popup and report the highlight count back on the main thread. Selecting a
                     // word inside an open popup must not block the UI thread on the JNI lookup.
-                    popupChildLookupExecutor.execute {
-                        val lookup = lookupChildPopup(selection)
-                        post {
-                            if (lookup == null) {
-                                selectionHighlightView.update(emptyList(), state.darkMode, state.eInkMode)
-                                reply(null)
-                            } else {
-                                val (childPopup, highlightCount) = lookup
-                                onPopupsChange(closeChildPopups(allPopups, index) + childPopup.withoutRootInsets())
-                                reply(highlightCount)
-                            }
+                    childLookupJob = lookupScope.launch {
+                        val lookup = withContext(popupChildLookupDispatcher) {
+                            lookupChildPopup(selection)
+                        }
+                        if (lookup == null) {
+                            selectionHighlightView.update(emptyList(), state.darkMode, state.eInkMode)
+                            reply(null)
+                        } else {
+                            val (childPopup, highlightCount) = lookup
+                            onPopupsChange(closeChildPopups(allPopups, index) + childPopup.withoutRootInsets())
+                            reply(highlightCount)
                         }
                     }
                 }
@@ -594,6 +606,7 @@ private class LookupPopupHostView(
                 }
             },
             onScroll = {
+                childLookupJob?.cancel()
                 selectionHighlightView.update(emptyList(), state.darkMode, state.eInkMode)
                 if (isPopupActive) {
                     val nextPopups = closeChildPopupsForScrolledParent(allPopups, index)
@@ -709,6 +722,7 @@ private class LookupPopupHostView(
         onPopupsChange: (List<LookupPopupItem>) -> Unit,
         onRootPopupDismissed: () -> Boolean,
     ) {
+        childLookupJob?.cancel()
         val rootDismissHandled = index == 0 && onRootPopupDismissed()
         if (!rootDismissHandled) onPopupsChange(dismissPopupAt(allPopups, index))
     }
@@ -741,14 +755,13 @@ private class LookupPopupHostView(
             isHorizontalScrollBarEnabled = false
             settings.offscreenPreRaster = true
             setBackgroundColor(AndroidColor.TRANSPARENT)
-            addJavascriptInterface(
+            installPopupBridge(
                 PopupWebViewBridge(
                     webView = this,
                     callbackHolder = callbacks,
                     lookupResultsHolder = lookupResultsHolder,
                     selectionOffsetHolder = selectionOffsetHolder,
                 ),
-                "HoshiPopup",
             )
             webViewClient = PopupMessageWebViewClient(
                 callbackHolder = callbacks,

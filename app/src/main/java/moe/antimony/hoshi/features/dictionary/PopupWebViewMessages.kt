@@ -236,56 +236,71 @@ internal class PopupWebViewBridge(
     private val onShellReady: () -> Unit = {},
 ) {
     private val mainHandler = Handler(Looper.getMainLooper())
+    private val callbackDispatcher = PopupCallbackDispatcher(
+        enqueue = { action -> mainHandler.post { action() } },
+        clearQueue = { mainHandler.removeCallbacksAndMessages(null) },
+    )
     private var buttonFrameVisualStateRequestId = 0L
+
+    fun release() {
+        callbackDispatcher.release()
+        callbackHolder.callbacks = PopupWebViewCallbacks()
+        lookupResultsHolder.results = emptyList()
+    }
 
     @JavascriptInterface
     fun getEntry(index: Int): String? =
-        lookupResultsHolder.results.getOrNull(index)?.let { LookupPopupHtml.entryJsonString(it) }
+        if (callbackDispatcher.isReleased) null
+        else lookupResultsHolder.results.getOrNull(index)?.let { LookupPopupHtml.entryJsonString(it) }
 
     @JavascriptInterface
     fun lookupRedirect(query: String): Int {
+        if (callbackDispatcher.isReleased) return 0
         val results = callbackHolder.callbacks.onLookupRedirect(query)
         lookupResultsHolder.results = results
         if (results.isNotEmpty()) {
-            mainHandler.post { callbackHolder.callbacks.onLookupRedirected(results.size) }
+            callbackDispatcher.post { callbackHolder.callbacks.onLookupRedirected(results.size) }
         }
         return results.size
     }
 
     @JavascriptInterface
     fun postMessage(message: String) {
+        if (callbackDispatcher.isReleased) return
         val payload = runCatching { JSONObject(message) }.getOrNull() ?: return
         val callbacks = callbackHolder.callbacks
         when (payload.optString("name")) {
-            "openLink" -> payload.optString("body").takeIf { it.isNotBlank() }?.let(callbacks.onOpenLink)
-            "tapOutside" -> mainHandler.post {
+            "openLink" -> payload.optString("body").takeIf { it.isNotBlank() }?.let { url ->
+                callbackDispatcher.post { callbacks.onOpenLink(url) }
+            }
+            "tapOutside" -> callbackDispatcher.post {
                 callbacks.onTapOutside()
                 webView.evaluateJavascript("window.hoshiSelection.clearSelection()", null)
             }
-            "swipeDismiss" -> mainHandler.post(callbacks.onSwipeDismiss)
-            "shellReady" -> mainHandler.post(onShellReady)
-            "contentReady" -> mainHandler.post {
+            "swipeDismiss" -> callbackDispatcher.post(callbacks.onSwipeDismiss)
+            "shellReady" -> callbackDispatcher.post(onShellReady)
+            "contentReady" -> callbackDispatcher.post {
                 val frames = popupButtonFramesFromMessageJson(message)
                 updateActionButtonFrames(frames)
                 callbackHolder.callbacks.onContentReady()
             }
-            "popupScrolled" -> mainHandler.post(callbacks.onScroll)
+            "popupScrolled" -> callbackDispatcher.post(callbacks.onScroll)
             "buttonFrames" -> {
                 val frames = popupButtonFramesFromMessageJson(message)
-                mainHandler.post {
+                callbackDispatcher.post {
                     updateActionButtonFrames(frames)
                 }
             }
             "visualStateButtonFrames" -> {
                 val frames = popupButtonFramesFromMessageJson(message)
-                mainHandler.post {
+                callbackDispatcher.post {
                     val requestId = buttonFrameVisualStateRequestId + 1
                     buttonFrameVisualStateRequestId = requestId
                     webView.postVisualStateCallback(
                         requestId,
                         object : WebView.VisualStateCallback() {
                             override fun onComplete(requestId: Long) {
-                                if (buttonFrameVisualStateRequestId == requestId) {
+                                if (!callbackDispatcher.isReleased && buttonFrameVisualStateRequestId == requestId) {
                                     updateActionButtonFrames(frames)
                                 }
                             }
@@ -296,30 +311,32 @@ internal class PopupWebViewBridge(
             "playWordAudio" -> payload.optJSONObject("body")?.let { body ->
                 val url = body.optString("url").takeIf { it.isNotBlank() } ?: return
                 val mode = AudioPlaybackMode.fromRawValue(body.optString("mode"))
-                mainHandler.post { callbacks.onPlayWordAudio(url, mode) }
+                callbackDispatcher.post { callbacks.onPlayWordAudio(url, mode) }
             }
             "textSelected" -> payload.optJSONObject("body")?.toSelectionData(selectionOffsetHolder.offsetX, selectionOffsetHolder.offsetY)?.let { selection ->
-                mainHandler.post {
+                callbackDispatcher.post {
                     // onTextSelected reports its highlight count asynchronously: the reader runs the
                     // native lookup on a background thread and replies on the main thread, so the
                     // highlight is applied here once the popup lookup completes.
                     callbacks.onTextSelected(selection) { highlightCount ->
-                        if (highlightCount != null) {
+                        if (!callbackDispatcher.isReleased && highlightCount != null) {
                             val onSelectionRectsLoaded = callbacks.onSelectionRectsLoaded
                             if (onSelectionRectsLoaded == null) {
                                 webView.evaluateJavascript("window.hoshiSelection.highlightSelection($highlightCount)", null)
                             } else {
                                 webView.evaluateJavascript("JSON.stringify(window.hoshiSelection.selectionRects($highlightCount))") { result ->
-                                    onSelectionRectsLoaded(
-                                        ReaderSelectionBridgePayload.rectsFromJavascriptResult(result).map { rect ->
-                                            ReaderSelectionRect(
-                                                x = selectionOffsetHolder.highlightOffsetX + rect.x,
-                                                y = selectionOffsetHolder.highlightOffsetY + rect.y,
-                                                width = rect.width,
-                                                height = rect.height,
-                                            )
-                                        },
-                                    )
+                                    callbackDispatcher.runIfActive {
+                                        onSelectionRectsLoaded(
+                                            ReaderSelectionBridgePayload.rectsFromJavascriptResult(result).map { rect ->
+                                                ReaderSelectionRect(
+                                                    x = selectionOffsetHolder.highlightOffsetX + rect.x,
+                                                    y = selectionOffsetHolder.highlightOffsetY + rect.y,
+                                                    width = rect.width,
+                                                    height = rect.height,
+                                                )
+                                            },
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -329,21 +346,23 @@ internal class PopupWebViewBridge(
             "duplicateCheck" -> {
                 val messageId = payload.optString("id").takeIf { it.isNotBlank() } ?: return
                 val expression = payload.optString("body").takeIf { it.isNotBlank() } ?: return
-                callbacks.onDuplicateCheck(expression) { isDuplicate ->
-                    mainHandler.post {
-                        webView.evaluateJavascript(
-                            "window.HoshiAndroidPopup && window.HoshiAndroidPopup.resolveMessage(${quote(messageId)}, $isDuplicate)",
-                            null,
-                        )
+                callbackDispatcher.post {
+                    callbacks.onDuplicateCheck(expression) { isDuplicate ->
+                        callbackDispatcher.post {
+                            webView.evaluateJavascript(
+                                "window.HoshiAndroidPopup && window.HoshiAndroidPopup.resolveMessage(${quote(messageId)}, $isDuplicate)",
+                                null,
+                            )
+                        }
                     }
                 }
             }
             "mineEntry" -> {
                 val messageId = payload.optString("id").takeIf { it.isNotBlank() } ?: return
                 val body = payload.opt("body").takeIf { it != null && it != JSONObject.NULL } ?: return
-                mainHandler.post {
+                callbackDispatcher.post {
                     callbacks.onMineEntry(body.toString()) { mined ->
-                        mainHandler.post {
+                        callbackDispatcher.post {
                             webView.evaluateJavascript(
                                 "window.HoshiAndroidPopup && window.HoshiAndroidPopup.resolveMessage(${quote(messageId)}, $mined)",
                                 null,

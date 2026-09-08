@@ -494,13 +494,12 @@ private fun DictionaryResultWebView(
                 isVerticalScrollBarEnabled = false
                 isHorizontalScrollBarEnabled = false
                 setBackgroundColor(android.graphics.Color.TRANSPARENT)
-                addJavascriptInterface(
+                installPopupBridge(
                     PopupWebViewBridge(
                         webView = this,
                         callbackHolder = callbackHolder,
                         lookupResultsHolder = lookupResultsHolder,
                     ),
-                    "HoshiPopup",
                 )
                 webViewClient = PopupMessageWebViewClient(
                     callbackHolder = callbackHolder,
@@ -510,6 +509,7 @@ private fun DictionaryResultWebView(
                 )
             }
         },
+        onRelease = { webView -> webView.release() },
         update = { webView ->
             callbackHolder.callbacks = callbacks
             webView.webViewClient = PopupMessageWebViewClient(

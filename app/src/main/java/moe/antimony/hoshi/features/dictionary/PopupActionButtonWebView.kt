@@ -23,6 +23,13 @@ internal class PopupActionButtonWebView @JvmOverloads constructor(
     private val buttons = mutableMapOf<String, ImageButton>()
     private var actionButtonTint = ColorStateList.valueOf(DefaultActionButtonTint)
     private var popupInputEnabled = true
+    private var popupBridge: PopupWebViewBridge? = null
+    private var released = false
+
+    fun installPopupBridge(bridge: PopupWebViewBridge) {
+        popupBridge = bridge
+        addJavascriptInterface(bridge, "HoshiPopup")
+    }
 
     fun setPopupInputEnabled(enabled: Boolean) {
         popupInputEnabled = enabled
@@ -37,6 +44,7 @@ internal class PopupActionButtonWebView @JvmOverloads constructor(
             post { setActionButtonTint(color) }
             return
         }
+        if (released) return
         actionButtonTint = ColorStateList.valueOf(color)
         buttons.values.forEach { it.imageTintList = actionButtonTint }
     }
@@ -46,6 +54,7 @@ internal class PopupActionButtonWebView @JvmOverloads constructor(
             post { updateActionButtonFrames(frames) }
             return
         }
+        if (released) return
 
         val activeKeys = frames.mapTo(mutableSetOf()) { it.key }
         frames.forEach(::updateActionButton)
@@ -72,6 +81,12 @@ internal class PopupActionButtonWebView @JvmOverloads constructor(
      * context. Call once when the host is removed; the view must not be reused afterwards.
      */
     fun release() {
+        if (released) return
+        released = true
+        popupBridge?.release()
+        popupBridge = null
+        setPopupInputEnabled(false)
+        (parent as? ViewGroup)?.removeView(this)
         stopLoading()
         clearActionButtons()
         removeJavascriptInterface("HoshiPopup")
@@ -165,6 +180,7 @@ internal class PopupActionButtonWebView @JvmOverloads constructor(
             post(::refreshActionButtonClipping)
             return
         }
+        if (released) return
         val viewportLeft = scrollX
         val viewportTop = scrollY
         val viewportRight = scrollX + width

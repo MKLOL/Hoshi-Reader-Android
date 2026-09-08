@@ -41,6 +41,10 @@ This file is the short operational handoff for future agents.
 
 ### Reader And Lookup
 
+- Native dictionary popup teardown invalidates queued JavaScript callbacks before WebView
+  destruction and cancels superseded or dismissed nested lookups. Regression entry:
+  `PopupCallbackDispatcherTest`; emulator-verified rapid manga word taps, recursive lookup,
+  and dismissal with pending lookups. Keep these checks when changing popup ownership.
 - Sentence mode (experimental, EPUB only, `features/reader/sentence/`): segments chapters exactly like `tools/pretranslate` (`EpubSentenceSegmenterTest` pins the rules) so stored sentence translations resolve; validated on the emulator (word-tap popups, tap-outside dismissal, swipe navigation, font and theme controls); promote it out of experimental after it has been used on a few real books.
 
 - Use `docs/IOS_UPSTREAM_SYNC_QUEUE.md` as the current iOS upstream sync queue; checked through `61306c7`, with popup scaling/vertical anchors, reader image/selection follow-up fixes, Dictionary pull-to-clear/auto-update, Anki/IPA glossary behavior, and TTU/Google Drive bookdata sync pending.
