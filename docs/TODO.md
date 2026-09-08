@@ -124,6 +124,12 @@ This file is the short operational handoff for future agents.
 
 ### Release Distribution
 
+- Update transfers reconcile with DownloadManager on startup and while About is visible;
+  queued/paused/progress/failure states, retry/cancel, and the always-available latest-release
+  link are covered by `UpdateDownloadCoordinatorTest`, `UpdateDownloadDestinationTest`,
+  `AboutUpdateStatusTest`, `UpdateDownloadManagerInstrumentedTest`, and `AboutUpdateLinkInstrumentedTest`
+  (download service and About link verified on API 35).
+
 - Before F-Droid distribution, split update behavior by distribution channel so F-Droid builds do not bypass F-Droid update checks.
 - Device-validate GitHub update prompts after the check/download split, covering skip-version, manual checks, completed-download prompts, user-triggered install, and same-version APK cleanup.
 - Device-validate split GitHub release APK updates on arm64-v8a and armeabi-v7a targets, including the transitional arm64 legacy-name APK alias.

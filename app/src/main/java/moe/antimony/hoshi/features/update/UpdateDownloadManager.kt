@@ -9,101 +9,83 @@ import android.os.Environment
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import moe.antimony.hoshi.R
 import java.io.File
-import java.security.MessageDigest
 
 internal class AndroidUpdateDownloadManager(
     context: Context,
-    private val store: UpdateDownloadStore,
+    store: UpdateDownloadStore,
+    private val directoryOverride: File? = null,
 ) : UpdateDownloadController {
     private val appContext = context.applicationContext
-    private val downloadManager = appContext.getSystemService(DownloadManager::class.java)
+    private val coordinator = UpdateDownloadCoordinator(store, AndroidDownloadBackend(appContext), updateDirectory())
 
-    override suspend fun statusFor(update: AvailableUpdate): UpdateDownloadStatus {
-        val record = store.load()
-        if (record?.matches(update) != true) return UpdateDownloadStatus.None
-        val file = updateFile(record.fileName)
-        if (record.status == UpdateDownloadRecordStatus.Downloaded && file.isFile) {
-            return UpdateDownloadStatus.Downloaded(file)
-        }
-        if (record.status != UpdateDownloadRecordStatus.Downloading && record.status != UpdateDownloadRecordStatus.Failed) {
-            return UpdateDownloadStatus.None
-        }
-        val downloadId = record.downloadId ?: return UpdateDownloadStatus.None
-        val downloadStatus = downloadManager.queryStatus(downloadId)
-        return when (downloadStatus) {
-            DownloadManager.STATUS_PENDING,
-            DownloadManager.STATUS_PAUSED,
-            DownloadManager.STATUS_RUNNING,
-            -> UpdateDownloadStatus.Downloading(downloadId)
-            DownloadManager.STATUS_SUCCESSFUL -> {
-                val valid = record.downloadIsInstallable(file)
-                if (valid) {
-                    store.markDownloaded(downloadId)
-                    UpdateDownloadStatus.Downloaded(file)
-                } else {
-                    file.delete()
-                    store.markFailed(downloadId)
-                    UpdateDownloadStatus.None
-                }
-            }
-            DownloadManager.STATUS_FAILED -> {
-                store.markFailed(downloadId)
-                UpdateDownloadStatus.None
-            }
-            else -> UpdateDownloadStatus.None
-        }
-    }
+    override suspend fun statusFor(update: AvailableUpdate): UpdateDownloadStatus = coordinator.statusFor(update)
+    override suspend fun enqueue(update: AvailableUpdate): Long = coordinator.enqueue(update)
+    suspend fun retry(update: AvailableUpdate): Long = coordinator.retry(update)
+    suspend fun cancel(downloadId: Long) = coordinator.cancel(downloadId)
+    suspend fun refresh(downloadId: Long? = null): UpdateDownloadRecord? = coordinator.refresh(downloadId)
+    suspend fun discardInstalledUpdate(currentVersionName: String) = coordinator.discardInstalledUpdate(currentVersionName)
 
-    override suspend fun enqueue(update: AvailableUpdate): Long {
-        val previousFailedDownloadUrl = store.load()
-            ?.takeIf { it.matches(update) && it.status == UpdateDownloadRecordStatus.Failed }
-            ?.downloadUrl
-        val downloadUrl = update.downloadUrlAfterFailed(previousFailedDownloadUrl)
-        val target = updateFile(UpdateFileName)
-        target.parentFile?.mkdirs()
-        deleteExistingUpdateApksExcept(target)
-        if (target.exists()) {
-            target.delete()
-        }
-        val request = DownloadManager.Request(Uri.parse(downloadUrl))
-            .setTitle("${appContext.getString(R.string.app_name)} ${update.versionName}")
-            .setDescription(appContext.getString(R.string.update_downloading_notification))
-            .setMimeType(ApkMimeType)
-            .setAllowedOverMetered(true)
-            .setAllowedOverRoaming(false)
-            .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-            .setDestinationUri(Uri.fromFile(target))
-        val downloadId = downloadManager.enqueue(request)
-        store.saveDownloading(update, target.name, downloadId, downloadUrl)
-        return downloadId
-    }
+    internal fun updateFile(fileName: String): File = File(updateDirectory(), fileName)
 
-    internal fun updateFile(fileName: String): File =
-        File(updateDirectory(), fileName)
-
-    internal fun updateApkFiles(): List<File> =
-        updateDirectory()
-            .listFiles { file -> file.isFile && file.extension.equals("apk", ignoreCase = true) }
-            ?.toList()
-            .orEmpty()
-
-    private fun deleteExistingUpdateApksExcept(target: File) {
-        val directory = target.parentFile ?: return
-        directory.listFiles { file -> file.isFile && file.extension.equals("apk", ignoreCase = true) }
-            ?.filterNot { file -> file == target }
-            ?.forEach { file -> file.delete() }
-    }
+    internal fun updateApkFiles(): List<File> = updateDirectory()
+        .listFiles { file -> file.isFile && file.extension.equals("apk", ignoreCase = true) }
+        ?.toList().orEmpty()
 
     internal fun updateDirectory(): File =
-        appContext.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
+        directoryOverride ?: appContext.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
             ?: File(appContext.filesDir, "downloads")
 
     companion object {
         const val ApkMimeType = "application/vnd.android.package-archive"
         const val UpdateFileName = "Hoshi-Reader-update.apk"
+    }
+}
+
+private class AndroidDownloadBackend(private val context: Context) : UpdateDownloadBackend {
+    private val manager = context.getSystemService(DownloadManager::class.java)
+
+    override fun enqueue(update: AvailableUpdate, url: String, target: File): Long = manager.enqueue(
+        DownloadManager.Request(Uri.parse(url))
+            .setTitle("${context.getString(R.string.app_name)} ${update.versionName}")
+            .setDescription(context.getString(R.string.update_downloading_notification))
+            .setMimeType(AndroidUpdateDownloadManager.ApkMimeType)
+            .setAllowedOverMetered(true)
+            .setAllowedOverRoaming(false)
+            .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+            .setDestinationUri(Uri.fromFile(target)),
+    )
+
+    override fun remove(downloadId: Long) { manager.remove(downloadId) }
+
+    override fun query(downloadId: Long): UpdateTransferSnapshot? {
+        val cursor = manager.query(DownloadManager.Query().setFilterById(downloadId)) ?: return null
+        return cursor.use {
+            if (!it.moveToFirst()) return null
+            val rawStatus = it.getInt(it.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS))
+            val status = when (rawStatus) {
+                DownloadManager.STATUS_PENDING -> UpdateDownloadRecordStatus.Queued
+                DownloadManager.STATUS_RUNNING -> UpdateDownloadRecordStatus.Downloading
+                DownloadManager.STATUS_PAUSED -> UpdateDownloadRecordStatus.Paused
+                DownloadManager.STATUS_SUCCESSFUL -> UpdateDownloadRecordStatus.Downloaded
+                else -> UpdateDownloadRecordStatus.Failed
+            }
+            val pauseReason = if (status == UpdateDownloadRecordStatus.Paused) {
+                when (it.getInt(it.getColumnIndexOrThrow(DownloadManager.COLUMN_REASON))) {
+                    DownloadManager.PAUSED_WAITING_FOR_NETWORK -> UpdateDownloadPauseReason.Network
+                    DownloadManager.PAUSED_QUEUED_FOR_WIFI -> UpdateDownloadPauseReason.Wifi
+                    DownloadManager.PAUSED_WAITING_TO_RETRY -> UpdateDownloadPauseReason.Retry
+                    else -> UpdateDownloadPauseReason.Unknown
+                }
+            } else null
+            UpdateTransferSnapshot(
+                status = status,
+                bytesDownloaded = it.getLong(it.getColumnIndexOrThrow(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR)),
+                totalBytes = it.getLong(it.getColumnIndexOrThrow(DownloadManager.COLUMN_TOTAL_SIZE_BYTES)),
+                pauseReason = pauseReason,
+            )
+        }
     }
 }
 
@@ -117,77 +99,11 @@ internal class UpdateDownloadCompleteReceiver : BroadcastReceiver() {
             try {
                 runCatching {
                     val appContext = context.applicationContext
-                    val store = appContext.updateDownloadStore()
-                    val record = store.load() ?: return@launch
-                    if (record.downloadId != downloadId) return@launch
-                    val manager = appContext.getSystemService(DownloadManager::class.java)
-                    if (manager.queryStatus(downloadId) != DownloadManager.STATUS_SUCCESSFUL) {
-                        store.markFailed(downloadId)
-                        return@launch
-                    }
-                    val file = AndroidUpdateDownloadManager(appContext, store).updateFile(record.fileName)
-                    val valid = record.downloadIsInstallable(file)
-                    if (valid) {
-                        store.markDownloaded(downloadId)
-                    } else {
-                        file.delete()
-                        store.markFailed(downloadId)
-                    }
+                    AndroidUpdateDownloadManager(appContext, appContext.updateDownloadStore()).refresh(downloadId)
                 }
             } finally {
                 pendingResult.finish()
             }
         }
     }
-}
-
-/**
- * Whether a finished download may be installed.
- *
- * When GitHub published an asset digest ([UpdateDownloadRecord.sha256]) the bytes are
- * verified against it. When it did not, we only trust bytes fetched straight from GitHub's
- * own origin: the app also downloads through CN mirror hosts, and a mirror could return
- * arbitrary bytes, so an unverifiable mirror download is treated as a verification failure
- * (rejected) rather than installed on the strength of Android's install-time signature check
- * alone. The happy path where a digest IS present is unchanged.
- */
-private suspend fun UpdateDownloadRecord.downloadIsInstallable(file: File): Boolean {
-    if (!file.isFile) return false
-    val expected = sha256
-    return if (expected != null) {
-        file.sha256Hex().equals(expected, ignoreCase = true)
-    } else {
-        downloadUrl.isCanonicalGitHubDownloadUrl()
-    }
-}
-
-private fun String?.isCanonicalGitHubDownloadUrl(): Boolean {
-    val host = this
-        ?.let { runCatching { Uri.parse(it).host }.getOrNull() }
-        ?.lowercase()
-        ?: return false
-    return host == "github.com" ||
-        host == "api.github.com" ||
-        host == "objects.githubusercontent.com"
-}
-
-private fun DownloadManager.queryStatus(downloadId: Long): Int? {
-    val cursor = query(DownloadManager.Query().setFilterById(downloadId)) ?: return null
-    cursor.use {
-        if (!it.moveToFirst()) return null
-        return it.getInt(it.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS))
-    }
-}
-
-private suspend fun File.sha256Hex(): String = withContext(Dispatchers.IO) {
-    val digest = MessageDigest.getInstance("SHA-256")
-    inputStream().use { input ->
-        val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
-        while (true) {
-            val read = input.read(buffer)
-            if (read < 0) break
-            digest.update(buffer, 0, read)
-        }
-    }
-    digest.digest().joinToString(separator = "") { byte -> "%02x".format(byte) }
 }

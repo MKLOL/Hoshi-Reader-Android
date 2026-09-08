@@ -40,11 +40,13 @@ class HoshiApplication : Application() {
         val store = updateDownloadStore()
         val downloadManager = AndroidUpdateDownloadManager(this, store)
         UpdateStartupSnapshot.initialRecord = runBlocking(Dispatchers.IO) {
+            runCatching { downloadManager.discardInstalledUpdate(BuildConfig.VERSION_NAME) }
             UpdateApkCleanup(
                 context = this@HoshiApplication,
                 downloadManager = downloadManager,
                 store = store,
             ).deleteCurrentVersionApks()
+            runCatching { downloadManager.refresh() }
             store.load()
         }
     }

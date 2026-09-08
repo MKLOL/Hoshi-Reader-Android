@@ -33,6 +33,9 @@ internal object UpdateConfig {
     /** Human-facing repository URL used by the About screen's "Source" link. */
     const val REPO_URL: String = "https://github.com/$GITHUB_OWNER/$GITHUB_REPO"
 
+    /** Always opens the newest release, including when API checks or downloads are unavailable. */
+    const val LATEST_RELEASE_URL: String = "$REPO_URL/releases/latest"
+
     /** GitHub Releases API endpoint for the latest release of [GITHUB_OWNER]/[GITHUB_REPO]. */
     const val LATEST_RELEASE_API_URL: String =
         "https://api.github.com/repos/$GITHUB_OWNER/$GITHUB_REPO/releases/latest"

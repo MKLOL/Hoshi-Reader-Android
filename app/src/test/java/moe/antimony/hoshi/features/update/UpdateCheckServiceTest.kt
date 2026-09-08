@@ -53,6 +53,83 @@ class UpdateCheckServiceTest {
         }
     }
 
+    @Test
+    fun newerReleaseReplacesOlderAvailableSkippedAndDownloadedRecords() = runBlocking {
+        updateStore().use { handle ->
+            val older = update.copy(versionName = "0.3.4", assetName = "Hoshi-Reader-v0.3.4.apk")
+            val service = service(FakeUpdateDownloadController(), handle.store)
+            for (status in listOf(UpdateDownloadRecordStatus.Available, UpdateDownloadRecordStatus.Skipped, UpdateDownloadRecordStatus.Downloaded)) {
+                when (status) {
+                    UpdateDownloadRecordStatus.Skipped -> handle.store.skip(older)
+                    UpdateDownloadRecordStatus.Downloaded -> {
+                        handle.store.saveDownloading(older, "older.apk", 42, older.downloadUrl)
+                        handle.store.markDownloaded(42)
+                    }
+                    else -> handle.store.saveAvailable(older)
+                }
+
+                assertEquals(UpdateCheckOutcome.Available(update), service.check())
+                val record = requireNotNull(handle.store.load())
+                assertTrue(record.matches(update))
+                assertEquals(UpdateDownloadRecordStatus.Available, record.status)
+            }
+        }
+    }
+
+    @Test
+    fun newerReleaseCheckPreservesOlderActiveTransfer() = runBlocking {
+        updateStore().use { handle ->
+            val older = update.copy(versionName = "0.3.4", assetName = "Hoshi-Reader-v0.3.4.apk")
+            val service = service(FakeUpdateDownloadController(), handle.store)
+            for (status in listOf(UpdateDownloadRecordStatus.Queued, UpdateDownloadRecordStatus.Downloading, UpdateDownloadRecordStatus.Paused)) {
+                handle.store.saveDownloading(older, "older.apk", 42, older.downloadUrl)
+                handle.store.updateTransfer(requireNotNull(handle.store.load()), UpdateTransferSnapshot(status))
+                val expected = handle.store.load()
+
+                assertEquals(UpdateCheckOutcome.Available(update), service.check())
+                assertEquals(expected, handle.store.load())
+            }
+        }
+    }
+
+    @Test
+    fun downloadStartedAfterInitialStatusQueryIsRequeriedAndPreserved() = runBlocking {
+        updateStore().use { handle ->
+            var queries = 0
+            val downloads = FakeUpdateDownloadController {
+                if (++queries == 1) {
+                    handle.store.saveDownloading(update, "update.apk", 42, update.downloadUrl)
+                    UpdateDownloadStatus.None
+                } else UpdateDownloadStatus.Downloading(42)
+            }
+
+            assertEquals(UpdateCheckOutcome.DownloadInProgress(update, 42), service(downloads, handle.store).check())
+            assertEquals(2, queries)
+            assertEquals(42L, handle.store.load()?.downloadId)
+            assertEquals(UpdateDownloadRecordStatus.Queued, handle.store.load()?.status)
+        }
+    }
+
+    @Test
+    fun downloadFinishedAfterInitialStatusQueryIsRequeriedAndPreserved() = runBlocking {
+        updateStore().use { handle ->
+            val file = tempFolder.newFile("update.apk")
+            var queries = 0
+            val downloads = FakeUpdateDownloadController {
+                if (++queries == 1) {
+                    handle.store.saveDownloading(update, file.name, 42, update.downloadUrl)
+                    handle.store.markDownloaded(42)
+                    UpdateDownloadStatus.None
+                } else UpdateDownloadStatus.Downloaded(file)
+            }
+
+            assertEquals(UpdateCheckOutcome.DownloadAlreadyFinished(update, file), service(downloads, handle.store).check())
+            assertEquals(2, queries)
+            assertEquals(42L, handle.store.load()?.downloadId)
+            assertEquals(UpdateDownloadRecordStatus.Downloaded, handle.store.load()?.status)
+        }
+    }
+
     private fun service(
         downloadController: UpdateDownloadController,
         updateStore: UpdateDownloadStore,
@@ -99,11 +176,13 @@ class UpdateCheckServiceTest {
             )
     }
 
-    private class FakeUpdateDownloadController : UpdateDownloadController {
+    private class FakeUpdateDownloadController(
+        private val query: suspend (AvailableUpdate) -> UpdateDownloadStatus = { UpdateDownloadStatus.None },
+    ) : UpdateDownloadController {
         var startedDownloads = 0
             private set
 
-        override suspend fun statusFor(update: AvailableUpdate): UpdateDownloadStatus = UpdateDownloadStatus.None
+        override suspend fun statusFor(update: AvailableUpdate): UpdateDownloadStatus = query(update)
 
         override suspend fun enqueue(update: AvailableUpdate): Long {
             startedDownloads += 1

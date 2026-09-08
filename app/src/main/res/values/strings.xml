@@ -464,6 +464,14 @@
         <item quantity="one">%1$d item</item>
         <item quantity="other">%1$d items</item>
     </plurals>
+    <string name="about_latest_release">Latest release (manual download)</string>
+    <string name="about_update_queued">Waiting for the update download to start.</string>
+    <string name="about_update_waiting_network">Download paused — waiting for a network connection.</string>
+    <string name="about_update_waiting_wifi">Download paused — waiting for Wi-Fi.</string>
+    <string name="about_update_waiting_retry">Download paused after a network error. You can retry now.</string>
+    <string name="about_update_paused">Update download paused. You can retry or cancel it.</string>
+    <string name="about_update_progress_format">Downloading update (%1$d%%).</string>
+    <string name="about_update_cancel_failed">Could not cancel the update download. Please try again.</string>
     <string name="about_updates">Updates</string>
     <string name="about_check_updates">Check for Updates</string>
     <string name="about_update_check_failed">Failed to check for updates.</string>

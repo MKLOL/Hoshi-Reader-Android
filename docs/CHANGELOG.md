@@ -7,6 +7,15 @@ Semantic Versioning.
 
 ## [Unreleased]
 
+### Added
+- **About now links directly to the latest release for manual downloads.** The link stays
+  available even when the built-in update check or download fails.
+
+### Fixed
+- **Updates no longer stay stuck on “downloading” after a failed or missing download.**
+  About shows actual progress and waiting states, with retry and cancel controls. Retrying
+  safely replaces the old transfer, and manually installing an update clears its old download.
+
 ## [v0.11.7] - 2026-09-08
 
 ### Fixed

@@ -462,6 +462,14 @@
         <item quantity="one">%1$d 项</item>
         <item quantity="other">%1$d 项</item>
     </plurals>
+    <string name="about_latest_release">最新版本（手动下载）</string>
+    <string name="about_update_queued">正在等待开始下载更新。</string>
+    <string name="about_update_waiting_network">下载已暂停，正在等待网络连接。</string>
+    <string name="about_update_waiting_wifi">下载已暂停，正在等待 Wi-Fi。</string>
+    <string name="about_update_waiting_retry">网络错误导致下载暂停。你可以立即重试。</string>
+    <string name="about_update_paused">更新下载已暂停。你可以重试或取消。</string>
+    <string name="about_update_progress_format">正在下载更新（%1$d%%）。</string>
+    <string name="about_update_cancel_failed">无法取消更新下载，请重试。</string>
     <string name="about_updates">更新</string>
     <string name="about_check_updates">检查更新</string>
     <string name="about_update_check_failed">无法检查更新。</string>

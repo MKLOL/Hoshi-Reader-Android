@@ -30,6 +30,14 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.runtime.LaunchedEffect
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.CancellationException
+import moe.antimony.hoshi.ui.resolve
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -69,6 +77,22 @@ fun AboutScreen(
     val resources = LocalResources.current
     val appContainer = LocalHoshiAppContainer.current
     val scope = rememberCoroutineScope()
+    val lifecycleOwner = LocalLifecycleOwner.current
+    var transferBusy by remember { mutableStateOf(false) }
+    LaunchedEffect(appContainer, lifecycleOwner) {
+        lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            while (isActive) {
+                try {
+                    appContainer.updateDownloadManager.refresh()
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    // A transient provider error can be retried on the next visible refresh.
+                }
+                delay(1_000)
+            }
+        }
+    }
     val recordLoadState = appContainer.updateDownloadStore.record.collectAsSettingsLoadState()
     val record = (recordLoadState as? SettingsLoadState.Loaded)?.value
     val actionableRecord = record?.takeIf { it.shouldSurfaceInAbout(BuildConfig.VERSION_NAME) }
@@ -425,10 +449,18 @@ fun AboutScreen(
                         )
                         Spacer(Modifier.height(8.dp))
                         Text(
-                            text = updateStatusText(resources, checkState, actionableRecord),
+                            text = aboutUpdateStatus(checkState, actionableRecord).resolve(resources),
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
+                        (checkState as? AboutUpdateCheckState.Error)?.let { error ->
+                            Spacer(Modifier.height(8.dp))
+                            Text(
+                                text = error.message,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.error,
+                            )
+                        }
                         Spacer(Modifier.height(16.dp))
                         Row(
                             horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -523,6 +555,58 @@ fun AboutScreen(
                                 }
                             }
                         }
+                        if (actionableRecord?.status?.isInFlight == true) {
+                            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                OutlinedButton(
+                                    enabled = !transferBusy,
+                                    onClick = {
+                                        val update = actionableRecord.toAvailableUpdate() ?: return@OutlinedButton
+                                        transferBusy = true
+                                        scope.launch {
+                                            try {
+                                                appContainer.updateDownloadManager.retry(update)
+                                                checkState = AboutUpdateCheckState.Idle
+                                            } catch (cancelled: CancellationException) {
+                                                throw cancelled
+                                            } catch (_: Exception) {
+                                                checkState = AboutUpdateCheckState.Error(resources.getString(R.string.about_update_download_failed))
+                                            } finally {
+                                                transferBusy = false
+                                            }
+                                        }
+                                    },
+                                ) { Text(stringResource(R.string.action_retry)) }
+                                TextButton(
+                                    enabled = !transferBusy,
+                                    onClick = {
+                                        val id = actionableRecord.downloadId ?: return@TextButton
+                                        transferBusy = true
+                                        scope.launch {
+                                            try {
+                                                appContainer.updateDownloadManager.cancel(id)
+                                                checkState = AboutUpdateCheckState.Idle
+                                            } catch (cancelled: CancellationException) {
+                                                throw cancelled
+                                            } catch (_: Exception) {
+                                                checkState = AboutUpdateCheckState.Error(resources.getString(R.string.about_update_cancel_failed))
+                                            } finally {
+                                                transferBusy = false
+                                            }
+                                        }
+                                    },
+                                ) { Text(stringResource(R.string.action_cancel)) }
+                            }
+                        }
+                        TextButton(
+                            onClick = { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(UpdateConfig.LATEST_RELEASE_URL))) },
+                        ) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Rounded.OpenInNew,
+                                contentDescription = null,
+                                modifier = Modifier.padding(end = 8.dp),
+                            )
+                            Text(stringResource(R.string.about_latest_release))
+                        }
                     }
                 }
             }
@@ -577,12 +661,6 @@ private fun AboutCard(content: @Composable () -> Unit) {
     }
 }
 
-private sealed interface AboutUpdateCheckState {
-    data object Idle : AboutUpdateCheckState
-    data object Checking : AboutUpdateCheckState
-    data class Result(val outcome: UpdateCheckOutcome) : AboutUpdateCheckState
-    data class Error(val message: String) : AboutUpdateCheckState
-}
 
 private sealed interface StorageCleanupUiState {
     data object Idle : StorageCleanupUiState
@@ -650,37 +728,4 @@ private val StorageCleanupCategoryId.titleRes: Int
         StorageCleanupCategoryId.DictionaryImportResidue -> R.string.about_storage_category_dictionary_import_residue
         StorageCleanupCategoryId.LocalAudioImportResidue -> R.string.about_storage_category_local_audio_import_residue
         StorageCleanupCategoryId.OrphanSasayakiAudio -> R.string.about_storage_category_orphan_sasayaki_audio
-    }
-
-private fun updateStatusText(
-    resources: Resources,
-    checkState: AboutUpdateCheckState,
-    record: UpdateDownloadRecord?,
-): String =
-    when (checkState) {
-        AboutUpdateCheckState.Idle -> when (record?.status) {
-            UpdateDownloadRecordStatus.Available -> resources.getString(R.string.about_update_available_format, record.versionName)
-            UpdateDownloadRecordStatus.Skipped -> resources.getString(R.string.about_update_skipped_format, record.versionName)
-            UpdateDownloadRecordStatus.Downloading -> resources.getString(R.string.about_update_downloading)
-            UpdateDownloadRecordStatus.Downloaded -> resources.getString(R.string.about_update_downloaded_format, record.versionName)
-            UpdateDownloadRecordStatus.Failed -> resources.getString(R.string.about_update_last_download_failed)
-            null -> resources.getString(R.string.about_update_check_github)
-        }
-        AboutUpdateCheckState.Checking -> resources.getString(R.string.about_update_checking_github)
-        is AboutUpdateCheckState.Error -> checkState.message
-        is AboutUpdateCheckState.Result -> when (val outcome = checkState.outcome) {
-            UpdateCheckOutcome.UpToDate -> resources.getString(R.string.about_update_latest)
-            UpdateCheckOutcome.NoInstallableAsset -> resources.getString(R.string.about_update_no_matching_apk)
-            is UpdateCheckOutcome.Skipped -> resources.getString(R.string.about_update_skipped_format, outcome.update.versionName)
-            is UpdateCheckOutcome.Available -> resources.getString(R.string.about_update_available_format, outcome.update.versionName)
-            is UpdateCheckOutcome.DownloadStarted -> resources.getString(R.string.about_update_downloading_format, outcome.update.versionName)
-            is UpdateCheckOutcome.DownloadInProgress -> resources.getString(
-                R.string.about_update_already_downloading_format,
-                outcome.update.versionName,
-            )
-            is UpdateCheckOutcome.DownloadAlreadyFinished -> resources.getString(
-                R.string.about_update_already_downloaded_format,
-                outcome.update.versionName,
-            )
-        }
     }

@@ -39,14 +39,24 @@ internal class UpdateCheckService(
             is UpdateDownloadStatus.Downloaded -> UpdateCheckOutcome.DownloadAlreadyFinished(update, status.file)
             is UpdateDownloadStatus.Downloading -> UpdateCheckOutcome.DownloadInProgress(update, status.downloadId)
             UpdateDownloadStatus.None -> {
-                val record = updateStore.load()?.takeIf { it.matches(update) }
+                val expected = updateStore.load()
+                val record = expected?.takeIf { it.matches(update) }
+                // A download can start after the first status query releases its lock.
+                // Reconcile it again instead of replacing its ID with availability state.
+                if (record?.status?.isInFlight == true || record?.status == UpdateDownloadRecordStatus.Downloaded) {
+                    return when (val refreshed = downloadController.statusFor(update)) {
+                        is UpdateDownloadStatus.Downloaded -> UpdateCheckOutcome.DownloadAlreadyFinished(update, refreshed.file)
+                        is UpdateDownloadStatus.Downloading -> UpdateCheckOutcome.DownloadInProgress(update, refreshed.downloadId)
+                        UpdateDownloadStatus.None -> UpdateCheckOutcome.Available(update)
+                    }
+                }
                 if (record?.status == UpdateDownloadRecordStatus.Skipped && !ignoreSkipped) {
                     return UpdateCheckOutcome.Skipped(update)
                 }
                 if (record?.status != UpdateDownloadRecordStatus.Skipped &&
                     record?.status != UpdateDownloadRecordStatus.Failed
                 ) {
-                    updateStore.saveAvailable(update)
+                    updateStore.saveAvailableIfUnchanged(update, expected)
                 }
                 UpdateCheckOutcome.Available(update)
             }
