@@ -646,6 +646,9 @@ internal object MangaPageHtml {
               // bound; (2) binary-search between the largest fitting size and the
               // smallest overflowing size. Mirrors Gnathonic's mokuro-reader algorithm.
               function findMaxFitting(start) {
+                // Computed cqw sizes are fractional. Integer bounds ensure the floored
+                // midpoint always advances, even when high - low is between 1 and 2.
+                start = Math.floor(start);
                 if (start < MIN_FS) start = MIN_FS;
                 if (start > MAX_FS) start = MAX_FS;
                 setFs(start);

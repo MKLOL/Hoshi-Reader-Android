@@ -10,6 +10,10 @@ Semantic Versioning.
 ### Fixed
 - **Rapidly tapping words no longer crashes the dictionary popup.** Closing or replacing a
   popup now discards its pending updates and nested lookups, including while reading manga.
+  Simultaneous dictionary refreshes and lookups are also protected against crashes.
+- **Revealing manga text no longer freezes on certain bubble sizes.**
+- **Looking up text with rare kanji no longer crashes when selection ends inside a character.**
+  Reader and popup selections now keep each character intact.
 
 ## [v0.11.6] - 2026-09-06
 

@@ -8,7 +8,10 @@ import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import moe.antimony.hoshi.mokuro.MokuroPage
 import moe.antimony.hoshi.mokuro.MokuroTextBox
+import org.json.JSONObject
+import org.json.JSONTokener
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -36,6 +39,24 @@ import java.util.concurrent.TimeUnit
  */
 @RunWith(AndroidJUnit4::class)
 class MangaWrapFallbackInstrumentedTest {
+    @Test
+    fun fractionalFittingFontTerminatesAndPromotesWrap() {
+        val state = runFractionalFontFallback(initialPx = 7.4)
+
+        assertTrue("fitting font should promote wrapping: $state", state.getBoolean("wrapped"))
+        assertTrue("wrapped text must fit its box: $state", state.getBoolean("fits"))
+        assertTrue("expected a larger fitting font: $state", state.getDouble("fontSize") >= 13.0)
+        assertTrue("font must stay below the overflowing bound: $state", state.getDouble("fontSize") < 14.8)
+    }
+
+    @Test
+    fun fractionalOverflowingFontTerminatesAndKeepsOriginalPresentation() {
+        val state = runFractionalFontFallback(initialPx = 14.8)
+
+        assertFalse("smaller fitting text must not promote wrapping: $state", state.getBoolean("wrapped"))
+        assertEquals("original font should be restored: $state", 14.8, state.getDouble("fontSize"), 0.01)
+    }
+
     @Test
     fun wrapFallbackPromotesMisTaggedHorizontalBubble() {
         val brokenBubble = MokuroTextBox(
@@ -197,6 +218,92 @@ class MangaWrapFallbackInstrumentedTest {
             "extent ($extentBottom) did not clear the overflow past the border box ($borderBottom)",
             extentBottom!! > borderBottom!! + 3f,
         )
+    }
+
+    private fun runFractionalFontFallback(initialPx: Double): JSONObject {
+        val html = MangaPageHtml.build(
+            page = MokuroPage(
+                index = 0,
+                imagePath = "test.png",
+                imageWidth = 1000,
+                imageHeight = 1500,
+                textBoxes = listOf(
+                    MokuroTextBox(
+                        left = 100, top = 100,
+                        width = 500, height = 85,
+                        fontSize = 37,
+                        vertical = false,
+                        lines = listOf("食べる"),
+                    ),
+                ),
+            ),
+            backgroundCssColor = "#ffffff",
+            selectionScript = "",
+            scanNonJapaneseText = false,
+            eInkMode = false,
+            viewportCssWidth = 200,
+            viewportCssHeight = 400,
+        )
+        val result = runInWebView(html) { webView, done ->
+            webView.evaluateJavascript(
+                """
+                (function() {
+                  var box = document.querySelector('.ocr-box');
+                  if (!box) return JSON.stringify({error: 'no box'});
+                  // Keep real Chromium measurements while controlling the overflow
+                  // boundary: 13px fits, but the fractional upper bound 14.8px does not.
+                  Object.assign(box.style, {
+                    width: '100px', height: '15px', padding: '0px', lineHeight: '1.1'
+                  });
+                  box.classList.add('wrap');
+                  function overflowsAt(size) {
+                    box.style.fontSize = size + 'px';
+                    return box.scrollWidth > box.clientWidth || box.scrollHeight > box.clientHeight;
+                  }
+                  var fits13 = !overflowsAt(13);
+                  var overflows148 = overflowsAt(14.8);
+                  if (!fits13 || !overflows148) {
+                    return JSON.stringify({error: 'invalid overflow fixture', fits13: fits13, overflows148: overflows148});
+                  }
+                  box.style.fontSize = '${initialPx}px';
+                  box.classList.remove('wrap');
+                  delete box.dataset.wrapTried;
+
+                  // Forward the native layout getter, but fail a stuck search promptly
+                  // so a regression cannot leave the test renderer spinning forever.
+                  var nativeGetter = Object.getOwnPropertyDescriptor(Element.prototype, 'scrollWidth').get;
+                  var probes = 0;
+                  Object.defineProperty(box, 'scrollWidth', {
+                    configurable: true,
+                    get: function() {
+                      if (++probes > 100) throw new Error('font search did not terminate');
+                      return nativeGetter.call(this);
+                    }
+                  });
+                  var error = null;
+                  try {
+                    window.hoshiManga.tryWrapFallback(box);
+                  } catch (failure) {
+                    error = String(failure);
+                  } finally {
+                    delete box.scrollWidth;
+                  }
+                  return JSON.stringify({
+                    error: error,
+                    probes: probes,
+                    fontSize: parseFloat(window.getComputedStyle(box).fontSize),
+                    wrapped: box.classList.contains('wrap'),
+                    fits: box.scrollWidth <= box.clientWidth && box.scrollHeight <= box.clientHeight
+                  });
+                })();
+                """.trimIndent(),
+            ) { value -> done(value) }
+        }
+        val decoded = JSONTokener(result ?: error("evaluateJavascript returned null")).nextValue()
+        val state = JSONObject(decoded as? String ?: error("expected JSON string result: $result"))
+        assertTrue("fractional font search failed: $state", state.isNull("error"))
+        assertTrue("font search exceeded measurement budget: $state", state.getInt("probes") in 1..100)
+        return state
     }
 
     /**

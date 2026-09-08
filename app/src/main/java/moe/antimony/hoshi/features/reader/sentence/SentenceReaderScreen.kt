@@ -98,8 +98,6 @@ import androidx.compose.ui.text.style.LineHeightStyle
 import kotlin.math.max
 import kotlin.math.min
 
-/** Longest query handed to the dictionary from a tap; the scan-length setting trims it further. */
-private const val MAX_TAP_QUERY_CHARS = 32
 private const val FONT_SIZE_STEP = 2
 private const val MIN_FONT_SIZE = 16
 private const val MAX_FONT_SIZE = 60
@@ -593,8 +591,13 @@ private fun SentenceText(
                         currentOnTapOutside()
                         return@detectTapGestures
                     }
-                    val offset = current.getOffsetForPosition(tap).coerceIn(0, text.length - 1)
-                    val query = text.substring(offset).take(MAX_TAP_QUERY_CHARS)
+                    val lookupQuery = sentenceLookupQuery(text, current.getOffsetForPosition(tap))
+                    if (lookupQuery == null) {
+                        currentOnTapOutside()
+                        return@detectTapGestures
+                    }
+                    val offset = lookupQuery.startOffset
+                    val query = lookupQuery.text
                     if (query.isBlank()) {
                         currentOnTapOutside()
                         return@detectTapGestures

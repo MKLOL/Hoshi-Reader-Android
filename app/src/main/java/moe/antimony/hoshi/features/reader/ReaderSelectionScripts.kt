@@ -192,6 +192,13 @@ internal object ReaderSelectionScripts {
               this.scanDelimiters.includes(char) ||
               (window.scanNonJapaneseText === false && !this.isCodePointJapanese(char.codePointAt(0)));
           },
+          // DOM offsets are UTF-16, but Android's native lookup requires complete Unicode characters.
+          codePointStartOffset: function(text, offset) {
+            var unit = text.charCodeAt(offset);
+            var previous = text.charCodeAt(offset - 1);
+            return unit >= 0xdc00 && unit <= 0xdfff && previous >= 0xd800 && previous <= 0xdbff
+              ? offset - 1 : offset;
+          },
           isFurigana: function(node) {
             var el = node.nodeType === Node.TEXT_NODE ? node.parentElement : node;
             return !!(el && el.closest('rt, rp'));
@@ -289,13 +296,15 @@ internal object ReaderSelectionScripts {
             var range = document.createRange();
             var node;
             while (node = walker.nextNode()) {
-              for (var i = 0; i < node.textContent.length; i++) {
+              for (var i = 0; i < node.textContent.length;) {
+                var char = String.fromCodePoint(node.textContent.codePointAt(i));
                 range.setStart(node, i);
-                range.setEnd(node, i + 1);
+                range.setEnd(node, i + char.length);
                 if (this.inCharRange(range, x, y)) {
                   range.collapse(true);
                   return range;
                 }
+                i += char.length;
               }
             }
             return document.caretRangeFromPoint ? document.caretRangeFromPoint(x, y) : null;
@@ -309,13 +318,15 @@ internal object ReaderSelectionScripts {
             var caret = range.startOffset;
             var offsets = [caret, caret - 1, caret + 1];
             for (var i = 0; i < offsets.length; i++) {
-              var offset = offsets[i];
-              if (offset < 0 || offset >= text.length) continue;
+              var candidate = offsets[i];
+              if (candidate < 0 || candidate >= text.length) continue;
+              var offset = this.codePointStartOffset(text, candidate);
+              var char = String.fromCodePoint(text.codePointAt(offset));
               var charRange = document.createRange();
               charRange.setStart(node, offset);
-              charRange.setEnd(node, offset + 1);
+              charRange.setEnd(node, offset + char.length);
               if (this.inCharRange(charRange, x, y)) {
-                if (this.isScanBoundary(text[offset])) return null;
+                if (this.isScanBoundary(char)) return null;
                 return { node: node, offset: offset };
               }
             }
@@ -402,21 +413,23 @@ internal object ReaderSelectionScripts {
             var container = this.findParagraph(hit.node) || document.body;
             var walker = this.createWalker(container);
             var text = '';
+            var characterCount = 0;
             var node = hit.node;
             var offset = hit.offset;
             var ranges = [];
             walker.currentNode = node;
-            while (text.length < maxLength && node) {
+            while (characterCount < maxLength && node) {
               var content = node.textContent;
               var start = offset;
-              while (offset < content.length && text.length < maxLength) {
-                var char = content[offset];
+              while (offset < content.length && characterCount < maxLength) {
+                var char = String.fromCodePoint(content.codePointAt(offset));
                 if (this.isScanBoundary(char)) break;
                 text += char;
-                offset++;
+                offset += char.length;
+                characterCount++;
               }
               if (offset > start) ranges.push({ node: node, start: start, end: offset });
-              if (offset < content.length || text.length >= maxLength) break;
+              if (offset < content.length || characterCount >= maxLength) break;
               node = walker.nextNode();
               offset = 0;
             }
@@ -438,7 +451,7 @@ internal object ReaderSelectionScripts {
             var first = this.selection.ranges[0];
             var range = document.createRange();
             range.setStart(first.node, first.start);
-            range.setEnd(first.node, first.start + 1);
+            range.setEnd(first.node, first.start + String.fromCodePoint(first.node.textContent.codePointAt(first.start)).length);
             var rects = window.hoshiRubyGeometry.rectsForRange(range);
             var rect = rects.find(function(rect) {
               return x >= rect.x && x <= rect.x + rect.width && y >= rect.y && y <= rect.y + rect.height;
