@@ -15,7 +15,7 @@ class NewsArticleXhtmlTest {
               <style>p{}</style>
               <p style="color:red"><ruby>東京<rt>とうきょう</rt></ruby>で<a href="https://x">雨</a>が<span class="colorL">降りました</span>。</p>
               <nav><a href="/">home</a></nav>
-              <figure><img src="https://example.jp/a.jpg" alt="写真" width="100" data-track="1"/><figcaption>写真です</figcaption></figure>
+              <figure><img src="http://example.jp/a.jpg" alt="写真" width="100" data-track="1"/><figcaption>写真です</figcaption></figure>
               <p></p>
               <div><div></div></div>
             </div>
@@ -26,6 +26,7 @@ class NewsArticleXhtmlTest {
         assertTrue(output, output.contains("<p><ruby>東京<rt>とうきょう</rt></ruby>で雨が降りました。</p>"))
         // The serializer orders attributes alphabetically, so check them independently.
         val img = Regex("""<img [^>]*/>""").find(output)?.value ?: error("no img in $output")
+        // Plain-http sources are upgraded to https so the iOS reader (App Transport Security) can load them.
         assertTrue(img, img.contains("""src="https://example.jp/a.jpg"""") && img.contains("""alt="写真"""") && !img.contains("width") && !img.contains("data-"))
         assertTrue(output, output.contains("<figcaption>写真です</figcaption>"))
         assertFalse(output, output.contains("script"))

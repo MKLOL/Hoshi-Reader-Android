@@ -85,7 +85,9 @@ object NewsArticleXhtml {
                                     child = child.nextSibling
                                     continue
                                 }
-                                copy.setAttribute("src", src)
+                                // Plain-http images are blocked by the iOS app's transport security, and the
+                                // https variant nearly always exists: both apps rewrite so saved articles match.
+                                copy.setAttribute("src", if (src.startsWith("http://", ignoreCase = true)) "https://" + src.substring("http://".length) else src)
                                 element.getAttribute("alt").takeIf { it.isNotBlank() }?.let { copy.setAttribute("alt", it) }
                             }
                             to.appendChild(copy)
