@@ -354,7 +354,7 @@ private fun JobStatus(
         is PretranslationJobState.Uploading -> StatusRow(stringResource(R.string.news_pretranslate_uploading)) {}
         is PretranslationJobState.Finished -> StatusRow(
             stringResource(R.string.news_pretranslate_done_format, job.translated, job.total) +
-                if (!job.uploaded) "\n" + stringResource(R.string.news_pretranslate_done_not_uploaded) else "",
+                if (job.uploadAttempted && !job.uploaded) "\n" + stringResource(R.string.news_pretranslate_done_not_uploaded) else "",
         ) {
             IconButton(onClick = { onDismiss(job.bookId) }) { Icon(Icons.Rounded.Close, contentDescription = stringResource(R.string.action_dismiss)) }
         }

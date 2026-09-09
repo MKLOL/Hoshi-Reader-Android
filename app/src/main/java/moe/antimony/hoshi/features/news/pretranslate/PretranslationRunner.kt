@@ -82,7 +82,10 @@ class PretranslationRunner(
             }
             onProgress(sink.size, sentences.size)
         }
-        if (sink.isEmpty() && sentences.isNotEmpty()) {
+        // Reused entries alone are not success: if requests failed and nothing new arrived, say so
+        // instead of rewriting the old blob and reporting the job as finished.
+        val newlyTranslated = pending.any { it.id in sink }
+        if (pending.isNotEmpty() && !newlyTranslated && (failures > 0 || sink.isEmpty())) {
             throw TooManyFailuresException("No sentence could be translated", lastError)
         }
         return sink

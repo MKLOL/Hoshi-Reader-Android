@@ -111,6 +111,16 @@ class PretranslationRunnerTest {
     }
 
     @Test
+    fun rerunWhereEveryNewRequestFailsWithinBudgetIsNotReportedAsSuccess() {
+        val dead = FakeTranslator(supportsBatches = false, singleBehavior = { throw IOException("down") })
+        val existing = mapOf("c0s0" to SentenceTranslation("c0s0", "old"))
+        val error = assertThrows(PretranslationRunner.TooManyFailuresException::class.java) {
+            runBlocking { PretranslationRunner(dead, config(), maxFailedRequests = 6).run(sentences.take(3), existing) }
+        }
+        assertTrue(error.message!!.contains("No sentence could be translated"))
+    }
+
+    @Test
     fun nothingTranslatedIsAnError() {
         val silent = FakeTranslator(batchBehavior = { emptyMap() }, singleBehavior = { null })
         assertThrows(PretranslationRunner.TooManyFailuresException::class.java) {

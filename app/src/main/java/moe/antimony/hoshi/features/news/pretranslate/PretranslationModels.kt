@@ -88,6 +88,8 @@ sealed interface PretranslationJobState {
         override val bookId: String,
         val translated: Int,
         val total: Int,
+        /** False when sync is not configured; [uploaded] is meaningful only when true. */
+        val uploadAttempted: Boolean,
         val uploaded: Boolean,
         val engineLabel: String,
     ) : PretranslationJobState

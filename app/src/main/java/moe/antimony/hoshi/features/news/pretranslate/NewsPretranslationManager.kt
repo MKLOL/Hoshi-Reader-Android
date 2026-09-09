@@ -257,7 +257,7 @@ object NewsPretranslationManager {
                     ),
                 )
             }
-            publish(PretranslationJobState.Finished(bookId, translations.size, builtPlan.sentences.size, uploaded, label))
+            publish(PretranslationJobState.Finished(bookId, translations.size, builtPlan.sentences.size, uploadAttempted = sync.isConfigured, uploaded = uploaded, engineLabel = label))
         } catch (cancelled: CancellationException) {
             // The state must reach the UI even if persisting throws under a cancelled job.
             val saved = runCatching { persistPartial() }.getOrDefault(0)
