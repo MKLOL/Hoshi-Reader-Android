@@ -56,6 +56,10 @@
             android:name=".features.ai.offline.ModelDownloadService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
+        <service
+            android:name=".features.news.pretranslate.NewsPretranslationService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
 
         <activity
             android:name=".MainActivity"
@@ -79,6 +83,13 @@
                 <data android:mimeType="application/epub+zip" />
                 <data android:scheme="content" />
                 <data android:scheme="file" />
+            </intent-filter>
+            <intent-filter android:label="@string/news_share_target_label">
+                <action android:name="android.intent.action.SEND" />
+
+                <category android:name="android.intent.category.DEFAULT" />
+
+                <data android:mimeType="text/plain" />
             </intent-filter>
         </activity>
         <activity

@@ -19,10 +19,12 @@ import java.nio.file.Files
 
 class MainShellUiTest {
     @Test
-    fun mainTabsMatchIosOrder() {
-        assertEquals(listOf(MainTab.Books, MainTab.Dictionary, MainTab.Settings), MainTab.entries)
+    fun mainTabsKeepIosOrderWithNewsAfterBooks() {
+        // iOS has Books, Dictionary and Settings in this order. News is Android-only and sits right
+        // after Books; the iOS tabs must keep their relative order around it.
+        assertEquals(listOf(MainTab.Books, MainTab.News, MainTab.Dictionary, MainTab.Settings), MainTab.entries)
         assertEquals(
-            listOf(R.string.main_tab_books, R.string.main_tab_dictionary, R.string.main_tab_settings),
+            listOf(R.string.main_tab_books, R.string.main_tab_news, R.string.main_tab_dictionary, R.string.main_tab_settings),
             MainTab.entries.map { it.labelRes },
         )
     }

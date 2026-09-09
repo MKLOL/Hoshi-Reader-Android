@@ -598,6 +598,8 @@ class BookshelfViewModelTest {
 
         override suspend fun importBook(uri: android.net.Uri): String = importBookId
 
+        override suspend fun importExtractedEpubDirectory(tempRoot: java.io.File, folderName: String): String = error("unused")
+
         override suspend fun importMokuroFolder(treeUri: android.net.Uri): String = importBookId
 
         override suspend fun deleteBook(entry: BookEntry) {

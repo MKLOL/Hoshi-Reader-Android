@@ -22,17 +22,20 @@ import moe.antimony.hoshi.features.reader.ReaderSettings
 import moe.antimony.hoshi.features.reader.usesDarkInterface
 import moe.antimony.hoshi.features.reader.usesDarkSystemBarIcons
 import moe.antimony.hoshi.features.update.DownloadedUpdatePrompt
+import moe.antimony.hoshi.features.news.NewsSharedUrl
 import moe.antimony.hoshi.features.update.UpdateConfig
 import moe.antimony.hoshi.navigation.AppShell
 import moe.antimony.hoshi.ui.theme.HoshiReaderTheme
 
 class MainActivity : ComponentActivity() {
     private var pendingImportUri by mutableStateOf<Uri?>(null)
+    private var pendingNewsUrl by mutableStateOf<String?>(null)
     private var readerKeyEventHandler: ((KeyEvent) -> Boolean)? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         pendingImportUri = intent.importUri()
+        pendingNewsUrl = intent.sharedNewsUrl()
         enableEdgeToEdge()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             window.isNavigationBarContrastEnforced = false
@@ -61,6 +64,8 @@ class MainActivity : ComponentActivity() {
                     AppShell(
                         pendingImportUri = pendingImportUri,
                         onPendingImportConsumed = { pendingImportUri = null },
+                        pendingNewsUrl = pendingNewsUrl,
+                        onPendingNewsUrlConsumed = { pendingNewsUrl = null },
                         readerSettings = loadedReaderSettings,
                         onReaderSettingsChange = { settings ->
                             readerSettings = settings
@@ -92,8 +97,13 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         intent.importUri()?.let { pendingImportUri = it }
+        intent.sharedNewsUrl()?.let { pendingNewsUrl = it }
     }
 
     private fun Intent?.importUri(): Uri? =
         this?.data?.takeIf { action == Intent.ACTION_VIEW }
+
+    /** A link shared from a browser ("Save as article" share target). */
+    private fun Intent?.sharedNewsUrl(): String? =
+        this?.takeIf { action == Intent.ACTION_SEND }?.let { NewsSharedUrl.extract(it.getStringExtra(Intent.EXTRA_TEXT)) }
 }

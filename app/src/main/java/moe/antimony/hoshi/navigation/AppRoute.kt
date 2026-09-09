@@ -14,6 +14,10 @@ sealed interface AppRoute : NavKey {
     @Serializable
     data object DictionaryRoute : AppRoute
 
+    /** Easy-Japanese news listings; saved articles become ordinary EPUB books. */
+    @Serializable
+    data object NewsRoute : AppRoute
+
     @Serializable
     data object SettingsRoute : AppRoute
 

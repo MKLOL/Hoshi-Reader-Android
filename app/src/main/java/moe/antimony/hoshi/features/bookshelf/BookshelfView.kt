@@ -61,6 +61,7 @@ import androidx.compose.material.icons.rounded.RadioButtonUnchecked
 import androidx.compose.material.icons.rounded.ReportProblem
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.SmartToy
+import androidx.compose.material.icons.rounded.Newspaper
 import androidx.compose.material.icons.rounded.Translate
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -1806,6 +1807,7 @@ private fun EmptyBooksView(
 private fun BottomTabGlyph(tab: MainTab, modifier: Modifier = Modifier) {
     val icon = when (tab) {
         MainTab.Books -> Icons.AutoMirrored.Rounded.MenuBook
+        MainTab.News -> Icons.Rounded.Newspaper
         MainTab.Dictionary -> Icons.Rounded.Translate
         MainTab.Settings -> Icons.Rounded.Settings
     }

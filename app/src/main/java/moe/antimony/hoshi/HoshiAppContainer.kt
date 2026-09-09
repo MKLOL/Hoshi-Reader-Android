@@ -21,6 +21,14 @@ import moe.antimony.hoshi.features.anki.AnkiRepository
 import moe.antimony.hoshi.features.anki.AnkiSettingsRepository
 import moe.antimony.hoshi.features.anki.ankiSettingsRepository
 import moe.antimony.hoshi.features.backup.HoshiBackupRepository
+import moe.antimony.hoshi.features.ai.offline.OfflineTranslationSettingsRepository
+import moe.antimony.hoshi.features.ai.offline.offlineTranslationSettingsRepository
+import moe.antimony.hoshi.features.news.NewsFeedStore
+import moe.antimony.hoshi.features.news.NewsHttp
+import moe.antimony.hoshi.features.news.NewsRepository
+import moe.antimony.hoshi.features.news.NewsSettingsRepository
+import moe.antimony.hoshi.features.news.WebViewNewsExtractor
+import moe.antimony.hoshi.features.news.newsSettingsRepository
 import moe.antimony.hoshi.features.bookshelf.AndroidBookshelfRepository
 import moe.antimony.hoshi.features.bookshelf.BookshelfRepository
 import moe.antimony.hoshi.features.bookshelf.BookshelfSettingsRepository
@@ -193,6 +201,21 @@ internal class HoshiAppContainer(context: Context) {
                 httpSyncBookmarkScheduler.onBookmarkChanged(root, title, syncId)
             },
         )
+
+    val offlineTranslationSettingsRepository: OfflineTranslationSettingsRepository =
+        appContext.offlineTranslationSettingsRepository()
+    val newsSettingsRepository: NewsSettingsRepository = appContext.newsSettingsRepository()
+    val newsFeedStore: NewsFeedStore = NewsFeedStore(appContext.filesDir)
+    val newsRepository: NewsRepository by lazy {
+        NewsRepository(
+            filesDir = appContext.filesDir,
+            store = newsFeedStore,
+            settings = newsSettingsRepository,
+            extractor = WebViewNewsExtractor(appContext),
+            http = NewsHttp(),
+            bookshelf = bookshelfRepository(appContext),
+        )
+    }
 
     fun bookshelfRepository(context: Context): BookshelfRepository =
         AndroidBookshelfRepository(

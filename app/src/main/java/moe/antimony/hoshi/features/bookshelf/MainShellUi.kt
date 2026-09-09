@@ -8,6 +8,7 @@ import moe.antimony.hoshi.epub.BookSortOption
 
 enum class MainTab(@param:StringRes val labelRes: Int) {
     Books(R.string.main_tab_books),
+    News(R.string.main_tab_news),
     Dictionary(R.string.main_tab_dictionary),
     Settings(R.string.main_tab_settings),
 }

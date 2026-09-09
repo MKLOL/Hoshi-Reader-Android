@@ -125,6 +125,41 @@ This file is the short operational handoff for future agents.
 - Keep the existing-KV logical two-map HTTP sync and durable five-second EPUB/manga bookmark outbox covered: unchanged libraries stay at one metadata GET, any number of dirty positions use one per-install shard PUT, concurrent devices cannot overwrite each other, and upgraded installs retain already-downloaded books after one content-hash computation.
 - Device-validate the first Android Google Drive sync slice with `testdata/test.epub` on a user-configured Device Code OAuth client from the same project as iOS/ッツ: connect/sign-out state, transient network backoff and another-device authorization guidance, long-press manual import/export result dialogs, reader-open import-only, iOS-aligned paginated/continuous auto-export timing, close/background flush export, statistics Merge/Replace, and Sasayaki last-position sync.
 
+### News
+
+- The News tab (`features/news/`) is additive: saved articles are written as extracted EPUB trees
+  (`NewsArticleEpubWriter`, EPUB 3 + NCX for iOS) and registered through
+  `BookshelfRepository.importExtractedEpubDirectory`, so the reader, sync and shelves see plain
+  books; the only news-owned state lives in `files/News/` (`NewsFeedStore`). Listings come from RSS
+  (`RssFeedParser`) or a hidden WebView (`WebViewNewsExtractor` + `assets/hoshi-news/extract.js`)
+  because NHK's 2025 site is client-rendered behind a session token. Regression entries:
+  `RssFeedParserTest`, `NewsFeedStoreTest`, `NewsArticleXhtmlTest`, `NewsArticleEpubWriterTest`.
+- Pre-translation (`features/news/pretranslate/`) is the app's first writer of
+  `sentence_translations.json`: `PretranslationPlanner` segments with `EpubSentenceSegmenter`,
+  `PretranslationRunner` batches through `CloudChat` or the on-device model, the blob is validated
+  with `EpubTranslationStore.validationError` before `SentenceTranslationsWriter` stores it, and
+  `SentenceTranslationsUploader` PUTs `books/{syncId}/sentences` (sync itself stays download-only
+  and, by design, re-validates the listed blob on every sync even when the local copy matches:
+  `HttpEpubSyncInteropTest` pins that an identical malformed blob is still rejected).
+  Cost estimates come from `ModelPricing` (approximate list prices, dated) and `TokenEstimator`.
+  Regression entries: `PretranslationPlannerTest`, `SentenceBatchPromptTest`,
+  `PretranslationRunnerTest`, `SentenceTranslationsWriterTest`.
+- Shared links (`MainActivity` "Save as article" share target, `NewsSharedUrl`,
+  `NewsRepository.saveSharedUrl`) reuse the same extractor; a URL is attributed to the built-in
+  source that owns its host so its hints apply, otherwise to the shared-link pseudo-source.
+- NHK NEWS WEB EASY (NHK ONE) serves its article list only inside Japan; the source starts
+  disabled and is labeled Japan-only. `extract.js` clicks the site's "For users abroad" notice
+  once (only for a source with `acknowledgeSelector`), which was not enough from the US. Blocked
+  on access from Japan or a VPN; the public sitemap (`/news/easy/sitemap/sitemap.xml`) is the
+  fallback listing if one is ever needed.
+- Blocked: the pre-translation job has not been run against a real model on a device (no API key
+  or downloaded on-device model on the test emulator). The dialog, planning, cost estimate, batch
+  runner, blob writer and reader consumption are covered by unit tests; the first real run should
+  check a cloud model with notes on and the on-device path.
+- Next: re-check MATCHA/Watanoc extraction after site redesigns (the hints in `NewsSourceCatalog`
+  are the only site-specific knowledge); consider thumbnails in the list and a per-article
+  "translated" badge on the Books shelf.
+
 ### Release Distribution
 
 - Update transfers reconcile with DownloadManager on startup and while About is visible;

@@ -7,6 +7,17 @@ Semantic Versioning.
 
 ## [Unreleased]
 
+### Added
+- **A News tab for easy Japanese.** Browse Watanoc and MATCHA Easy Japanese in one list, add your
+  own RSS feeds, and switch sources on or off. "Want to read" saves an article to a News shelf as a
+  book that opens in the regular reader with tap-to-look-up, furigana and sync. "Pre-translate"
+  sends the article's sentences to the model you choose (cloud or on-device), shows the sentence
+  count and an estimated cost first, then stores the translations with the article and shares them
+  through sync so other devices show them like any pre-translated EPUB. NHK NEWS WEB EASY is
+  included but off by default: its new site only serves the article list inside Japan.
+- **Share a link to save it as an article.** Sharing an article URL from a browser to "Save as
+  article" downloads it, puts it on the News shelf and opens it in the reader.
+
 ### Fixed
 - **Tapping a word while dictionaries are reloading no longer freezes the reader.** The lookup
   waits in the background and the popup opens when it is ready; tapping elsewhere in the

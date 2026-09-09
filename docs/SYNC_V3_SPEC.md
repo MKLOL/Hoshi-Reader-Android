@@ -77,7 +77,7 @@ remote imports preserve the server key exactly, and legacy metadata is backfille
 | `books/{syncId}/payload.manifest` | rare overwrite — Mokuro/legacy manifest |
 | `books/{syncId}/epub.zip` | rare overwrite — zipped EPUB directory |
 | `books/{syncId}/epub.manifest` | rare overwrite — canonical EPUB manifest |
-| `books/{syncId}/sentences` | download-only — validated EPUB sentence translations |
+| `books/{syncId}/sentences` | download-only for the sync engines — validated EPUB sentence translations. The News tab's pre-translation is the one client-side writer (unconditional PUT, last writer wins); the engines still re-validate the listed blob on every sync |
 | `app/ai_chat_settings` | overwrite — global ChatGPT settings (model + prompts) |
 
 v3 reuses the existing blob types from `HttpSyncBlobs.kt` verbatim

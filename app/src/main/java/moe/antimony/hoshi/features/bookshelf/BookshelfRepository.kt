@@ -44,6 +44,14 @@ internal interface BookshelfRepository {
     suspend fun openBook(entry: BookEntry): String
     suspend fun importBook(uri: Uri): String
     suspend fun importMokuroFolder(treeUri: Uri): String
+
+    /**
+     * Registers an already-extracted EPUB tree written by the app itself (a saved news article)
+     * as a book: moves it under `Books/`, writes the metadata and book-info sidecars and publishes
+     * it to sync exactly like [importBook]. [folderName] becomes the directory name and must be
+     * unique per article; the title comes from the package. Returns the reader book id.
+     */
+    suspend fun importExtractedEpubDirectory(tempRoot: File, folderName: String): String
     suspend fun deleteBook(entry: BookEntry)
     suspend fun deleteBooks(entries: Collection<BookEntry>)
     suspend fun moveBooks(bookIds: Set<String>, shelfName: String?)
@@ -125,6 +133,24 @@ internal class AndroidBookshelfRepository(
             }
             ContentType.Mokuro -> writeMokuroSidecars(root)
         }
+        // Publish the new book's metadata immediately (payload still uploads on manual sync).
+        notifyBookImported(root)
+        readerBookId(root)
+    }
+
+    override suspend fun importExtractedEpubDirectory(tempRoot: File, folderName: String): String = withContext(ioDispatcher) {
+        val parsedBook = runCatching { bookParser.parse(tempRoot) }
+            .onFailure { tempRoot.deleteRecursively() }
+            .getOrThrow()
+        val root = bookRepository.createBookDirectory(folderName)
+        if (root.listFiles()?.isNotEmpty() == true) {
+            tempRoot.deleteRecursively()
+            error("A book directory named $folderName already exists")
+        }
+        root.deleteRecursively()
+        check(tempRoot.renameTo(root)) { "Unable to move the article into Books/${root.name}" }
+        saveMetadata(root, parsedBook, bookRepository.loadMetadata(root))
+        saveBookInfo(root, parsedBook)
         // Publish the new book's metadata immediately (payload still uploads on manual sync).
         notifyBookImported(root)
         readerBookId(root)

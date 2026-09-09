@@ -38,6 +38,7 @@ import moe.antimony.hoshi.features.bookshelf.SettingsTab
 import moe.antimony.hoshi.epub.ContentType
 import moe.antimony.hoshi.features.diagnostics.DiagnosticsView
 import moe.antimony.hoshi.features.dictionary.DictionarySearchView
+import moe.antimony.hoshi.features.news.NewsFeedView
 import moe.antimony.hoshi.features.dictionary.DictionaryView
 import moe.antimony.hoshi.features.reader.ReaderAppearanceScreen
 import moe.antimony.hoshi.features.reader.ReaderBehaviorScreen
@@ -65,6 +66,8 @@ private val NoPredictiveNavContentTransition:
 fun AppShell(
     pendingImportUri: Uri? = null,
     onPendingImportConsumed: () -> Unit = {},
+    pendingNewsUrl: String? = null,
+    onPendingNewsUrlConsumed: () -> Unit = {},
     readerSettings: ReaderSettings,
     onReaderSettingsChange: (ReaderSettings) -> Unit,
     onReaderKeyEventHandlerChange: (((KeyEvent) -> Boolean)?) -> Unit = {},
@@ -142,6 +145,10 @@ fun AppShell(
         backStack.openSasayakiMatchRoute(request.bookId)
     }
 
+    LaunchedEffect(pendingNewsUrl) {
+        if (pendingNewsUrl != null) backStack.selectTopLevelRoute(AppRoute.NewsRoute)
+    }
+
     LaunchedEffect(pendingImportUri) {
         pendingImportRouteCoordinator.routePendingImport(
             hasPendingImport = pendingImportUri != null,
@@ -165,6 +172,19 @@ fun AppShell(
                         selectedTab = MainTab.Books,
                         pendingImportUri = pendingImportUri,
                         onPendingImportConsumed = onPendingImportConsumed,
+                        readerSettings = currentReaderSettings,
+                        onReaderSettingsChange = currentOnReaderSettingsChange,
+                        onOpenReader = ::openReader,
+                        onOpenSasayakiMatch = ::openSasayakiMatch,
+                        bookshelfRefreshKey = bookshelfRefreshKey,
+                        onSelectedTabChange = { selectTopLevelRoute(it.toRoute()) },
+                    )
+                    AppRoute.NewsRoute -> TopLevelRouteContent(
+                        selectedTab = MainTab.News,
+                        pendingImportUri = pendingImportUri,
+                        onPendingImportConsumed = onPendingImportConsumed,
+                        pendingNewsUrl = pendingNewsUrl,
+                        onPendingNewsUrlConsumed = onPendingNewsUrlConsumed,
                         readerSettings = currentReaderSettings,
                         onReaderSettingsChange = currentOnReaderSettingsChange,
                         onOpenReader = ::openReader,
@@ -315,6 +335,8 @@ private fun TopLevelRouteContent(
     bookshelfRefreshKey: Int,
     onSelectedTabChange: (MainTab) -> Unit,
     onSettingsDestination: (SettingsDestination) -> Unit = {},
+    pendingNewsUrl: String? = null,
+    onPendingNewsUrlConsumed: () -> Unit = {},
 ) {
     HoshiMainShell(
         selectedTab = selectedTab,
@@ -328,6 +350,13 @@ private fun TopLevelRouteContent(
                 onOpenSasayakiMatch = onOpenSasayakiMatch,
                 refreshKey = bookshelfRefreshKey,
                 layoutSpec = layoutSpec,
+                modifier = contentModifier,
+            )
+            MainTab.News -> NewsFeedView(
+                onOpenReader = onOpenReader,
+                layoutSpec = layoutSpec,
+                pendingSharedUrl = pendingNewsUrl,
+                onPendingSharedUrlConsumed = onPendingNewsUrlConsumed,
                 modifier = contentModifier,
             )
             MainTab.Dictionary -> DictionarySearchView(
@@ -403,6 +432,7 @@ private fun SettingsDetailDestination(
 
 private fun MainTab.toRoute(): AppRoute = when (this) {
     MainTab.Books -> AppRoute.BooksRoute
+    MainTab.News -> AppRoute.NewsRoute
     MainTab.Dictionary -> AppRoute.DictionaryRoute
     MainTab.Settings -> AppRoute.SettingsRoute
 }
