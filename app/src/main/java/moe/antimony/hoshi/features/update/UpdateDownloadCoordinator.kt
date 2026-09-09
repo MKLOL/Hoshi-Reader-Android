@@ -61,6 +61,9 @@ internal class UpdateDownloadCoordinator(
                 ?: UpdateTransferSnapshot(UpdateDownloadRecordStatus.Failed)
             if (snapshot.status == UpdateDownloadRecordStatus.Downloaded && !record.downloadIsInstallable(target)) {
                 target.delete()
+                // Drop the system row too, or its "download complete" notification would keep
+                // pointing at a file that no longer exists.
+                record.downloadId?.let(backend::remove)
                 snapshot = snapshot.copy(status = UpdateDownloadRecordStatus.Failed)
             }
             store.updateTransfer(record, snapshot)
@@ -75,10 +78,12 @@ internal class UpdateDownloadCoordinator(
     private suspend fun start(update: AvailableUpdate, retry: Boolean): Long = withContext(Dispatchers.IO) {
         transferMutex.withLock {
             val previous = refreshLocked()
-            if (!retry && previous?.matches(update) == true &&
-                (previous.status.isInFlight || previous.status == UpdateDownloadRecordStatus.Downloaded) &&
-                previous.downloadId != null
-            ) return@withLock previous.downloadId
+            if (previous?.matches(update) == true && previous.downloadId != null) {
+                // A verified APK is never replaced: a Retry tap can land after the poll above
+                // promoted the transfer it was aimed at to Downloaded.
+                if (previous.status == UpdateDownloadRecordStatus.Downloaded) return@withLock previous.downloadId
+                if (!retry && previous.status.isInFlight) return@withLock previous.downloadId
+            }
 
             val failedUrl = previous?.takeIf { it.matches(update) && (retry || it.status == UpdateDownloadRecordStatus.Failed) }
                 ?.downloadUrl
@@ -106,7 +111,10 @@ internal class UpdateDownloadCoordinator(
 
     suspend fun cancel(downloadId: Long) = withContext(Dispatchers.IO) {
         transferMutex.withLock {
-            val record = store.load()?.takeIf { it.downloadId == downloadId } ?: return@withLock
+            // About offers Cancel for in-flight transfers only, but the tap can land after a
+            // refresh promoted the same id to Downloaded. Never discard a verified APK.
+            val record = store.load()?.takeIf { it.downloadId == downloadId && it.status.isInFlight }
+                ?: return@withLock
             backend.remove(downloadId)
             withContext(NonCancellable) {
                 record.toAvailableUpdate()?.let { store.saveAvailable(it) } ?: store.clear()

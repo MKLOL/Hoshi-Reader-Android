@@ -7,6 +7,14 @@ Semantic Versioning.
 
 ## [Unreleased]
 
+### Fixed
+- **Tapping a word while dictionaries are reloading no longer freezes the reader.** The lookup
+  waits in the background and the popup opens when it is ready; tapping elsewhere in the
+  meantime discards it.
+- **Looking up damaged text shared from another app no longer crashes the app.**
+- **Starting the app is no longer delayed while a finished update download is verified.**
+- **Cancel, Retry and Skip can no longer discard an update that had just finished downloading.**
+
 ## [v0.11.8] - 2026-09-08
 
 ### Added

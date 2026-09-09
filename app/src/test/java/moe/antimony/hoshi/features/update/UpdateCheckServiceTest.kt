@@ -63,7 +63,7 @@ class UpdateCheckServiceTest {
                     UpdateDownloadRecordStatus.Skipped -> handle.store.skip(older)
                     UpdateDownloadRecordStatus.Downloaded -> {
                         handle.store.saveDownloading(older, "older.apk", 42, older.downloadUrl)
-                        handle.store.markDownloaded(42)
+                        handle.store.updateTransfer(requireNotNull(handle.store.load()), UpdateTransferSnapshot(UpdateDownloadRecordStatus.Downloaded))
                     }
                     else -> handle.store.saveAvailable(older)
                 }
@@ -118,7 +118,7 @@ class UpdateCheckServiceTest {
             val downloads = FakeUpdateDownloadController {
                 if (++queries == 1) {
                     handle.store.saveDownloading(update, file.name, 42, update.downloadUrl)
-                    handle.store.markDownloaded(42)
+                    handle.store.updateTransfer(requireNotNull(handle.store.load()), UpdateTransferSnapshot(UpdateDownloadRecordStatus.Downloaded))
                     UpdateDownloadStatus.None
                 } else UpdateDownloadStatus.Downloaded(file)
             }

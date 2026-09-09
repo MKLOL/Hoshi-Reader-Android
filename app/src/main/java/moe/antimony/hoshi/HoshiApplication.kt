@@ -11,6 +11,7 @@ import moe.antimony.hoshi.features.update.AndroidUpdateDownloadManager
 import moe.antimony.hoshi.features.update.UpdateApkCleanup
 import moe.antimony.hoshi.features.update.UpdateConfig
 import moe.antimony.hoshi.features.update.UpdateScheduler
+import moe.antimony.hoshi.features.update.UpdateStartup
 import moe.antimony.hoshi.features.update.UpdateStartupSnapshot
 import moe.antimony.hoshi.features.update.updateDownloadStore
 
@@ -30,7 +31,6 @@ class HoshiApplication : Application() {
         // never ran).
         if (UpdateConfig.AUTO_UPDATE_ENABLED) {
             prepareUpdateStartupState()
-            UpdateScheduler.sync(this)
         } else {
             UpdateScheduler.cancel(this)
         }
@@ -39,15 +39,23 @@ class HoshiApplication : Application() {
     private fun prepareUpdateStartupState() {
         val store = updateDownloadStore()
         val downloadManager = AndroidUpdateDownloadManager(this, store)
-        UpdateStartupSnapshot.initialRecord = runBlocking(Dispatchers.IO) {
-            runCatching { downloadManager.discardInstalledUpdate(BuildConfig.VERSION_NAME) }
-            UpdateApkCleanup(
-                context = this@HoshiApplication,
-                downloadManager = downloadManager,
-                store = store,
-            ).deleteCurrentVersionApks()
-            runCatching { downloadManager.refresh() }
-            store.load()
+        val cleanup = UpdateApkCleanup(context = this, downloadManager = downloadManager, store = store)
+        val startup = UpdateStartup(
+            store = store,
+            currentVersionName = BuildConfig.VERSION_NAME,
+            discardInstalledUpdate = downloadManager::discardInstalledUpdate,
+            deleteCurrentVersionApks = cleanup::deleteCurrentVersionApks,
+            refresh = { downloadManager.refresh() },
+        )
+        // Only the persisted record is read synchronously. Reconciling with DownloadManager
+        // parses and hashes APKs, so it runs in the background; the prompt and About observe
+        // the record flow and update when it finishes. The scheduled check follows the
+        // reconciliation so an already-installed update is discarded before a newer release
+        // can replace its record.
+        UpdateStartupSnapshot.initialRecord = runBlocking(Dispatchers.IO) { startup.snapshot() }
+        CoroutineScope(Dispatchers.IO).launch {
+            startup.reconcile()
+            UpdateScheduler.syncNow(this@HoshiApplication)
         }
     }
 }

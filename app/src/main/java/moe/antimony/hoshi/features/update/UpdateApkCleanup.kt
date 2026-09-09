@@ -37,9 +37,11 @@ internal class UpdateApkCleanup(
             .filter { file -> file.delete() }
             .map { file -> file.name }
             .toSet()
+        // This runs in the background now, alongside the UI and the check worker, so only the
+        // record that pointed at a deleted file may be cleared, never a replacement.
         val record = store.load()
         if (record?.fileName?.let { it in deletedFileNames } == true) {
-            store.clear()
+            store.clear(record)
         }
     }
 }

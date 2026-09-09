@@ -132,6 +132,13 @@ internal class UpdateDownloadStore(
 
     suspend fun skip(update: AvailableUpdate) {
         dataStore.edit { preferences ->
+            val current = preferences.toRecord()
+            // Skip and Download sit in the same dialog. A transfer that already started, or a
+            // verified download of this update, must not be orphaned by a late Skip. Like
+            // saveAvailableIfUnchanged, this also keeps a transfer of another version; skipping a
+            // newer release found by a manual check while an older one downloads is not recorded.
+            if (current?.status?.isInFlight == true) return@edit
+            if (current?.matches(update) == true && current.status == UpdateDownloadRecordStatus.Downloaded) return@edit
             preferences[KEY_VERSION_NAME] = update.versionName
             preferences[KEY_RELEASE_URL] = update.releaseUrl
             preferences[KEY_ASSET_NAME] = update.assetName
@@ -141,22 +148,6 @@ internal class UpdateDownloadStore(
             preferences[KEY_FALLBACK_DOWNLOAD_URLS] = update.fallbackDownloadUrls.joinToString(separator = "\n")
             preferences[KEY_STATUS] = UpdateDownloadRecordStatus.Skipped.name
             update.sha256?.let { preferences[KEY_SHA256] = it } ?: preferences.remove(KEY_SHA256)
-        }
-    }
-
-    suspend fun markDownloaded(downloadId: Long) {
-        dataStore.edit { preferences ->
-            if (preferences[KEY_DOWNLOAD_ID] == downloadId) {
-                preferences[KEY_STATUS] = UpdateDownloadRecordStatus.Downloaded.name
-            }
-        }
-    }
-
-    suspend fun markFailed(downloadId: Long) {
-        dataStore.edit { preferences ->
-            if (preferences[KEY_DOWNLOAD_ID] == downloadId) {
-                preferences[KEY_STATUS] = UpdateDownloadRecordStatus.Failed.name
-            }
         }
     }
 

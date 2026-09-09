@@ -43,12 +43,15 @@ This file is the short operational handoff for future agents.
 
 - Native dictionary popup teardown invalidates queued JavaScript callbacks before WebView
   destruction and cancels superseded or dismissed nested lookups. Regression entry:
-  `PopupCallbackDispatcherTest`; emulator-verified rapid manga word taps, recursive lookup,
-  and repeated reader exit/reopen during tap bursts. Keep these checks when changing popup ownership.
+  `PopupCallbackDispatcherTest`. Keep these checks when changing popup ownership.
 - Shared native dictionary reads/rebuilds use one monitor; regression entry:
-  `DictionaryNativeConcurrencyInstrumentedTest`. Unicode selection keeps complete characters
-  with UTF-16 DOM offsets (`ReaderSelectionUnicodeWebViewTest`, `SentenceLookupQueryTest`); manga font
-  search terminates on integer bounds (`MangaWrapFallbackInstrumentedTest`); all verified on API 35.
+  `DictionaryNativeConcurrencyInstrumentedTest`. Because that monitor makes a lookup wait for a
+  rebuild, every reader lookup runs through `ReaderLookupRunner` (EPUB), the manga reader's
+  `lookupSelectionJob`, or the popup overlay's `lookupScope`, never on the main thread
+  (`ReaderLookupRunnerTest`). Text reaching the native engine is sanitized in `LookupEngine`
+  (`LookupTextTest`). Unicode selection keeps complete characters with UTF-16 DOM offsets
+  (`ReaderSelectionUnicodeWebViewTest`, `SentenceLookupQueryTest`); manga font search terminates
+  on integer bounds (`MangaWrapFallbackInstrumentedTest`).
 - Sentence mode (experimental, EPUB only, `features/reader/sentence/`): segments chapters exactly like `tools/pretranslate` (`EpubSentenceSegmenterTest` pins the rules) so stored sentence translations resolve; validated on the emulator (word-tap popups, tap-outside dismissal, swipe navigation, font and theme controls); promote it out of experimental after it has been used on a few real books.
 
 - Use `docs/IOS_UPSTREAM_SYNC_QUEUE.md` as the current iOS upstream sync queue; checked through `61306c7`, with popup scaling/vertical anchors, reader image/selection follow-up fixes, Dictionary pull-to-clear/auto-update, Anki/IPA glossary behavior, and TTU/Google Drive bookdata sync pending.
@@ -127,8 +130,10 @@ This file is the short operational handoff for future agents.
 - Update transfers reconcile with DownloadManager on startup and while About is visible;
   queued/paused/progress/failure states, retry/cancel, and the always-available latest-release
   link are covered by `UpdateDownloadCoordinatorTest`, `UpdateDownloadDestinationTest`,
-  `AboutUpdateStatusTest`, `UpdateDownloadManagerInstrumentedTest`, and `AboutUpdateLinkInstrumentedTest`
-  (download service and About link verified on API 35).
+  `AboutUpdateStatusTest`, `UpdateDownloadManagerInstrumentedTest`, and `AboutUpdateLinkInstrumentedTest`.
+  `Application.onCreate` blocks only on `UpdateStartup.snapshot()`; the DownloadManager query and
+  APK hashing in `UpdateStartup.reconcile()` stay in the background. Cancel, Retry and Skip never
+  discard a verified download (`UpdateDownloadCoordinatorTest`).
 
 - Before F-Droid distribution, split update behavior by distribution channel so F-Droid builds do not bypass F-Droid update checks.
 - Device-validate GitHub update prompts after the check/download split, covering skip-version, manual checks, completed-download prompts, user-triggered install, and same-version APK cleanup.

@@ -485,9 +485,6 @@
     <string name="about_update_checking_github">Checking GitHub Releases...</string>
     <string name="about_update_latest">You are running the latest version.</string>
     <string name="about_update_no_matching_apk">A newer release was found, but it does not include a single matching APK.</string>
-    <string name="about_update_downloading_format">Downloading update %1$s.</string>
-    <string name="about_update_already_downloading_format">Update %1$s is already downloading.</string>
-    <string name="about_update_already_downloaded_format">Update %1$s has already been downloaded.</string>
     <string name="update_downloading_notification">Downloading update</string>
     <string name="sasayaki_title">Sasayaki</string>
     <string name="sasayaki_pause">Pause Sasayaki</string>

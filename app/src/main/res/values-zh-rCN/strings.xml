@@ -483,9 +483,6 @@
     <string name="about_update_checking_github">正在检查 GitHub Releases...</string>
     <string name="about_update_latest">当前已是最新版本。</string>
     <string name="about_update_no_matching_apk">发现新版发布，但没有单个匹配的 APK。</string>
-    <string name="about_update_downloading_format">正在下载更新 %1$s。</string>
-    <string name="about_update_already_downloading_format">更新 %1$s 已在下载。</string>
-    <string name="about_update_already_downloaded_format">更新 %1$s 已下载。</string>
     <string name="update_downloading_notification">正在下载更新</string>
     <string name="sasayaki_title">有声书</string>
     <string name="sasayaki_pause">暂停有声书</string>

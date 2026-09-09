@@ -523,7 +523,7 @@ private fun DictionaryResultWebView(
             if (loadedHtml != html) {
                 lookupResultsHolder.results = results
                 loadedHtml = html
-                (webView as? PopupActionButtonWebView)?.clearActionButtons()
+                webView.clearActionButtons()
                 webView.loadDataWithBaseURL(
                     "https://hoshi.local/dictionary/",
                     html,
@@ -532,7 +532,7 @@ private fun DictionaryResultWebView(
                     null,
                 )
             }
-            (webView as? PopupActionButtonWebView)?.setActionButtonTint(actionButtonTintColor.toArgb())
+            webView.setActionButtonTint(actionButtonTintColor.toArgb())
             if (appliedPopupScale != popupScale) {
                 appliedPopupScale = popupScale
                 webView.evaluateJavascript(

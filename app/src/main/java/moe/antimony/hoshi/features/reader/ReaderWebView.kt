@@ -124,6 +124,10 @@ fun ReaderWebView(
     val context = LocalContext.current
     val appContainer = LocalHoshiAppContainer.current
     val scope = rememberCoroutineScope()
+    // Dictionary queries share a monitor with rebuilds, so they run off the main thread and a
+    // dismissal drops a result that arrives late. Selection and redirect lookups are independent.
+    val selectionLookups = remember(scope) { ReaderLookupRunner(scope) }
+    val redirectLookups = remember(scope) { ReaderLookupRunner(scope) }
     val fontManager = appContainer.readerFontManager
     val readerImageResourceBridge = remember(book, fontManager) {
         ReaderWebResourceBridge(book, fontManager)
@@ -561,62 +565,71 @@ fun ReaderWebView(
         if (!sasayakiSettings.enabled || !player.hasAudio) return null
         return player.findCue(chapterIndex = stateHolder.readerPosition.displayedPosition.index, offset = offset)
     }
-    fun lookupRootPopup(selection: ReaderSelectionData): Pair<LookupPopupItem, Int>? =
-        createLookupPopupItem(
-            selection = selection,
-            dictionaryStyles = dictionaryStyles,
-            lookup = dictionaryRepository::lookup,
-            options = LookupPopupOptions(
-                isVertical = effectiveSettings.verticalWriting,
-                isFullWidth = effectiveSettings.popupFullWidth,
-                width = effectiveSettings.popupWidth,
-                height = effectiveSettings.popupHeight,
-                swipeToDismiss = effectiveSettings.popupSwipeToDismiss,
-                swipeThreshold = effectiveSettings.popupSwipeThreshold,
-                reducedMotionScrolling = effectiveSettings.popupReducedMotionScrolling,
-                reducedMotionScrollPercent = effectiveSettings.popupReducedMotionScrollPercent,
-                reducedMotionSwipeThreshold = effectiveSettings.popupReducedMotionSwipeThreshold,
-                popupScale = effectiveSettings.popupScale,
-                popupActionBar = effectiveSettings.popupActionBar,
-                dictionarySettings = dictionarySettings,
-                darkMode = popupDarkMode,
-                eInkMode = effectiveSettings.eInkMode,
-                audioSettings = audioSettings,
-                documentTitle = book.title,
-                coverPath = sasayakiCoverFile?.absolutePath,
-            ),
-        )?.let { (popup, highlightCount) ->
-            popup.copy(sasayakiCue = sasayakiCueForSelection(selection)) to highlightCount
-        }
+    fun rootPopupOptions(): LookupPopupOptions = LookupPopupOptions(
+        isVertical = effectiveSettings.verticalWriting,
+        isFullWidth = effectiveSettings.popupFullWidth,
+        width = effectiveSettings.popupWidth,
+        height = effectiveSettings.popupHeight,
+        swipeToDismiss = effectiveSettings.popupSwipeToDismiss,
+        swipeThreshold = effectiveSettings.popupSwipeThreshold,
+        reducedMotionScrolling = effectiveSettings.popupReducedMotionScrolling,
+        reducedMotionScrollPercent = effectiveSettings.popupReducedMotionScrollPercent,
+        reducedMotionSwipeThreshold = effectiveSettings.popupReducedMotionSwipeThreshold,
+        popupScale = effectiveSettings.popupScale,
+        popupActionBar = effectiveSettings.popupActionBar,
+        dictionarySettings = dictionarySettings,
+        darkMode = popupDarkMode,
+        eInkMode = effectiveSettings.eInkMode,
+        audioSettings = audioSettings,
+        documentTitle = book.title,
+        coverPath = sasayakiCoverFile?.absolutePath,
+    )
+    fun childPopupOptions(): LookupPopupOptions = rootPopupOptions().copy(isVertical = false, isFullWidth = false)
+    /**
+     * Runs the dictionary query off the main thread and delivers the popup, with its Sasayaki
+     * cue attached, back on the main thread. Everything read from composition state happens
+     * here, before the query is handed to the background dispatcher.
+     */
+    fun launchPopupLookup(
+        selection: ReaderSelectionData,
+        options: LookupPopupOptions,
+        onResult: (Pair<LookupPopupItem, Int>?) -> Unit,
+    ) {
+        val styles = dictionaryStyles
+        selectionLookups.launch(
+            lookup = { createLookupPopupItem(selection, options, styles, dictionaryRepository::lookup) },
+            onResult = { lookup ->
+                onResult(
+                    lookup?.let { (popup, highlightCount) ->
+                        popup.copy(sasayakiCue = sasayakiCueForSelection(selection)) to highlightCount
+                    },
+                )
+            },
+        )
+    }
+    fun cancelPendingLookups() {
+        selectionLookups.cancel()
+        redirectLookups.cancel()
+    }
+    /**
+     * Clears the popups for a new root selection without resuming Sasayaki. The synchronous
+     * code resumed and re-paused playback within one main-thread turn; with the lookup off the
+     * main thread that gap would be audible. The result opens a popup and keeps the pause, an
+     * empty result or a dismissal resumes playback through [setLookupPopups].
+     */
+    fun clearLookupPopupsForPendingLookup() {
+        val keepPaused = stateHolder.sasayakiWasPausedByLookup
+        readerPopupHistories = emptyMap()
+        stateHolder.setLookupPopups(emptyList())
+        if (keepPaused) stateHolder.markSasayakiPausedByLookup()
+    }
+    /** Child lookup for the overlay fallback, which runs it on its own background dispatcher. */
     fun lookupChildPopup(selection: ReaderSelectionData): Pair<LookupPopupItem, Int>? =
-        createLookupPopupItem(
-            selection = selection,
-            dictionaryStyles = dictionaryStyles,
-            lookup = dictionaryRepository::lookup,
-            options = LookupPopupOptions(
-                isVertical = false,
-                isFullWidth = false,
-                width = effectiveSettings.popupWidth,
-                height = effectiveSettings.popupHeight,
-                swipeToDismiss = effectiveSettings.popupSwipeToDismiss,
-                swipeThreshold = effectiveSettings.popupSwipeThreshold,
-                reducedMotionScrolling = effectiveSettings.popupReducedMotionScrolling,
-                reducedMotionScrollPercent = effectiveSettings.popupReducedMotionScrollPercent,
-                reducedMotionSwipeThreshold = effectiveSettings.popupReducedMotionSwipeThreshold,
-                popupScale = effectiveSettings.popupScale,
-                popupActionBar = effectiveSettings.popupActionBar,
-                dictionarySettings = dictionarySettings,
-                darkMode = popupDarkMode,
-                eInkMode = effectiveSettings.eInkMode,
-                audioSettings = audioSettings,
-                documentTitle = book.title,
-                coverPath = sasayakiCoverFile?.absolutePath,
-            ),
-        )?.let { (popup, highlightCount) ->
-            popup.copy(sasayakiCue = sasayakiCueForSelection(selection)) to highlightCount
-        }
+        createLookupPopupItem(selection, childPopupOptions(), dictionaryStyles, dictionaryRepository::lookup)
+            ?.let { (popup, highlightCount) -> popup.copy(sasayakiCue = sasayakiCueForSelection(selection)) to highlightCount }
 
     fun closeReader() {
+        cancelPendingLookups()
         val plan = readerLifecycleAutoSyncPlan(ReaderLifecycleAutoSyncEvent.Dispose)
         if (plan.flushPendingProgressSave) {
             webView?.flushPendingProgressSave()
@@ -654,12 +667,14 @@ fun ReaderWebView(
         stateHolder.setLookupPopups(nextPopups, ::resumeSasayakiAfterLookupIfNeeded)
     }
     fun dismissRootLookupPopup() {
+        cancelPendingLookups()
         rootSelectionHighlight = null
         setLookupPopups(clearPopupSelectionHighlights(stateHolder.lookupPopups))
         clearReaderSelection()
         setLookupPopups(emptyList())
     }
     fun closeLookupPopupsAndSelection() {
+        cancelPendingLookups()
         rootSelectionHighlight = null
         if (lookupPopups.isNotEmpty()) {
             setLookupPopups(clearPopupSelectionHighlights(stateHolder.lookupPopups))
@@ -785,10 +800,12 @@ fun ReaderWebView(
             is ReaderLookupPopupBridgeMessage.OpenLink -> context.openPopupExternalLink(message.url)
             is ReaderLookupPopupBridgeMessage.TapOutside -> {
                 val index = popupIndex(message.popupId).takeIf { it >= 0 } ?: return
+                selectionLookups.cancel()
                 setLookupPopups(stateHolder.lookupPopups.take(index + 1))
             }
             is ReaderLookupPopupBridgeMessage.SwipeDismiss -> {
                 val index = popupIndex(message.popupId).takeIf { it >= 0 } ?: return
+                selectionLookups.cancel()
                 if (index == 0) {
                     dismissRootLookupPopup()
                 } else {
@@ -796,16 +813,18 @@ fun ReaderWebView(
                 }
             }
             is ReaderLookupPopupBridgeMessage.TextSelected -> {
-                val index = popupIndex(message.popupId).takeIf { it >= 0 } ?: return
-                val nextPopups = stateHolder.lookupPopups.take(index + 1)
-                val lookup = lookupChildPopup(message.selection)
-                if (lookup == null) {
-                    highlightReaderPopupSelection(message.popupId, 0)
-                    return
+                if (popupIndex(message.popupId) < 0) return
+                launchPopupLookup(message.selection, childPopupOptions()) { lookup ->
+                    // The parent may have been closed while the query ran.
+                    val index = popupIndex(message.popupId).takeIf { it >= 0 } ?: return@launchPopupLookup
+                    if (lookup == null) {
+                        highlightReaderPopupSelection(message.popupId, 0)
+                        return@launchPopupLookup
+                    }
+                    val (childPopup, highlightCount) = lookup
+                    setLookupPopups(stateHolder.lookupPopups.take(index + 1) + childPopup)
+                    highlightReaderPopupSelection(message.popupId, highlightCount)
                 }
-                val (childPopup, highlightCount) = lookup
-                setLookupPopups(nextPopups + childPopup)
-                highlightReaderPopupSelection(message.popupId, highlightCount)
             }
             is ReaderLookupPopupBridgeMessage.PlayWordAudio -> {
                 WordAudioPlayer.get(context).play(message.url, message.mode)
@@ -829,30 +848,39 @@ fun ReaderWebView(
             }
             is ReaderLookupPopupBridgeMessage.LookupRedirect -> {
                 val popup = popupById(message.popupId) ?: return
-                val results = dictionaryRepository.lookup(
-                    message.query,
-                    popup.state.dictionarySettings.maxResults,
-                    popup.state.dictionarySettings.scanLength,
+                val settings = popup.state.dictionarySettings
+                redirectLookups.launch(
+                    lookup = {
+                        runCatching { dictionaryRepository.lookup(message.query, settings.maxResults, settings.scanLength) }
+                            .getOrDefault(emptyList())
+                    },
+                    // A redirect superseded by another link click, or dropped by a dismissal,
+                    // still resolves its promise so the popup's click handler does not hang.
+                    onDropped = { message.messageId?.let { replyReaderPopupMessage(message.popupId, it, "0") } },
+                    onResult = { results ->
+                        // A popup closed while the query ran has nothing left awaiting the reply.
+                        if (popupById(message.popupId) == null) return@launch
+                        if (results.isNotEmpty()) {
+                            setLookupPopups(
+                                stateHolder.lookupPopups.map { existing ->
+                                    if (existing.id == message.popupId) {
+                                        existing.copy(state = existing.state.copy(results = results))
+                                    } else {
+                                        existing
+                                    }
+                                },
+                            )
+                            val current = readerPopupHistories[message.popupId] ?: ReaderPopupHistoryCounts()
+                            readerPopupHistories = readerPopupHistories + (
+                                message.popupId to current.copy(
+                                    backCount = current.backCount + 1,
+                                    forwardCount = 0,
+                                )
+                                )
+                        }
+                        message.messageId?.let { replyReaderPopupMessage(message.popupId, it, results.size.toString()) }
+                    },
                 )
-                if (results.isNotEmpty()) {
-                    setLookupPopups(
-                        stateHolder.lookupPopups.map { existing ->
-                            if (existing.id == message.popupId) {
-                                existing.copy(state = existing.state.copy(results = results))
-                            } else {
-                                existing
-                            }
-                        },
-                    )
-                    val current = readerPopupHistories[message.popupId] ?: ReaderPopupHistoryCounts()
-                    readerPopupHistories = readerPopupHistories + (
-                        message.popupId to current.copy(
-                            backCount = current.backCount + 1,
-                            forwardCount = 0,
-                        )
-                        )
-                }
-                replyReaderPopupMessage(message.popupId, message.messageId ?: return, results.size.toString())
             }
             is ReaderLookupPopupBridgeMessage.GetEntry -> {
                 val entry = popupById(message.popupId)?.state?.results?.getOrNull(message.index)
@@ -861,6 +889,7 @@ fun ReaderWebView(
             }
             is ReaderLookupPopupBridgeMessage.PopupScrolled -> {
                 val index = popupIndex(message.popupId).takeIf { it >= 0 } ?: return
+                selectionLookups.cancel()
                 setLookupPopups(closeChildPopupsForScrolledParent(stateHolder.lookupPopups, index))
             }
             is ReaderLookupPopupBridgeMessage.NavigateBack -> {
@@ -910,11 +939,11 @@ fun ReaderWebView(
         }
     }
     readerPopupBridgeHolder.callbacks = ReaderLookupPopupBridgeCallbacks(::handleReaderPopupBridgeMessage)
-    val handleTextSelected: (ReaderSelectionData, (Int, (List<ReaderSelectionRect>) -> Unit) -> Unit) -> Unit = { selection, selectionRects ->
-        stateHolder.enterFocusModeForReaderInteraction()
-        rootSelectionHighlight = null
-        setLookupPopups(emptyList())
-        val lookup = lookupRootPopup(selection)
+    fun applyRootLookup(
+        selection: ReaderSelectionData,
+        selectionRects: (Int, (List<ReaderSelectionRect>) -> Unit) -> Unit,
+        lookup: Pair<LookupPopupItem, Int>?,
+    ) {
         if (lookup != null) {
             val (popup, highlightCount) = lookup
             pauseSasayakiForLookupIfNeeded()
@@ -974,6 +1003,8 @@ fun ReaderWebView(
                 }
             }
         } else {
+            // No popup opens, so playback paused for the previous popup may resume now.
+            setLookupPopups(emptyList())
             onTextSelected(selection)?.let { count ->
                 if (readerIframePopupSupported) {
                     selectionRects(count) { rects ->
@@ -988,8 +1019,17 @@ fun ReaderWebView(
             }
         }
     }
+    val handleTextSelected: (ReaderSelectionData, (Int, (List<ReaderSelectionRect>) -> Unit) -> Unit) -> Unit = { selection, selectionRects ->
+        stateHolder.enterFocusModeForReaderInteraction()
+        rootSelectionHighlight = null
+        clearLookupPopupsForPendingLookup()
+        launchPopupLookup(selection, rootPopupOptions()) { lookup -> applyRootLookup(selection, selectionRects, lookup) }
+    }
     fun handleReaderTapOutside() {
-        if (!stateHolder.toggleFocusModeFromReaderTap(hasVisiblePopups = stateHolder.lookupPopups.isNotEmpty())) {
+        // A lookup whose popup has not opened yet counts as visible: the tap dismisses it
+        // instead of toggling focus mode and then letting the late popup appear.
+        val hasVisiblePopups = stateHolder.lookupPopups.isNotEmpty() || selectionLookups.isPending
+        if (!stateHolder.toggleFocusModeFromReaderTap(hasVisiblePopups = hasVisiblePopups)) {
             closeLookupPopupsAndSelection()
         }
     }

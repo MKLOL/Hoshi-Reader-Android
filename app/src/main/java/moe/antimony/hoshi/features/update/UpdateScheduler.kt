@@ -10,23 +10,13 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.launch
 import moe.antimony.hoshi.BuildConfig
 import java.util.concurrent.TimeUnit
 
 internal object UpdateScheduler {
     const val UniqueWorkName = "github-release-update-check"
     const val UniqueImmediateWorkName = "github-release-update-check-now"
-
-    fun sync(context: Context) {
-        val appContext = context.applicationContext
-        CoroutineScope(Dispatchers.IO).launch {
-            syncNow(appContext)
-        }
-    }
 
     suspend fun syncNow(context: Context) {
         val enabled = context.updateSettingsRepository().settings.first().autoCheckUpdates

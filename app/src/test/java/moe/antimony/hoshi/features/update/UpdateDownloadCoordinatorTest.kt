@@ -85,6 +85,7 @@ class UpdateDownloadCoordinatorTest {
                 f.backend.rows[id] = UpdateTransferSnapshot(UpdateDownloadRecordStatus.Downloaded)
                 assertEquals(UpdateDownloadRecordStatus.Failed, f.manager.refresh()?.status)
                 assertFalse(f.backend.targets.getValue(id).exists())
+                assertTrue("system row of the rejected file is removed", id in f.backend.removed)
             }
         }
     }
@@ -197,6 +198,132 @@ class UpdateDownloadCoordinatorTest {
         }
     }
 
+    @Test fun cancelAimedAtAnInFlightTransferDoesNotDiscardTheDownloadItRacedWith() = runBlocking {
+        fixture().use { f ->
+            val id = completeAndVerify(f)
+            f.manager.cancel(id)
+            assertEquals(UpdateDownloadRecordStatus.Downloaded, f.store.load()?.status)
+            assertEquals(id, f.store.load()?.downloadId)
+            assertTrue(f.backend.removed.isEmpty())
+            assertArrayEquals(bytes, f.backend.targets.getValue(id).readBytes())
+            assertTrue(f.manager.statusFor(update) is UpdateDownloadStatus.Downloaded)
+        }
+    }
+
+    @Test fun cancelWithAStaleIdIsIgnored() = runBlocking {
+        fixture().use { f ->
+            val id = f.manager.enqueue(update)
+            f.manager.cancel(id + 100)
+            assertEquals(UpdateDownloadRecordStatus.Queued, f.store.load()?.status)
+            assertTrue(f.backend.removed.isEmpty())
+        }
+    }
+
+    @Test fun retryNeverReplacesAVerifiedDownload() = runBlocking {
+        fixture().use { f ->
+            val id = completeAndVerify(f)
+            assertEquals(id, f.manager.retry(update))
+            assertEquals(UpdateDownloadRecordStatus.Downloaded, f.store.load()?.status)
+            assertTrue(f.backend.removed.isEmpty())
+            assertEquals(1, f.backend.targets.size)
+            assertArrayEquals(bytes, f.backend.targets.getValue(id).readBytes())
+        }
+    }
+
+    @Test fun skipCannotOrphanATransferThatAlreadyStarted() = runBlocking {
+        fixture().use { f ->
+            val id = f.manager.enqueue(update)
+            f.store.skip(update)
+            assertEquals(UpdateDownloadRecordStatus.Queued, f.store.load()?.status)
+            assertEquals(id, f.store.load()?.downloadId)
+            f.backend.rows[id] = UpdateTransferSnapshot(UpdateDownloadRecordStatus.Paused, pauseReason = UpdateDownloadPauseReason.Network)
+            f.manager.refresh()
+            f.store.skip(update)
+            assertEquals(UpdateDownloadRecordStatus.Paused, f.store.load()?.status)
+        }
+    }
+
+    @Test fun skipCannotDiscardAVerifiedDownloadOfTheSameUpdate() = runBlocking {
+        fixture().use { f ->
+            val id = completeAndVerify(f)
+            f.store.skip(update)
+            assertEquals(UpdateDownloadRecordStatus.Downloaded, f.store.load()?.status)
+            assertEquals(id, f.store.load()?.downloadId)
+        }
+    }
+
+    @Test fun skipStillReplacesAnAvailableOrFailedRecord() = runBlocking {
+        fixture().use { f ->
+            f.store.saveAvailable(update)
+            f.store.skip(update)
+            assertEquals(UpdateDownloadRecordStatus.Skipped, f.store.load()?.status)
+            val id = f.manager.enqueue(update)
+            f.backend.rows.remove(id)
+            assertEquals(UpdateDownloadRecordStatus.Failed, f.manager.refresh()?.status)
+            f.store.skip(update)
+            assertEquals(UpdateDownloadRecordStatus.Skipped, f.store.load()?.status)
+        }
+    }
+
+    @Test fun startupSnapshotReadsThePersistedRecordWithoutTouchingTheSystemDownloadOrTheFile() = runBlocking {
+        fixture().use { f ->
+            val id = f.manager.enqueue(update)
+            f.backend.targets.getValue(id).writeBytes(bytes)
+            f.backend.rows[id] = UpdateTransferSnapshot(UpdateDownloadRecordStatus.Downloaded, bytes.size.toLong(), bytes.size.toLong())
+            f.backend.queries = 0
+            val startup = startup(f)
+
+            val snapshot = startup.snapshot()
+
+            assertEquals(UpdateDownloadRecordStatus.Queued, snapshot?.status)
+            assertEquals(0, f.backend.queries)
+            assertEquals(UpdateDownloadRecordStatus.Queued, f.store.load()?.status)
+
+            startup.reconcile()
+
+            assertTrue(f.backend.queries > 0)
+            assertEquals(UpdateDownloadRecordStatus.Downloaded, f.store.load()?.status)
+            assertTrue(f.manager.statusFor(update) is UpdateDownloadStatus.Downloaded)
+        }
+    }
+
+    @Test fun startupReconcileDiscardsAnAlreadyInstalledUpdateAndSurvivesAFailingStep() = runBlocking {
+        fixture().use { f ->
+            val id = f.manager.enqueue(update)
+            f.backend.rows[id] = UpdateTransferSnapshot(UpdateDownloadRecordStatus.Paused)
+            var cleanupCalls = 0
+            val startup = UpdateStartup(
+                store = f.store,
+                currentVersionName = update.versionName,
+                discardInstalledUpdate = f.manager::discardInstalledUpdate,
+                deleteCurrentVersionApks = { cleanupCalls++; error("cleanup failed") },
+                refresh = { f.manager.refresh() },
+            )
+
+            startup.reconcile()
+
+            assertEquals(1, cleanupCalls)
+            assertNull(f.store.load())
+            assertEquals(listOf(id), f.backend.removed)
+        }
+    }
+
+    private suspend fun completeAndVerify(f: Fixture): Long {
+        val id = f.manager.enqueue(update)
+        f.backend.targets.getValue(id).writeBytes(bytes)
+        f.backend.rows[id] = UpdateTransferSnapshot(UpdateDownloadRecordStatus.Downloaded, bytes.size.toLong(), bytes.size.toLong())
+        assertEquals(UpdateDownloadRecordStatus.Downloaded, f.manager.refresh()?.status)
+        return id
+    }
+
+    private fun startup(f: Fixture) = UpdateStartup(
+        store = f.store,
+        currentVersionName = "0.11.7",
+        discardInstalledUpdate = f.manager::discardInstalledUpdate,
+        deleteCurrentVersionApks = {},
+        refresh = { f.manager.refresh() },
+    )
+
     private fun fixture(): Fixture {
         val directory = temp.newFolder()
         val scope = CoroutineScope(Dispatchers.IO + Job())
@@ -214,7 +341,11 @@ class UpdateDownloadCoordinatorTest {
         val targets = mutableMapOf<Long, File>()
         val urls = mutableMapOf<Long, String>()
         val removed = mutableListOf<Long>()
-        override fun query(downloadId: Long) = rows[downloadId]
+        var queries = 0
+        override fun query(downloadId: Long): UpdateTransferSnapshot? {
+            queries++
+            return rows[downloadId]
+        }
         override fun enqueue(update: AvailableUpdate, url: String, target: File): Long {
             check(rows.isEmpty()) { "Previous writer must be removed before enqueue" }
             check(!target.exists()) { "Previous partial file must be removed" }
