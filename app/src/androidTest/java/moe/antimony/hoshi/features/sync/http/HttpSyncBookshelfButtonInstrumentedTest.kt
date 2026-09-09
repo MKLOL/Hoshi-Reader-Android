@@ -20,7 +20,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 
-/** Use an empty emulator, with the local sync test server on adb-reversed port 18795. */
+/** Use an empty emulator, with a fresh, empty local sync test server on adb-reversed port 18795. */
 @RunWith(AndroidJUnit4::class)
 class HttpSyncBookshelfButtonInstrumentedTest {
     @get:Rule val compose = createComposeRule()
