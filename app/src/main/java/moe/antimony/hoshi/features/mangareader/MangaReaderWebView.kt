@@ -24,6 +24,7 @@ import moe.antimony.hoshi.features.reader.ReaderSwipeGestureTracker
 import moe.antimony.hoshi.mokuro.MokuroBook
 import moe.antimony.hoshi.webview.applyHoshiWebViewSecurityDefaults
 import java.io.File
+import kotlin.math.roundToInt
 
 private const val MANGA_SWIPE_MIN_DISTANCE = 72f
 private const val MANGA_NAVIGATION_MAX_ZOOM = 1.01f
@@ -160,6 +161,8 @@ internal fun MangaReaderWebView(
             )
             if (webView.tag != loadToken) {
                 webView.tag = loadToken
+                // setInitialScale uses physical pixels, unlike the viewport's CSS scale.
+                webView.setInitialScale((webView.resources.displayMetrics.density * 100).roundToInt())
                 webView.loadDataWithBaseURL(
                     MangaPageHtml.BASE_URL,
                     html,
@@ -167,27 +170,16 @@ internal fun MangaReaderWebView(
                     "utf-8",
                     null,
                 )
-                webView.post { webView.syncMangaHostScale() }
             }
         },
     )
 }
 
 private class MangaWebView(context: Context) : WebView(context) {
-    private var baselineScale: Float? = null
-
-    fun adoptMangaScaleBaseline(scale: Float) {
-        if (baselineScale == null && scale.isFinite() && scale > 0f) {
-            baselineScale = scale
-        }
-    }
-
     fun mangaZoomScale(): Float {
-        val current = rawMangaScale()
-        val baseline = baselineScale?.takeIf { it.isFinite() && it > 0f }
-            ?: current.takeIf { it.isFinite() && it > 0f }?.also { baselineScale = it }
-            ?: 1f
-        return current / baseline
+        // The fitted document uses initial/minimum-scale=1. Never adopt a restored zoom as
+        // the baseline: it would make a zoomed page look fitted to the swipe/selection code.
+        return rawMangaScale() / resources.displayMetrics.density
     }
 }
 
@@ -328,14 +320,20 @@ private class MangaWebViewClient(
     override fun onPageFinished(view: WebView, url: String?) {
         super.onPageFinished(view, url)
         if (requestUrlHost(url) != MangaWebResourceBridge.HOST) return
-        view.syncMangaHostScale()
         val loadToken = view.tag as? MangaPageLoadToken ?: return
+        // Reloading the same base URL can retain the preceding page's zoom and pan. Clamp to
+        // the document's minimum after it loads, before announcing its first rendered frame.
+        view.zoomBy(0.1f)
+        view.scrollTo(0, 0)
+        view.syncMangaHostScale()
         val requestId = nextMangaPageReadyRequestId()
         view.postVisualStateCallback(
             requestId,
             object : WebView.VisualStateCallback() {
                 override fun onComplete(requestId: Long) {
                     if (view.tag == loadToken) {
+                        view.scrollTo(0, 0)
+                        view.syncMangaHostScale()
                         onPageReady(loadToken.pageIndex)
                     }
                 }
@@ -345,7 +343,6 @@ private class MangaWebViewClient(
 
     override fun onScaleChanged(view: WebView, oldScale: Float, newScale: Float) {
         super.onScaleChanged(view, oldScale, newScale)
-        (view as? MangaWebView)?.adoptMangaScaleBaseline(oldScale)
         view.syncMangaHostScale()
     }
 

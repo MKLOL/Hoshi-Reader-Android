@@ -8,6 +8,7 @@ Semantic Versioning.
 ## [Unreleased]
 
 ### Added
+- **Sync directly from Books.** Once an HTTP sync token is saved, a cloud button starts sync and shows progress, results, and errors. Sync continues when its status dialog is closed.
 - **A News tab for easy Japanese.** Browse Watanoc and MATCHA Easy Japanese in one list, add your
   own RSS feeds, and switch sources on or off. "Want to read" saves an article to a News shelf as a
   book that opens in the regular reader with tap-to-look-up, furigana and sync. "Pre-translate"
@@ -19,6 +20,7 @@ Semantic Versioning.
   article" downloads it, puts it on the News shelf and opens it in the reader.
 
 ### Fixed
+- **Manga pages open fully zoomed out.** Opening a book or changing pages resets zoom and pan so the next swipe can turn the page immediately.
 - **Tapping a word while dictionaries are reloading no longer freezes the reader.** The lookup
   waits in the background and the popup opens when it is ready; tapping elsewhere in the
   meantime discards it.

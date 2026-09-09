@@ -115,6 +115,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -129,6 +130,8 @@ import moe.antimony.hoshi.epub.bookContentType
 import moe.antimony.hoshi.features.reader.ReaderSettings
 import moe.antimony.hoshi.features.sync.SyncDirection
 import moe.antimony.hoshi.features.sync.SyncMode
+import moe.antimony.hoshi.features.sync.http.HttpSyncBookshelfButton
+import moe.antimony.hoshi.features.sync.http.SyncStatus
 import moe.antimony.hoshi.features.sync.SyncSettings
 import moe.antimony.hoshi.importing.DirectoryImportContent
 import moe.antimony.hoshi.importing.ImportFileType
@@ -170,6 +173,7 @@ fun BookshelfView(
 ) {
     val context = LocalContext.current
     val appContainer = LocalHoshiAppContainer.current
+    val httpSyncStatus by appContainer.httpSyncManualSync.status.collectAsStateWithLifecycle()
     val syncSettings by appContainer.syncSettingsRepository.settings.collectAsState(initial = SyncSettings())
     val readerSettings by appContainer.readerSettingsRepository.settings.collectAsState(initial = ReaderSettings())
     val sasayakiSettings by appContainer.sasayakiSettingsRepository.settings.collectAsState(
@@ -262,6 +266,13 @@ fun BookshelfView(
 
     LaunchedEffect(refreshKey) {
         booksViewModel.reloadBookEntries()
+    }
+
+    LaunchedEffect(httpSyncStatus) {
+        if (httpSyncStatus is SyncStatus.Done || httpSyncStatus is SyncStatus.Failed) {
+            // A partial sync may still have imported books or updated reading positions.
+            booksViewModel.reloadBookEntries()
+        }
     }
 
     LaunchedEffect(Unit) {
@@ -989,6 +1000,7 @@ private fun BooksTopAppBar(
                     )
                 }
             } else {
+                HttpSyncBookshelfButton(enabled = enabled)
                 IconButton(onClick = onManageShelves, enabled = enabled) {
                     Icon(
                         imageVector = Icons.Rounded.FolderOpen,

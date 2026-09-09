@@ -144,6 +144,26 @@ internal class HoshiAppContainer(context: Context) {
         aiSettingsRepository = aiChatSettingsRepository,
         bookLocks = httpSyncBookLocks,
     )
+    val httpSyncManualSync = moe.antimony.hoshi.features.sync.http.HttpSyncManualSync(appScope) { onProgress ->
+        val settings = httpSyncSettingsRepository.settings.first()
+        require(settings.isConfigured) { appContext.getString(R.string.http_sync_not_configured) }
+        val result = httpSyncFastSync.syncNow(settings) { reconcileSettings, transport ->
+            HttpSyncEngineDispatcher.syncOnce(
+                reconciler = httpSyncReconciler,
+                v3Engine = v3SyncEngine,
+                settings = reconcileSettings,
+                transport = transport,
+                onProgress = onProgress,
+            )
+        }
+        result.newLastSyncedAt?.let { cursor ->
+            httpSyncSettingsRepository.update { it.copy(lastSyncedAt = cursor) }
+        }
+        if (result.errors.isEmpty()) {
+            httpSyncManualSyncSuccessAt.value = System.currentTimeMillis()
+        }
+        result
+    }
     val httpSyncBookmarkScheduler: HttpSyncBookmarkScheduler = HttpSyncBookmarkScheduler(
         state = httpSyncBatchState,
         currentSettings = { httpSyncSettingsRepository.settings.first() },

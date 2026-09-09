@@ -1,6 +1,6 @@
 # Hoshi Android Agent TODO
 
-Last updated: 2026-09-08
+Last updated: 2026-09-09
 
 This file is the short operational handoff for future agents.
 
@@ -120,6 +120,7 @@ This file is the short operational handoff for future agents.
   `epub.zip` + `epub.manifest` materialize remote-only EPUBs, `sentences` installs the
   validated offline sentence-translation sidecar, and the legacy v2 fallback must upload
   EPUB content instead of reporting metadata-only success.
+- Books has a token-gated HTTP cloud shortcut with shared app-owned manual sync, progress/results, and shelf refresh after completion; manga document loads reset zoom/pan before becoming ready. Validated with unit tests, build, lint, and a dedicated emulator covering zoomed page jumps/reopen/swipe plus cloud-button visibility and sync success/errors.
 - Preserve HTTP Sync manual-progress callbacks when adding reconciliation phases; long-running work should update the Settings screen with a real phase and item counter.
 - Preserve HTTP Sync per-key revision sidecars for bookmark/metadata edits; manual sync and auto-push paths must keep tombstones, shelf placement, imports, and bookmark writes revisioned so stale devices cannot overwrite newer remote state.
 - Keep the existing-KV logical two-map HTTP sync and durable five-second EPUB/manga bookmark outbox covered: unchanged libraries stay at one metadata GET, any number of dirty positions use one per-install shard PUT, concurrent devices cannot overwrite each other, and upgraded installs retain already-downloaded books after one content-hash computation.

@@ -667,4 +667,13 @@
     <string name="news_source_chip_error_format">%1$s！</string>
     <string name="news_meta_separator" translatable="false"> · </string>
     <string name="news_pretranslate_channel_name">文章翻译</string>
+    <string name="http_sync_not_configured">请在设置 → 高级 → HTTP 同步中添加服务器地址和令牌。</string>
+    <string name="http_sync_title">HTTP 同步</string>
+    <string name="http_sync_now">立即同步</string>
+    <string name="http_sync_running">正在同步…</string>
+    <string name="http_sync_starting">开始同步</string>
+    <string name="http_sync_errors">同步错误：</string>
+    <string name="http_sync_complete_format">同步完成：%1$s</string>
+    <string name="http_sync_failed_format">同步失败：%1$s</string>
+    <string name="http_sync_unknown_error">无法完成同步。</string>
 </resources>

@@ -669,4 +669,13 @@
     <string name="news_source_chip_error_format">%1$s !</string>
     <string name="news_meta_separator" translatable="false"> · </string>
     <string name="news_pretranslate_channel_name">Article translation</string>
+    <string name="http_sync_not_configured">Add a base URL and token in Settings → Advanced → HTTP Sync.</string>
+    <string name="http_sync_title">HTTP Sync</string>
+    <string name="http_sync_now">Sync now</string>
+    <string name="http_sync_running">Syncing…</string>
+    <string name="http_sync_starting">Starting sync</string>
+    <string name="http_sync_errors">Sync errors:</string>
+    <string name="http_sync_complete_format">Sync complete: %1$s</string>
+    <string name="http_sync_failed_format">Sync failed: %1$s</string>
+    <string name="http_sync_unknown_error">Unable to complete sync.</string>
 </resources>

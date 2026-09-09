@@ -21,10 +21,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -33,9 +31,8 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
-import kotlinx.coroutines.Dispatchers
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import moe.antimony.hoshi.LocalHoshiAppContainer
 import moe.antimony.hoshi.R
 import moe.antimony.hoshi.features.settings.SettingsDetailScaffold
@@ -53,18 +50,14 @@ fun HttpSyncSettingsView(
 ) {
     val appContainer = LocalHoshiAppContainer.current
     val repository = appContainer.httpSyncSettingsRepository
-    val reconciler = appContainer.httpSyncReconciler
-    val v3Engine = appContainer.v3SyncEngine
+    val manualSync = appContainer.httpSyncManualSync
     val scope = rememberCoroutineScope()
-    val settings by repository.settings.collectAsState(initial = null)
+    val settings by repository.settings.collectAsStateWithLifecycle(initialValue = null)
 
-    // Status is transient — a sync result doesn't need to survive process death — and
-    // `SyncStatus` is a sealed interface with non-Parcelable payloads, so `rememberSaveable`'s
-    // default saver crashes at composition trying to validate it. Plain `remember` is fine.
-    var status by remember { mutableStateOf<SyncStatus>(SyncStatus.Idle) }
+    val status by manualSync.status.collectAsStateWithLifecycle()
     var tokenVisible by rememberSaveable { mutableStateOf(false) }
 
-    SettingsDetailScaffold(title = "HTTP Sync", onClose = onClose, modifier = modifier) { innerPadding ->
+    SettingsDetailScaffold(title = stringResource(R.string.http_sync_title), onClose = onClose, modifier = modifier) { innerPadding ->
         val loaded = settings ?: return@SettingsDetailScaffold
         Column(
             modifier = Modifier
@@ -125,53 +118,9 @@ fun HttpSyncSettingsView(
             SyncNowButton(
                 enabled = loaded.isConfigured && status !is SyncStatus.Running,
                 running = status is SyncStatus.Running,
-                onClick = {
-                    status = SyncStatus.Running(
-                        HttpSyncProgress(
-                            message = "Starting sync",
-                            detail = "Preparing to compare this device with the server.",
-                        ),
-                    )
-                    scope.launch {
-                        status = runCatching {
-                            // Branches on loaded.useV3Sync. Default = v2 = production
-                            // behavior. See HttpSyncEngineDispatcher for the v3 cutover
-                            // safety net and the reader-hook TODO.
-                            appContainer.httpSyncFastSync.syncNow(loaded) { reconcileSettings, transport ->
-                                HttpSyncEngineDispatcher.syncOnce(
-                                    reconciler = reconciler,
-                                    v3Engine = v3Engine,
-                                    settings = reconcileSettings,
-                                    transport = transport,
-                                ) { progress ->
-                                    withContext(Dispatchers.Main.immediate) {
-                                        status = SyncStatus.Running(progress)
-                                    }
-                                }
-                            }
-                        }
-                            .fold(
-                                onSuccess = { result ->
-                                    // Persist the inbound cursor so the next sync can use
-                                    // `?since=` to skip everything we've already seen.
-                                    result.newLastSyncedAt?.let { cursor ->
-                                        repository.update { it.copy(lastSyncedAt = cursor) }
-                                    }
-                                    // Tell any active reader's circuit breaker that the
-                                    // server is reachable now, so the next page turn pushes
-                                    // even if the breaker was open from earlier failures.
-                                    appContainer.httpSyncManualSyncSuccessAt.value =
-                                        System.currentTimeMillis()
-                                    SyncStatus.Done(result)
-                                },
-                                onFailure = {
-                                    SyncStatus.Failed(it.message ?: "HTTP sync failed.")
-                                },
-                            )
-                    }
-                },
+                onClick = manualSync::start,
             )
-            StatusLine(status)
+            HttpSyncStatusLine(status)
         }
     }
 }
@@ -186,17 +135,25 @@ private fun SyncNowButton(
         if (running) {
             CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
             Spacer(Modifier.size(12.dp))
-            Text("Syncing…")
+            Text(stringResource(R.string.http_sync_running))
         } else {
-            Text("Sync now")
+            Text(stringResource(R.string.http_sync_now))
         }
     }
 }
 
 @Composable
-private fun StatusLine(status: SyncStatus) {
+internal fun HttpSyncStatusLine(status: SyncStatus) {
     if (status is SyncStatus.Running) {
-        SyncProgressView(status.progress)
+        val progress = status.progress
+        if (progress == null) {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                Text(stringResource(R.string.http_sync_starting))
+            }
+        } else {
+            SyncProgressView(progress)
+        }
         return
     }
     val (text, color) = when (status) {
@@ -204,10 +161,13 @@ private fun StatusLine(status: SyncStatus) {
         is SyncStatus.Running -> "" to MaterialTheme.colorScheme.onSurfaceVariant
         is SyncStatus.Done -> {
             val errorTail = if (status.result.errors.isEmpty()) "" else
-                "\nErrors:\n" + status.result.errors.joinToString("\n") { " • $it" }
-            "Sync complete: ${status.result.summary()}.$errorTail" to MaterialTheme.colorScheme.onSurface
+                "\n" + stringResource(R.string.http_sync_errors) + "\n" + status.result.errors.joinToString("\n") { " • $it" }
+            stringResource(R.string.http_sync_complete_format, status.result.summary()) + errorTail to MaterialTheme.colorScheme.onSurface
         }
-        is SyncStatus.Failed -> "Sync failed: ${status.message}" to MaterialTheme.colorScheme.error
+        is SyncStatus.Failed -> stringResource(
+            R.string.http_sync_failed_format,
+            status.message ?: stringResource(R.string.http_sync_unknown_error),
+        ) to MaterialTheme.colorScheme.error
     }
     if (text.isNotEmpty()) {
         Text(text = text, style = MaterialTheme.typography.bodyMedium, color = color)
@@ -239,11 +199,4 @@ private fun SyncProgressView(progress: HttpSyncProgress) {
             )
         }
     }
-}
-
-private sealed interface SyncStatus {
-    data object Idle : SyncStatus
-    data class Running(val progress: HttpSyncProgress) : SyncStatus
-    data class Done(val result: HttpSyncResult) : SyncStatus
-    data class Failed(val message: String) : SyncStatus
 }
