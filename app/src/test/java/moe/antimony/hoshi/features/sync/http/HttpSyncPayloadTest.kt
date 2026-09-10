@@ -15,6 +15,8 @@ import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import java.io.ByteArrayOutputStream
 import java.io.File
+import java.security.MessageDigest
+import java.util.zip.CRC32
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 
@@ -155,6 +157,34 @@ class HttpSyncPayloadTest {
     }
 
     // ===== Zip / unzip round-trip ==============================================================
+
+    @Test
+    fun unpacksIosZip64DataDescriptorsUsingCentralDirectory() {
+        // Synthetic three-page book made by iOS tools/seed_zoom_fixture.py, then uploaded
+        // with SSZipArchive on 2026-09-09. Its ZIP64 descriptors break ZipInputStream even
+        // though every entry is smaller than 16 KB. Keep the original archive bytes.
+        val archive = tempFolder.newFile("ios-payload.zip")
+        requireNotNull(javaClass.getResourceAsStream("/sync/ios-generated-payload.zip")).use { input ->
+            archive.outputStream().use { input.copyTo(it) }
+        }
+        val target = tempFolder.newFolder("ios-payload")
+
+        codec.unzipInto(archive, target)
+
+        val expectedHashes = mapOf(
+            "mokuro.json" to "71be77829ec9888c3a3ca645efc7237fc9a3dfe338cec46984bacefe2b4bd23f",
+            "images/page001.png" to "4a21c728ec24523e014010b8e1b5f9e1615da36455e4b20550e9fab7ef225e06",
+            "images/page002.png" to "3a40bb671a5d62abe33537cdb1840931396ad3467f5326018c891c6b9c386efc",
+            "images/page003.png" to "3a40bb671a5d62abe33537cdb1840931396ad3467f5326018c891c6b9c386efc",
+            "cover.png" to "f36df15062b907caa1de8eebeae0713355bb8f019e868b37bc4cdac8c4b05a5a",
+        )
+        assertEquals(expectedHashes.keys, target.walkTopDown().filter { it.isFile }.map { it.relativeTo(target).invariantSeparatorsPath }.toSet())
+        for ((path, expected) in expectedHashes) {
+            val actual = MessageDigest.getInstance("SHA-256").digest(target.resolve(path).readBytes())
+                .joinToString("") { "%02x".format(it) }
+            assertEquals(path, expected, actual)
+        }
+    }
 
     @Test
     fun zipAndUnzipRoundTripPreservesContents() = runBlocking {
@@ -556,14 +586,40 @@ class HttpSyncPayloadTest {
     }
 
     @Test
-    fun unzipGracefullyHandlesBytesWithNoZipSignature() {
-        // Java's ZipInputStream treats no-magic bytes as "zip with zero entries" rather
-        // than throwing. The codec's sha256 check on the caller side is what catches the
-        // actual corruption (bytes != manifest's sha) — see [downloadAndUnpackFailsOnSha256Mismatch].
+    fun unzipRejectsBytesWithNoZipSignature() {
         val garbage = ByteArray(100) { 0xFF.toByte() }
         val target = tempFolder.newFolder("victim")
-        codec.unzipInto(garbage, target)
+        assertThrows(HttpSyncException::class.java) {
+            codec.unzipInto(garbage, target)
+        }
         assertEquals("no files extracted from garbage bytes", 0, target.listFiles()?.size ?: 0)
+    }
+
+    @Test
+    fun unzipRejectsCorruptEntryEvenWhenCentralDirectoryIsReadable() {
+        val content = "original payload".toByteArray()
+        val archive = ByteArrayOutputStream().run {
+            ZipOutputStream(this).use { zip ->
+                zip.putNextEntry(ZipEntry("data.txt").apply {
+                    method = ZipEntry.STORED
+                    size = content.size.toLong()
+                    compressedSize = size
+                    crc = CRC32().apply { update(content) }.value
+                })
+                zip.write(content)
+                zip.closeEntry()
+            }
+            toByteArray()
+        }
+        // A STORED entry's bytes begin immediately after its 30-byte header and name.
+        val nameLength = (archive[26].toInt() and 0xff) or ((archive[27].toInt() and 0xff) shl 8)
+        val extraLength = (archive[28].toInt() and 0xff) or ((archive[29].toInt() and 0xff) shl 8)
+        val contentOffset = 30 + nameLength + extraLength
+        archive[contentOffset] = (archive[contentOffset].toInt() xor 1).toByte()
+
+        assertThrows(HttpSyncException::class.java) {
+            codec.unzipInto(archive, tempFolder.newFolder("corrupt-entry"))
+        }
     }
 
     // ===== uploadIfChanged + manifest comparison ==============================================

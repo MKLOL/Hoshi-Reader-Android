@@ -9,6 +9,9 @@ import android.provider.OpenableColumns
 import moe.antimony.hoshi.importing.ImportFileType
 import moe.antimony.hoshi.importing.validateImportFile
 import java.io.File
+import java.io.InputStream
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 
 class SasayakiAudioRepository(private val bookRoot: File) {
     fun importedPlayback(
@@ -63,11 +66,28 @@ class SasayakiAudioRepository(private val bookRoot: File) {
             .lowercase()
             .takeIf { it == "mp3" || it == "m4b" }
             ?: "m4b"
-        val targetName = "sasayaki_audio.$extension"
-        val target = audioDirectory().resolve(targetName)
-        contentResolver.openInputStream(uri).use { input ->
+        return contentResolver.openInputStream(uri).use { input ->
             requireNotNull(input) { "Unable to open selected audio file." }
-            target.outputStream().use { output -> input.copyTo(output) }
+            copyAudio(input, extension)
+        }
+    }
+
+    internal fun copyAudio(input: InputStream, extension: String): String {
+        val directory = audioDirectory()
+        val targetName = "sasayaki_audio.$extension"
+        val target = directory.resolve(targetName)
+        val staging = File.createTempFile("sasayaki_audio-", ".tmp", directory)
+        try {
+            staging.outputStream().use { output -> input.copyTo(output) }
+            // Keep the previous audiobook readable until the entire replacement is copied.
+            Files.move(
+                staging.toPath(),
+                target.toPath(),
+                StandardCopyOption.ATOMIC_MOVE,
+                StandardCopyOption.REPLACE_EXISTING,
+            )
+        } finally {
+            staging.delete()
         }
         return targetName
     }

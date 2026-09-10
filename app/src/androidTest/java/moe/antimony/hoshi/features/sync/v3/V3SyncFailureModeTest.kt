@@ -108,9 +108,13 @@ class V3SyncFailureModeTest {
             server.start()
             val a = freshDevice(server, "A", tempFolder.newFolder("a-root"))
             a.importMokuro("Book")
+            val interceptedLists = AtomicInteger()
             server.setBehavior { method, path ->
-                if (method == "GET" && path.startsWith("/v1/kv?")) BehaviorAction.FailWith(503, "boom")
-                else BehaviorAction.Passthrough
+                // NanoHTTPD's session.uri is the path only; the query lives separately.
+                if (method == "GET" && path == "/v1/kv") {
+                    interceptedLists.incrementAndGet()
+                    BehaviorAction.FailWith(503, "boom")
+                } else BehaviorAction.Passthrough
             }
             try {
                 a.sync()
@@ -120,6 +124,7 @@ class V3SyncFailureModeTest {
             } catch (_: Exception) {
                 // Some implementations may wrap differently; any exception is acceptable.
             }
+            assertTrue("The LIST fault was not exercised", interceptedLists.get() > 0)
         }
     }
 
@@ -128,9 +133,12 @@ class V3SyncFailureModeTest {
         StubKvServer().use { server ->
             server.start()
             val a = freshDevice(server, "A", tempFolder.newFolder("a-root"))
+            val interceptedLists = AtomicInteger()
             server.setBehavior { method, path ->
-                if (method == "GET" && path.startsWith("/v1/kv?")) BehaviorAction.FailWith(401, "no auth")
-                else BehaviorAction.Passthrough
+                if (method == "GET" && path == "/v1/kv") {
+                    interceptedLists.incrementAndGet()
+                    BehaviorAction.FailWith(401, "no auth")
+                } else BehaviorAction.Passthrough
             }
             try {
                 a.sync()
@@ -146,6 +154,7 @@ class V3SyncFailureModeTest {
                     listOf("auth", "401", "token", "bearer").any { it in (e.message ?: "").lowercase() },
                 )
             }
+            assertTrue("The LIST auth fault was not exercised", interceptedLists.get() > 0)
         }
     }
 

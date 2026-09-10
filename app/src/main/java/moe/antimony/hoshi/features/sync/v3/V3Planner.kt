@@ -302,7 +302,14 @@ class V3Planner {
                             remoteShelfUpdatedAt = r.metadata.shelfUpdatedAt,
                             localShelvesUpdatedAt = l.shelfUpdatedAt,
                         )
-                    ) (r.metadata.shelfUpdatedAt ?: r.metadataLastModified) else l.shelfUpdatedAt
+                    ) {
+                        // An unshelved book with no placement stamp has never been moved.
+                        // A metadata upload is not a shelf edit: manufacturing its timestamp
+                        // here changes identical metadata on the next sync. Legacy named
+                        // shelves still use the metadata timestamp to date their placement.
+                        r.metadata.shelfUpdatedAt
+                            ?: r.metadataLastModified.takeIf { r.metadata.shelfName != null }
+                    } else l.shelfUpdatedAt
                     // importedAt write-out:
                     //  - If we just overrode a server tombstone, publish the LOCAL import stamp
                     //    verbatim so peers can in turn compare it against any older `deletedAt`

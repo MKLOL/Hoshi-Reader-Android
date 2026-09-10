@@ -23,9 +23,9 @@ internal data class AppVersion(
         fun parse(raw: String): AppVersion? {
             val match = VersionRegex.matchEntire(raw.trim()) ?: return null
             return AppVersion(
-                major = match.groupValues[1].toInt(),
-                minor = match.groupValues[2].toInt(),
-                patch = match.groupValues[3].toInt(),
+                major = match.groupValues[1].toIntOrNull() ?: return null,
+                minor = match.groupValues[2].toIntOrNull() ?: return null,
+                patch = match.groupValues[3].toIntOrNull() ?: return null,
             )
         }
     }
@@ -84,7 +84,7 @@ internal fun GitHubRelease.availableUpdateOrNull(
     val selectedAsset = apkAssets.firstOrNull { it.name == expectedManga }
         ?: apkAssets.selectCompatibleAbiAsset(normalizedVersion, supportedAbis)
         ?: apkAssets.firstOrNull { it.name == expectedReaderLegacy }
-        ?: apkAssets.singleOrNull()
+        ?: apkAssets.singleOrNull()?.takeUnless { it.splitAbi(normalizedVersion) != null }
         ?: return null
     return AvailableUpdate(
         versionName = normalizedVersion,
@@ -100,19 +100,20 @@ private fun List<GitHubReleaseAsset>.selectCompatibleAbiAsset(
     normalizedVersion: String,
     supportedAbis: List<String>,
 ): GitHubReleaseAsset? {
-    val expectedPrefix = "Hoshi-Reader-v$normalizedVersion-"
-    val expectedSuffix = ".apk"
     val assetsByAbi = mapNotNull { asset ->
-        val abi = asset.name
-            .takeIf { it.startsWith(expectedPrefix) && it.endsWith(expectedSuffix) }
-            ?.removePrefix(expectedPrefix)
-            ?.removeSuffix(expectedSuffix)
-            ?: return@mapNotNull null
+        val abi = asset.splitAbi(normalizedVersion) ?: return@mapNotNull null
         abi to asset
     }
     return supportedAbis.firstNotNullOfOrNull { abi ->
         assetsByAbi.singleOrNull { (assetAbi, _) -> assetAbi == abi }?.second
     }
+}
+
+private fun GitHubReleaseAsset.splitAbi(normalizedVersion: String): String? {
+    val prefix = listOf("Hoshi-Reader", "Hoshi-Manga")
+        .map { "$it-v$normalizedVersion-" }
+        .firstOrNull(name::startsWith) ?: return null
+    return name.takeIf { it.endsWith(".apk") }?.removePrefix(prefix)?.removeSuffix(".apk")
 }
 
 private object AndroidSupportedAbis {

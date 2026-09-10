@@ -660,6 +660,7 @@
     <string name="news_pretranslate_error_book_missing">The article is no longer on the shelf.</string>
     <string name="news_pretranslate_error_no_sync_id">The article has no sync identity.</string>
     <string name="news_pretranslate_error_no_sentences">The article has no sentences to translate.</string>
+    <string name="news_pretranslate_error_incomplete_replacement">Pre-translation was incomplete. Your previous translations were kept.</string>
     <string name="news_pretranslate_error_blob_format">The translations could not be saved: %1$s</string>
     <string name="news_pretranslate_error_requests_failed_format">Too many requests failed. Last error: %1$s</string>
     <string name="news_pretranslate_error_on_device_model_format">Select %1$s as the offline translation model in Settings first.</string>

@@ -1,6 +1,6 @@
 # Hoshi Android Agent TODO
 
-Last updated: 2026-09-09
+Last updated: 2026-09-10
 
 This file is the short operational handoff for future agents.
 
@@ -27,40 +27,25 @@ This file is the short operational handoff for future agents.
 
 ### Bookshelf, Import, And Backup
 
-- EPUB is again a first-class format alongside mokuro manga: SAF file/folder import and
-  content-URI Open-with are available; bookshelf open events carry the selected on-disk
-  format directly into its matching reader, unsupported import errors remain localized,
-  single-file folder imports retain blocking progress through parsing, selected EPUB tree
-  grants are persisted, historical content/file Open-with coverage is restored, and
-  Appearance, Sasayaki, and ッツ sync expose the iOS-aligned EPUB workflows.
+- EPUB is again a first-class format alongside mokuro manga: SAF file/folder import and content-URI Open-with are available; bookshelf open events carry the selected on-disk format directly into its matching reader, unsupported import errors remain localized, single-file folder imports retain blocking progress through parsing, selected EPUB tree grants are persisted, historical content/file Open-with coverage is restored, and Appearance, Sasayaki, and ッツ sync expose the iOS-aligned EPUB workflows.
 - Bookshelf covers now publish stable cover sources with shelf state, decode iOS-sized 768px thumbnails, reuse cached bitmaps when returning to Books, and fill the cover frame without letterboxing.
 - Device-validate bookshelf multi-select markers in E-ink mode, confirming unselected books show an empty circle and selected books show a check mark.
 - Device-validate shelf-name entry, including user shelves named Reading alongside the virtual Reading Shelf, multi-EPUB DocumentsUI import, and recursive EPUB folder import in a session where text input and picker interaction can be driven reliably.
 - Device-validate editable text fields in dark and E-ink themes, confirming visible cursors and cursor-driven horizontal scrolling for long search, Audio source, Sync, Anki, shelf, and book-title values.
 - Cross-validate Android-created `Books` and `Dictionaries` `.hoshi` archives restored by iOS.
+- Keep corrupt-backup rejection before library replacement covered by `HoshiBackupRepositoryTest`.
 
 ### Reader And Lookup
 
-- Native dictionary popup teardown invalidates queued JavaScript callbacks before WebView
-  destruction and cancels superseded or dismissed nested lookups. Regression entry:
-  `PopupCallbackDispatcherTest`. Keep these checks when changing popup ownership.
-- Shared native dictionary reads/rebuilds use one monitor; regression entry:
-  `DictionaryNativeConcurrencyInstrumentedTest`. Because that monitor makes a lookup wait for a
-  rebuild, every reader lookup runs through `ReaderLookupRunner` (EPUB), the manga reader's
-  `lookupSelectionJob`, or the popup overlay's `lookupScope`, never on the main thread
-  (`ReaderLookupRunnerTest`). Text reaching the native engine is sanitized in `LookupEngine`
-  (`LookupTextTest`). Unicode selection keeps complete characters with UTF-16 DOM offsets
-  (`ReaderSelectionUnicodeWebViewTest`, `SentenceLookupQueryTest`); manga font search terminates
-  on integer bounds (`MangaWrapFallbackInstrumentedTest`).
+- Audiobook replacement stages the complete copy before an atomic move; retain `SasayakiAudioRepositoryTest` and `SasayakiAudioRepositoryInstrumentedTest`.
+
+- EPUB URL paths decode once, contents links resolve from their navigation document, and resource fallbacks stay inside the imported book. Regression entries: `EpubBookParserTest`, `EpubBookModelTest`, `ReaderInternalLinkTest`, and `ReaderWebResourceBridgeTest`.
+- Native dictionary popup teardown invalidates queued JavaScript callbacks before WebView destruction and cancels superseded or dismissed nested lookups. Regression entry: `PopupCallbackDispatcherTest`. Keep these checks when changing popup ownership.
+- Shared native dictionary reads/rebuilds use one monitor; regression entry: `DictionaryNativeConcurrencyInstrumentedTest`. Because that monitor makes a lookup wait for a rebuild, every reader lookup runs through `ReaderLookupRunner` (EPUB), the manga reader's `lookupSelectionJob`, or the popup overlay's `lookupScope`, never on the main thread (`ReaderLookupRunnerTest`). Text reaching the native engine is sanitized in `LookupEngine` (`LookupTextTest`). Unicode selection keeps complete characters with UTF-16 DOM offsets (`ReaderSelectionUnicodeWebViewTest`, `SentenceLookupQueryTest`); manga font search terminates on integer bounds (`MangaWrapFallbackInstrumentedTest`).
 - Sentence mode (experimental, EPUB only, `features/reader/sentence/`): segments chapters exactly like `tools/pretranslate` (`EpubSentenceSegmenterTest` pins the rules) so stored sentence translations resolve; validated on the emulator (word-tap popups, tap-outside dismissal, swipe navigation, font and theme controls); promote it out of experimental after it has been used on a few real books.
 
 - Use `docs/IOS_UPSTREAM_SYNC_QUEUE.md` as the current iOS upstream sync queue; checked through `61306c7`, with popup scaling/vertical anchors, reader image/selection follow-up fixes, Dictionary pull-to-clear/auto-update, Anki/IPA glossary behavior, and TTU/Google Drive bookdata sync pending.
-- Completed `docs/IOS_UPSTREAM_SYNC_QUEUE.md` slice 1: continuous reader padding now belongs to the visible viewport, vertical paginated columns resolve from page height, and chapter HTML receives an early XHTML-safe viewport while retaining the fast `loadUrl` chapter path.
-- Completed `docs/IOS_UPSTREAM_SYNC_QUEUE.md` slice 2: large reader images and SVG image media now use iOS-style tap handling, Blur Images first-tap reveal, fullscreen zoom with anchored raster-image gestures, safe-area-aware controls and bounded panning, and copy/save/share controls.
-- Completed `docs/IOS_UPSTREAM_SYNC_QUEUE.md` slice 3: Advanced reader Layout now includes iOS-style paragraph spacing with persistence, WebView reload-key participation, and vertical/horizontal CSS margin mapping.
-- Completed `docs/IOS_UPSTREAM_SYNC_QUEUE.md` slice 4: reader chrome now uses Android immersive system bars with transient edge-swipe reveal, iOS-aligned focus-mode entry on selection/page/scroll, floating center info bubbles, top text safety spacing, screen-edge focus quick controls, a small bottom gesture-safe progress band, and bottom chrome overlays without reserving button space in reader content.
-- Completed `docs/IOS_UPSTREAM_SYNC_QUEUE.md` slice 5: recursive lookup popup selection now uses the configured scan length; zoom-coordinate handling was aligned with iOS but the pre-fix drift was not reproduced on Android WebView.
-- Completed `docs/IOS_UPSTREAM_SYNC_QUEUE.md` slice 7: EPUB publisher CSS rules are sanitized before Android WebView rendering, preserving negative indentation while removing layout-breaking writing mode, line height, height, positive indentation, and nested column-count declarations.
+- iOS upstream slices 1–5 and 7 are aligned: viewport padding, image interactions, paragraph spacing, immersive chrome, recursive scan length, and publisher CSS sanitization. Keep their remaining device matrices below.
 - Reader Appearance now supports iOS-style Custom theme colors with a separate Interface setting; real-device smoke covered immediate Background, Text, and Info color updates from the reader sheet, with the full theme regression matrix still tracked below.
 - Device-validate the reader lookup iframe popup path across paged and continuous mode, vertical and horizontal writing, recursive child lookup, parent-scroll child dismissal, duplicate state, audio error/autoplay, popup scale levels, redirect history, Sasayaki popup controls, dark-mode action button contrast, E-ink selection marks, swipe dismiss, outside tap/stylus dismiss, dictionary media images, and absence of invisible touch blockers after dismissal.
 - Reader lookup iframe now preloads/reuses the root iframe, gates visibility on first renderable content plus root selection highlight readiness, restores E-ink underline-style root marks, keeps action/Sasayaki controls aligned with the native popup layout, and lazy-loads popup dictionary media; it has real-device smoke coverage for vertical lookup, Sasayaki control-bar layout, popup bottom overscroll isolation, and swipe dismiss, while the full validation matrix above remains open.
@@ -104,6 +89,7 @@ This file is the short operational handoff for future agents.
 
 ### Anki
 
+- Keep note-type refresh and stale-ID recovery covered by `AnkiRepositoryTest` and `AnkiRepositoryBackendSelectionTest`; removed fields must not survive a mapping refresh.
 - Device-validate Android AnkiConnect against both an HTTPS internet host and a private HTTP host: connect, fetch, duplicate check, referenced-only media storage (including no unused cover/audio uploads), add-note, and optional force-sync behavior.
 - Blocked: device-validate AnkiDroid add-card sync on an Android target with AnkiDroid installed, confirming the new Anki setting starts `com.ichi2.anki.DO_SYNC` only after a successful add and respects AnkiDroid's 5-minute sync limit.
 - Keep backend coverage for duplicate checks, AnkiDroid fetch failures, and AnkiConnect request shaping.
@@ -111,66 +97,33 @@ This file is the short operational handoff for future agents.
 
 ### Sync
 
+- AI chat appends serialize across reader/sync store instances; settings compare timestamp instants (`AiChatHistoryStoreTest`, `AiChatSettingsRepositoryTest`).
+
 - HTTP sync payload content hash: iOS builds through 0.11.3 published mis-derived `contentSha256` manifests, so every download failed the content check; the 22 server manifests were repaired on 2026-09-04. Both clients now correct a wrong manifest hash on download (only while the server still serves the exact manifest bytes the archive was checked against) and re-hash from disk before any replacement; every proof that the local bytes equal the server's archive records its sha256 in `.payload.zip.sha256.cache`, so pre-existing books gain the baseline that stops cross-platform hash disagreements from re-downloading them (`SyncIntegrationTest.aBookHeldBeforeTheArchiveBaselineExisted…`). Cross-platform golden vectors: `HttpSyncPayloadTest.contentHashMatchesCrossPlatformGoldenVector` and iOS `Tests/Regression/test_payload_content_hash.py` (compiles the real Swift function); change fixtures on both or neither.
 - Preserve the shared lifecycle-aware loaded-settings collection pattern when adding settings pages so controls do not flash default values before saved preferences load.
 - Keep reader auto-export save/upload work on a scope that survives reader route disposal so close and background flushes can finish after navigation.
 - Keep HTTP Sync `payload.zip` upload/download file-backed; large Mokuro manga must not be materialized as a single `ByteArray` in production sync paths.
 - Keep HTTP Sync large `payload.zip` uploads on the multipart KV API with Cloudflare-safe part sizes; do not fall back to one oversized HTTP request.
-- HTTP Sync must keep Android interoperable with the current iOS EPUB wire contract:
-  `epub.zip` + `epub.manifest` materialize remote-only EPUBs, `sentences` installs the
-  validated offline sentence-translation sidecar, and the legacy v2 fallback must upload
-  EPUB content instead of reporting metadata-only success.
-- Investigate iOS-generated manga ZIP import on Android: uploading the synthetic `tools/seed_zoom_fixture.py` book with iOS then syncing Android hits `invalid entry size (expected 0 but got 686 bytes)` in `HttpSyncPayload` extraction. The shortcut reports the error; its success path passes against a fresh local server.
+- HTTP Sync must keep Android interoperable with the current iOS EPUB wire contract: `epub.zip` + `epub.manifest` materialize remote-only EPUBs, `sentences` installs the validated offline sentence-translation sidecar, and the legacy v2 fallback must upload EPUB content instead of reporting metadata-only success.
+- iOS ZIP64 payloads use central-directory extraction with entry size/CRC validation; retain the iOS-produced fixture in `HttpSyncPayloadTest` and `HttpSyncPayloadArchiveInstrumentedTest` when changing archive handling.
 - Books has a token-gated HTTP cloud shortcut with shared app-owned manual sync, progress/results, and shelf refresh after completion; manga document loads reset zoom/pan before becoming ready. Validated with unit tests, build, lint, and a dedicated emulator covering zoomed page jumps/reopen/swipe plus cloud-button visibility and sync success/errors.
 - Preserve HTTP Sync manual-progress callbacks when adding reconciliation phases; long-running work should update the Settings screen with a real phase and item counter.
 - Preserve HTTP Sync per-key revision sidecars for bookmark/metadata edits; manual sync and auto-push paths must keep tombstones, shelf placement, imports, and bookmark writes revisioned so stale devices cannot overwrite newer remote state.
-- Keep the existing-KV logical two-map HTTP sync and durable five-second EPUB/manga bookmark outbox covered: unchanged libraries stay at one metadata GET, any number of dirty positions use one per-install shard PUT, concurrent devices cannot overwrite each other, and upgraded installs retain already-downloaded books after one content-hash computation.
+- Keep never-moved unshelved metadata timestamp-free (`V3PlannerTest`). Keep the existing-KV logical two-map HTTP sync and durable five-second EPUB/manga bookmark outbox covered: unchanged libraries stay at one metadata GET, any number of dirty positions use one per-install shard PUT, concurrent devices cannot overwrite each other, and upgraded installs retain already-downloaded books after one content-hash computation.
 - Device-validate the first Android Google Drive sync slice with `testdata/test.epub` on a user-configured Device Code OAuth client from the same project as iOS/ッツ: connect/sign-out state, transient network backoff and another-device authorization guidance, long-press manual import/export result dialogs, reader-open import-only, iOS-aligned paginated/continuous auto-export timing, close/background flush export, statistics Merge/Replace, and Sasayaki last-position sync.
 
 ### News
 
-- The News tab (`features/news/`) is additive: saved articles are written as extracted EPUB trees
-  (`NewsArticleEpubWriter`, EPUB 3 + NCX for iOS) and registered through
-  `BookshelfRepository.importExtractedEpubDirectory`, so the reader, sync and shelves see plain
-  books; the only news-owned state lives in `files/News/` (`NewsFeedStore`). Listings come from RSS
-  (`RssFeedParser`) or a hidden WebView (`WebViewNewsExtractor` + `assets/hoshi-news/extract.js`)
-  because NHK's 2025 site is client-rendered behind a session token. Regression entries:
-  `RssFeedParserTest`, `NewsFeedStoreTest`, `NewsArticleXhtmlTest`, `NewsArticleEpubWriterTest`.
-- Pre-translation (`features/news/pretranslate/`) is the app's first writer of
-  `sentence_translations.json`: `PretranslationPlanner` segments with `EpubSentenceSegmenter`,
-  `PretranslationRunner` batches through `CloudChat` or the on-device model, the blob is validated
-  with `EpubTranslationStore.validationError` before `SentenceTranslationsWriter` stores it, and
-  `SentenceTranslationsUploader` PUTs `books/{syncId}/sentences` (sync itself stays download-only
-  and, by design, re-validates the listed blob on every sync even when the local copy matches:
-  `HttpEpubSyncInteropTest` pins that an identical malformed blob is still rejected).
-  Cost estimates come from `ModelPricing` (approximate list prices, dated) and `TokenEstimator`.
-  Regression entries: `PretranslationPlannerTest`, `SentenceBatchPromptTest`,
-  `PretranslationRunnerTest`, `SentenceTranslationsWriterTest`.
-- Shared links (`MainActivity` "Save as article" share target, `NewsSharedUrl`,
-  `NewsRepository.saveSharedUrl`) reuse the same extractor; a URL is attributed to the built-in
-  source that owns its host so its hints apply, otherwise to the shared-link pseudo-source.
-- NHK NEWS WEB EASY (NHK ONE) serves its article list only inside Japan; the source starts
-  disabled and is labeled Japan-only. `extract.js` clicks the site's "For users abroad" notice
-  once (only for a source with `acknowledgeSelector`), which was not enough from the US. Blocked
-  on access from Japan or a VPN; the public sitemap (`/news/easy/sitemap/sitemap.xml`) is the
-  fallback listing if one is ever needed.
-- Blocked: the pre-translation job has not been run against a real model on a device (no API key
-  or downloaded on-device model on the test emulator). The dialog, planning, cost estimate, batch
-  runner, blob writer and reader consumption are covered by unit tests; the first real run should
-  check a cloud model with notes on and the on-device path.
-- Next: re-check MATCHA/Watanoc extraction after site redesigns (the hints in `NewsSourceCatalog`
-  are the only site-specific knowledge); consider thumbnails in the list and a per-article
-  "translated" badge on the Books shelf.
+- The News tab (`features/news/`) is additive: saved articles are written as extracted EPUB trees (`NewsArticleEpubWriter`, EPUB 3 + NCX for iOS) and registered through `BookshelfRepository.importExtractedEpubDirectory`, so the reader, sync and shelves see plain books; the only news-owned state lives in `files/News/` (`NewsFeedStore`). Listings come from RSS (`RssFeedParser`) or a hidden WebView (`WebViewNewsExtractor` + `assets/hoshi-news/extract.js`) because NHK's 2025 site is client-rendered behind a session token. Regression entries: `RssFeedParserTest`, `NewsFeedStoreTest`, `NewsArticleXhtmlTest`, `NewsArticleEpubWriterTest`.
+- Pre-translation (`features/news/pretranslate/`) is the app's first writer of `sentence_translations.json`: `PretranslationPlanner` segments with `EpubSentenceSegmenter`, `PretranslationRunner` batches through `CloudChat` or the on-device model, the blob is validated with `EpubTranslationStore.validationError` before `SentenceTranslationsWriter` stores it, and `SentenceTranslationsUploader` PUTs `books/{syncId}/sentences` (sync itself stays download-only and, by design, re-validates the listed blob on every sync even when the local copy matches: `HttpEpubSyncInteropTest` pins that an identical malformed blob is still rejected). Cost estimates come from `ModelPricing` (approximate list prices, dated) and `TokenEstimator`. Regression entries: `PretranslationPlannerTest`, `SentenceBatchPromptTest`, `PretranslationRunnerTest`, `SentenceTranslationsWriterTest`; incomplete reruns preserve other-model translations until replacement is complete.
+- Shared links (`MainActivity` "Save as article" share target, `NewsSharedUrl`, `NewsRepository.saveSharedUrl`) reuse the same extractor; a URL is attributed to the built-in source that owns its host so its hints apply, otherwise to the shared-link pseudo-source.
+- NHK NEWS WEB EASY (NHK ONE) serves its article list only inside Japan; the source starts disabled and is labeled Japan-only. `extract.js` clicks the site's "For users abroad" notice once (only for a source with `acknowledgeSelector`), which was not enough from the US. Blocked on access from Japan or a VPN; the public sitemap (`/news/easy/sitemap/sitemap.xml`) is the fallback listing if one is ever needed.
+- Blocked: the pre-translation job has not been run against a real model on a device (no API key or downloaded on-device model on the test emulator). The dialog, planning, cost estimate, batch runner, blob writer and reader consumption are covered by unit tests; the first real run should check a cloud model with notes on and the on-device path.
+- Next: re-check MATCHA/Watanoc extraction after site redesigns (the hints in `NewsSourceCatalog` are the only site-specific knowledge); consider thumbnails in the list and a per-article "translated" badge on the Books shelf.
 
 ### Release Distribution
 
-- Update transfers reconcile with DownloadManager on startup and while About is visible;
-  queued/paused/progress/failure states, retry/cancel, and the always-available latest-release
-  link are covered by `UpdateDownloadCoordinatorTest`, `UpdateDownloadDestinationTest`,
-  `AboutUpdateStatusTest`, `UpdateDownloadManagerInstrumentedTest`, and `AboutUpdateLinkInstrumentedTest`.
-  `Application.onCreate` blocks only on `UpdateStartup.snapshot()`; the DownloadManager query and
-  APK hashing in `UpdateStartup.reconcile()` stay in the background. Cancel, Retry and Skip never
-  discard a verified download (`UpdateDownloadCoordinatorTest`).
+- Update transfers reconcile with DownloadManager on startup and while About is visible; queued/paused/progress/failure states, retry/cancel, and the always-available latest-release link are covered by `UpdateDownloadCoordinatorTest`, `UpdateDownloadDestinationTest`, `AboutUpdateStatusTest`, `UpdateDownloadManagerInstrumentedTest`, and `AboutUpdateLinkInstrumentedTest`. `Application.onCreate` blocks only on `UpdateStartup.snapshot()`; the DownloadManager query and APK hashing in `UpdateStartup.reconcile()` stay in the background. Cancel, Retry and Skip never discard a verified download (`UpdateDownloadCoordinatorTest`).
 
 - Before F-Droid distribution, split update behavior by distribution channel so F-Droid builds do not bypass F-Droid update checks.
 - Device-validate GitHub update prompts after the check/download split, covering skip-version, manual checks, completed-download prompts, user-triggered install, and same-version APK cleanup.
@@ -181,110 +134,16 @@ This file is the short operational handoff for future agents.
 Branch `codex/mokuro-manga-support`. A parallel content path for mokuro manga (JSON +
 page images) that reuses the bookshelf, dictionary lookup, and Anki mining.
 
-- Working end to end, emulator-verified: import (`.zip`/`.cbz` bundle or SAF folder),
-  bookshelf entry + cover, page WebView rendering, visible+selectable OCR text wired to
-  the shared dictionary lookup, right-to-left navigation, volume-key paging, per-page
-  resume. Content type is derived from disk (`mokuro.json` sidecar), never stored in the
-  iOS-shared `metadata.json`; `Bookmark.chapterIndex` carries the page index. Accepted
-  manga archive layout is documented in `docs/MOKURO_ZIP_FORMAT.md`; ambiguous fallback
-  image paths are rejected instead of silently binding a page from another volume.
-- Architecture invariants for future work: keep using the shared `ReaderSelectionScripts`
-  / `ReaderSelectionBridge` / `LookupPopupStackView` for lookup; the manga page WebView is
-  sized from the host-provided viewport dimensions (CSS `vw`/`vh` resolve to 0 in this
-  WebView config) — do not reintroduce `useWideViewPort`/`loadWithOverviewMode` or
-  `vh`-based sizing.
-- Emulator-verified: OCR text is hidden until a bubble is tapped (a tap reveals that
-  bubble on a near-opaque plate and looks the tapped word up; tapping empty artwork hides
-  revealed bubbles again), a revealed bubble shows a copy button that copies its whole
-  text, and page turns play a right-to-left slide animation by default while Behavior can
-  disable that animation for instant swaps without forcing E-ink black-and-white mode.
-- ChatGPT bubble lookup, emulator-verified end to end: a revealed bubble shows a ChatGPT
-  button that sends a configurable prompt + the bubble's OCR text to OpenAI and shows the
-  Markdown-rendered reply in a closable popup; API key / model / prompt and a per-manga
-  chat history with compact Yomitan-style dictionary context are reached from the manga
-  reader's overflow (⋯) menu. Kept deliberately self-contained in `features/ai/` (own
-  settings store, own `ai_chat_log.json` per book, no shared-file edits) so it stays easy
-  to merge alongside upstream.
-- ChatGPT screenshot translation, emulator-verified end to end: the manga overflow menu can
-  open a crop overlay, map the selected zoomed/panned viewport back to source page pixels,
-  send that crop to OpenAI, save it on the history entry, and use a separate
-  customizable/synced image prompt while keeping the API key local-only.
-- Zoom/chrome interactions, emulator-verified: one-finger swipes turn pages only when the
-  page is not zoomed or pannable, two-finger pinch zooms and one-finger panning do not turn
-  pages, zoomed OCR bubble taps hit the visible bubble position, and the floating controls
-  / page chip have subtle independent backgrounds without full-width input bars.
-- Manga statistics are wired to the shared `statistics.json` sidecar while presenting
-  manga-specific page units in the reader overflow Statistics sheet; adjacent manga pages
-  are also preloaded through a small generated-HTML cache and bounded image-file warmup.
-- Boox/Onyx fullscreen reader bars still need real-device validation with a tall manga
-  page after emulator validation: the top status strip should hide while reading, and if
-  a device keeps a system bar visible then page artwork must be inset below it.
-- Not yet done: reader appearance/settings sheet for manga and two-page spreads. Manual
-  validation should cover import of both source layouts, RTL paging boundaries, rapid page
-  turns, tall/zoomed OCR bubble popup placement, short-landscape full-width popups, and
-  ChatGPT history rendering on slow devices.
+- Working end to end, emulator-verified: import (`.zip`/`.cbz` bundle or SAF folder), bookshelf entry + cover, page WebView rendering, visible+selectable OCR text wired to the shared dictionary lookup, right-to-left navigation, volume-key paging, per-page resume. Content type is derived from disk (`mokuro.json` sidecar), never stored in the iOS-shared `metadata.json`; `Bookmark.chapterIndex` carries the page index. Accepted manga archive layout is documented in `docs/MOKURO_ZIP_FORMAT.md`; ambiguous fallback image paths are rejected instead of silently binding a page from another volume.
+- Architecture invariants for future work: keep using the shared `ReaderSelectionScripts` / `ReaderSelectionBridge` / `LookupPopupStackView` for lookup; the manga page WebView is sized from the host-provided viewport dimensions (CSS `vw`/`vh` resolve to 0 in this WebView config) — do not reintroduce `useWideViewPort`/`loadWithOverviewMode` or `vh`-based sizing.
+- Emulator-verified: OCR text is hidden until a bubble is tapped (a tap reveals that bubble on a near-opaque plate and looks the tapped word up; tapping empty artwork hides revealed bubbles again), a revealed bubble shows a copy button that copies its whole text, and page turns play a right-to-left slide animation by default while Behavior can disable that animation for instant swaps without forcing E-ink black-and-white mode.
+- ChatGPT bubble lookup, emulator-verified end to end: a revealed bubble shows a ChatGPT button that sends a configurable prompt + the bubble's OCR text to OpenAI and shows the Markdown-rendered reply in a closable popup; API key / model / prompt and a per-manga chat history with compact Yomitan-style dictionary context are reached from the manga reader's overflow (⋯) menu. Kept deliberately self-contained in `features/ai/` (own settings store, own `ai_chat_log.json` per book, no shared-file edits) so it stays easy to merge alongside upstream.
+- ChatGPT screenshot translation, emulator-verified end to end: the manga overflow menu can open a crop overlay, map the selected zoomed/panned viewport back to source page pixels, send that crop to OpenAI, save it on the history entry, and use a separate customizable/synced image prompt while keeping the API key local-only.
+- Zoom/chrome interactions, emulator-verified: one-finger swipes turn pages only when the page is not zoomed or pannable, two-finger pinch zooms and one-finger panning do not turn pages, zoomed OCR bubble taps hit the visible bubble position, and the floating controls / page chip have subtle independent backgrounds without full-width input bars.
+- Manga statistics are wired to the shared `statistics.json` sidecar while presenting manga-specific page units in the reader overflow Statistics sheet; adjacent manga pages are also preloaded through a small generated-HTML cache and bounded image-file warmup.
+- Boox/Onyx fullscreen reader bars still need real-device validation with a tall manga page after emulator validation: the top status strip should hide while reading, and if a device keeps a system bar visible then page artwork must be inset below it.
+- Not yet done: reader appearance/settings sheet for manga and two-page spreads. Manual validation should cover import of both source layouts, RTL paging boundaries, rapid page turns, tall/zoomed OCR bubble popup placement, short-landscape full-width popups, and ChatGPT history rendering on slow devices.
 
 ## Required Validation
 
-- HTTP sync: `./gradlew :app:testDebugUnitTest --tests 'moe.antimony.hoshi.features.sync.integration.*'` runs the production engines against the real `tools/sync-test-server` over HTTP (needs `python3`); the iOS repo's `python3 -m unittest Tests.Regression.test_sync_integration` does the same for iOS in the simulator. Both must pass before any sync release.
-
-On a fresh machine, run `./bootstrap.sh` (macOS/Homebrew) to install the JDK 21, Android
-SDK 36 + NDK + CMake, and Rust + cargo-ndk toolchain, then `source ./.bootstrap-env` before
-any Gradle command (it exports `ANDROID_NDK_HOME`, which the Rust/UniFFI build needs).
-
-Before claiming implementation complete, run:
-
-```bash
-./gradlew test
-./gradlew assembleDebug
-```
-
-Also run `./gradlew lint` when changing resources, manifest, UI, packaging, or release-facing build behavior.
-
-For settings/navigation changes, verify settings controls update immediately and route changes avoid fade transitions on e-ink displays.
-
-For dark-theme cold-start regressions, use emulator screen recording with the App Appearance theme set to Dark and confirm no light `No Books` app frame appears before the bookshelf loads.
-
-For build label regressions, verify build variant manifest labels override localized app name resources: release builds keep the launcher label `Sui Manga Reader` and debug builds show `Sui Manga Reader Debug` on English and Simplified Chinese devices.
-
-For bookshelf tab-switch regressions, use real-device screen recording to confirm cover placeholders do not flash white when returning to Books from the bottom tab bar.
-
-For bookshelf-to-reader regressions, use real-device continuous screenshots or screen recording to confirm no Bookshelf loading spinner or dark-mode white loading frame appears between tapping a book and showing the Reader.
-
-For reader/dictionary/audio user flows, perform targeted emulator or device validation using the test data listed in `AGENTS.md`; include external AnkiconnectAndroid Local Audio URL add behavior, built-in Local Audio enable behavior, MP3 and Opus `android.db` playback, and use the `pixivで読む` definition link case for dictionary external-link regressions.
-
-For reader/dictionary theme regressions, verify open Dictionary tab results, the Dictionary search cursor, reader lookup taps and open reader lookup popups, system status/navigation icon contrast in Light, Sepia Light, Dark, Sepia Dark, and Custom interface modes under Android system dark mode, reader theme-family switches update colors without WebView reload, Custom background/text/info colors update immediately, and System theme's Use Sepia as Light Theme toggle update immediately when switching between Light, Dark, System, Custom, and E-ink appearance modes.
-
-For reader process-restore regressions, verify returning directly to an open book after app process eviction still rebuilds dictionary lookup and opens reader lookup popups without first visiting the bookshelf.
-
-For Dictionary tab input regressions, verify opening the tab focuses the search field, shows the soft keyboard, and hints Japanese input when a Japanese-capable keyboard is installed.
-
-For reader appearance chrome regressions, verify Show Title off, Show Back Button on/off, Progress Position Bottom, compact bottom buttons, Sasayaki top-right toggle spacing, top title centering with asymmetric top buttons, bottom reader-menu spacing, iOS visual item order, light-mode menu outline visibility, focus mode status-bar hiding without text reflow, Android Back revealing chrome before closing the reader, and all progress indicators hidden against the paginated reader text area.
-
-For reader appearance controls, verify Layout Mode shows both Paginated and Continuous labels without truncation in the settings page and reader sheet.
-
-For reader statistics regressions, verify Advanced -> Statistics defaults off, enabling it turns on the three Appearance statistics toggles, Off/Page Turn/On autostart modes, the reader Statistics sheet without an extra header close row, single 70%-height reader sheet behavior without detent jitter, compact reader sheet row density, smooth Appearance and Chapters sheet scrolling, the Chapters sheet without the extra large title/close row while keeping the book cover header, untruncated Appearance segmented labels with clear selected-state contrast in E-ink mode, compact single-row Appearance font selection, the top-left session toggle using chart/timer icons, bottom speed/time display, page-turn delayed saves, close/background `statistics.json` persistence, and background pause/resume without counted elapsed time.
-
-For Sasayaki settings regressions, verify fresh installs default Sasayaki, Show Sasayaki Toggle, Auto-Scroll, and Auto-Pause on Lookup on, and that Appearance can toggle the reader Sasayaki button.
-
-For Sasayaki matching regressions, verify short low-confidence `＊` subtitle cues are skipped while longer `＊` cues still match and advance playback alignment.
-
-For Sasayaki skip-control regressions, verify the same cue/5s/10s/15s/30s action applies from reader safe-area playback controls, Sasayaki sheet controls, and Android system media controls.
-
-Blocked: device-validate Sasayaki bottom safe-area playback controls once an Android target is available, covering the inherited/default-on Pin Playback Controls to Safe Area toggle in the Sasayaki menu, left-aligned rewind/play-or-pause/fast-forward controls with corner padding, vertical-writing reverse action behavior, right-aligned bottom progress when both are enabled, centered progress when only progress is fixed, and absence of the old Back/Menu-flanking skip buttons.
-
-For Sasayaki volume-key regressions, verify volume-key seek with loaded audiobook audio, fallback without loaded audio, priority over Volume Keys Turn Pages, and Reverse Volume Key Direction affecting both seek and page-turn controls.
-
-For reader keep-screen-on regressions, verify Behavior -> Keep Screen On defaults off, persists after leaving settings, keeps the display awake while the reader is foregrounded when enabled, clears after closing the reader when disabled, and still keeps Sasayaki playback awake only while playback and Auto-Scroll are active.
-
-For reader text layout regressions, verify Appearance -> Layout changes such as Vertical Padding reload the current chapter at the displayed position and visibly affect text spacing; also spot-check vertical ruby text near the bottom of a line so furigana-adjacent text continues in the current column when there is room.
-
-For continuous reader layout regressions, verify vertical-writing Horizontal Padding and horizontal-writing Vertical Padding inset the current visible viewport rather than only the chapter ends, and continuous reader chrome only re-enters focus mode from a new drag gesture after tapping to reveal controls.
-
-For continuous reader gesture regressions, verify a long drag that reverses direction still scrolls, that dragging backwards at the start of a chapter reaches the previous chapter's end, and that lifting a finger mid-chapter never turns a chapter on its own.
-
-For reader popup settings regressions, verify changing every Popup section control while a continuous reader is open does not rebuild the WebView and does not stop scroll progress updates.
-
-For localization changes, run `./gradlew :app:testDebugUnitTest --tests moe.antimony.hoshi.LocalizationResourceTest` and keep `docs/TRANSLATING.md` aligned with supported locale resource directories.
-
-For app-language regressions, verify the Advanced settings Language card appears only on Android 13+, selection persists through Android system App Language, Follow system clears the app locale, and Android 12 or lower continues to follow the system language without showing the card.
+- Follow [Validation entry points](VALIDATION.md) for build/test/lint commands, cross-platform sync checks, and the reader, theme, localization, audio, and device regression matrices.

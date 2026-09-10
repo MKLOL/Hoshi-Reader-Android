@@ -26,11 +26,6 @@ class AiChatHistoryStore(
         ignoreUnknownKeys = true
     }
 
-    // [append] is a load-modify-write, so two requests finishing close together (a previous
-    // in-flight one plus a new tap) could otherwise interleave their reads and clobber an
-    // entry. Serializing append behind this mutex keeps the log append-only.
-    private val appendMutex = Mutex()
-
     /** The book's chat history, or an empty log if there is none yet / it cannot be read. */
     suspend fun load(bookRoot: File): AiChatLog = withContext(ioDispatcher) {
         val file = bookRoot.resolve(FILE_NAME)
@@ -64,5 +59,9 @@ class AiChatHistoryStore(
 
     private companion object {
         const val FILE_NAME = "ai_chat_log.json"
+
+        // The reader and sync each own a store. Serialize their load-modify-write appends
+        // together so concurrent replies cannot overwrite one another's history entries.
+        val appendMutex = Mutex()
     }
 }

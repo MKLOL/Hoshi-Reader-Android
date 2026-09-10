@@ -147,12 +147,12 @@ class AiChatSettingsRepository(
         return applied
     }
 
-    /**
-     * Lexicographic comparison of RFC 3339 UTC strings — chronological order for Z-suffixed
-     * timestamps. Lives here (instead of in [moe.antimony.hoshi.features.sync.http]) so the
-     * settings module doesn't need a sync dependency for an atomic LWW decision.
-     */
-    private fun compareRfc3339String(a: String, b: String): Int = a.compareTo(b)
+    /** Fractional precision and UTC offsets can differ between devices. */
+    private fun compareRfc3339String(a: String, b: String): Int {
+        val left = runCatching { Instant.parse(a) }.getOrNull()
+        val right = runCatching { Instant.parse(b) }.getOrNull()
+        return if (left != null && right != null) left.compareTo(right) else a.compareTo(b)
+    }
 
     /**
      * Reads the API key for [provider] from its own DataStore slot. Keys are per-provider and never

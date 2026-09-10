@@ -16,8 +16,11 @@ import java.security.DigestOutputStream
 import java.security.MessageDigest
 import java.text.Normalizer
 import java.util.UUID
+import java.util.zip.CRC32
+import java.util.zip.CheckedInputStream
 import java.util.zip.ZipEntry
-import java.util.zip.ZipInputStream
+import java.util.zip.ZipException
+import java.util.zip.ZipFile
 import java.util.zip.ZipOutputStream
 
 /**
@@ -750,20 +753,28 @@ class HttpSyncPayloadCodec(
      * (zip-slip defense). Throws [HttpSyncException] on malformed zip or escape attempts.
      */
     internal fun unzipInto(bytes: ByteArray, targetDir: File) {
-        unzipStream({ bytes.inputStream() }, targetDir)
+        // Small-fixture helper only; production already has a file-backed download.
+        targetDir.parentFile?.mkdirs()
+        val archive = File.createTempFile("hoshi-sync-fixture-", ".zip", targetDir.parentFile)
+        try {
+            archive.writeBytes(bytes)
+            unzipInto(archive, targetDir)
+        } finally {
+            archive.delete()
+        }
     }
 
     internal fun unzipInto(zipFile: File, targetDir: File) {
-        unzipStream({ zipFile.inputStream().buffered(STREAM_BUFFER_SIZE) }, targetDir)
-    }
-
-    private fun unzipStream(openInput: () -> java.io.InputStream, targetDir: File) {
         targetDir.mkdirs()
         val canonicalTarget = targetDir.canonicalFile
         try {
-            ZipInputStream(openInput()).use { zin ->
-                while (true) {
-                    val entry = zin.nextEntry ?: break
+            // SSZipArchive on iOS writes ZIP64 data descriptors even for small entries.
+            // ZipInputStream can interpret those as 32-bit descriptors and reject valid
+            // data with "expected 0". ZipFile uses the final central-directory sizes.
+            ZipFile(zipFile).use { archive ->
+                val entries = archive.entries()
+                while (entries.hasMoreElements()) {
+                    val entry = entries.nextElement()
                     val outFile = canonicalTarget.resolve(entry.name).canonicalFile
                     if (!outFile.path.startsWith(canonicalTarget.path + File.separator) &&
                         outFile.path != canonicalTarget.path) {
@@ -773,9 +784,15 @@ class HttpSyncPayloadCodec(
                         outFile.mkdirs()
                     } else {
                         outFile.parentFile?.mkdirs()
-                        outFile.outputStream().use { out -> zin.copyTo(out) }
+                        val checksum = CRC32()
+                        val copied = CheckedInputStream(archive.getInputStream(entry), checksum).use { input ->
+                            outFile.outputStream().buffered(STREAM_BUFFER_SIZE).use { out -> input.copyTo(out) }
+                        }
+                        // ZipFile streams do not validate CRC themselves as ZipInputStream did.
+                        if (copied != entry.size || checksum.value != entry.crc) {
+                            throw ZipException()
+                        }
                     }
-                    zin.closeEntry()
                 }
             }
         } catch (e: HttpSyncException) {

@@ -15,6 +15,7 @@ import java.nio.file.Files
 import java.time.Instant
 import java.time.ZoneId
 import java.util.zip.ZipEntry
+import java.util.zip.CRC32
 import java.util.zip.ZipInputStream
 import java.util.zip.ZipOutputStream
 
@@ -152,6 +153,39 @@ class HoshiBackupRepositoryTest {
 
         assertEquals("keep", booksDir.resolve("keep.txt").readText())
         assertFalse(filesDir.resolve("escape.txt").exists())
+    }
+
+    @Test
+    fun restoreBooksRejectsDamagedEntryWithoutReplacingCurrentBooks() = runBlocking {
+        val filesDir = Files.createTempDirectory("hoshi-books-backup-corrupt").toFile()
+        val booksDir = filesDir.resolve("Books").also { it.mkdirs() }
+        booksDir.resolve("keep.txt").writeText("current library")
+        val content = "restored data".toByteArray()
+        val archive = ByteArrayOutputStream().run {
+            ZipOutputStream(this).use { zip ->
+                zip.putNextEntry(ZipEntry("restored.txt").apply {
+                    method = ZipEntry.STORED
+                    size = content.size.toLong()
+                    compressedSize = size
+                    crc = CRC32().apply { update(content) }.value
+                })
+                zip.write(content)
+                zip.closeEntry()
+            }
+            toByteArray()
+        }
+        val dataOffset = 30 + ushort(26, archive) + ushort(28, archive)
+        archive[dataOffset] = (archive[dataOffset].toInt() xor 1).toByte()
+
+        try {
+            HoshiBackupRepository(filesDir).restoreBooks(ByteArrayInputStream(archive))
+            fail("Expected damaged backup to be rejected")
+        } catch (_: CorruptBackupException) {
+        }
+
+        assertEquals("current library", booksDir.resolve("keep.txt").readText())
+        assertFalse(booksDir.resolve("restored.txt").exists())
+        assertEquals(listOf("Books"), filesDir.listFiles().orEmpty().map { it.name })
     }
 
     @Test

@@ -208,6 +208,40 @@ class GitHubReleaseUpdateRepositoryTest {
     }
 
     @Test
+    fun doesNotOfferAnIncompatibleSplitWhenItIsTheOnlyApk() {
+        val release = splitAbiRelease().let { it.copy(assets = it.assets.take(1)) }
+
+        assertEquals(
+            null,
+            release.availableUpdateOrNull("0.3.4", supportedAbis = listOf("armeabi-v7a")),
+        )
+    }
+
+    @Test
+    fun selectsCompatibleMangaSplitAndRejectsAnIncompatibleOnlySplit() {
+        val release = splitAbiRelease().let { release ->
+            release.copy(assets = release.assets.map { it.copy(name = it.name.replace("Hoshi-Reader", "Hoshi-Manga")) })
+        }
+
+        assertEquals(
+            "Hoshi-Manga-v0.3.5-armeabi-v7a.apk",
+            release.availableUpdateOrNull("0.3.4", supportedAbis = listOf("armeabi-v7a"))?.assetName,
+        )
+        assertEquals(
+            null,
+            release.copy(assets = release.assets.take(1))
+                .availableUpdateOrNull("0.3.4", supportedAbis = listOf("armeabi-v7a")),
+        )
+    }
+
+    @Test
+    fun rejectsOverflowingVersionComponentsWithoutThrowing() {
+        listOf("2147483648.1.0", "1.2147483648.0", "1.0.2147483648").forEach { raw ->
+            assertEquals(null, AppVersion.parse(raw))
+        }
+    }
+
+    @Test
     fun rejectsInvalidReleaseVersionAndAmbiguousApkAssets() {
         val invalidVersion = GitHubRelease(
             tagName = "latest",

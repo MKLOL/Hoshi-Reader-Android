@@ -29,7 +29,7 @@ internal class ReaderWebResourceBridge(
         val path = uri.path.orEmpty()
         return when {
             path.startsWith("/fonts/") -> fontResource(path.removePrefix("/fonts/"))
-            path.startsWith("/epub/") -> epubResource(path.removePrefix("/epub/"))
+            path.startsWith("/epub/") -> epubResource(uri.rawPath.orEmpty().removePrefix("/epub/"))
             else -> null
         }
     }
@@ -37,8 +37,8 @@ internal class ReaderWebResourceBridge(
     fun imageResourceForUrl(url: String): ReaderWebResource? {
         val uri = runCatching { URI(url) }.getOrNull() ?: return null
         if (uri.host != "hoshi.local") return null
-        val path = uri.path.orEmpty().removePrefix("/epub/")
-        if (path.isBlank() || path == uri.path.orEmpty()) return null
+        val path = uri.rawPath.orEmpty().removePrefix("/epub/")
+        if (path.isBlank() || path == uri.rawPath.orEmpty()) return null
         val mediaType = book.mediaType(path).substringBefore(';').trim()
         if (!mediaType.startsWith("image/", ignoreCase = true)) return null
         val data = book.readResource(path) ?: return null

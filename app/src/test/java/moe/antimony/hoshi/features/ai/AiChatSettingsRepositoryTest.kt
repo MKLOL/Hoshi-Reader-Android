@@ -171,6 +171,26 @@ class AiChatSettingsRepositoryTest {
         assertEquals("first-model", repo.settings.first().model)
     }
 
+    @Test
+    fun applyFromSyncOrdersFractionalSecondsChronologically() = runBlocking {
+        val repo = newRepo()
+        repo.applyFromSync("first", "first", "first", "2026-09-10T12:00:00Z")
+
+        assertTrue(repo.applyFromSync("newer", "newer", "newer", "2026-09-10T12:00:00.123Z"))
+        assertFalse(repo.applyFromSync("older", "older", "older", "2026-09-10T12:00:00Z"))
+        assertEquals("newer", repo.settings.first().model)
+    }
+
+    @Test
+    fun applyFromSyncDoesNotReplaceAnEqualInstantWithDifferentFormatting() = runBlocking {
+        val repo = newRepo()
+        repo.applyFromSync("first", "first", "first", "2026-09-10T12:00:00.000Z")
+
+        assertFalse(repo.applyFromSync("equal", "equal", "equal", "2026-09-10T12:00:00Z"))
+        assertFalse(repo.applyFromSync("offset", "offset", "offset", "2026-09-10T14:00:00+02:00"))
+        assertEquals("first", repo.settings.first().model)
+    }
+
     private fun newRepo(): AiChatSettingsRepository =
         AiChatSettingsRepository(InMemoryPreferencesDataStore())
 

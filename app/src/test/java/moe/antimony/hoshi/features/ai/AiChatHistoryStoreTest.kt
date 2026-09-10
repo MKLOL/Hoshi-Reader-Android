@@ -1,9 +1,13 @@
 package moe.antimony.hoshi.features.ai
 
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.yield
+import kotlin.coroutines.CoroutineContext
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -112,6 +116,35 @@ class AiChatHistoryStoreTest {
             (1..count).map { "bubble-$it" }.toSet(),
             persisted.map { it.bubbleText }.toSet(),
         )
+    }
+
+    @Test
+    fun readerAndSyncStoreAppendsPreserveBothEntries() = runBlocking {
+        val bookRoot = tempFolder.newFolder("shared-book")
+        val pending = ArrayDeque<Runnable>()
+        val ioDispatcher = object : CoroutineDispatcher() {
+            override fun dispatch(context: CoroutineContext, block: Runnable) {
+                pending.addLast(block)
+            }
+        }
+        val readerStore = AiChatHistoryStore(ioDispatcher)
+        val syncStore = AiChatHistoryStore(ioDispatcher)
+        val readerEntry = AiChatEntry("reader", "p", "model", "reader reply", 1.0)
+        val syncEntry = AiChatEntry("sync", "p", "model", "synced reply", 2.0)
+
+        val writes = listOf(
+            async(start = CoroutineStart.UNDISPATCHED) { readerStore.append(bookRoot, readerEntry) },
+            async(start = CoroutineStart.UNDISPATCHED) { syncStore.append(bookRoot, syncEntry) },
+        )
+        // Drain reads together before their continuations can queue writes. Without a shared
+        // lock both stores read an empty log, then overwrite one another deterministically.
+        while (writes.any { !it.isCompleted }) {
+            while (pending.isNotEmpty()) pending.removeFirst().run()
+            yield()
+        }
+        writes.awaitAll()
+
+        assertEquals(setOf(readerEntry, syncEntry), store.load(bookRoot).entries.toSet())
     }
 }
 

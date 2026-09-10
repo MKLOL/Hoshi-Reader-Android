@@ -66,6 +66,9 @@ internal class SimDevice(
                 cover = null,
                 folder = root.name,
                 lastAccess = appleNow(),
+                // Match AndroidBookshelfRepository: a new import is newer than any
+                // prior deletion of the same title, so it can revive that sync identity.
+                importedAt = Instant.now().toString(),
             ),
         )
         return root
@@ -108,6 +111,7 @@ internal class SimDevice(
                 cover = null,
                 folder = root.name,
                 lastAccess = appleNow(),
+                importedAt = Instant.now().toString(),
             ),
         )
         return root

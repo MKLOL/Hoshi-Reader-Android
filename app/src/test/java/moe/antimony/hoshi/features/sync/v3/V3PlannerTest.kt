@@ -161,6 +161,30 @@ class V3PlannerTest {
     // --- empty / trivial ------------------------------------------------------
 
     @Test
+    fun unchangedUnshelvedMetadataDoesNotTurnUploadTimeIntoAShelfEdit() {
+        val metadata = HttpSyncMetadataBlob(title = "book", contentType = HttpSyncContentType.Mokuro, rev = 0)
+        val remote = remoteBook("book", metadata = metadata).copy(metadataLastModified = "2026-05-15T12:00:00Z")
+
+        val plan = planner.compute(snapshot(listOf(localBook("book"))), remoteSnapshot(listOf(remote)))
+
+        assertEquals(metadata, plan.actions.filterIsInstance<V3Action.PushMetadata>().single().blob)
+        assertTrue(plan.actions.none { it is V3Action.ApplyRemoteMetadata })
+    }
+
+    @Test
+    fun legacyNamedShelfCanStillUseMetadataTimeForItsPlacement() {
+        val metadata = HttpSyncMetadataBlob(title = "book", contentType = HttpSyncContentType.Mokuro, shelfName = "Reading")
+        val stamp = "2026-05-15T12:00:00Z"
+        val remote = remoteBook("book", metadata = metadata).copy(metadataLastModified = stamp)
+
+        val plan = planner.compute(snapshot(listOf(localBook("book"))), remoteSnapshot(listOf(remote)))
+
+        val uploaded = plan.actions.filterIsInstance<V3Action.PushMetadata>().single().blob
+        assertEquals("Reading", uploaded.shelfName)
+        assertEquals(stamp, uploaded.shelfUpdatedAt)
+    }
+
+    @Test
     fun emptyLocalAndEmptyRemoteProducesEmptyPlan() {
         val plan = planner.compute(snapshot(), remoteSnapshot())
         assertEquals(emptyList<V3Action>(), plan.actions)

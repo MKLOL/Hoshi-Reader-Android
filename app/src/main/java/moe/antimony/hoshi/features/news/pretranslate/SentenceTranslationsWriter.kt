@@ -59,6 +59,15 @@ object SentenceTranslationsWriter {
     fun encode(blob: HttpSyncSentencesBlob): ByteArray =
         json.encodeToString(HttpSyncSentencesBlob.serializer(), blob).toByteArray(Charsets.UTF_8)
 
+    /** Keeps another configuration's translations until the replacement covers the whole plan. */
+    fun writeResult(bookRoot: File, blob: HttpSyncSentencesBlob, sentenceCount: Int): Boolean {
+        if (blob.entries.size < sentenceCount &&
+            hasSidecarForOtherConfiguration(bookRoot, blob.syncId, blob.model, blob.promptId)
+        ) return false
+        write(bookRoot, encode(blob))
+        return true
+    }
+
     /** Writes [bytes] atomically as the book's sidecar and drops the reader's cached copy. */
     fun write(bookRoot: File, bytes: ByteArray) {
         val target = File(bookRoot, EPUB_TRANSLATIONS_FILENAME)

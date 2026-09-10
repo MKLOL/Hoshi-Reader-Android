@@ -53,7 +53,7 @@ class UpdateDownloadManagerInstrumentedTest {
         }
     }
 
-    @Test fun retryDuringStreamingSurvivesOldWriterShutdownAndCancelRemovesRequest() = runBlocking<Unit> {
+    @Test fun retryDuringStreamingSurvivesOldWriterShutdownAndLateCancelPreservesVerifiedApk() = runBlocking<Unit> {
         fixture().use { f ->
             val first = f.start("slow")
             val streaming = f.awaitStatus(UpdateDownloadRecordStatus.Downloading, requireProgress = true)
@@ -64,10 +64,26 @@ class UpdateDownloadManagerInstrumentedTest {
             delay(1_000) // old DownloadThread shutdown must not delete the replacement APK
             assertArrayEquals(f.server.bytes, f.manager.updateFile(completed.fileName).readBytes())
             f.manager.cancel(next)
-            assertEquals(UpdateDownloadRecordStatus.Available, f.store.load()?.status)
-            assertFalse(f.manager.updateFile(completed.fileName).exists())
+            assertEquals(UpdateDownloadRecordStatus.Downloaded, f.store.load()?.status)
+            assertArrayEquals(f.server.bytes, f.manager.updateFile(completed.fileName).readBytes())
             assertFalse(f.existsInSystem(first))
-            assertFalse(f.existsInSystem(next))
+            assertTrue(f.existsInSystem(next))
+        }
+    }
+
+    @Test fun cancelDuringStreamingRemovesRequestAndPartialFile() = runBlocking<Unit> {
+        fixture().use { f ->
+            val id = f.start("slow")
+            val streaming = f.awaitStatus(UpdateDownloadRecordStatus.Downloading, requireProgress = true)
+
+            f.manager.cancel(id)
+
+            assertEquals(UpdateDownloadRecordStatus.Available, f.store.load()?.status)
+            assertFalse(f.existsInSystem(id))
+            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+            val partialFile = f.manager.updateFile(streaming.fileName)
+            while (partialFile.exists() && System.nanoTime() < deadline) delay(50)
+            assertFalse(partialFile.exists())
         }
     }
 

@@ -117,6 +117,85 @@ class EpubBookParserTest {
         assertEquals("Source File", book.title)
     }
 
+    @Test
+    fun opensPercentEncodedChapterCoverAndStylesheetFilenames() {
+        val root = tempFolder.newFolder("encoded-paths")
+        writeExtractedEpub(root)
+        val replacements = listOf(
+            Triple("text/chapter-1.xhtml", "text/chapter%201.xhtml", "text/chapter 1.xhtml"),
+            Triple("styles/book.css", "styles/book%2Bstyle%25.css", "styles/book+style%.css"),
+            Triple("images/cover.jpg", "images/cover%23art.jpg", "images/cover#art.jpg"),
+        )
+        replacements.forEach { (old, _, filename) ->
+            root.resolve("OPS/$old").renameTo(root.resolve("OPS/$filename"))
+        }
+        val packageFile = root.resolve("OPS/package.opf")
+        packageFile.writeText(replacements.fold(packageFile.readText()) { text, (old, encoded, _) ->
+            text.replace(old, encoded)
+        })
+
+        val book = EpubBookParser().parse(root)
+
+        assertEquals("<html><body>First</body></html>", book.chapters.last().html)
+        assertEquals("OPS/text/chapter%201.xhtml", book.chapters.last().href)
+        assertEquals("OPS/images/cover%23art.jpg", book.coverHref)
+        assertArrayEquals(byteArrayOf(1, 2, 3), book.readResource(book.coverHref!!))
+        assertArrayEquals("body {}".toByteArray(), book.readResource("OPS/styles/book%2Bstyle%25.css"))
+        assertEquals("text/css", book.mediaType("OPS/styles/book%2Bstyle%25.css"))
+    }
+
+    @Test
+    fun resolvesNestedEpub3NavigationAgainstItsOwnDirectory() {
+        val root = tempFolder.newFolder("nested-nav")
+        writeExtractedEpub(root)
+        root.resolve("OPS/navigation").mkdirs()
+        root.resolve("OPS/navigation/toc.xhtml").writeText(
+            """
+            <html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+              <head><title>Contents</title></head><body><nav epub:type="toc"><ol>
+                <li><a href="../text/chapter-1.xhtml#part%201">First</a></li>
+              </ol></nav></body>
+            </html>
+            """.trimIndent(),
+        )
+        val packageFile = root.resolve("OPS/package.opf")
+        packageFile.writeText(packageFile.readText().replace(
+            "</manifest>",
+            """<item id="nav" href="navigation/toc.xhtml" media-type="application/xhtml+xml" properties="nav"/></manifest>""",
+        ))
+
+        val book = EpubBookParser().parse(root)
+
+        assertEquals("First", book.toc.single().label)
+        assertEquals("OPS/text/chapter-1.xhtml#part%201", book.toc.single().href)
+    }
+
+    @Test
+    fun resolvesNestedEpub2NavigationAgainstItsOwnDirectory() {
+        val root = tempFolder.newFolder("nested-ncx")
+        writeExtractedEpub(root)
+        root.resolve("OPS/navigation").mkdirs()
+        root.resolve("OPS/navigation/toc.ncx").writeText(
+            """
+            <ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1">
+              <head/><docTitle><text>Contents</text></docTitle><navMap>
+                <navPoint id="first" playOrder="1"><navLabel><text>First</text></navLabel>
+                  <content src="../text/chapter-1.xhtml#part-1"/>
+                </navPoint>
+              </navMap>
+            </ncx>
+            """.trimIndent(),
+        )
+        val packageFile = root.resolve("OPS/package.opf")
+        packageFile.writeText(packageFile.readText()
+            .replace("</manifest>", """<item id="ncx" href="navigation/toc.ncx" media-type="application/x-dtbncx+xml"/></manifest>""")
+            .replace("<spine ", """<spine toc="ncx" """))
+
+        val book = EpubBookParser().parse(root)
+
+        assertEquals("OPS/text/chapter-1.xhtml#part-1", book.toc.single().href)
+    }
+
     private fun writeExtractedEpub(
         root: File,
         title: String = "Sample Book",

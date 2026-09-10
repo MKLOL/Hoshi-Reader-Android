@@ -50,6 +50,19 @@ class ReaderWebResourceBridgeTest {
     }
 
     @Test
+    fun preservesEncodedEpubPathsUntilResourceResolution() {
+        val bridge = ReaderWebResourceBridge(
+            book = bookWithResource("images/cover%2520%23+art.jpg", "image/jpeg", byteArrayOf(1, 2, 3)),
+            fontFileForRequest = { null },
+        )
+        val url = "https://hoshi.local/epub/images/cover%2520%23+art.jpg"
+
+        assertEquals(listOf<Byte>(1, 2, 3), bridge.resourceForUrl(url)?.data?.toList())
+        assertEquals(listOf<Byte>(1, 2, 3), bridge.imageResourceForUrl(url)?.data?.toList())
+        assertNull(bridge.resourceForUrl("https://hoshi.local/epub/images/cover%20%23+art.jpg"))
+    }
+
+    @Test
     fun servesEpubHtmlWithSingleEarlyViewportMeta() {
         val bridge = ReaderWebResourceBridge(
             book = bookWithResource(

@@ -205,10 +205,9 @@ class AnkiRepository(
         val deck = availableDecks.firstOrNull { it.id == settings.selectedDeckId }
             ?: settings.selectedDeckName?.let { name -> availableDecks.firstOrNull { it.name == name } }
             ?: return@withContext false
-        val noteTypeId = settings.selectedNoteTypeId
-            ?: settings.selectedNoteTypeName?.let { name -> availableNoteTypes.firstOrNull { it.name == name }?.id }
+        val noteType = availableNoteTypes.firstOrNull { it.id == settings.selectedNoteTypeId }
+            ?: settings.selectedNoteTypeName?.let { name -> availableNoteTypes.firstOrNull { it.name == name } }
             ?: return@withContext false
-        val noteType = availableNoteTypes.firstOrNull { it.id == noteTypeId } ?: return@withContext false
         activeBackend.isDuplicate(
             deck = deck,
             noteType = noteType,
@@ -350,19 +349,14 @@ internal fun fieldMappingsAfterFetch(
     selectedNoteType: AnkiNoteType,
     current: AnkiSettings,
 ): Map<String, String> =
-    if (LapisPreset.matches(selectedNoteType) && !currentSelectionMatchesLapis(current)) {
-        LapisPreset.applyDefaults(selectedNoteType, emptyMap())
+    if (
+        selectedNoteType.id == current.selectedNoteTypeId ||
+        selectedNoteType.name == current.selectedNoteTypeName
+    ) {
+        current.fieldMappings.filterKeys { it in selectedNoteType.fields }
     } else {
-        current.fieldMappings
+        LapisPreset.applyDefaults(selectedNoteType, emptyMap())
     }
-
-private fun currentSelectionMatchesLapis(current: AnkiSettings): Boolean =
-    current.availableNoteTypes.firstOrNull {
-        it.id == current.selectedNoteTypeId || it.name == current.selectedNoteTypeName
-    }
-        ?.let(LapisPreset::matches)
-        ?: current.selectedNoteTypeName?.contains("lapis", ignoreCase = true)
-        ?: false
 
 sealed interface AnkiFetchResult {
     data class Success(

@@ -658,6 +658,7 @@
     <string name="news_pretranslate_error_book_missing">这篇文章已不在书架上。</string>
     <string name="news_pretranslate_error_no_sync_id">这篇文章没有同步标识。</string>
     <string name="news_pretranslate_error_no_sentences">这篇文章没有可翻译的句子。</string>
+    <string name="news_pretranslate_error_incomplete_replacement">预翻译未完成，已保留原有译文。</string>
     <string name="news_pretranslate_error_blob_format">无法保存翻译：%1$s</string>
     <string name="news_pretranslate_error_requests_failed_format">失败的请求过多。最后的错误：%1$s</string>
     <string name="news_pretranslate_error_on_device_model_format">请先在“设置”中将 %1$s 选为离线翻译模型。</string>

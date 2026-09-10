@@ -82,15 +82,18 @@ class V3SyncRaceIntegrationTest {
             assertNoErrors(b.sync())
             val bookB = b.repo.loadBookEntries().single { it.metadata.title == title }.root
 
+            // B reads while offline first. Its unsynced bookmark must predate A's
+            // later reading session for timestamp-based conflict resolution to pick A.
+            b.turnPage(bookB, 1)
+            b.turnPage(bookB, 2)
+
             // A turns 1 -> 2 -> 3 (each is a fresh bookmark write with a strictly newer ts).
             a.turnPage(bookA, 1)
             a.turnPage(bookA, 2)
             a.turnPage(bookA, 3)
             assertNoErrors(a.sync())
 
-            // B turns 1 -> 2 BEFORE syncing — its bookmark is older than A's 3.
-            b.turnPage(bookB, 1)
-            b.turnPage(bookB, 2)
+            // B reconnects after A synced; A's newer page 3 wins over B's older page 2.
             assertNoErrors(b.sync())
 
             assertEquals(3, b.repo.loadBookmark(bookB)?.characterCount)
@@ -159,21 +162,9 @@ class V3SyncRaceIntegrationTest {
             assertNoErrors(b.sync())
             assertFalse(b.repo.loadBookEntries().any { it.metadata.title == title })
 
-            // Re-import the same title on A. Its local sidecar should kill the tombstone
-            // before the next sync stamps a fresh metadata.
-            clearTombstoneFor(a, title)
-            // Also clear the metadata key on the server so a new metadata blob isn't
-            // dominated by the deletedAt-stamped one. In real life the user would
-            // re-import after enough time has passed that they want it back; spec says
-            // "the local re-import survives, doesn't get wiped by its own tombstone".
-            server.bytesAt(metadataKey(deriveSyncId(title)!!))
-                ?: error("metadata key should still exist after tombstone")
-            // Replace remote metadata via a direct DELETE (simulating the user's curl
-            // workaround the spec mentions, OR a fresh metadata push that clears deletedAt).
-            // The simulated path: clear the deletedAt by pushing a fresh metadata blob.
-            // We do this by re-importing then syncing; this is what the user wants
-            // covered. Some implementations may refuse to clear an existing tombstone
-            // — that's a real bug the test must catch.
+            // Leave the server tombstone intact. As in the real import path, the new
+            // metadata's importedAt proves this import happened after the deletion.
+            assertNotNull(server.bytesAt(metadataKey(deriveSyncId(title)!!)))
             a.importMokuro(title)
             assertNoErrors(a.sync())
             assertNoErrors(b.sync())
@@ -537,7 +528,6 @@ class V3SyncRaceIntegrationTest {
             stageTombstoneFor(a, title)
             a.delete(bookA)
             assertNoErrors(a.sync())
-            clearTombstoneFor(a, title)
             val reBookA = a.importMokuro(title)
             a.turnPage(reBookA, toCharacter = 7)
             assertNoErrors(a.sync())
@@ -602,6 +592,15 @@ class V3SyncRaceIntegrationTest {
             for (i in 1..3) a.importMokuro("Idem Vol $i")
             assertNoErrors(a.sync())
             assertNoErrors(b.sync())
+
+            // Installing a remote book records this device's importedAt (as on iOS).
+            // The following pass publishes those three new device-registration stamps;
+            // only after that exchange are both devices' metadata fully converged.
+            val registered = b.sync()
+            assertNoErrors(registered)
+            assertEquals(3, registered.pushed.metadata)
+            assertEquals(0, registered.pushed.payloads)
+            assertConvergent(a, b)
 
             val firstKeySnapshot = server.keys().toSet()
             val firstByteSnapshot = firstKeySnapshot.associateWith { server.bytesAt(it)?.toList() }

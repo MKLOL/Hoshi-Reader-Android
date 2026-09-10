@@ -4,6 +4,7 @@ import uniffi.hoshiepub.EpubBook as NativeEpubBook
 import uniffi.hoshiepub.TocNode as NativeTocNode
 import uniffi.hoshiepub.parseExtractedEpub
 import java.io.File
+import java.net.URLDecoder
 import javax.xml.parsers.DocumentBuilderFactory
 
 data class EpubBook(
@@ -17,17 +18,19 @@ data class EpubBook(
     /** Total package spine item count, including any non-HTML items skipped by [chapters]. */
     val spineCount: Int = chapters.maxOfOrNull { (it.spineIndex ?: -1) + 1 } ?: chapters.size,
 ) {
+    private val normalizedResources = resources.mapKeys { (href, _) -> href.decodedEpubResourcePath() }
+
     fun readResource(path: String): ByteArray? {
-        val normalized = path.normalizeResourceHref()
-        return resources[normalized]?.readBytes()
+        val normalized = path.decodedEpubResourcePath()
+        return normalizedResources[normalized]?.readBytes()
             ?: rootDirectory
-                ?.resolve(normalized)
+                ?.resolveContainedResource(normalized)
                 ?.takeIf { it.isFile }
                 ?.readBytes()
     }
 
     fun mediaType(path: String): String =
-        resources[path.normalizeResourceHref()]?.mediaType ?: path.fallbackMimeType()
+        normalizedResources[path.decodedEpubResourcePath()]?.mediaType ?: path.fallbackMimeType()
 
     fun characterCountAt(chapterIndex: Int, progress: Double): Int {
         val chapter = chapters.getOrNull(chapterIndex) ?: return 0
@@ -115,7 +118,7 @@ class EpubBookParser {
 
         val resources = manifest.values.mapNotNull { manifestItem ->
             val href = contentDirectoryPrefix.resolveManifestHref(manifestItem.href)
-            val file = root.resolve(href)
+            val file = root.resolveContainedResource(href.decodedEpubResourcePath()) ?: return@mapNotNull null
             href to EpubResource.file(manifestItem.mediaType, file)
         }.toMap()
 
@@ -155,11 +158,12 @@ private fun NativeTocNode.toReaderTocItem(root: File, contentDirectory: File): E
     )
 
 private fun String.normalizeTocHref(root: File, contentDirectory: File): String {
-    val raw = trim().replace('\\', '/').removePrefix("/")
+    val raw = trim().replace('\\', '/')
     if (raw.isBlank()) return raw
     val fragment = raw.substringAfter('#', "")
     val base = raw.substringBefore('#').substringBefore('?')
-    val href = contentDirectory.resolve(base).relativeHref(root)
+    val target = if (base.startsWith('/')) root.resolve(base.removePrefix("/")) else contentDirectory.resolve(base)
+    val href = target.relativeHref(root)
         ?: base.normalizeResourceHref()
     return if (fragment.isBlank()) href else "$href#$fragment"
 }
@@ -229,6 +233,18 @@ private fun String.normalizeResourceHref(): String =
         .removePrefix("/")
         .substringBefore('#')
         .substringBefore('?')
+
+/** Decodes a URL path once; a literal '+' in an EPUB filename is never form-encoded space. */
+internal fun String.decodedEpubResourcePath(): String {
+    val path = normalizeResourceHref()
+    val decoded = runCatching { URLDecoder.decode(path.replace("+", "%2B"), "UTF-8") }.getOrDefault(path)
+    return File(decoded).normalize().invariantSeparatorsPath
+}
+
+private fun File.resolveContainedResource(path: String): File? = runCatching {
+    val root = canonicalFile
+    root.resolve(path).canonicalFile.takeIf { it.toPath().startsWith(root.toPath()) }
+}.getOrNull()
 
 private fun String.isHtmlMediaType(): Boolean =
     equals("application/xhtml+xml", ignoreCase = true) ||

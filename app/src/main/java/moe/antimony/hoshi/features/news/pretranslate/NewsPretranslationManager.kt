@@ -177,7 +177,6 @@ object NewsPretranslationManager {
             val currentPlan = plan ?: return 0
             val bookRoot = root ?: return 0
             if (sink.size <= existingCount) return 0
-            if (SentenceTranslationsWriter.hasSidecarForOtherConfiguration(bookRoot, currentPlan.syncId, label, promptId)) return 0
             // execute() already runs on the IO dispatcher; NonCancellable alone keeps this on the
             // same thread so a cancelled outer job cannot interrupt the write.
             return withContext(NonCancellable) {
@@ -185,7 +184,7 @@ object NewsPretranslationManager {
                     val blob = SentenceTranslationsWriter.buildBlob(currentPlan, sink, label, promptId)
                     if (SentenceTranslationsWriter.validationError(blob) != null) return@runCatching 0
                     val bytes = SentenceTranslationsWriter.encode(blob)
-                    SentenceTranslationsWriter.write(bookRoot, bytes)
+                    if (!SentenceTranslationsWriter.writeResult(bookRoot, blob, currentPlan.sentences.size)) return@runCatching 0
                     val sync = deps.syncSettings.settings.first()
                     if (sync.isConfigured) {
                         runCatching { SentenceTranslationsUploader(HttpSyncKvClient(sync.baseUrl, sync.bearerToken)).upload(currentPlan.syncId, bytes) }
@@ -236,7 +235,9 @@ object NewsPretranslationManager {
                 throw JobFailure(UiText.Resource(R.string.news_pretranslate_error_blob_format, it))
             }
             val bytes = SentenceTranslationsWriter.encode(blob)
-            SentenceTranslationsWriter.write(entry.root, bytes)
+            if (!SentenceTranslationsWriter.writeResult(entry.root, blob, builtPlan.sentences.size)) {
+                throw JobFailure(UiText.Resource(R.string.news_pretranslate_error_incomplete_replacement))
+            }
 
             var uploaded = false
             val sync = deps.syncSettings.settings.first()

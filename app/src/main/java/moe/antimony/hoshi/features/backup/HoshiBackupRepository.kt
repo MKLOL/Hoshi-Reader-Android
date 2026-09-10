@@ -16,6 +16,7 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.UUID
 import java.util.zip.CRC32
+import java.util.zip.CheckedInputStream
 import java.util.zip.ZipEntry
 import java.util.zip.ZipFile
 import java.util.zip.ZipOutputStream
@@ -163,9 +164,13 @@ class HoshiBackupRepository(
                     target.mkdirs()
                 } else {
                     target.parentFile?.mkdirs()
-                    zip.getInputStream(entry).use { input ->
+                    val checksum = CRC32()
+                    val copied = CheckedInputStream(zip.getInputStream(entry), checksum).use { input ->
                         target.outputStream().use { output -> input.copyTo(output) }
                     }
+                    // ZipFile reads the central directory but does not verify entry checksums.
+                    // Reject a damaged backup before replacing the existing library.
+                    if (copied != entry.size || checksum.value != entry.crc) throw CorruptBackupException()
                 }
             }
         }
@@ -202,6 +207,9 @@ class HoshiBackupRepository(
         Dictionaries("Dictionaries"),
     }
 }
+
+/** Kept separate from IO details so restore screens can display their localized failure text. */
+class CorruptBackupException : IllegalArgumentException()
 
 fun booksBackupFileName(
     now: Instant = Instant.now(),

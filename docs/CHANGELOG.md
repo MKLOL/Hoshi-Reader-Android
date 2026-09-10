@@ -7,6 +7,8 @@ Semantic Versioning.
 
 ## [Unreleased]
 
+## [v0.11.9] - 2026-09-10
+
 ### Added
 - **Sync directly from Books.** Once an HTTP sync token is saved, a cloud button starts sync and shows progress, results, and errors. Sync continues when its status dialog is closed.
 - **A News tab for easy Japanese.** Browse Watanoc and MATCHA Easy Japanese in one list, add your
@@ -14,12 +16,25 @@ Semantic Versioning.
   book that opens in the regular reader with tap-to-look-up, furigana and sync. "Pre-translate"
   sends the article's sentences to the model you choose (cloud or on-device), shows the sentence
   count and an estimated cost first, then stores the translations with the article and shares them
-  through sync so other devices show them like any pre-translated EPUB. NHK NEWS WEB EASY is
+  through sync so other devices show them like any pre-translated EPUB. An incomplete rerun
+  keeps existing translations until its replacement is complete. NHK NEWS WEB EASY is
   included but off by default: its new site only serves the article list inside Japan.
 - **Share a link to save it as an article.** Sharing an article URL from a browser to "Save as
   article" downloads it, puts it on the News shelf and opens it in the reader.
 
 ### Fixed
+- **Books uploaded from iOS sync successfully again**, including ZIP64 archives with small files.
+- **Repeated syncs leave unchanged shelf metadata alone**, avoiding unnecessary uploads.
+- **EPUBs with encoded filenames and nested tables of contents open correctly.** Images, styles,
+  chapter links, and links to specific passages resolve to the intended content.
+- **Damaged backups leave your current library intact.** Restore checks file integrity before
+  replacing books or dictionaries.
+- **Interrupted audiobook imports preserve the previous audio file.**
+- **Anki refresh removes outdated field mappings**, and duplicate checks recover when a note
+  type keeps its name but changes its ID.
+- **AI settings sync correctly across timestamp formats**, including fractional seconds and time zones.
+- **Reading and syncing at the same time no longer lose AI chat history entries.**
+- **Update checks handle malformed versions and incompatible APKs safely.**
 - **Manga pages open fully zoomed out.** Opening a book or changing pages resets zoom and pan so the next swipe can turn the page immediately.
 - **Tapping a word while dictionaries are reloading no longer freezes the reader.** The lookup
   waits in the background and the popup opens when it is ready; tapping elsewhere in the

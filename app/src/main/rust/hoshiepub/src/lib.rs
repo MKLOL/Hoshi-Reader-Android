@@ -128,7 +128,9 @@ impl EpubBook {
             return Ok(None);
         };
 
-        let path = self.content_dir.join(manifest_entry.href_raw().to_string());
+        let path = self
+            .root_dir
+            .join(manifest_entry.href().path().decode().trim_start_matches('/'));
         Ok(Some(path.to_string_lossy().to_string()))
     }
 
@@ -148,9 +150,8 @@ impl EpubBook {
                     idref: idref.to_string(),
                 })?;
 
-        let path = self.content_dir.join(manifest_entry.href_raw().to_string());
-        std::fs::read_to_string(&path).map_err(|e| EpubError::Io {
-            msg: format!("{}: {e}", path.display()),
+        manifest_entry.read_str().map_err(|e| EpubError::Io {
+            msg: e.to_string(),
         })
     }
 }
@@ -160,7 +161,9 @@ impl EpubBook {
         let children = entry.iter().map(|e| Self::convert_toc_entry(&e)).collect();
         TocNode {
             label: entry.label().to_string(),
-            href: entry.href_raw().map(|h| h.to_string()),
+            // The navigation document can live in a different directory than the OPF.
+            // rbook resolves this href against the actual NCX/XHTML navigation document.
+            href: entry.href().map(|h| h.to_string()),
             children,
         }
     }

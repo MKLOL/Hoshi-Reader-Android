@@ -121,6 +121,51 @@ class AnkiRepositoryTest {
     }
 
     @Test
+    fun fetchClearsMappingsWhenTheSelectedNoteTypeWasRemoved() {
+        val current = AnkiSettings(
+            selectedNoteTypeId = 7L,
+            selectedNoteTypeName = "Lapis",
+            fieldMappings = mapOf("Expression" to "{expression}", "MainDefinition" to "{glossary}"),
+        )
+
+        assertEquals(
+            emptyMap<String, String>(),
+            fieldMappingsAfterFetch(AnkiNoteType(5L, "Basic", listOf("Front", "Back")), current),
+        )
+    }
+
+    @Test
+    fun fetchDropsRemovedFieldsAndKeepsMappingsForTheSameNoteType() {
+        val current = AnkiSettings(
+            selectedNoteTypeId = 5L,
+            selectedNoteTypeName = "Basic",
+            fieldMappings = mapOf("Front" to "{expression}", "Back" to "{glossary}"),
+        )
+
+        assertEquals(
+            mapOf("Front" to "{expression}"),
+            fieldMappingsAfterFetch(AnkiNoteType(5L, "Basic", listOf("Front", "Definition")), current),
+        )
+    }
+
+    @Test
+    fun fetchResetsMappingsWhenSwitchingBetweenDifferentLapisNoteTypes() {
+        val current = AnkiSettings(
+            selectedNoteTypeId = 7L,
+            selectedNoteTypeName = "Old Lapis",
+            fieldMappings = mapOf("Expression" to "{reading}"),
+        )
+
+        assertEquals(
+            mapOf("Expression" to "{expression}", "MainDefinition" to "{glossary-first}"),
+            fieldMappingsAfterFetch(
+                AnkiNoteType(8L, "New Lapis", listOf("Expression", "MainDefinition")),
+                current,
+            ),
+        )
+    }
+
+    @Test
     fun fetchSelectionKeepsCurrentDeckAndNoteTypeWhenStillAvailable() {
         val current = AnkiSettings(
             selectedDeckId = 2L,

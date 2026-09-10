@@ -5,8 +5,31 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.junit.Rule
+import org.junit.rules.TemporaryFolder
+import java.nio.file.Files
 
 class EpubBookModelTest {
+    @get:Rule
+    val temporaryFolder = TemporaryFolder()
+
+    @Test
+    fun resolvesEncodedResourcesOnceAndKeepsReadsInsideBookDirectory() {
+        val root = temporaryFolder.newFolder("book")
+        val outside = temporaryFolder.newFile("private.txt").apply { writeText("private") }
+        root.resolve("images").mkdirs()
+        root.resolve("images/cover%20+one.jpg").writeText("image")
+        root.resolve("inside.txt").writeText("inside")
+        Files.createSymbolicLink(root.resolve("outside-link.txt").toPath(), outside.toPath())
+        val book = EpubBook(title = "Book", chapters = emptyList(), rootDirectory = root)
+
+        assertArrayEquals("image".toByteArray(), book.readResource("images/cover%2520+one.jpg"))
+        assertArrayEquals("inside".toByteArray(), book.readResource("images/../inside.txt"))
+        assertNull(book.readResource("../private.txt"))
+        assertNull(book.readResource("%2e%2e/private.txt"))
+        assertNull(book.readResource("outside-link.txt"))
+    }
+
     @Test
     fun exposesOnlyReaderResourcesNeededByWebView() {
         val css = "body {}".toByteArray()

@@ -94,6 +94,36 @@ class SentenceTranslationsWriterTest {
     }
 
     @Test
+    fun partialRerunKeepsPreviousConfigurationUntilReplacementIsComplete() {
+        val root = articleBook()
+        val plan = plan(root)
+        val translations = plan.sentences.associate { it.id to SentenceTranslation(it.id, "original") }
+        val original = SentenceTranslationsWriter.buildBlob(plan, translations, "old-model", "p")
+        assertTrue(SentenceTranslationsWriter.writeResult(root, original, plan.sentences.size))
+        val file = File(root, EPUB_TRANSLATIONS_FILENAME)
+        val originalBytes = file.readText()
+        val partial = SentenceTranslationsWriter.buildBlob(plan, translations.entries.take(1).associate { it.toPair() }, "new-model", "p")
+
+        assertTrue(!SentenceTranslationsWriter.writeResult(root, partial, plan.sentences.size))
+        assertEquals(originalBytes, file.readText())
+
+        val complete = SentenceTranslationsWriter.buildBlob(plan, translations, "new-model", "p")
+        assertTrue(SentenceTranslationsWriter.writeResult(root, complete, plan.sentences.size))
+        assertEquals(SentenceTranslationsWriter.encode(complete).decodeToString(), file.readText())
+    }
+
+    @Test
+    fun partialResultForSameConfigurationCanStillBeSaved() {
+        val root = articleBook()
+        val plan = plan(root)
+        val first = plan.sentences.first()
+        val partial = SentenceTranslationsWriter.buildBlob(plan, mapOf(first.id to SentenceTranslation(first.id, "saved")), "m", "p")
+
+        assertTrue(SentenceTranslationsWriter.writeResult(root, partial, plan.sentences.size))
+        assertEquals(setOf(first.id), SentenceTranslationsWriter.existingTranslations(root, plan, "m", "p").keys)
+    }
+
+    @Test
     fun existingTranslationsAreReusedOnlyWhenTheSentenceTextStillMatches() {
         val root = articleBook()
         val plan = plan(root)

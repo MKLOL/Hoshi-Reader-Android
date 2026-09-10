@@ -250,6 +250,31 @@ class AnkiRepositoryBackendSelectionTest {
     }
 
     @Test
+    fun duplicateCheckResolvesSavedNoteTypeByNameWhenItsIdChanged() = runBlocking {
+        val deck = AnkiDeck(10L, "Mining")
+        val noteType = AnkiNoteType(20L, "Lapis", listOf("Expression"))
+        val backend = RecordingBackend(
+            decks = listOf(deck),
+            noteTypes = listOf(noteType),
+            duplicate = true,
+        )
+        val repository = repository(
+            backend = backend,
+            settingsRepository = InMemoryAnkiSettingsRepository(
+                AnkiSettings(
+                    selectedDeckId = deck.id,
+                    selectedDeckName = deck.name,
+                    selectedNoteTypeId = 99L,
+                    selectedNoteTypeName = noteType.name,
+                ),
+            ),
+        )
+
+        assertTrue(repository.isDuplicate("食べる", decks = emptyList(), noteTypes = emptyList()))
+        assertEquals(1, backend.duplicateCalls)
+    }
+
+    @Test
     fun mineEntryStoresLocalMediaThroughActiveAnkiConnectBackend() = runBlocking {
         val deck = AnkiDeck(10L, "Mining")
         val noteType = AnkiNoteType(20L, "Lapis", listOf("Expression", "Cover"))

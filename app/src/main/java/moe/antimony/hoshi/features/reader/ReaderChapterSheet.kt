@@ -5,7 +5,6 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.LocalOverscrollFactory
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -335,11 +334,12 @@ private fun EpubBook.flattenChapterRows(
     currentIndex: Int,
 ): List<ReaderChapterRow> {
     val row = item.href?.let { href ->
-        val spineIndex = chapterIndexForHref(href) ?: return@let null
+        val target = resolveReaderChapterHref(href) ?: return@let null
+        val spineIndex = target.position.index
         ReaderChapterRow(
             label = item.label,
             spineIndex = spineIndex,
-            fragment = href.substringAfter('#', "").ifBlank { null },
+            fragment = target.fragment,
             characterCount = bookInfo.chapterInfo[chapters[spineIndex].href]?.currentTotal,
             isCurrent = spineIndex == currentIndex,
             indentLevel = indentLevel,
@@ -348,17 +348,6 @@ private fun EpubBook.flattenChapterRows(
     return listOfNotNull(row) + item.children.flatMap { child ->
         flattenChapterRows(child, indentLevel = indentLevel + 1, currentIndex = currentIndex)
     }
-}
-
-private fun EpubBook.chapterIndexForHref(href: String): Int? {
-    val tocPath = href.readerHrefBase()
-    if (tocPath.isBlank()) return null
-    return chapters.indexOfFirst { chapter ->
-        val chapterPath = chapter.href.readerHrefBase()
-        tocPath == chapterPath ||
-            tocPath.endsWith("/$chapterPath") ||
-            chapterPath.endsWith("/$tocPath")
-    }.takeIf { it >= 0 }
 }
 
 private fun EpubBook.chapterPositionForCharacter(characterCount: Int): ReaderChapterPosition {
@@ -376,10 +365,3 @@ private fun EpubBook.chapterPositionForCharacter(characterCount: Int): ReaderCha
     }
     return ReaderChapterPosition(index = index, progress = progress.coerceIn(0.0, 1.0))
 }
-
-private fun String.readerHrefBase(): String =
-    trim()
-        .replace('\\', '/')
-        .removePrefix("/")
-        .substringBefore('#')
-        .substringBefore('?')
