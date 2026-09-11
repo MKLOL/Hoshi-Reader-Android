@@ -7,6 +7,10 @@ Semantic Versioning.
 
 ## [Unreleased]
 
+### Fixed
+- **Manga swipes work on pages with overflowing OCR text.** Invisible text and rounded starting zoom no longer make fitted pages act like they can be panned; pinch zoom and ordinary page turns keep their existing behavior.
+- **News shows current articles first.** NHK Easier and Slow Communication provide dated easy-Japanese news, undated articles no longer jump to the top after refresh, and Watanoc's older archive is optional under Sources.
+
 ## [v0.11.9] - 2026-09-10
 
 ### Added

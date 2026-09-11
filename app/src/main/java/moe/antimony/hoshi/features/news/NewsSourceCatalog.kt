@@ -8,6 +8,33 @@ object NewsSourceCatalog {
     const val NHK_EASY_ID = "nhk-easy"
     const val WATANOC_ID = "watanoc"
     const val MATCHA_EASY_ID = "matcha-easy"
+    const val NHK_EASIER_ID = "nhk-easier"
+    const val SLOW_COMMUNICATION_ID = "slow-communication"
+
+    /** Independent easy-Japanese sites with dated RSS listings accessible outside Japan. */
+    val nhkEasier = NewsSource(
+        id = NHK_EASIER_ID,
+        name = "NHK Easier",
+        homepage = "https://nhkeasier.com/",
+        listing = NewsListing.Rss("https://nhkeasier.com/feed/"),
+        hints = NewsExtractionHints(
+            articleSelectors = listOf("article"),
+            titleSelectors = listOf("article h3"),
+            removeSelectors = listOf("h3", "nav", "footer", "aside", "table.links"),
+        ),
+    )
+
+    val slowCommunication = NewsSource(
+        id = SLOW_COMMUNICATION_ID,
+        name = "Slow Communication",
+        homepage = "https://slow-communication.jp/",
+        listing = NewsListing.Rss("https://slow-communication.jp/news/feed/"),
+        hints = NewsExtractionHints(
+            articleSelectors = listOf("article"),
+            titleSelectors = listOf("h1"),
+            removeSelectors = listOf("nav", "footer", "aside", ".reaction-container", ".share-area"),
+        ),
+    )
 
     /**
      * NHK NEWS WEB EASY moved to a client-rendered site in 2025 whose news API needs a session
@@ -37,6 +64,8 @@ object NewsSourceCatalog {
     val watanoc = NewsSource(
         id = WATANOC_ID,
         name = "Watanoc",
+        // Its RSS feed ends in 2016. Keep the archive available as an optional source.
+        enabledByDefault = false,
         homepage = "https://watanoc.com/",
         listing = NewsListing.Rss("https://watanoc.com/feed"),
         hints = NewsExtractionHints(
@@ -64,7 +93,7 @@ object NewsSourceCatalog {
         ),
     )
 
-    val builtIn: List<NewsSource> = listOf(nhkEasy, watanoc, matchaEasy)
+    val builtIn: List<NewsSource> = listOf(nhkEasier, slowCommunication, nhkEasy, watanoc, matchaEasy)
 
     const val SHARED_LINK_ID = "shared-link"
 

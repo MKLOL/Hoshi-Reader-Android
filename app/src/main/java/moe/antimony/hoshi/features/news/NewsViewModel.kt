@@ -66,7 +66,10 @@ data class NewsUiState(
     val openBookId: String? = null,
 ) {
     val visibleArticles: List<NewsArticle>
-        get() = feed.articles.filter { selectedSourceId == null || it.sourceId == selectedSourceId }
+        get() = feed.articles
+            .filter { selectedSourceId == null || it.sourceId == selectedSourceId }
+            // A custom feed can overlap a built-in source; keep each article's list key unique.
+            .distinctBy { it.id }
 
     fun sourceName(sourceId: String): String = settings.sources.firstOrNull { it.id == sourceId }?.name ?: sourceId
 

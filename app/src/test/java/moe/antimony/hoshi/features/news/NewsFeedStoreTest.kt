@@ -40,6 +40,40 @@ class NewsFeedStoreTest {
     }
 
     @Test
+    fun refreshingUndatedArticlesDoesNotPutThemAheadOfDatedNews() = runBlocking {
+        val store = NewsFeedStore(temp.root)
+        store.replaceSourceArticles("news", listOf(
+            article("news", "https://news/recent", 900),
+            article("news", "https://news/older", 800),
+        ), refreshedAt = 1_000)
+        store.replaceSourceArticles("travel", listOf(
+            article("travel", "https://travel/undated", null).copy(fetchedAt = 5_000),
+        ), refreshedAt = 5_000)
+        assertEquals(listOf("https://news/recent", "https://news/older", "https://travel/undated"),
+            store.loadArticles().map { it.url })
+
+        store.replaceSourceArticles("travel", listOf(
+            article("travel", "https://travel/undated", null).copy(fetchedAt = 10_000),
+        ), refreshedAt = 10_000)
+        assertEquals("https://news/recent", store.loadArticles().first().url)
+    }
+
+    @Test
+    fun anOlderCacheIsSortedByPublicationBeforeAnyNetworkRefresh() = runBlocking {
+        val directory = temp.root.resolve("News").apply { mkdirs() }
+        directory.resolve("feed.json").writeText("""
+            {"version":1,"articles":[
+              {"id":"undated","sourceId":"a","url":"https://a/undated","title":"Old guide","fetchedAt":1000},
+              {"id":"older","sourceId":"b","url":"https://b/older","title":"Older news","publishedAt":10,"fetchedAt":20},
+              {"id":"newer","sourceId":"b","url":"https://b/newer","title":"Newer news","publishedAt":30,"fetchedAt":40}
+            ],"refreshedAt":{"a":1000,"b":40}}
+        """.trimIndent())
+        val store = NewsFeedStore(temp.root)
+        assertEquals(listOf("newer", "older", "undated"), store.loadArticles().map { it.id })
+        assertEquals(mapOf("a" to 1000L, "b" to 40L), store.refreshedAt())
+    }
+
+    @Test
     fun savedArticlesRoundTripAndUpdate() = runBlocking {
         val store = NewsFeedStore(temp.root)
         val saved = SavedNewsArticle(articleId = "id1", bookId = "book", sourceId = "a", url = "https://a/1", title = "T", savedAt = 9)

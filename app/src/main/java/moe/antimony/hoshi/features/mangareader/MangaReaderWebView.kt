@@ -24,7 +24,6 @@ import moe.antimony.hoshi.features.reader.ReaderSwipeGestureTracker
 import moe.antimony.hoshi.mokuro.MokuroBook
 import moe.antimony.hoshi.webview.applyHoshiWebViewSecurityDefaults
 import java.io.File
-import kotlin.math.roundToInt
 
 private const val MANGA_SWIPE_MIN_DISTANCE = 72f
 private const val MANGA_NAVIGATION_MAX_ZOOM = 1.01f
@@ -161,8 +160,8 @@ internal fun MangaReaderWebView(
             )
             if (webView.tag != loadToken) {
                 webView.tag = loadToken
-                // setInitialScale uses physical pixels, unlike the viewport's CSS scale.
-                webView.setInitialScale((webView.resources.displayMetrics.density * 100).roundToInt())
+                // Keep WebView's default initial scale. Rounding density to a whole percent
+                // can slightly magnify a fitted page and make it horizontally pannable.
                 webView.loadDataWithBaseURL(
                     MangaPageHtml.BASE_URL,
                     html,

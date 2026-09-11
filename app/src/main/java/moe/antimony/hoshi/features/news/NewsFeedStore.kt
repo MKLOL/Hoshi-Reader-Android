@@ -32,7 +32,10 @@ class NewsFeedStore(
     @Serializable
     private data class SavedFile(val version: Int = 1, val saved: List<SavedNewsArticle> = emptyList())
 
-    suspend fun loadArticles(): List<NewsArticle> = withContext(ioDispatcher) { readFeed().articles }
+    suspend fun loadArticles(): List<NewsArticle> = withContext(ioDispatcher) {
+        // Also correct older caches immediately, including while offline.
+        readFeed().articles.sortedByDescending { it.publishedAt }
+    }
 
     suspend fun refreshedAt(): Map<String, Long> = withContext(ioDispatcher) { readFeed().refreshedAt }
 
@@ -43,7 +46,8 @@ class NewsFeedStore(
                 val current = readFeed()
                 val kept = current.articles.filterNot { it.sourceId == sourceId }
                 val merged = (kept + articles.filter { it.sourceId == sourceId })
-                    .sortedWith(compareByDescending<NewsArticle> { it.publishedAt ?: it.fetchedAt }.thenBy { it.id })
+                    // Fetch time says nothing about publication: undated articles go last.
+                    .sortedByDescending { it.publishedAt }
                     .take(MAX_CACHED_ARTICLES)
                 writeFeed(current.copy(articles = merged, refreshedAt = current.refreshedAt + (sourceId to refreshedAt)))
             }

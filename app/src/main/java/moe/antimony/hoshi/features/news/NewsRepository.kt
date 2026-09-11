@@ -88,7 +88,9 @@ internal class NewsRepository(
                 }
                 if (items.isEmpty()) throw NewsNoArticlesException("No articles found for ${source.name}")
                 val fetchedAt = now()
-                val articles = items.distinctBy { it.url }.take(MAX_ARTICLES_PER_SOURCE).map { item ->
+                val articles = items.distinctBy { it.url }
+                    .sortedByDescending { it.publishedAt }
+                    .take(MAX_ARTICLES_PER_SOURCE).map { item ->
                     NewsArticle(
                         id = NewsArticle.idFor(item.url),
                         sourceId = source.id,

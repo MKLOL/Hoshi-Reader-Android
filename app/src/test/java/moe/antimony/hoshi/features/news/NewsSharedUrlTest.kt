@@ -30,7 +30,7 @@ class NewsSharedUrlTest {
     fun geoRestrictedBuiltInStartsDisabledUntilSwitchedOn() {
         val defaults = NewsSettings()
         assertEquals(false, defaults.isEnabled(NewsSourceCatalog.nhkEasy))
-        assertEquals(true, defaults.isEnabled(NewsSourceCatalog.watanoc))
+        assertEquals(true, defaults.isEnabled(NewsSourceCatalog.nhkEasier))
         assertEquals(true, defaults.copy(enabledSourceIds = setOf(NewsSourceCatalog.NHK_EASY_ID)).isEnabled(NewsSourceCatalog.nhkEasy))
         assertEquals(false, defaults.copy(disabledSourceIds = setOf(NewsSourceCatalog.WATANOC_ID)).isEnabled(NewsSourceCatalog.watanoc))
     }
