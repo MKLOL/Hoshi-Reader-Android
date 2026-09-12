@@ -26,6 +26,15 @@ sealed interface AppRoute : NavKey {
         val section: SettingsDetailSection,
     ) : AppRoute
 
+    /** Reading statistics: streak, heatmap and every book's time; pushed from Books or Settings. */
+    @Serializable
+    data object StatisticsRoute : AppRoute
+
+    @Serializable
+    data class StatisticsBookRoute(
+        val bookId: String,
+    ) : AppRoute
+
     @Serializable
     data class ReaderRoute(
         val bookId: String,
@@ -55,7 +64,6 @@ enum class SettingsDetailSection {
     ChatGpt,
     Appearance,
     Behavior,
-    Statistics,
     Advanced,
     Diagnostics,
     About,

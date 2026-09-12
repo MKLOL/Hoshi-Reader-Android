@@ -203,6 +203,11 @@ internal fun ReaderRouteDestination(
                     }
                     scheduleExport(state.entry)
                 },
+                onSaveStatistics = { statistics ->
+                    autoSyncExportController.launchSave {
+                        stateHolder.saveStatistics(state = state, statistics = statistics)
+                    }
+                },
                 onFlushAutoSyncExport = ::flushExport,
                 onForegroundAutoSyncImport = { importOnForeground(state.entry) },
                 onClose = onClose,

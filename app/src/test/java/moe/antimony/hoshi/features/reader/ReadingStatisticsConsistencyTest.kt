@@ -152,4 +152,40 @@ class ReadingStatisticsConsistencyTest {
         assertEquals(before + 2, repository.statisticsChanges.value)
         assertTrue(repository.statisticsChanges.value > before)
     }
+
+    @Test
+    fun daysImportedBySyncWhileTheBookIsOpenSurviveTheReadersNextSave() = runBlocking {
+        val repository = BookRepository(Files.createTempDirectory("hoshi-import-while-open").toFile())
+        val root = repository.newBook("book-d", "Book D")
+        repository.saveStatistics(root, listOf(day("2026-09-10", 900.0, 2_000, modified = 10L)))
+        val clock = FakeClock(LocalDate.of(2026, 9, 12), 1_000_000L)
+        val tracker = ReaderStatisticsTracker("Book D", repository.loadStatistics(root), enabled = true, clock = clock)
+        tracker.start(0)
+        clock.advanceSeconds(60)
+        tracker.update(120)
+
+        // A Drive/HTTP import lands while the reader is open and adds an older day.
+        repository.saveStatistics(root, listOf(day("2026-09-05", 1_200.0, 3_000, modified = 5L)))
+        // The reader saves its session afterwards, knowing nothing about that day.
+        repository.saveStatistics(root, requireNotNull(tracker.statisticsForPersistenceOrNull()))
+
+        val overview = loadReadingStatisticsOverview(repository, todayKey = "2026-09-12")
+        val row = overview.books.single()
+        assertEquals(listOf("2026-09-12", "2026-09-10", "2026-09-05"), row.days.map { it.dateKey })
+        assertEquals(900.0 + 1_200.0 + 60.0, row.totalSeconds, 0.0)
+        assertEquals(tracker.state.today.readingTime, overview.todaySeconds, 0.0)
+    }
+
+    @Test
+    fun deletingABookSignalsAStatisticsChange() = runBlocking {
+        val repository = BookRepository(Files.createTempDirectory("hoshi-delete").toFile())
+        val root = repository.newBook("book-e", "Book E")
+        val before = repository.statisticsChanges.value
+
+        repository.deleteBook(root)
+
+        assertTrue(repository.statisticsChanges.value > before)
+        repository.notifyStatisticsChanged()
+        assertEquals(before + 2, repository.statisticsChanges.value)
+    }
 }

@@ -112,7 +112,11 @@ class SyncManager(
             val remoteStats = statsFileId?.let { drive.getStatsFile(it) }.orEmpty()
             val merged = TtuSyncRules.mergeStatistics(localStats, remoteStats, statsSyncMode)
             if (merged.isNotEmpty()) {
-                bookRepository.saveStatistics(entry.root, merged)
+                if (statsSyncMode == StatisticsSyncMode.Replace) {
+                    bookRepository.replaceStatistics(entry.root, merged)
+                } else {
+                    bookRepository.saveStatistics(entry.root, merged)
+                }
             }
         }
         if (syncAudioBook) {

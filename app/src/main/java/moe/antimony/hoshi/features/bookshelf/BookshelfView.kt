@@ -168,6 +168,7 @@ fun BookshelfView(
     onPendingImportConsumed: () -> Unit = {},
     onOpenReader: (bookId: String, contentType: ContentType) -> Unit,
     onOpenSasayakiMatch: (SasayakiMatchRequest) -> Unit,
+    onOpenStatistics: () -> Unit = {},
     refreshKey: Int = 0,
     layoutSpec: MainShellLayoutSpec,
     modifier: Modifier = Modifier,
@@ -327,6 +328,7 @@ fun BookshelfView(
         onImport = ::launchBookImporter,
         onImportEpubFolder = ::launchEpubFolderImporter,
         onImportMangaFolder = ::launchMangaFolderImporter,
+        onOpenStatistics = onOpenStatistics,
         onOpenBook = booksViewModel::openBook,
         contextMenuTarget = contextMenuTarget,
         onContextMenuTargetChange = { contextMenuTarget = it },
@@ -686,6 +688,7 @@ private fun BooksTab(
     onImport: () -> Unit,
     onImportEpubFolder: () -> Unit,
     onImportMangaFolder: () -> Unit,
+    onOpenStatistics: () -> Unit,
     onOpenBook: (BookEntry) -> Unit,
     contextMenuTarget: BookContextMenuTarget?,
     onContextMenuTargetChange: (BookContextMenuTarget?) -> Unit,
@@ -724,6 +727,7 @@ private fun BooksTab(
                 onImport = onImport,
                 onImportEpubFolder = onImportEpubFolder,
                 onImportMangaFolder = onImportMangaFolder,
+                onOpenStatistics = onOpenStatistics,
             )
         },
     ) { innerPadding ->
@@ -898,6 +902,7 @@ private fun BooksTopAppBar(
     onImport: () -> Unit,
     onImportEpubFolder: () -> Unit,
     onImportMangaFolder: () -> Unit,
+    onOpenStatistics: () -> Unit,
 ) {
     var moveMenuExpanded by remember { mutableStateOf(false) }
     var importMenuExpanded by remember { mutableStateOf(false) }
@@ -1001,6 +1006,12 @@ private fun BooksTopAppBar(
                     )
                 }
             } else {
+                IconButton(onClick = onOpenStatistics, enabled = enabled) {
+                    Icon(
+                        imageVector = Icons.Rounded.QueryStats,
+                        contentDescription = stringResource(R.string.bookshelf_statistics),
+                    )
+                }
                 HttpSyncBookshelfButton(enabled = enabled)
                 IconButton(onClick = onManageShelves, enabled = enabled) {
                     Icon(
@@ -1206,7 +1217,7 @@ internal suspend fun loadBookProgressById(
     }
 
 @Composable
-private fun BookCoverCard(
+internal fun BookCoverCard(
     coverSource: BookCoverSource?,
     modifier: Modifier = Modifier,
 ) {

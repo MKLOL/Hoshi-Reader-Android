@@ -37,6 +37,8 @@ data class ReaderSettings(
     val continuousMode: Boolean = false,
     val statisticsSyncEnabled: Boolean = false,
     val statisticsSyncMode: StatisticsSyncMode = StatisticsSyncMode.Merge,
+    /** Minutes read in a day for it to count towards the reading streak. */
+    val statisticsStreakMinimumMinutes: Int = 10,
     val showStatisticsToggle: Boolean = false,
     val showReadingSpeed: Boolean = false,
     val showReadingTime: Boolean = false,
@@ -406,6 +408,7 @@ class ReaderSettingsRepository(
             continuousMode = this[KEY_CONTINUOUS_MODE] ?: false,
             statisticsSyncEnabled = this[KEY_STATISTICS_SYNC_ENABLED] ?: false,
             statisticsSyncMode = StatisticsSyncMode.fromRawValue(this[KEY_STATISTICS_SYNC_MODE]),
+            statisticsStreakMinimumMinutes = (this[KEY_STATISTICS_STREAK_MINIMUM_MINUTES] ?: 10).coerceIn(1, 600),
             showStatisticsToggle = this[KEY_SHOW_STATISTICS_TOGGLE] ?: false,
             showReadingSpeed = this[KEY_SHOW_READING_SPEED] ?: false,
             showReadingTime = this[KEY_SHOW_READING_TIME] ?: false,
@@ -461,6 +464,7 @@ class ReaderSettingsRepository(
         this[KEY_CONTINUOUS_MODE] = settings.continuousMode
         this[KEY_STATISTICS_SYNC_ENABLED] = settings.statisticsSyncEnabled
         this[KEY_STATISTICS_SYNC_MODE] = settings.statisticsSyncMode.rawValue
+        this[KEY_STATISTICS_STREAK_MINIMUM_MINUTES] = settings.statisticsStreakMinimumMinutes
         this[KEY_SHOW_STATISTICS_TOGGLE] = settings.showStatisticsToggle
         this[KEY_SHOW_READING_SPEED] = settings.showReadingSpeed
         this[KEY_SHOW_READING_TIME] = settings.showReadingTime
@@ -521,6 +525,7 @@ class ReaderSettingsRepository(
         private val KEY_CONTINUOUS_MODE = booleanPreferencesKey("continuousMode")
         private val KEY_STATISTICS_SYNC_ENABLED = booleanPreferencesKey("statisticsEnableSync")
         private val KEY_STATISTICS_SYNC_MODE = stringPreferencesKey("statisticsSyncMode")
+        private val KEY_STATISTICS_STREAK_MINIMUM_MINUTES = intPreferencesKey("statisticsStreakMinimumMinutes")
         private val KEY_SHOW_STATISTICS_TOGGLE = booleanPreferencesKey("readerShowStatisticsToggle")
         private val KEY_SHOW_READING_SPEED = booleanPreferencesKey("readerShowReadingSpeed")
         private val KEY_SHOW_READING_TIME = booleanPreferencesKey("readerShowReadingTime")

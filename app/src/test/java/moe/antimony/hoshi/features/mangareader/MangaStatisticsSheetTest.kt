@@ -54,4 +54,12 @@ class MangaStatisticsSheetTest {
         assertEquals("42 pages / h", formatMangaReadingPace(42))
         assertEquals("0 pages / h", formatMangaReadingPace(-10))
     }
+
+    @Test
+    fun pageChangesCountAsReadOnlyWhileTrackingAndOnlyForRealTurns() {
+        assertEquals(true, mangaPageChangeCountsAsRead(isTracking = true, countAsRead = true))
+        assertEquals(false, mangaPageChangeCountsAsRead(isTracking = false, countAsRead = true))
+        assertEquals(false, mangaPageChangeCountsAsRead(isTracking = true, countAsRead = false))
+        assertEquals(false, mangaPageChangeCountsAsRead(isTracking = false, countAsRead = false))
+    }
 }

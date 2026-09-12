@@ -14,7 +14,8 @@ data class MangaTextReadState(
 /**
  * Counts OCR characters read, per day, next to the page-based
  * [moe.antimony.hoshi.features.reader.ReaderStatisticsTracker]. Only forward page turns add
- * characters (see `MokuroBook.ocrCharactersTurnedPast`), so re-reading never double counts.
+ * characters (see `MokuroBook.ocrCharactersTurnedPast`); turning back adds nothing, and turning
+ * forward again over the same pages counts them again, exactly like the page counter.
  */
 class MangaTextReadCounter(
     initialStatistics: List<MangaTextStatistic>,

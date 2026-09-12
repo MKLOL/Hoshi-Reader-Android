@@ -356,7 +356,7 @@ internal fun MangaReaderScreen(
         lookupPopups = emptyList()
     }
 
-    fun goToPage(index: Int) {
+    fun goToPage(index: Int, countAsRead: Boolean = true) {
         val clamped = index.coerceIn(0, book.pages.lastIndex.coerceAtLeast(0))
         if (clamped == pageIndex) return
         val direction = if (clamped > pageIndex) {
@@ -382,12 +382,14 @@ internal fun MangaReaderScreen(
         readyTransition = null
         val previousPageIndex = pageIndex
         val previousStatisticsCounter = statisticsPageCounter
-        statisticsPageCounter = mangaStatisticsCounterAfterPageChange(
-            currentCounter = previousStatisticsCounter,
-            fromPageIndex = previousPageIndex,
-            toPageIndex = clamped,
-        )
-        textReadCounter?.add(book.ocrCharactersTurnedPast(previousPageIndex, clamped))
+        if (mangaPageChangeCountsAsRead(isTracking = statisticsTracker?.state?.isTracking == true, countAsRead = countAsRead)) {
+            statisticsPageCounter = mangaStatisticsCounterAfterPageChange(
+                currentCounter = previousStatisticsCounter,
+                fromPageIndex = previousPageIndex,
+                toPageIndex = clamped,
+            )
+            textReadCounter?.add(book.ocrCharactersTurnedPast(previousPageIndex, clamped))
+        }
         pageIndex = clamped
         recordStatisticsAtCounter(statisticsPageCounter)
         scheduleBookmarkSave(clamped)
@@ -804,7 +806,7 @@ internal fun MangaReaderScreen(
             }
         }
     }
-    DisposableEffect(lifecycle, statisticsTracker, bookRoot) {
+    DisposableEffect(lifecycle, statisticsTracker, textReadCounter, bookRoot) {
         val tracker = statisticsTracker
         val observer = LifecycleEventObserver { _, event ->
             when (event) {
@@ -1228,7 +1230,7 @@ internal fun MangaReaderScreen(
                 onDismiss = { showGoToPageDialog = false },
                 onConfirm = { page ->
                     showGoToPageDialog = false
-                    goToPage(page - 1)
+                    goToPage(page - 1, countAsRead = false)
                 },
             )
         }

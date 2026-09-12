@@ -164,6 +164,34 @@ class ReaderRouteStateHolderTest {
         assertEquals(statistics, repository.savedStatistics)
     }
 
+    @Test
+    fun saveStatisticsAloneWritesTheSidecarWithoutABookmarkOrASyncQueueEntry() = runBlocking {
+        val root = File("book-a")
+        val book = readerBook(html = "1234567890")
+        val statistics = listOf(ReadingStatistics(title = "Book", dateKey = "2026-09-12", readingTime = 95.0, charactersRead = 40))
+        val repository = FakeReaderRouteBookRepository(entry = null, now = 99.0)
+        var bookmarkQueued = false
+        val stateHolder = ReaderRouteStateHolder(
+            repository,
+            FakeReaderRouteEpubParser(book),
+            onBookmarkPersisted = { _, _, _ -> bookmarkQueued = true },
+        )
+
+        stateHolder.saveStatistics(
+            state = ReaderRouteLoadState.Ready(
+                entry = BookEntry(root, BookMetadata("book-a", "Book", null, "book-a", 0.0)),
+                bookRoot = root,
+                book = book,
+                bookmark = null,
+            ),
+            statistics = statistics,
+        )
+
+        assertEquals(statistics, repository.savedStatistics)
+        assertEquals(null, repository.savedBookmark)
+        assertEquals(false, bookmarkQueued)
+    }
+
     private class FakeReaderRouteBookRepository(
         private val entry: BookEntry?,
         private val bookmark: Bookmark? = null,

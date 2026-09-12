@@ -44,6 +44,12 @@ class ReadingStatisticsOverviewTest {
         assertEquals(null, epub.pagesRead)
         assertEquals(500, epub.charactersRead)
         assertEquals("2026-09-02", manga.lastReadDateKey)
+        assertEquals("2026-08-30", manga.startedDateKey)
+        assertEquals(2, manga.daysRead)
+        assertEquals(listOf("2026-09-02", "2026-08-30"), manga.days.map { it.dateKey })
+        assertEquals(listOf("2026-09-02", "2026-09-01", "2026-08-30"), overview.daily.map { it.dateKey })
+        assertEquals(60.0, overview.daily.first { it.dateKey == "2026-09-01" }.seconds, 0.0)
+        assertEquals(500, overview.daily.first { it.dateKey == "2026-09-01" }.characters)
         assertEquals(ContentType.Mokuro, manga.contentType)
         assertEquals(1260.0, overview.totalSeconds, 0.0)
         assertEquals(0.0, overview.todaySeconds, 0.0)
@@ -141,5 +147,23 @@ class ReadingStatisticsOverviewTest {
         assertEquals(0, overview.totalCharacters)
         assertEquals(0, overview.todayCharacters)
         assertNull(overview.books.firstOrNull())
+    }
+
+    @Test
+    fun todayNeverExceedsAllTimeBecauseOnlyListedBooksFeedTheDailyTotals() {
+        val overview = summarizeReadingStatistics(
+            listOf(
+                book("timeless", "Synced characters, no time", ContentType.Epub, day("2026-09-12", 0.0, units = 5_000)),
+                book("read", "Read today", ContentType.Epub, day("2026-09-12", 120.0, units = 300)),
+            ),
+            todayKey = "2026-09-12",
+        )
+
+        assertEquals(listOf("read"), overview.books.map { it.bookId })
+        assertEquals(300, overview.totalCharacters)
+        assertEquals(300, overview.todayCharacters)
+        assertEquals(120.0, overview.todaySeconds, 0.0)
+        assertEquals(listOf("2026-09-12"), overview.daily.map { it.dateKey })
+        assertTrue(overview.todayCharacters <= overview.totalCharacters)
     }
 }

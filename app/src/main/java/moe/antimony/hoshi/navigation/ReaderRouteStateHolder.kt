@@ -82,6 +82,13 @@ internal class ReaderRouteStateHolder(
         )
         onBookmarkSaved()
     }
+
+    /** Statistics only: the reader was left or backgrounded and must not write a new bookmark. */
+    suspend fun saveStatistics(state: ReaderRouteLoadState.Ready, statistics: List<ReadingStatistics>) {
+        withContext(ioDispatcher) {
+            repository.saveStatistics(state.bookRoot, statistics)
+        }
+    }
 }
 
 internal interface ReaderRouteEpubParser {

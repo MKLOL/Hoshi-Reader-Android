@@ -33,6 +33,7 @@ class ReaderSettingsTest {
         assertFalse(settings.showReadingSpeed)
         assertFalse(settings.showReadingTime)
         assertEquals(20, settings.chapterSwipeDistance)
+        assertEquals(10, settings.statisticsStreakMinimumMinutes)
         assertTrue(settings.popupSwipeToDismiss)
         assertEquals(30, settings.popupSwipeThreshold)
     }

@@ -300,6 +300,14 @@ internal fun mangaStatisticsCounterAfterPageChange(
 ): Int =
     currentCounter.coerceAtLeast(0) + max(toPageIndex - fromPageIndex, 0)
 
+/**
+ * Whether a page change counts as reading for both the page counter and the OCR character
+ * counter: only while statistics are tracking (a paused session records nothing, like the
+ * time) and only for real turns, never for a "Go to page" jump.
+ */
+internal fun mangaPageChangeCountsAsRead(isTracking: Boolean, countAsRead: Boolean): Boolean =
+    isTracking && countAsRead
+
 internal fun mangaRemainingPages(pageIndex: Int, pageCount: Int): Int =
     max(pageCount - mangaStatisticsPosition(pageIndex), 0)
 

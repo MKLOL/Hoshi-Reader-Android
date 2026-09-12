@@ -112,6 +112,8 @@ fun ReaderWebView(
     onReaderSettingsChange: (ReaderSettings) -> Unit = {},
     onReaderKeyEventHandlerChange: (((KeyEvent) -> Boolean)?) -> Unit = {},
     onSaveBookmark: (chapterIndex: Int, progress: Double, statistics: List<ReadingStatistics>?) -> Unit = { _, _, _ -> },
+    /** Persists statistics alone, for leaving or backgrounding the reader without a new bookmark. */
+    onSaveStatistics: (statistics: List<ReadingStatistics>) -> Unit = {},
     onFlushAutoSyncExport: () -> Unit = {},
     onForegroundAutoSyncImport: () -> Unit = {},
     onTextSelected: (ReaderSelectionData) -> Int? = { null },
@@ -531,6 +533,14 @@ fun ReaderWebView(
         }
         return paused
     }
+    /**
+     * Writes the session's time to `statistics.json` without a bookmark. Page turns save both
+     * together, but the time spent on the last page before leaving or backgrounding would
+     * otherwise stay in memory only, and the Statistics screen would lag behind this sheet.
+     */
+    fun saveStatisticsWithoutBookmark() {
+        statisticsTracker?.statisticsForPersistenceOrNull()?.let(onSaveStatistics)
+    }
     fun resumeStatisticsForLifecycleStartIfNeeded() {
         if (!resumeStatisticsTrackingOnStart) return
         resumeStatisticsTrackingOnStart = false
@@ -629,6 +639,9 @@ fun ReaderWebView(
         }
         if (plan.saveCurrentDisplayedPosition) {
             saveCurrentDisplayedPosition()
+        } else {
+            pauseStatisticsForLifecycleStop()
+            saveStatisticsWithoutBookmark()
         }
         if (plan.flushAutoSyncExport) {
             onFlushAutoSyncExport()
@@ -1173,6 +1186,8 @@ fun ReaderWebView(
         resumeStatisticsTrackingOnStart = pauseStatisticsForLifecycleStop()
         if (plan.saveCurrentDisplayedPosition) {
             saveCurrentDisplayedPosition()
+        } else {
+            saveStatisticsWithoutBookmark()
         }
         if (plan.flushAutoSyncExport) {
             onFlushAutoSyncExport()
@@ -1185,6 +1200,9 @@ fun ReaderWebView(
         }
         if (plan.saveCurrentDisplayedPosition) {
             saveCurrentDisplayedPosition()
+        } else {
+            pauseStatisticsForLifecycleStop()
+            saveStatisticsWithoutBookmark()
         }
         if (plan.flushAutoSyncExport) {
             onFlushAutoSyncExport()

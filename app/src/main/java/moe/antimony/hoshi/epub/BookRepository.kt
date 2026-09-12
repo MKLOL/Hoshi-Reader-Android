@@ -120,6 +120,7 @@ class BookRepository(
             runCatching { releasePersistedSasayakiAudioUri(uri) }
         }
         fileDataSource.deleteBook(bookRoot)
+        statisticsChangeCounter.update { it + 1 }
         val cleanedShelves = loadShelves().map { shelf ->
             shelf.copy(bookIds = shelf.bookIds.filterNot { it == removedId })
         }
@@ -152,18 +153,41 @@ class BookRepository(
     }
 
     override suspend fun loadStatistics(bookRoot: File): List<ReadingStatistics> =
-        sidecarDataSource.loadStatistics(bookRoot).orEmpty()
+        bookLocks.withBookLock(bookRoot) { sidecarDataSource.loadStatistics(bookRoot).orEmpty() }
 
+    /**
+     * Merges [statistics] into the sidecar day by day (newest `lastStatisticModified` wins per
+     * day) instead of overwriting it. A reader only knows the days it loaded plus today, so a
+     * plain overwrite would drop days that a sync import added while the book was open.
+     */
     override suspend fun saveStatistics(bookRoot: File, statistics: List<ReadingStatistics>) {
-        sidecarDataSource.saveStatistics(bookRoot, statistics)
+        bookLocks.withBookLock(bookRoot) {
+            val onDisk = sidecarDataSource.loadStatistics(bookRoot).orEmpty()
+            sidecarDataSource.saveStatistics(bookRoot, (statistics + onDisk).deduplicateReadingStatistics())
+        }
+        statisticsChangeCounter.update { it + 1 }
+    }
+
+    /** Overwrites the sidecar wholesale, for a sync in Replace mode; readers never call this. */
+    suspend fun replaceStatistics(bookRoot: File, statistics: List<ReadingStatistics>) {
+        bookLocks.withBookLock(bookRoot) { sidecarDataSource.saveStatistics(bookRoot, statistics) }
         statisticsChangeCounter.update { it + 1 }
     }
 
     suspend fun loadMangaTextStatistics(bookRoot: File): List<MangaTextStatistic> =
-        sidecarDataSource.loadMangaTextStatistics(bookRoot).orEmpty()
+        bookLocks.withBookLock(bookRoot) { sidecarDataSource.loadMangaTextStatistics(bookRoot).orEmpty() }
 
+    /** Same day-by-day merge as [saveStatistics]. */
     suspend fun saveMangaTextStatistics(bookRoot: File, statistics: List<MangaTextStatistic>) {
-        sidecarDataSource.saveMangaTextStatistics(bookRoot, statistics)
+        bookLocks.withBookLock(bookRoot) {
+            val onDisk = sidecarDataSource.loadMangaTextStatistics(bookRoot).orEmpty()
+            sidecarDataSource.saveMangaTextStatistics(bookRoot, (statistics + onDisk).deduplicateMangaTextStatistics())
+        }
+        statisticsChangeCounter.update { it + 1 }
+    }
+
+    /** For paths that replace book directories wholesale (backup restore) and cannot go through a save. */
+    fun notifyStatisticsChanged() {
         statisticsChangeCounter.update { it + 1 }
     }
 
@@ -623,7 +647,9 @@ class BookSidecarDataSource(
         // storage fills mid-write; loadJson then reads it as absent and silently loses data
         // (e.g. every shelf placement, or the stable id/syncId). POSIX rename within one
         // directory is atomic; mirrors iOS Data.write(options: .atomic) in Core/BookStorage.swift.
-        val tmp = File(bookRoot, "$fileName.tmp")
+        // A unique temp name per write: two writers of the same sidecar (a debounced page-turn
+        // save racing a dispose save) must never rename each other's half-written file.
+        val tmp = File(bookRoot, "$fileName.${java.util.UUID.randomUUID()}.tmp")
         try {
             tmp.writeText(text)
         } catch (error: Throwable) {
