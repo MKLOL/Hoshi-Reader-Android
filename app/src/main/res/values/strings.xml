@@ -278,6 +278,13 @@
     <string name="statistics_book_type_manga">Manga</string>
     <string name="statistics_book_type_book">Book</string>
     <string name="statistics_book_not_found">This book is no longer in your library.</string>
+    <string name="statistics_devices_title">By device</string>
+    <string name="statistics_this_device">This device</string>
+    <string name="statistics_unknown_device">Unknown device</string>
+    <plurals name="statistics_device_books">
+        <item quantity="one">%1$s book</item>
+        <item quantity="other">%1$s books</item>
+    </plurals>
     <plurals name="statistics_streak_days">
         <item quantity="one">%1$d day streak</item>
         <item quantity="other">%1$d day streak</item>

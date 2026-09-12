@@ -432,6 +432,7 @@ fun ReaderWebView(
                 title = book.title,
                 initialStatistics = statistics,
                 enabled = true,
+                device = appContainer.deviceIdentity,
             )
         }
     }

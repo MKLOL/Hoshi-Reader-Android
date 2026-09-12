@@ -16,6 +16,7 @@ import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.builtins.ListSerializer
 import moe.antimony.hoshi.mokuro.MangaTextStatistic
+import moe.antimony.hoshi.mokuro.attributedTo
 import moe.antimony.hoshi.mokuro.deduplicateMangaTextStatistics
 import kotlinx.serialization.json.Json
 import moe.antimony.hoshi.features.sync.http.HttpSyncActiveBooks
@@ -48,6 +49,12 @@ class BookRepository(
     private val sidecarDataSource: BookSidecarDataSource = BookSidecarDataSource(ioDispatcher),
     private val clock: BookClock = SystemBookClock,
     private val bookLocks: HttpSyncBookLocks = HttpSyncBookLocks(),
+    /**
+     * The device statistics entries without a device are attributed to: everything this
+     * install recorded before devices were tracked, plus anything handed in without one (a
+     * ッツ import). Null only in tests that do not care about devices.
+     */
+    private val deviceIdentity: DeviceIdentity? = null,
 ) : ReaderRouteBookRepository, SasayakiSidecarRepository {
     private val importDataSource = BookImportDataSource(
         filesDir = filesDir,
@@ -157,41 +164,109 @@ class BookRepository(
     }
 
     override suspend fun loadStatistics(bookRoot: File): List<ReadingStatistics> =
-        bookLocks.withBookLock(bookRoot) { sidecarDataSource.loadStatistics(bookRoot).orEmpty() }
+        bookLocks.withBookLock(bookRoot) {
+            val onDisk = sidecarDataSource.loadStatistics(bookRoot).orEmpty()
+            val attributed = onDisk.legacyAttributed(bookRoot)
+            // A file from before devices were tracked is rewritten once, so every reader of the
+            // file (screens, sync uploads) sees the same attribution.
+            if (attributed != onDisk) sidecarDataSource.saveStatistics(bookRoot, attributed)
+            attributed
+        }
 
     /**
-     * Merges [statistics] into the sidecar day by day (newest `lastStatisticModified` wins per
-     * day) instead of overwriting it. A reader only knows the days it loaded plus today, so a
-     * plain overwrite would drop days that a sync import added while the book was open.
+     * Merges [statistics] into the sidecar entry by entry (newest `lastStatisticModified` wins
+     * per day and device) instead of overwriting it. A reader only knows the days it loaded
+     * plus today, so a plain overwrite would drop days that a sync import added while the book
+     * was open. Entries without a device are stored as they are (see [legacyAttributed]).
      */
     override suspend fun saveStatistics(bookRoot: File, statistics: List<ReadingStatistics>) {
         // Not cancellable: the manga reader cancels its debounced save when the next page turn
         // arrives, and a write that has already reached the file must still signal the change.
         withContext(NonCancellable) {
             bookLocks.withBookLock(bookRoot) {
-                val onDisk = sidecarDataSource.loadStatistics(bookRoot).orEmpty()
+                val onDisk = sidecarDataSource.loadStatistics(bookRoot).orEmpty().legacyAttributed(bookRoot)
                 sidecarDataSource.saveStatistics(bookRoot, (statistics + onDisk).deduplicateReadingStatistics())
             }
             statisticsChangeCounter.update { it + 1 }
         }
     }
 
-    /** Overwrites the sidecar wholesale, for a sync in Replace mode; readers never call this. */
+    /** Overwrites the sidecar wholesale; readers never call this. */
     suspend fun replaceStatistics(bookRoot: File, statistics: List<ReadingStatistics>) {
         withContext(NonCancellable) {
-            bookLocks.withBookLock(bookRoot) { sidecarDataSource.saveStatistics(bookRoot, statistics) }
+            bookLocks.withBookLock(bookRoot) {
+                sidecarDataSource.saveStatistics(bookRoot, statistics)
+            }
             statisticsChangeCounter.update { it + 1 }
         }
     }
 
+    /**
+     * Makes each day's total across devices match [dayTotals] — device-less per-day entries,
+     * as a ッツ statistics file holds them — by adjusting only this device's entry for the
+     * day. The other devices' entries are theirs and stay untouched, so this device's share
+     * becomes the day's total minus what the other devices recorded (never below zero). A day
+     * whose total already matches is left alone, so importing what was just exported changes
+     * nothing, and the file is not written at all when nothing changed. With [replaceOtherDays]
+     * this device's entries for days missing from [dayTotals] are dropped (ッツ "Replace").
+     *
+     * @return whether the sidecar changed.
+     */
+    suspend fun applyDayTotals(
+        bookRoot: File,
+        dayTotals: List<ReadingStatistics>,
+        replaceOtherDays: Boolean,
+    ): Boolean = withContext(NonCancellable) {
+        val device = deviceIdentity
+        val changed = bookLocks.withBookLock(bookRoot) {
+            val next = sidecarDataSource.loadStatistics(bookRoot).orEmpty().legacyAttributed(bookRoot).toMutableList()
+            var changed = false
+            val totals = dayTotals.collapsedByDay()
+            for (total in totals) {
+                val sameDay = next.filter { it.dateKey == total.dateKey }
+                val own = sameDay.firstOrNull { it.deviceId == device?.id }
+                val others = sameDay.filter { it.deviceId != device?.id }
+                val ownTime = (total.readingTime - others.sumOf { it.readingTime }).coerceAtLeast(0.0)
+                val ownCharacters = (total.charactersRead - others.sumOf { it.charactersRead }).coerceAtLeast(0)
+                if (own == null && ownTime <= 0.0 && ownCharacters <= 0) continue
+                if (own != null && own.readingTime == ownTime && own.charactersRead == ownCharacters) continue
+                val updated = total.copy(
+                    readingTime = ownTime,
+                    charactersRead = ownCharacters,
+                    lastReadingSpeed = if (ownTime > 0.0) (ownCharacters / ownTime * 3600.0).toInt() else 0,
+                    // Newer than the entry it replaces, so HTTP sync carries it to the other devices.
+                    lastStatisticModified = maxOf(total.lastStatisticModified, (own?.lastStatisticModified ?: 0L) + 1),
+                    deviceId = device?.id,
+                    deviceName = device?.name,
+                )
+                if (own != null) next.remove(own)
+                next += updated
+                changed = true
+            }
+            if (replaceOtherDays) {
+                val keep = totals.map { it.dateKey }.toSet()
+                if (next.removeAll { it.deviceId == device?.id && it.dateKey !in keep }) changed = true
+            }
+            if (changed) sidecarDataSource.saveStatistics(bookRoot, next.deduplicateReadingStatistics())
+            changed
+        }
+        if (changed) statisticsChangeCounter.update { it + 1 }
+        changed
+    }
+
     suspend fun loadMangaTextStatistics(bookRoot: File): List<MangaTextStatistic> =
-        bookLocks.withBookLock(bookRoot) { sidecarDataSource.loadMangaTextStatistics(bookRoot).orEmpty() }
+        bookLocks.withBookLock(bookRoot) {
+            val onDisk = sidecarDataSource.loadMangaTextStatistics(bookRoot).orEmpty()
+            val attributed = onDisk.legacyAttributed(bookRoot)
+            if (attributed != onDisk) sidecarDataSource.saveMangaTextStatistics(bookRoot, attributed)
+            attributed
+        }
 
     /** Same day-by-day merge as [saveStatistics]. */
     suspend fun saveMangaTextStatistics(bookRoot: File, statistics: List<MangaTextStatistic>) {
         withContext(NonCancellable) {
             bookLocks.withBookLock(bookRoot) {
-                val onDisk = sidecarDataSource.loadMangaTextStatistics(bookRoot).orEmpty()
+                val onDisk = sidecarDataSource.loadMangaTextStatistics(bookRoot).orEmpty().legacyAttributed(bookRoot)
                 sidecarDataSource.saveMangaTextStatistics(bookRoot, (statistics + onDisk).deduplicateMangaTextStatistics())
             }
             statisticsChangeCounter.update { it + 1 }
@@ -202,6 +277,34 @@ class BookRepository(
     fun notifyStatisticsChanged() {
         statisticsChangeCounter.update { it + 1 }
     }
+
+    /** The device new statistics entries of this install are attributed to, when known. */
+    val statisticsDevice: DeviceIdentity? get() = deviceIdentity
+
+    /**
+     * Statistics written before devices were tracked carry no device. They are this device's
+     * own history exactly when the file has never been touched by a device-aware build (no
+     * entry names a device) and the book's statistics have never been exchanged over HTTP
+     * sync — otherwise the same device-less days already sit on the other side under the
+     * "unknown device" key, and claiming them here would count them twice after the next
+     * sync. Anything that arrives without a device later (from an older client, through
+     * sync) stays in that "unknown device" bucket, which is what the Statistics screens show.
+     */
+    private fun List<ReadingStatistics>.legacyAttributed(bookRoot: File): List<ReadingStatistics> {
+        val device = deviceIdentity ?: return this
+        if (!legacyAttributionApplies(bookRoot, any { it.deviceId != null })) return this
+        return attributedTo(device)
+    }
+
+    @JvmName("legacyAttributedMangaText")
+    private fun List<MangaTextStatistic>.legacyAttributed(bookRoot: File): List<MangaTextStatistic> {
+        val device = deviceIdentity ?: return this
+        if (!legacyAttributionApplies(bookRoot, any { it.deviceId != null })) return this
+        return attributedTo(device)
+    }
+
+    private fun legacyAttributionApplies(bookRoot: File, anyEntryNamesADevice: Boolean): Boolean =
+        !anyEntryNamesADevice && !bookRoot.resolve(STATISTICS_SYNC_STATE_FILE_NAME).isFile
 
     private val pendingStatisticsSaves = ConcurrentHashMap<String, MutableSet<Job>>()
 
@@ -716,6 +819,9 @@ object SystemBookClock : BookClock {
 private const val METADATA_FILE_NAME = "metadata.json"
 private const val BOOKMARK_FILE_NAME = "bookmark.json"
 private const val STATISTICS_FILE_NAME = "statistics.json"
+
+/** HTTP sync's per-book statistics exchange state; its presence means the book's statistics were synced at least once. */
+internal const val STATISTICS_SYNC_STATE_FILE_NAME = ".http_sync_statistics.json"
 // Android-only per-day OCR character counts for manga; already in PAYLOAD_EXCLUDED_FILES.
 private const val MANGA_STATISTICS_FILE_NAME = "manga_statistics.json"
 private const val HIGHLIGHTS_FILE_NAME = "highlights.json"

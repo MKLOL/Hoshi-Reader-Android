@@ -1,5 +1,6 @@
 package moe.antimony.hoshi.features.reader
 
+import moe.antimony.hoshi.epub.DeviceIdentity
 import moe.antimony.hoshi.epub.ReadingStatistics
 import moe.antimony.hoshi.epub.deduplicateReadingStatistics
 import moe.antimony.hoshi.epub.readingTotals
@@ -10,6 +11,11 @@ import kotlin.math.abs
 data class ReaderStatisticsState(
     val isTracking: Boolean,
     val session: ReadingStatistics,
+    /**
+     * Today for this book across every device: this device's running entry plus whatever
+     * other devices already recorded for the day, so the sheet agrees with the Statistics
+     * page's day-by-day history.
+     */
     val today: ReadingStatistics,
     val allTime: ReadingStatistics,
 )
@@ -30,16 +36,21 @@ class ReaderStatisticsTracker(
     initialStatistics: List<ReadingStatistics>,
     private val enabled: Boolean,
     private val clock: ReaderStatisticsClock = SystemReaderStatisticsClock,
+    /** The device whose per-day entry this tracker adds to; other devices' entries are left as they are. */
+    private val device: DeviceIdentity? = null,
 ) {
     private var statistics = initialStatistics.deduplicateReadingStatistics()
     private var lastTimestampMillis: Long = clock.currentTimeMillis()
     private var lastCharacterCount: Int = 0
     private var hasUpdated = false
 
+    /** This device's entry for today: what [update] adds to and [storeToday] writes back. */
+    private var todayOnThisDevice: ReadingStatistics = statisticForDate(clock.currentDate())
+
     private var currentState: ReaderStatisticsState = ReaderStatisticsState(
         isTracking = false,
         session = defaultStatistic(clock.currentDate()),
-        today = statisticForDate(clock.currentDate()),
+        today = todayAcrossDevices(clock.currentDate()),
         allTime = allTimeStatistic(statistics),
     )
 
@@ -96,6 +107,7 @@ class ReaderStatisticsTracker(
             charDiff
         }
         val modified = clock.currentTimeMillis()
+        todayOnThisDevice = todayOnThisDevice.updated(timeDiff, finalCharDiff, modified)
         currentState = currentState.copy(
             session = currentState.session.updated(timeDiff, finalCharDiff, modified),
             today = currentState.today.updated(timeDiff, finalCharDiff, modified),
@@ -121,9 +133,9 @@ class ReaderStatisticsTracker(
     }
 
     private fun storeToday(): List<ReadingStatistics> {
-        val today = currentState.today
+        val today = todayOnThisDevice
         val next = statistics.toMutableList()
-        val index = next.indexOfFirst { it.dateKey == today.dateKey }
+        val index = next.indexOfFirst { it.dateKey == today.dateKey && it.deviceId == today.deviceId }
         if (index >= 0) {
             next[index] = today
         } else {
@@ -136,16 +148,37 @@ class ReaderStatisticsTracker(
     private fun rollTodayIfNeeded() {
         val currentDate = clock.currentDate()
         val currentDateKey = currentDate.toString()
-        if (currentState.today.dateKey == currentDateKey) return
+        if (todayOnThisDevice.dateKey == currentDateKey) return
         storeToday()
-        currentState = currentState.copy(today = statisticForDate(currentDate))
+        todayOnThisDevice = statisticForDate(currentDate)
+        currentState = currentState.copy(today = todayAcrossDevices(currentDate))
     }
 
+    /** This device's stored entry for [date], carrying the device's current name, or a fresh one. */
     private fun statisticForDate(date: LocalDate): ReadingStatistics =
-        statistics.firstOrNull { it.dateKey == date.toString() } ?: defaultStatistic(date)
+        statistics.firstOrNull { it.dateKey == date.toString() && it.deviceId == device?.id }
+            ?.let { stored -> if (device != null) stored.copy(deviceName = device.name) else stored }
+            ?: defaultStatistic(date)
+
+    /**
+     * Every device's entry for [date] added up, with this device's running entry standing in for
+     * its stored one. Time, characters and the average speed are the whole day's; the min/max
+     * speed fields stay this device's session values, which is all the sheets show them for.
+     */
+    private fun todayAcrossDevices(date: LocalDate): ReadingStatistics {
+        val dateKey = date.toString()
+        val others = statistics.filter { it.dateKey == dateKey && it.deviceId != todayOnThisDevice.deviceId }
+        val readingTime = todayOnThisDevice.readingTime + others.sumOf { it.readingTime }
+        val charactersRead = todayOnThisDevice.charactersRead + others.sumOf { it.charactersRead }
+        return todayOnThisDevice.copy(
+            readingTime = readingTime,
+            charactersRead = charactersRead,
+            lastReadingSpeed = if (readingTime > 0.0) (charactersRead / readingTime * 3600.0).toInt() else 0,
+        )
+    }
 
     private fun defaultStatistic(date: LocalDate): ReadingStatistics =
-        ReadingStatistics(title = title, dateKey = date.toString())
+        ReadingStatistics(title = title, dateKey = date.toString(), deviceId = device?.id, deviceName = device?.name)
 
     private fun allTimeStatistic(statistics: List<ReadingStatistics>): ReadingStatistics {
         // Same totals the Statistics screens compute from the persisted file (see readingTotals).

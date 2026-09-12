@@ -6,6 +6,8 @@ import moe.antimony.hoshi.epub.BookRepository
 import moe.antimony.hoshi.epub.ContentType
 import moe.antimony.hoshi.epub.ReadingStatistics
 import moe.antimony.hoshi.epub.bookContentType
+import moe.antimony.hoshi.epub.STATISTICS_SYNC_STATE_FILE_NAME
+import moe.antimony.hoshi.epub.dayDeviceKey
 import moe.antimony.hoshi.epub.deduplicateReadingStatistics
 import moe.antimony.hoshi.mokuro.MangaTextStatistic
 import moe.antimony.hoshi.mokuro.deduplicateMangaTextStatistics
@@ -25,27 +27,27 @@ internal const val MAX_STATISTICS_BLOB_BYTES: Int = 4 * 1024 * 1024
  * Per-book, per-device record of the last statistics exchange, so a converged book costs no
  * request on later syncs. Excluded from the payload like every other per-device sidecar.
  */
-internal const val STATISTICS_SYNC_STATE_FILENAME: String = ".http_sync_statistics.json"
+internal const val STATISTICS_SYNC_STATE_FILENAME: String = STATISTICS_SYNC_STATE_FILE_NAME
 
 @Serializable
 data class HttpSyncStatisticsBlob(
-    val version: Int = 1,
+    val version: Int = 2,
     val syncId: String = "",
     val entries: List<ReadingStatistics> = emptyList(),
 ) {
     companion object {
-        const val SUPPORTED_VERSION: Int = 1
+        const val SUPPORTED_VERSION: Int = 2
     }
 }
 
 @Serializable
 data class HttpSyncMangaStatisticsBlob(
-    val version: Int = 1,
+    val version: Int = 2,
     val syncId: String = "",
     val entries: List<MangaTextStatistic> = emptyList(),
 ) {
     companion object {
-        const val SUPPORTED_VERSION: Int = 1
+        const val SUPPORTED_VERSION: Int = 2
     }
 }
 
@@ -92,10 +94,11 @@ internal data class StatisticsSyncState(
 )
 
 /**
- * Two-way, per-day merge of a book's statistics with the server: the union of days, and for a
- * day both sides know, the entry with the newest modification stamp. That is the same rule the
- * sidecars apply on every write, so the exchange is idempotent and converges from any
- * interleaving without revision counters.
+ * Two-way merge of a book's statistics with the server, per day and device: the union of
+ * (day, device) entries, and for one both sides know, the entry with the newest modification
+ * stamp. That is the same rule the sidecars apply on every write, so the exchange is idempotent
+ * and converges from any interleaving without revision counters. Entries without a device
+ * (older clients) form their own bucket and are never re-attributed by the exchange.
  *
  * The exchange is `read remote -> merge -> save locally if new -> PUT if the server lacks
  * something`. A per-book state file remembers the sha of the local body and the size of the
@@ -133,7 +136,7 @@ class HttpSyncStatisticsSync(
                     loadLocal = { bookRepository.loadStatistics(bookRoot) },
                     saveLocal = { bookRepository.saveStatistics(bookRoot, it) },
                     merge = { it.deduplicateReadingStatistics() },
-                    dateKey = { it.dateKey },
+                    entryKey = { dayDeviceKey(it.dateKey, it.deviceId) },
                     stamp = { it.lastStatisticModified },
                     encode = { entries ->
                         json.encodeToString(HttpSyncStatisticsBlob.serializer(), HttpSyncStatisticsBlob(syncId = syncId, entries = entries))
@@ -156,7 +159,7 @@ class HttpSyncStatisticsSync(
                     loadLocal = { bookRepository.loadMangaTextStatistics(bookRoot) },
                     saveLocal = { bookRepository.saveMangaTextStatistics(bookRoot, it) },
                     merge = { it.deduplicateMangaTextStatistics() },
-                    dateKey = { it.dateKey },
+                    entryKey = { dayDeviceKey(it.dateKey, it.deviceId) },
                     stamp = { it.lastModified },
                     encode = { entries ->
                         json.encodeToString(HttpSyncMangaStatisticsBlob.serializer(), HttpSyncMangaStatisticsBlob(syncId = syncId, entries = entries))
@@ -183,14 +186,15 @@ class HttpSyncStatisticsSync(
         loadLocal: suspend () -> List<T>,
         saveLocal: suspend (List<T>) -> Unit,
         merge: (List<T>) -> List<T>,
-        dateKey: (T) -> String,
+        /** Sort key: day plus device, so bodies are byte-identical on every device. */
+        entryKey: (T) -> String,
         stamp: (T) -> Long,
         encode: (List<T>) -> String,
         decode: (String) -> List<T>,
         readState: (StatisticsSyncState) -> StatisticsSyncStateEntry?,
         writeState: (StatisticsSyncState, StatisticsSyncStateEntry) -> StatisticsSyncState,
     ): StatisticsSyncOutcome {
-        val local = merge(loadLocal()).sortedBy(dateKey)
+        val local = merge(loadLocal()).sortedBy(entryKey)
         val localBody = encode(local)
         val localSha = sha256(localBody)
         val state = loadState(bookRoot)
@@ -209,7 +213,7 @@ class HttpSyncStatisticsSync(
         val fetched = transport.getBounded(key, MAX_STATISTICS_BLOB_BYTES)
             ?: return uploadWhole(transport, bookRoot, key, local, localBody, localSha, state, writeState)
         val remoteEntries = try {
-            merge(decode(fetched.body.toString(Charsets.UTF_8))).sortedBy(dateKey)
+            merge(decode(fetched.body.toString(Charsets.UTF_8))).sortedBy(entryKey)
         } catch (error: HttpSyncException) {
             throw error
         } catch (error: Exception) {
@@ -218,7 +222,7 @@ class HttpSyncStatisticsSync(
         // The dedupe keeps the first entry it sees for a day when stamps tie, so order the
         // candidates the same way on every device: newest stamp first, then by content.
         val candidates = (local + remoteEntries).sortedWith(compareByDescending<T> { stamp(it) }.thenByDescending { it.toString() })
-        val merged = merge(candidates).sortedBy(dateKey)
+        val merged = merge(candidates).sortedBy(entryKey)
         val downloaded = merged != local
         if (downloaded) {
             saveLocal(merged)

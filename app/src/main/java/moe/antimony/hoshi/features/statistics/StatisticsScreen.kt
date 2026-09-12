@@ -115,6 +115,7 @@ fun StatisticsScreen(
         onOpenBook = onOpenBook,
         onClose = onClose,
         modifier = modifier,
+        localDeviceId = appContainer.deviceIdentity.id,
         driveSync = if (syncSettings?.enabled == true) {
             DriveStatisticsSyncOptions(readerSettings.statisticsSyncEnabled, readerSettings.statisticsSyncMode)
         } else {
@@ -144,6 +145,8 @@ fun StatisticsScreenContent(
     modifier: Modifier = Modifier,
     driveSync: DriveStatisticsSyncOptions? = null,
     onDriveSyncChange: (DriveStatisticsSyncOptions) -> Unit = {},
+    /** Marks this device's row in the "By device" card. */
+    localDeviceId: String? = null,
 ) {
     val colorScheme = MaterialTheme.colorScheme
     val streak = remember(overview, minimumMinutes, today) {
@@ -166,6 +169,10 @@ fun StatisticsScreenContent(
         ) {
             item { StreakCard(streak, minimumMinutes, onMinimumMinutesChange); Spacer(Modifier.height(18.dp)) }
             item { TotalsCard(overview); Spacer(Modifier.height(18.dp)) }
+            val devices = overview?.devices.orEmpty()
+            if (devices.isNotEmpty()) {
+                item { DevicesCard(devices, localDeviceId, showBookCount = true); Spacer(Modifier.height(18.dp)) }
+            }
             item { HeatmapCard(heatmap); Spacer(Modifier.height(18.dp)) }
             item { WeekdayCard(weekdays); Spacer(Modifier.height(18.dp)) }
             if (driveSync != null) {

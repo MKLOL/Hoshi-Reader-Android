@@ -32,6 +32,15 @@ import java.text.NumberFormat
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle
+import androidx.compose.material3.ListItem
+import androidx.compose.material3.ListItemDefaults
+import androidx.compose.ui.res.pluralStringResource
+import androidx.compose.ui.res.stringResource
+import moe.antimony.hoshi.R
+import moe.antimony.hoshi.features.reader.DeviceReadingSummary
+import moe.antimony.hoshi.features.reader.formatDurationSeconds
+import moe.antimony.hoshi.features.settings.GroupCard
+import moe.antimony.hoshi.features.settings.GroupDivider
 
 internal fun formatStatisticsCount(value: Int): String = NumberFormat.getIntegerInstance().format(value)
 
@@ -153,4 +162,74 @@ internal fun StatisticsBarRow(label: String, value: String, fraction: Float, mod
             textAlign = androidx.compose.ui.text.style.TextAlign.End,
         )
     }
+}
+
+/**
+ * "By device": one row per device with its reading time, what was read and its last reading
+ * day, the current device marked. The same rows serve the overview (with book counts) and a
+ * single book's page.
+ */
+@Composable
+internal fun DevicesCard(
+    devices: List<DeviceReadingSummary>,
+    localDeviceId: String?,
+    showBookCount: Boolean,
+) {
+    GroupCard {
+        Text(
+            text = stringResource(R.string.statistics_devices_title),
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.padding(start = 16.dp, top = 14.dp, end = 16.dp, bottom = 2.dp),
+        )
+        devices.forEachIndexed { index, device ->
+            if (index > 0) GroupDivider()
+            ListItem(
+                colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                headlineContent = { Text(deviceRowTitle(device, localDeviceId)) },
+                supportingContent = { Text(deviceReadingSubtitle(device, showBookCount)) },
+                trailingContent = {
+                    Text(
+                        text = formatDurationSeconds(device.totalSeconds),
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                },
+            )
+        }
+    }
+}
+
+/** "Pixel 8 · This device", or "Unknown device" for entries no install has claimed. */
+@Composable
+internal fun deviceRowTitle(device: DeviceReadingSummary, localDeviceId: String?): String {
+    val name = device.deviceName?.takeIf { it.isNotBlank() } ?: stringResource(R.string.statistics_unknown_device)
+    return if (device.deviceId != null && device.deviceId == localDeviceId) {
+        name + " · " + stringResource(R.string.statistics_this_device)
+    } else {
+        name
+    }
+}
+
+/** "3 pages read · 282 characters read · Last read Sep 12, 2026 · 2 books", the same words as the book rows. */
+@Composable
+internal fun deviceReadingSubtitle(device: DeviceReadingSummary, showBookCount: Boolean): String {
+    val pagesRead = device.pagesRead.takeIf { it > 0 }?.let { pages ->
+        pluralStringResource(R.plurals.statistics_overview_pages_read, pages, formatStatisticsCount(pages))
+    }
+    val charactersRead = pluralStringResource(
+        R.plurals.statistics_overview_characters_read,
+        device.charactersRead,
+        formatStatisticsCount(device.charactersRead),
+    )
+    val lastRead = device.lastReadDateKey?.let { dateKey ->
+        stringResource(R.string.statistics_overview_last_read_format, formatStatisticsDate(dateKey))
+    }
+    val books = if (showBookCount) {
+        pluralStringResource(R.plurals.statistics_device_books, device.bookCount, formatStatisticsCount(device.bookCount))
+    } else {
+        null
+    }
+    return listOfNotNull(pagesRead, charactersRead, lastRead, books).joinToString(" · ")
 }

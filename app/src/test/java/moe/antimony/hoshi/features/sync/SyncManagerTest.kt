@@ -7,6 +7,8 @@ import moe.antimony.hoshi.epub.BookMetadata
 import moe.antimony.hoshi.epub.BookRepository
 import moe.antimony.hoshi.epub.Bookmark
 import moe.antimony.hoshi.epub.ReadingStatistics
+import moe.antimony.hoshi.epub.readingTotals
+import moe.antimony.hoshi.epub.DeviceIdentity
 import moe.antimony.hoshi.epub.SasayakiPlaybackData
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -58,6 +60,41 @@ class SyncManagerTest {
             SasayakiPlaybackData(lastPosition = 88.5, delay = 0.2, rate = 1.5f, audioUri = "content://audio"),
             repository.loadSasayakiPlayback(entry.root),
         )
+    }
+
+    @Test
+    fun importFromTtuAdjustsOnlyThisDevicesShareAndIsStableAcrossRepeatedImports() = runBlocking {
+        val phone = DeviceIdentity(id = "phone-id", name = "Pixel 8")
+        val tablet = DeviceIdentity(id = "tablet-id", name = "Galaxy Tab")
+        val repository = BookRepository(tempFolder.root, deviceIdentity = phone)
+        val entry = repository.createEntry()
+        repository.saveBookmark(entry.root, Bookmark(0, 0.1, 10, TtuSyncRules.unixMillisToAppleReferenceSeconds(1_000)))
+        repository.saveStatistics(
+            entry.root,
+            listOf(
+                ReadingStatistics(title = "Title", dateKey = "2026-05-12", charactersRead = 100, readingTime = 600.0, lastStatisticModified = 5, deviceId = phone.id, deviceName = phone.name),
+                ReadingStatistics(title = "Title", dateKey = "2026-05-12", charactersRead = 40, readingTime = 300.0, lastStatisticModified = 9, deviceId = tablet.id, deviceName = tablet.name),
+            ),
+        )
+        // ッツ holds the day as one total (what an export wrote) that has since grown on ッツ's side.
+        val drive = FakeDriveSyncDataSource(
+            progress = TtuProgress(7, 150, 0.5, 2_000),
+            statistics = listOf(ReadingStatistics(title = "Title", dateKey = "2026-05-12", charactersRead = 160, readingTime = 1000.0, lastStatisticModified = 20)),
+        )
+        val manager = SyncManager(repository, drive, nowUnixMillis = { 9_999 })
+        val sync = suspend {
+            manager.syncBook(entry = entry, direction = SyncDirection.ImportFromTtu, syncStats = true, statsSyncMode = StatisticsSyncMode.Merge, syncAudioBook = false)
+        }
+
+        sync()
+        val once = repository.loadStatistics(entry.root)
+        sync()
+        val twice = repository.loadStatistics(entry.root)
+
+        assertEquals(700.0, once.single { it.deviceId == phone.id }.readingTime, 0.0)
+        assertEquals(300.0, once.single { it.deviceId == tablet.id }.readingTime, 0.0)
+        assertEquals(1000.0, once.readingTotals().readingTime, 0.0)
+        assertEquals("a second import of the same file must not grow the day", once.toSet(), twice.toSet())
     }
 
     @Test

@@ -7,6 +7,7 @@ import moe.antimony.hoshi.epub.BookEntry
 import moe.antimony.hoshi.epub.BookRepository
 import moe.antimony.hoshi.epub.Bookmark
 import moe.antimony.hoshi.epub.ReadingStatistics
+import moe.antimony.hoshi.epub.collapsedByDay
 import moe.antimony.hoshi.epub.SasayakiPlaybackData
 
 class SyncManager(
@@ -108,15 +109,19 @@ class SyncManager(
         val progress = progressFileId?.let { drive.getProgressFile(it) } ?: return SyncResult.Skipped
         importProgress(entry, progress)
         if (syncStats) {
-            val localStats = bookRepository.loadStatistics(entry.root)
+            // ッツ keeps one device-less entry per day, i.e. every device's reading added up.
+            // The merge therefore runs on day totals, and what it decides is applied by
+            // adjusting only this device's share of each day (see applyDayTotals), so the
+            // other devices' entries are never duplicated or dropped.
+            val localDays = bookRepository.loadStatistics(entry.root).collapsedByDay()
             val remoteStats = statsFileId?.let { drive.getStatsFile(it) }.orEmpty()
-            val merged = TtuSyncRules.mergeStatistics(localStats, remoteStats, statsSyncMode)
+            val merged = TtuSyncRules.mergeStatistics(localDays, remoteStats, statsSyncMode)
             if (merged.isNotEmpty()) {
-                if (statsSyncMode == StatisticsSyncMode.Replace) {
-                    bookRepository.replaceStatistics(entry.root, merged)
-                } else {
-                    bookRepository.saveStatistics(entry.root, merged)
-                }
+                bookRepository.applyDayTotals(
+                    entry.root,
+                    merged,
+                    replaceOtherDays = statsSyncMode == StatisticsSyncMode.Replace,
+                )
             }
         }
         if (syncAudioBook) {
@@ -145,7 +150,7 @@ class SyncManager(
 
         if (syncStats) {
             val remoteStats = statsFileId?.let { drive.getStatsFile(it) }.orEmpty()
-            val localStats = bookRepository.loadStatistics(entry.root)
+            val localStats = bookRepository.loadStatistics(entry.root).collapsedByDay()
             val statsToExport = TtuSyncRules.mergeStatistics(remoteStats, localStats, statsSyncMode)
             if (statsToExport.isNotEmpty()) {
                 drive.updateStatsFile(driveFolderId, statsFileId, statsToExport)

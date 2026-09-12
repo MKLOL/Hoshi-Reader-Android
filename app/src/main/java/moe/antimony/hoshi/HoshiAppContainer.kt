@@ -2,6 +2,7 @@ package moe.antimony.hoshi
 
 import android.content.ContentResolver
 import android.content.Context
+import android.os.Build
 import android.provider.Settings
 import androidx.compose.runtime.staticCompositionLocalOf
 import kotlinx.coroutines.CoroutineScope
@@ -10,6 +11,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.first
 import moe.antimony.hoshi.dictionary.DictionaryRepository
 import moe.antimony.hoshi.epub.BookRepository
+import moe.antimony.hoshi.epub.DeviceIdentity
 import moe.antimony.hoshi.features.ai.AiChatSettingsRepository
 import moe.antimony.hoshi.features.ai.aiChatSettingsRepository
 import moe.antimony.hoshi.features.audio.AudioSettingsRepository
@@ -83,9 +85,13 @@ internal class HoshiAppContainer(context: Context) {
     // sidecar writes for one book cannot interleave.
     val httpSyncBookLocks: moe.antimony.hoshi.features.sync.http.HttpSyncBookLocks =
         moe.antimony.hoshi.features.sync.http.HttpSyncBookLocks()
+    private val installationId: String = httpSyncInstallationId(appContext)
+    /** This device, as reading statistics record it: the sync installation id plus the device's name. */
+    val deviceIdentity: DeviceIdentity = DeviceIdentity(id = installationId, name = deviceDisplayName(appContext))
     val bookRepository: BookRepository = BookRepository(
         filesDir = appContext.filesDir,
         bookLocks = httpSyncBookLocks,
+        deviceIdentity = deviceIdentity,
     )
     val dictionaryRepository: DictionaryRepository = DictionaryRepository(appContext.filesDir)
     // Shared between the bookshelf's metadata-sidecar write and the manga reader's load
@@ -129,7 +135,7 @@ internal class HoshiAppContainer(context: Context) {
     val httpSyncBatchState: HttpSyncBatchState = HttpSyncBatchState(
         bookRepository = bookRepository,
         bookLocks = httpSyncBookLocks,
-        installationId = httpSyncInstallationId(appContext),
+        installationId = installationId,
     )
     val httpSyncFullCycleRunner: HttpSyncFullCycleRunner = HttpSyncFullCycleRunner(appScope)
     val httpSyncFastSync: HttpSyncFastSync = HttpSyncFastSync(
@@ -283,6 +289,14 @@ internal class HoshiAppContainer(context: Context) {
 internal val LocalHoshiAppContainer = staticCompositionLocalOf<HoshiAppContainer> {
     error("HoshiAppContainer is not provided.")
 }
+
+/** The user-visible device name ("Dragos's Pixel"), falling back to the model when none is set. */
+private fun deviceDisplayName(context: Context): String =
+    runCatching { Settings.Global.getString(context.contentResolver, Settings.Global.DEVICE_NAME) }
+        .getOrNull()
+        ?.trim()
+        ?.takeIf { it.isNotEmpty() }
+        ?: Build.MODEL.orEmpty().ifBlank { "Android" }
 
 private fun httpSyncInstallationId(context: Context): String {
     val androidId = Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID)

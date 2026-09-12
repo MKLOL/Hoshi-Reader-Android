@@ -21,6 +21,28 @@ data class DailyReading(
     val characters: Int,
 )
 
+/**
+ * What one device read: of one book on the book page, of the whole library on the overview.
+ * [deviceId] is null for entries recorded before devices were tracked that no install has
+ * claimed yet (only possible in files that arrived from elsewhere).
+ */
+data class DeviceReadingSummary(
+    val deviceId: String?,
+    /** The name the device had when it last recorded reading. */
+    val deviceName: String?,
+    val totalSeconds: Double,
+    /** Characters read on this device: the book's text for an EPUB, OCR text for a manga. */
+    val charactersRead: Int,
+    /** Manga pages turned past on this device. */
+    val pagesRead: Int,
+    /** ISO date (`yyyy-MM-dd`) of the most recent day with reading time on this device. */
+    val lastReadDateKey: String?,
+    /** Books with reading time or characters recorded on this device. */
+    val bookCount: Int,
+    /** Newest modification stamp among this device's entries; the name on that entry is the one shown. */
+    val newestStamp: Long = 0L,
+)
+
 /** One book's share of the reading statistics, aggregated from its sidecars. */
 data class BookReadingSummary(
     val bookId: String,
@@ -42,6 +64,8 @@ data class BookReadingSummary(
     val coverSource: BookCoverSource?,
     /** Every day with reading time or amount read, newest first. */
     val days: List<DailyReading>,
+    /** This book's reading per device, longest first. */
+    val devices: List<DeviceReadingSummary> = emptyList(),
 ) {
     val daysRead: Int get() = days.count { it.seconds > 0.0 }
 }
@@ -56,6 +80,8 @@ data class ReadingStatisticsOverview(
     val books: List<BookReadingSummary>,
     /** Reading per day across every book, newest first. */
     val daily: List<DailyReading>,
+    /** Reading per device across every book, longest first. */
+    val devices: List<DeviceReadingSummary> = emptyList(),
 )
 
 data class BookStatisticsInput(
@@ -83,15 +109,17 @@ fun summarizeReadingStatistics(
     val books = inputs.mapNotNull { input ->
         val statistics = input.statistics.deduplicateReadingStatistics()
         val mangaText = input.mangaTextStatistics.deduplicateMangaTextStatistics()
+        // A day may hold one entry per device; the day is the sum of them.
+        val secondsByDay: Map<String, Double> = statistics.groupBy { it.dateKey }.mapValues { (_, entries) -> entries.sumOf { it.readingTime } }
         val charactersByDay: Map<String, Int> = when (input.contentType) {
-            ContentType.Epub -> statistics.associate { it.dateKey to it.charactersRead }
-            ContentType.Mokuro -> mangaText.associate { it.dateKey to it.charactersRead }
+            ContentType.Epub -> statistics.groupBy { it.dateKey }.mapValues { (_, entries) -> entries.sumOf { it.charactersRead } }
+            ContentType.Mokuro -> mangaText.groupBy { it.dateKey }.mapValues { (_, entries) -> entries.sumOf { it.charactersRead } }
         }
-        val days = (statistics.map { it.dateKey } + charactersByDay.keys).distinct()
+        val days = (secondsByDay.keys + charactersByDay.keys).distinct()
             .map { dateKey ->
                 DailyReading(
                     dateKey = dateKey,
-                    seconds = statistics.firstOrNull { it.dateKey == dateKey }?.readingTime ?: 0.0,
+                    seconds = secondsByDay[dateKey] ?: 0.0,
                     characters = charactersByDay[dateKey] ?: 0,
                 )
             }
@@ -128,6 +156,7 @@ fun summarizeReadingStatistics(
             finished = isBookCompleted(input.progress),
             coverSource = input.coverSource,
             days = days,
+            devices = summarizeDevices(input.contentType, statistics, mangaText),
         )
     }.sortedWith(compareByDescending<BookReadingSummary> { it.totalSeconds }.thenBy { it.title })
     val daily = (dailySeconds.keys + dailyCharacters.keys).distinct()
@@ -140,8 +169,68 @@ fun summarizeReadingStatistics(
         todayCharacters = dailyCharacters[todayKey] ?: 0,
         books = books,
         daily = daily,
+        devices = books.flatMap { it.devices }.mergeDevices(),
     )
 }
+
+/**
+ * One book's reading split by device. Every device's entry counts for its own device; the
+ * device's name is the one on its newest entry, so a renamed device shows its new name.
+ */
+private fun summarizeDevices(
+    contentType: ContentType,
+    statistics: List<ReadingStatistics>,
+    mangaText: List<MangaTextStatistic>,
+): List<DeviceReadingSummary> {
+    val deviceIds = (statistics.map { it.deviceId } + mangaText.map { it.deviceId }).distinct()
+    return deviceIds.mapNotNull { deviceId ->
+        val own = statistics.filter { it.deviceId == deviceId }
+        val ownText = mangaText.filter { it.deviceId == deviceId }
+        val totalSeconds = own.sumOf { it.readingTime }
+        val charactersRead = when (contentType) {
+            ContentType.Epub -> own.sumOf { it.charactersRead }
+            ContentType.Mokuro -> ownText.sumOf { it.charactersRead }
+        }
+        val pagesRead = when (contentType) {
+            ContentType.Epub -> 0
+            ContentType.Mokuro -> own.sumOf { it.charactersRead }
+        }
+        if (totalSeconds <= 0.0 && charactersRead <= 0 && pagesRead <= 0) return@mapNotNull null
+        val stamped = own.map { it.lastStatisticModified to it.deviceName } +
+            ownText.map { it.lastModified to it.deviceName }
+        val newest = stamped.filter { !it.second.isNullOrBlank() }.maxByOrNull { it.first }
+        DeviceReadingSummary(
+            deviceId = deviceId,
+            deviceName = newest?.second,
+            totalSeconds = totalSeconds,
+            charactersRead = charactersRead,
+            pagesRead = pagesRead,
+            lastReadDateKey = own.filter { it.readingTime > 0.0 }.maxOfOrNull { it.dateKey },
+            bookCount = 1,
+            newestStamp = newest?.first ?: stamped.maxOfOrNull { it.first } ?: 0L,
+        )
+    }.sortedWith(compareByDescending<DeviceReadingSummary> { it.totalSeconds }.thenBy { it.deviceName ?: "" })
+}
+
+/** Adds up per-book device summaries into per-device totals for the whole library. */
+fun List<DeviceReadingSummary>.mergeDevices(): List<DeviceReadingSummary> =
+    groupBy { it.deviceId }
+        .map { (deviceId, entries) ->
+            DeviceReadingSummary(
+                deviceId = deviceId,
+                // A renamed device shows its newest name on every screen: the name on the
+                // most recently modified entry, whichever book it belongs to.
+                deviceName = entries.filter { !it.deviceName.isNullOrBlank() }
+                    .maxByOrNull { it.newestStamp }?.deviceName,
+                totalSeconds = entries.sumOf { it.totalSeconds },
+                charactersRead = entries.sumOf { it.charactersRead },
+                pagesRead = entries.sumOf { it.pagesRead },
+                lastReadDateKey = entries.mapNotNull { it.lastReadDateKey }.maxOrNull(),
+                bookCount = entries.sumOf { it.bookCount },
+                newestStamp = entries.maxOf { it.newestStamp },
+            )
+        }
+        .sortedWith(compareByDescending<DeviceReadingSummary> { it.totalSeconds }.thenBy { it.deviceName ?: "" })
 
 /**
  * Reads every book's statistics sidecars, bookmark progress and cover. Call it again whenever

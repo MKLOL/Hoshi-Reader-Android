@@ -1,5 +1,6 @@
 package moe.antimony.hoshi.features.mangareader
 
+import moe.antimony.hoshi.epub.DeviceIdentity
 import moe.antimony.hoshi.features.reader.ReaderStatisticsClock
 import moe.antimony.hoshi.features.reader.SystemReaderStatisticsClock
 import moe.antimony.hoshi.mokuro.MangaTextStatistic
@@ -20,6 +21,8 @@ data class MangaTextReadState(
 class MangaTextReadCounter(
     initialStatistics: List<MangaTextStatistic>,
     private val clock: ReaderStatisticsClock = SystemReaderStatisticsClock,
+    /** The device whose per-day entry this counter adds to; other devices' entries are left as they are. */
+    private val device: DeviceIdentity? = null,
 ) {
     private var statistics = initialStatistics.deduplicateMangaTextStatistics()
     private var sessionCharacters = 0
@@ -30,7 +33,8 @@ class MangaTextReadCounter(
             val today = clock.currentDate().toString()
             return MangaTextReadState(
                 sessionCharacters = sessionCharacters,
-                todayCharacters = statistics.firstOrNull { it.dateKey == today }?.charactersRead ?: 0,
+                // Every device's characters for today, like the Statistics page's history.
+                todayCharacters = statistics.filter { it.dateKey == today }.sumOf { it.charactersRead },
                 allTimeCharacters = statistics.sumOf { it.charactersRead },
             )
         }
@@ -38,15 +42,17 @@ class MangaTextReadCounter(
     fun add(characters: Int) {
         if (characters <= 0) return
         val today = clock.currentDate().toString()
-        val existing = statistics.firstOrNull { it.dateKey == today }
+        val existing = statistics.firstOrNull { it.dateKey == today && it.deviceId == device?.id }
         val updated = MangaTextStatistic(
             dateKey = today,
             charactersRead = (existing?.charactersRead ?: 0) + characters,
             // Strictly newer than the day this count was built on, so the merge on save keeps
             // it even when the clock is behind that day's stamp (see ReaderStatisticsTracker).
             lastModified = maxOf(clock.currentTimeMillis(), (existing?.lastModified ?: 0L) + 1),
+            deviceId = device?.id,
+            deviceName = device?.name,
         )
-        statistics = statistics.filterNot { it.dateKey == today } + updated
+        statistics = statistics.filterNot { it.dateKey == today && it.deviceId == device?.id } + updated
         sessionCharacters += characters
         hasChanges = true
     }

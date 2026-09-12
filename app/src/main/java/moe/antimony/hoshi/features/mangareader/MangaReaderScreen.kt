@@ -232,6 +232,7 @@ internal fun MangaReaderScreen(
     // A scope that outlives the reader route, used only to flush a pending bookmark save on
     // exit — rememberCoroutineScope is cancelled on dispose, which would drop the save.
     val persistenceScope = LocalHoshiAppContainer.current.appScope
+    val statisticsDevice = LocalHoshiAppContainer.current.deviceIdentity
     var bookmarkSaveJob by remember(book) { mutableStateOf<Job?>(null) }
     // The page index awaiting the debounced bookmark write, or null when nothing is pending.
     val pendingBookmarkPage = remember(book) { mutableStateOf<Int?>(null) }
@@ -269,6 +270,7 @@ internal fun MangaReaderScreen(
                 title = book.title,
                 initialStatistics = statistics,
                 enabled = true,
+                device = statisticsDevice,
             )
         }
     }
@@ -276,7 +278,7 @@ internal fun MangaReaderScreen(
     var resumeStatisticsTrackingOnStart by remember(statisticsTracker) { mutableStateOf(false) }
     // OCR characters read, kept next to the page counter above (see MangaTextReadCounter).
     val textReadCounter = remember(bookRoot, persistedTextStatistics) {
-        persistedTextStatistics?.let { MangaTextReadCounter(initialStatistics = it) }
+        persistedTextStatistics?.let { MangaTextReadCounter(initialStatistics = it, device = statisticsDevice) }
     }
     var textReadState by remember(textReadCounter) { mutableStateOf(textReadCounter?.state) }
 

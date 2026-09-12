@@ -64,6 +64,7 @@ fun BookStatisticsScreen(
         loaded = overview != null,
         onClose = onClose,
         modifier = modifier,
+        localDeviceId = appContainer.deviceIdentity.id,
     )
 }
 
@@ -73,6 +74,8 @@ fun BookStatisticsContent(
     loaded: Boolean,
     onClose: () -> Unit,
     modifier: Modifier = Modifier,
+    /** Marks this device's row in the "By device" card. */
+    localDeviceId: String? = null,
 ) {
     val colorScheme = MaterialTheme.colorScheme
     SettingsDetailScaffold(
@@ -97,6 +100,9 @@ fun BookStatisticsContent(
                     item { BookHeader(summary) }
                     item { DatesCard(summary) }
                     item { BookTotalsCard(summary, pace) }
+                    if (summary.devices.isNotEmpty()) {
+                        item { DevicesCard(summary.devices, localDeviceId, showBookCount = false) }
+                    }
                     item { PaceCard(summary, pace) }
                     item { HistoryCard(summary) }
                 }
