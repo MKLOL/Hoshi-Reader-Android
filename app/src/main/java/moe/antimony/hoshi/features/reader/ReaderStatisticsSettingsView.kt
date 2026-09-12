@@ -15,6 +15,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -26,10 +27,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.ViewModel
-import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.lifecycle.viewmodel.compose.viewModel
 import moe.antimony.hoshi.LocalHoshiAppContainer
 import moe.antimony.hoshi.R
 import moe.antimony.hoshi.features.settings.GroupCard
@@ -56,16 +54,16 @@ fun ReaderStatisticsSettingsView(
 ) {
     val appContainer = LocalHoshiAppContainer.current
     val syncSettings = appContainer.syncSettingsRepository.settings.collectAsLoadedSettings()
-    val viewModel: ReadingStatisticsOverviewViewModel = viewModel(
-        factory = remember(appContainer) {
-            object : ViewModelProvider.Factory {
-                @Suppress("UNCHECKED_CAST")
-                override fun <T : ViewModel> create(modelClass: Class<T>): T =
-                    ReadingStatisticsOverviewViewModel(bookRepository = appContainer.bookRepository) as T
-            }
-        },
-    )
-    val overview by viewModel.overview.collectAsStateWithLifecycle()
+    // Reload whenever a statistics file changes (and on every open): no ViewModel here on
+    // purpose, the navigation host would scope it to the Activity and freeze the first load.
+    val statisticsVersion by appContainer.bookRepository.statisticsChanges.collectAsStateWithLifecycle()
+    var overview by remember { mutableStateOf<ReadingStatisticsOverview?>(null) }
+    LaunchedEffect(statisticsVersion) {
+        overview = loadReadingStatisticsOverview(
+            bookRepository = appContainer.bookRepository,
+            todayKey = SystemReaderStatisticsClock.currentDate().toString(),
+        )
+    }
     var syncModeMenuExpanded by remember { mutableStateOf(false) }
     val colorScheme = MaterialTheme.colorScheme
     SettingsDetailScaffold(

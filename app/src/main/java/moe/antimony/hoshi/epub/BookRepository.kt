@@ -5,6 +5,9 @@ import android.net.Uri
 import androidx.documentfile.provider.DocumentFile
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.KSerializer
@@ -153,6 +156,7 @@ class BookRepository(
 
     override suspend fun saveStatistics(bookRoot: File, statistics: List<ReadingStatistics>) {
         sidecarDataSource.saveStatistics(bookRoot, statistics)
+        statisticsChangeCounter.update { it + 1 }
     }
 
     suspend fun loadMangaTextStatistics(bookRoot: File): List<MangaTextStatistic> =
@@ -160,7 +164,17 @@ class BookRepository(
 
     suspend fun saveMangaTextStatistics(bookRoot: File, statistics: List<MangaTextStatistic>) {
         sidecarDataSource.saveMangaTextStatistics(bookRoot, statistics)
+        statisticsChangeCounter.update { it + 1 }
     }
+
+    private val statisticsChangeCounter = MutableStateFlow(0L)
+
+    /**
+     * Bumped after every statistics sidecar write (reader sessions, manga page turns, sync
+     * imports). Screens that aggregate statistics reload on each change, so they always show
+     * what the files hold instead of a snapshot taken when they were first opened.
+     */
+    val statisticsChanges: StateFlow<Long> = statisticsChangeCounter
 
     suspend fun loadHighlights(bookRoot: File): List<ReaderHighlight> =
         sidecarDataSource.loadHighlights(bookRoot).orEmpty()

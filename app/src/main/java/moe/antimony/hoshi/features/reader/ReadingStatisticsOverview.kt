@@ -1,17 +1,13 @@
 package moe.antimony.hoshi.features.reader
 
-import androidx.lifecycle.ViewModel
-import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import moe.antimony.hoshi.epub.BookRepository
 import moe.antimony.hoshi.epub.ContentType
 import moe.antimony.hoshi.epub.ReadingStatistics
 import moe.antimony.hoshi.epub.bookContentType
 import moe.antimony.hoshi.epub.deduplicateReadingStatistics
+import moe.antimony.hoshi.epub.readingTotals
 import moe.antimony.hoshi.mokuro.MangaTextStatistic
 import moe.antimony.hoshi.mokuro.deduplicateMangaTextStatistics
 
@@ -68,20 +64,21 @@ fun summarizeReadingStatistics(
             ContentType.Epub -> statistics.filter { it.dateKey == todayKey }.sumOf { it.charactersRead }
             ContentType.Mokuro -> mangaText.filter { it.dateKey == todayKey }.sumOf { it.charactersRead }
         }
-        val totalSeconds = statistics.sumOf { it.readingTime }
-        if (totalSeconds <= 0.0) return@mapNotNull null
+        // The same totals the reader's Statistics sheet shows as "All Time".
+        val totals = statistics.readingTotals()
+        if (totals.readingTime <= 0.0) return@mapNotNull null
         BookReadingSummary(
             bookId = input.bookId,
             title = input.title,
             contentType = input.contentType,
-            totalSeconds = totalSeconds,
+            totalSeconds = totals.readingTime,
             charactersRead = when (input.contentType) {
-                ContentType.Epub -> statistics.sumOf { it.charactersRead }
+                ContentType.Epub -> totals.charactersRead
                 ContentType.Mokuro -> mangaText.sumOf { it.charactersRead }
             },
             pagesRead = when (input.contentType) {
                 ContentType.Epub -> null
-                ContentType.Mokuro -> statistics.sumOf { it.charactersRead }
+                ContentType.Mokuro -> totals.charactersRead
             },
             lastReadDateKey = statistics.filter { it.readingTime > 0.0 }.maxOfOrNull { it.dateKey },
         )
@@ -95,36 +92,27 @@ fun summarizeReadingStatistics(
     )
 }
 
-/** Loads every book's statistics sidecars off the main thread; `overview` is null while loading. */
-class ReadingStatisticsOverviewViewModel(
-    private val bookRepository: BookRepository,
-    private val clock: ReaderStatisticsClock = SystemReaderStatisticsClock,
-) : ViewModel() {
-    private val overviewState = MutableStateFlow<ReadingStatisticsOverview?>(null)
-    val overview: StateFlow<ReadingStatisticsOverview?> = overviewState
-
-    init {
-        refresh()
+/**
+ * Reads every book's statistics sidecars. Call it again whenever
+ * [BookRepository.statisticsChanges] changes: the result is a snapshot of the files, never
+ * cached across screens.
+ */
+suspend fun loadReadingStatisticsOverview(
+    bookRepository: BookRepository,
+    todayKey: String,
+): ReadingStatisticsOverview = withContext(Dispatchers.IO) {
+    val inputs = bookRepository.loadBookEntries().map { entry ->
+        val contentType = bookContentType(entry.root)
+        BookStatisticsInput(
+            bookId = entry.metadata.id,
+            title = entry.displayTitle,
+            contentType = contentType,
+            statistics = bookRepository.loadStatistics(entry.root),
+            mangaTextStatistics = when (contentType) {
+                ContentType.Epub -> emptyList()
+                ContentType.Mokuro -> bookRepository.loadMangaTextStatistics(entry.root)
+            },
+        )
     }
-
-    fun refresh() {
-        viewModelScope.launch {
-            overviewState.value = withContext(Dispatchers.IO) {
-                val inputs = bookRepository.loadBookEntries().map { entry ->
-                    val contentType = bookContentType(entry.root)
-                    BookStatisticsInput(
-                        bookId = entry.metadata.id,
-                        title = entry.displayTitle,
-                        contentType = contentType,
-                        statistics = bookRepository.loadStatistics(entry.root),
-                        mangaTextStatistics = when (contentType) {
-                            ContentType.Epub -> emptyList()
-                            ContentType.Mokuro -> bookRepository.loadMangaTextStatistics(entry.root)
-                        },
-                    )
-                }
-                summarizeReadingStatistics(inputs, clock.currentDate().toString())
-            }
-        }
-    }
+    summarizeReadingStatistics(inputs, todayKey)
 }

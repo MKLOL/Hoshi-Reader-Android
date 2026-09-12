@@ -2,6 +2,7 @@ package moe.antimony.hoshi.features.reader
 
 import moe.antimony.hoshi.epub.ReadingStatistics
 import moe.antimony.hoshi.epub.deduplicateReadingStatistics
+import moe.antimony.hoshi.epub.readingTotals
 import java.time.LocalDate
 import java.time.ZoneId
 import kotlin.math.abs
@@ -126,20 +127,13 @@ class ReaderStatisticsTracker(
         ReadingStatistics(title = title, dateKey = date.toString())
 
     private fun allTimeStatistic(statistics: List<ReadingStatistics>): ReadingStatistics {
-        val base = defaultStatistic(clock.currentDate())
-        return statistics.fold(base) { total, statistic ->
-            val readingTime = total.readingTime + statistic.readingTime
-            val charactersRead = total.charactersRead + statistic.charactersRead
-            total.copy(
-                readingTime = readingTime,
-                charactersRead = charactersRead,
-                lastReadingSpeed = if (readingTime > 0.0) {
-                    (charactersRead.toDouble() / readingTime * 3600.0).toInt()
-                } else {
-                    0
-                },
-            )
-        }
+        // Same totals the Statistics screens compute from the persisted file (see readingTotals).
+        val totals = statistics.readingTotals()
+        return defaultStatistic(clock.currentDate()).copy(
+            readingTime = totals.readingTime,
+            charactersRead = totals.charactersRead,
+            lastReadingSpeed = totals.readingSpeed,
+        )
     }
 }
 
