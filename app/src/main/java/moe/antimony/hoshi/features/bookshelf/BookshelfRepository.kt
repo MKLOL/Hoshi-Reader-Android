@@ -11,6 +11,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import moe.antimony.hoshi.dictionary.DictionaryRepository
 import moe.antimony.hoshi.epub.BookEntry
+import moe.antimony.hoshi.epub.BOOKINFO_FILE_NAME
 import moe.antimony.hoshi.epub.BookInfo
 import moe.antimony.hoshi.epub.BookMetadata
 import moe.antimony.hoshi.epub.BookRepository
@@ -20,6 +21,7 @@ import moe.antimony.hoshi.epub.Bookmark
 import moe.antimony.hoshi.epub.ContentType
 import moe.antimony.hoshi.epub.EpubBook
 import moe.antimony.hoshi.epub.EpubBookParser
+import moe.antimony.hoshi.epub.MOKURO_SIDECAR_FILE
 import moe.antimony.hoshi.epub.bookContentType
 import moe.antimony.hoshi.epub.isUuidString
 import moe.antimony.hoshi.features.sync.StatisticsSyncMode
@@ -112,7 +114,15 @@ internal class AndroidBookshelfRepository(
                 saveMetadata(entry.root, parsedBook, bookRepository.loadMetadata(entry.root))
                 saveBookInfo(entry.root, parsedBook)
             }
-            ContentType.Mokuro -> writeMokuroSidecars(entry.root)
+            ContentType.Mokuro -> {
+                val root = entry.root
+                val stale = mokuroSidecarsNeedRewrite(
+                    root = root,
+                    metadata = bookRepository.loadMetadata(root),
+                    bookInfo = bookRepository.loadBookInfo(root),
+                )
+                if (stale) writeMokuroSidecars(root)
+            }
         }
         // Touch lastAccess on open (upstream) so recents ordering stays correct.
         val metadata = bookRepository.loadMetadata(entry.root) ?: entry.metadata
@@ -461,3 +471,18 @@ internal fun File.toBookCoverSource(): BookCoverSource =
         path = absolutePath,
         cacheKey = "$absolutePath:${lastModified()}:${length()}",
     )
+
+/**
+ * Whether opening a mokuro book must re-derive `metadata.json` / `bookinfo.json` from
+ * `mokuro.json`. Every open used to re-parse the sidecar and rewrite both files, which is
+ * pure I/O on the open path; now that only happens when a sidecar is missing or unusable, or
+ * when `mokuro.json` was modified after `bookinfo.json` was last written (a re-import, or a
+ * sync that replaced the book's files).
+ */
+internal fun mokuroSidecarsNeedRewrite(root: File, metadata: BookMetadata?, bookInfo: BookInfo?): Boolean {
+    if (metadata == null || metadata.title.isNullOrBlank()) return true
+    if (bookInfo == null || bookInfo.characterCount <= 0) return true
+    val mokuroModified = root.resolve(MOKURO_SIDECAR_FILE).lastModified()
+    val bookInfoModified = root.resolve(BOOKINFO_FILE_NAME).lastModified()
+    return mokuroModified > bookInfoModified
+}

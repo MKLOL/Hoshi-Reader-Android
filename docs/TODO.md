@@ -20,6 +20,7 @@ This file is the short operational handoff for future agents.
 ### Architecture And Hardening
 
 - Make screen-level Compose Flow collection lifecycle-aware with `collectAsStateWithLifecycle()` where the UI lifecycle is the right owner.
+- Opening an EPUB still re-parses the whole book twice (`AndroidBookshelfRepository.openBook` and then `ReaderRouteStateHolder.load`); give it the same stale-sidecar fast path the manga open now has.
 - Continue Reader state/WebView bridge extraction in behavior-protected slices from `docs/ARCHITECTURE_REFACTORING.md`; `ReaderWebView` is now split into focused WebView host, chrome, popup layer, and fullscreen image modules.
 - Replace remaining brittle source-string tests in touched areas with behavior, API, state-flow, or structured-config coverage where possible.
 - Add EPUB/WebView regression fixtures for cover pages, multi-image pages, vertical text, horizontal text, complex spines, and broken resources.
@@ -38,7 +39,6 @@ This file is the short operational handoff for future agents.
 ### Reader And Lookup
 
 - Audiobook replacement stages the complete copy before an atomic move; retain `SasayakiAudioRepositoryTest` and `SasayakiAudioRepositoryInstrumentedTest`.
-
 - EPUB URL paths decode once, contents links resolve from their navigation document, and resource fallbacks stay inside the imported book. Regression entries: `EpubBookParserTest`, `EpubBookModelTest`, `ReaderInternalLinkTest`, and `ReaderWebResourceBridgeTest`.
 - Native dictionary popup teardown invalidates queued JavaScript callbacks before WebView destruction and cancels superseded or dismissed nested lookups. Regression entry: `PopupCallbackDispatcherTest`. Keep these checks when changing popup ownership.
 - Shared native dictionary reads/rebuilds use one monitor; regression entry: `DictionaryNativeConcurrencyInstrumentedTest`. Because that monitor makes a lookup wait for a rebuild, every reader lookup runs through `ReaderLookupRunner` (EPUB), the manga reader's `lookupSelectionJob`, or the popup overlay's `lookupScope`, never on the main thread (`ReaderLookupRunnerTest`). Text reaching the native engine is sanitized in `LookupEngine` (`LookupTextTest`). Unicode selection keeps complete characters with UTF-16 DOM offsets (`ReaderSelectionUnicodeWebViewTest`, `SentenceLookupQueryTest`); manga font search terminates on integer bounds (`MangaWrapFallbackInstrumentedTest`).

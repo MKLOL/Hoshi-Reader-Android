@@ -19,9 +19,17 @@ internal class ReaderRouteStateHolder(
     /** `flush` is true when the reader is being left or backgrounded, so the push should not wait. */
     private val onStatisticsPersisted: suspend (File, String?, String?, Boolean) -> Unit = { _, _, _, _ -> },
 ) {
+    /**
+     * @param beforeBookmarkLoad runs once the entry is known, before the EPUB is parsed (sync
+     *   lease, time-bounded map refresh, optional Drive import).
+     * @param beforeBookmarkRead runs immediately before the saved bookmark is read — the point
+     *   from which the route must react to `remoteBookmarkUpdates` itself, because a remote
+     *   winner landing later can no longer be picked up by this load.
+     */
     suspend fun load(
         bookId: String,
         beforeBookmarkLoad: suspend (moe.antimony.hoshi.epub.BookEntry) -> Unit = {},
+        beforeBookmarkRead: () -> Unit = {},
     ): ReaderRouteLoadState = withContext(ioDispatcher) {
         runCatching {
             val entry = repository.loadBookEntry(bookId)
@@ -46,6 +54,7 @@ internal class ReaderRouteStateHolder(
             if (cachedBookInfo != displayBook.bookInfo) {
                 repository.saveBookInfo(entry.root, displayBook.bookInfo)
             }
+            beforeBookmarkRead()
             val bookmark = repository.loadBookmark(entry.root)
             ReaderRouteLoadState.Ready(
                 entry = displayEntry,

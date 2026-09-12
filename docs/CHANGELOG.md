@@ -12,6 +12,7 @@ Semantic Versioning.
 - **Reading statistics sync between devices.** HTTP sync now merges each book's per-day reading time and characters (and manga pages) across devices, so a manga read on the phone shows the same numbers on the tablet. If both devices read the same book on the same day before syncing, that day keeps the newer device's entry.
 
 ### Fixed
+- **Manga and books open faster.** Opening a book no longer waits more than 1.5 seconds for the HTTP sync bookmark check; on a slow connection it opens on the local bookmark and jumps to a newer remote one if it arrives later. Opening a manga also stops re-reading and rewriting its sidecar files every time, and its first page is no longer loaded twice while the system bars hide.
 - **Statistics always reflect what you just read.** The Statistics page could keep showing an old total after more reading; it now reloads whenever statistics change. The EPUB reader also saves the time spent on the last page when you close or background it, and manga pages and characters no longer count while tracking is paused or when jumping with "Go to page".
 
 ## [v0.11.12] - 2026-09-12

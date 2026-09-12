@@ -719,7 +719,7 @@ private const val STATISTICS_FILE_NAME = "statistics.json"
 // Android-only per-day OCR character counts for manga; already in PAYLOAD_EXCLUDED_FILES.
 private const val MANGA_STATISTICS_FILE_NAME = "manga_statistics.json"
 private const val HIGHLIGHTS_FILE_NAME = "highlights.json"
-private const val BOOKINFO_FILE_NAME = "bookinfo.json"
+internal const val BOOKINFO_FILE_NAME = "bookinfo.json"
 private const val SHELVES_FILE_NAME = "shelves.json"
 private const val SASAYAKI_MATCH_FILE_NAME = "sasayaki_match.json"
 private const val SASAYAKI_PLAYBACK_FILE_NAME = "sasayaki_playback.json"

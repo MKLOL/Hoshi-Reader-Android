@@ -858,37 +858,6 @@ internal fun MangaReaderScreen(
             lifecycle?.removeObserver(observer)
         }
     }
-    DisposableEffect(context, view, lifecycle) {
-        val activity = context.findHoshiActivity()
-        val window = activity?.window
-        val controller = window?.let { currentWindow ->
-            WindowCompat.getInsetsController(currentWindow, view)
-        }
-        val previousSystemBarsBehavior = controller?.systemBarsBehavior
-        fun applyReaderSystemBars() {
-            if (readerShouldUseImmersiveSystemBars(focusMode = false, immersiveReaderContent = true)) {
-                controller?.systemBarsBehavior =
-                    WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-                controller?.hide(WindowInsetsCompat.Type.systemBars())
-            } else {
-                controller?.show(WindowInsetsCompat.Type.systemBars())
-            }
-        }
-        applyReaderSystemBars()
-        val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME) {
-                applyReaderSystemBars()
-            }
-        }
-        lifecycle?.addObserver(observer)
-        onDispose {
-            lifecycle?.removeObserver(observer)
-            if (previousSystemBarsBehavior != null) {
-                controller?.systemBarsBehavior = previousSystemBarsBehavior
-            }
-            controller?.show(WindowInsetsCompat.Type.systemBars())
-        }
-    }
 
     // Flush a still-pending debounced bookmark save when the reader is left, so closing it
     // within the debounce window doesn't lose the last page turn. rememberCoroutineScope is
@@ -1754,5 +1723,50 @@ internal fun cropWebViewBitmapPng(bitmap: Bitmap, rect: MangaScreenshotCropRect)
             cropped?.recycle()
         }
         bitmap.recycle()
+    }
+}
+
+/**
+ * Puts the window into the manga reader's immersive system-bars mode for as long as the caller
+ * is composed, restoring the previous behaviour on dispose. [MangaReaderRouteDestination]
+ * composes it for the whole route, loading spinner included: hiding the bars only once the page
+ * composed made the WebView lay out against the inset-padded viewport first and reload the page
+ * a moment later when the bars finished hiding — two full page loads for one open.
+ */
+@Composable
+internal fun MangaReaderSystemBarsEffect() {
+    val context = LocalContext.current
+    val view = LocalView.current
+    val lifecycle = view.findViewTreeLifecycleOwner()?.lifecycle
+    DisposableEffect(context, view, lifecycle) {
+        val activity = context.findHoshiActivity()
+        val window = activity?.window
+        val controller = window?.let { currentWindow ->
+            WindowCompat.getInsetsController(currentWindow, view)
+        }
+        val previousSystemBarsBehavior = controller?.systemBarsBehavior
+        fun applyReaderSystemBars() {
+            if (readerShouldUseImmersiveSystemBars(focusMode = false, immersiveReaderContent = true)) {
+                controller?.systemBarsBehavior =
+                    WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+                controller?.hide(WindowInsetsCompat.Type.systemBars())
+            } else {
+                controller?.show(WindowInsetsCompat.Type.systemBars())
+            }
+        }
+        applyReaderSystemBars()
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                applyReaderSystemBars()
+            }
+        }
+        lifecycle?.addObserver(observer)
+        onDispose {
+            lifecycle?.removeObserver(observer)
+            if (previousSystemBarsBehavior != null) {
+                controller?.systemBarsBehavior = previousSystemBarsBehavior
+            }
+            controller?.show(WindowInsetsCompat.Type.systemBars())
+        }
     }
 }

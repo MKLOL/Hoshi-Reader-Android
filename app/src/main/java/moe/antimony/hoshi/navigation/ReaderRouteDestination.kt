@@ -76,32 +76,47 @@ internal fun ReaderRouteDestination(
             }
         }
     }
+    // Watched for the whole route: refreshBeforeOpen() waits a bounded time for the network, so
+    // a remote bookmark can land while the book is still loading. See RemoteBookmarkUpdateGate.
+    val remoteUpdateGate = remember(bookId) { RemoteBookmarkUpdateGate() }
+    LaunchedEffect(bookId) {
+        appContainer.httpSyncBatchState.remoteBookmarkUpdates.collect { changedId ->
+            if (remoteUpdateGate.shouldReload(changedId)) reloadKey += 1
+        }
+    }
     val routeState by produceState<ReaderRouteLoadState>(
         ReaderRouteLoadState.Loading,
         bookId,
         stateHolder,
         reloadKey,
     ) {
-        value = stateHolder.load(bookId) { entry ->
-            activeBookLease.acquire(syncIdForMetadata(entry.metadata))
-            appContainer.httpSyncBookmarkScheduler.refreshBeforeOpen()
-            val initialAutoSyncState = ReaderRouteAutoSyncState(
-                syncSettings = syncSettings ?: appContainer.syncSettingsRepository.settings.first(),
-                sasayakiSettings = sasayakiSettings ?: appContainer.sasayakiSettingsRepository.settings.first(),
-            )
-            if (initialAutoSyncState.shouldSyncOnOpen) {
-                runCatching {
-                    appContainer.syncManager.syncBook(
-                        entry = entry,
-                        direction = null,
-                        syncStats = readerSettings.statisticsSyncEnabled,
-                        statsSyncMode = readerSettings.statisticsSyncMode,
-                        syncAudioBook = initialAutoSyncState.shouldSyncAudioBook,
-                        importOnly = true,
-                    )
+        remoteUpdateGate.close()
+        value = stateHolder.load(
+            bookId = bookId,
+            beforeBookmarkRead = remoteUpdateGate::open,
+            beforeBookmarkLoad = { entry ->
+                val syncId = syncIdForMetadata(entry.metadata)
+                remoteUpdateGate.expect(syncId)
+                activeBookLease.acquire(syncId)
+                appContainer.httpSyncBookmarkScheduler.refreshBeforeOpen()
+                val initialAutoSyncState = ReaderRouteAutoSyncState(
+                    syncSettings = syncSettings ?: appContainer.syncSettingsRepository.settings.first(),
+                    sasayakiSettings = sasayakiSettings ?: appContainer.sasayakiSettingsRepository.settings.first(),
+                )
+                if (initialAutoSyncState.shouldSyncOnOpen) {
+                    runCatching {
+                        appContainer.syncManager.syncBook(
+                            entry = entry,
+                            direction = null,
+                            syncStats = readerSettings.statisticsSyncEnabled,
+                            statsSyncMode = readerSettings.statisticsSyncMode,
+                            syncAudioBook = initialAutoSyncState.shouldSyncAudioBook,
+                            importOnly = true,
+                        )
+                    }
                 }
-            }
-        }
+            },
+        )
     }
 
     DisposableEffect(lifecycleOwner, bookId) {
@@ -177,12 +192,6 @@ internal fun ReaderRouteDestination(
             Text(state.message)
         }
         is ReaderRouteLoadState.Ready -> {
-            val syncId = syncIdForMetadata(state.entry.metadata)
-            LaunchedEffect(syncId) {
-                appContainer.httpSyncBatchState.remoteBookmarkUpdates.collect { changedId ->
-                    if (changedId == syncId) reloadKey += 1
-                }
-            }
             ReaderWebView(
                 book = state.book,
                 bookRoot = state.bookRoot,

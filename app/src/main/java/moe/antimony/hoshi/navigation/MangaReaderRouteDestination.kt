@@ -25,6 +25,7 @@ import moe.antimony.hoshi.features.dictionary.DictionarySettings
 import moe.antimony.hoshi.features.mangareader.MangaReaderLoadState
 import moe.antimony.hoshi.features.mangareader.MangaReaderLoader
 import moe.antimony.hoshi.features.mangareader.MangaReaderScreen
+import moe.antimony.hoshi.features.mangareader.MangaReaderSystemBarsEffect
 import moe.antimony.hoshi.features.reader.ReaderSettings
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -66,6 +67,20 @@ internal fun MangaReaderRouteDestination(
     val loader = remember(appContainer) {
         MangaReaderLoader(appContainer.bookRepository, appContainer.mokuroParser)
     }
+    // Hide the system bars for the whole route, loading spinner included, so the window insets
+    // have settled by the time the page WebView composes and the first page loads only once.
+    MangaReaderSystemBarsEffect()
+    // Remote bookmark updates are watched for the whole route, not just once the page is ready:
+    // refreshBeforeOpen() only waits a bounded time for the network, so a remote bookmark can
+    // land while the book is still loading. The gate opens just before the load reads the
+    // bookmark file — anything written earlier is simply the page the load opens on, anything
+    // later must reload the reader (as it always did while reading).
+    val remoteUpdateGate = remember(bookId) { RemoteBookmarkUpdateGate() }
+    LaunchedEffect(bookId) {
+        appContainer.httpSyncBatchState.remoteBookmarkUpdates.collect { changedId ->
+            if (remoteUpdateGate.shouldReload(changedId)) bookmarkReloadKey += 1
+        }
+    }
     DisposableEffect(bookId, activeBookLease) {
         onDispose {
             appContainer.appScope.launch {
@@ -82,10 +97,16 @@ internal fun MangaReaderRouteDestination(
         bookmarkReloadKey,
     ) {
         value = MangaReaderLoadState.Loading
-        value = loader.load(bookId) { syncId ->
-            activeBookLease.acquire(syncId)
-            appContainer.httpSyncBookmarkScheduler.refreshBeforeOpen()
-        }
+        remoteUpdateGate.close()
+        value = loader.load(
+            bookId = bookId,
+            beforeParse = { syncId ->
+                remoteUpdateGate.expect(syncId)
+                activeBookLease.acquire(syncId)
+                appContainer.httpSyncBookmarkScheduler.refreshBeforeOpen()
+            },
+            beforeBookmarkRead = remoteUpdateGate::open,
+        )
     }
 
     DisposableEffect(lifecycleOwner, bookId) {
@@ -119,12 +140,6 @@ internal fun MangaReaderRouteDestination(
             Text(state.message)
         }
         is MangaReaderLoadState.Ready -> {
-            val syncId = state.syncId
-            LaunchedEffect(syncId) {
-                appContainer.httpSyncBatchState.remoteBookmarkUpdates.collect { changedId ->
-                    if (changedId == syncId) bookmarkReloadKey += 1
-                }
-            }
             MangaReaderScreen(
                 book = state.book,
                 bookRoot = state.bookRoot,
