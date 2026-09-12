@@ -42,7 +42,9 @@ class MangaTextReadCounter(
         val updated = MangaTextStatistic(
             dateKey = today,
             charactersRead = (existing?.charactersRead ?: 0) + characters,
-            lastModified = clock.currentTimeMillis(),
+            // Strictly newer than the day this count was built on, so the merge on save keeps
+            // it even when the clock is behind that day's stamp (see ReaderStatisticsTracker).
+            lastModified = maxOf(clock.currentTimeMillis(), (existing?.lastModified ?: 0L) + 1),
         )
         statistics = statistics.filterNot { it.dateKey == today } + updated
         sessionCharacters += characters

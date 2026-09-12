@@ -257,6 +257,9 @@ internal fun MangaReaderScreen(
         persistedTextStatistics = null
     }
     LaunchedEffect(bookRoot, repository) {
+        // Start from the previous instance's final save when this reader replaced it within
+        // that write (see BookRepository.trackStatisticsSave).
+        repository.awaitPendingStatisticsSaves(bookRoot)
         persistedStatistics = repository.loadStatistics(bookRoot)
         persistedTextStatistics = repository.loadMangaTextStatistics(bookRoot)
     }
@@ -306,15 +309,18 @@ internal fun MangaReaderScreen(
             val statistics = tracker.statisticsForPersistenceOrNull()
             val textStatistics = textStatisticsForSave()
             if (statistics != null || textStatistics != null) {
-                persistenceScope.launch {
-                    if (statistics != null) {
-                        repository.saveStatistics(bookRoot, statistics)
-                    }
-                    if (textStatistics != null) {
-                        repository.saveMangaTextStatistics(bookRoot, textStatistics)
-                    }
-                    httpSyncHooks.onStatisticsPersisted()
-                }
+                repository.trackStatisticsSave(
+                    bookRoot,
+                    persistenceScope.launch {
+                        if (statistics != null) {
+                            repository.saveStatistics(bookRoot, statistics)
+                        }
+                        if (textStatistics != null) {
+                            repository.saveMangaTextStatistics(bookRoot, textStatistics)
+                        }
+                        httpSyncHooks.onStatisticsPersisted()
+                    },
+                )
             }
         } else {
             tracker.start(currentPosition)
@@ -822,15 +828,18 @@ internal fun MangaReaderScreen(
                         val statistics = tracker.statisticsForPersistenceOrNull()
                         val textStatistics = textStatisticsForSave()
                         if (statistics != null || textStatistics != null) {
-                            persistenceScope.launch {
-                                if (statistics != null) {
-                                    repository.saveStatistics(bookRoot, statistics)
-                                }
-                                if (textStatistics != null) {
-                                    repository.saveMangaTextStatistics(bookRoot, textStatistics)
-                                }
-                                httpSyncHooks.onStatisticsPersisted()
-                            }
+                            repository.trackStatisticsSave(
+                                bookRoot,
+                                persistenceScope.launch {
+                                    if (statistics != null) {
+                                        repository.saveStatistics(bookRoot, statistics)
+                                    }
+                                    if (textStatistics != null) {
+                                        repository.saveMangaTextStatistics(bookRoot, textStatistics)
+                                    }
+                                    httpSyncHooks.onStatisticsPersisted()
+                                },
+                            )
                         }
                     }
                 }
@@ -893,22 +902,26 @@ internal fun MangaReaderScreen(
             val textStatistics = currentTextStatisticsForDispose.value()
             if (unsaved != null) {
                 pendingBookmarkPage.value = null
-                persistenceScope.launch {
-                    repository.saveBookmark(
-                        bookRoot,
-                        mangaBookmark(unsaved, repository.currentAppleReferenceDateSeconds()),
-                    )
-                    if (statistics != null) {
-                        repository.saveStatistics(bookRoot, statistics)
-                    }
-                    if (textStatistics != null) {
-                        repository.saveMangaTextStatistics(bookRoot, textStatistics)
-                    }
-                    // onLeave queues this just-saved final position before flushing the map.
-                    httpSyncHooks.onLeave()
-                }
-            } else {
-                if (statistics != null || textStatistics != null) {
+                repository.trackStatisticsSave(
+                    bookRoot,
+                    persistenceScope.launch {
+                        repository.saveBookmark(
+                            bookRoot,
+                            mangaBookmark(unsaved, repository.currentAppleReferenceDateSeconds()),
+                        )
+                        if (statistics != null) {
+                            repository.saveStatistics(bookRoot, statistics)
+                        }
+                        if (textStatistics != null) {
+                            repository.saveMangaTextStatistics(bookRoot, textStatistics)
+                        }
+                        // onLeave queues this just-saved final position before flushing the map.
+                        httpSyncHooks.onLeave()
+                    },
+                )
+            } else if (statistics != null || textStatistics != null) {
+                repository.trackStatisticsSave(
+                    bookRoot,
                     persistenceScope.launch {
                         if (statistics != null) {
                             repository.saveStatistics(bookRoot, statistics)
@@ -916,8 +929,12 @@ internal fun MangaReaderScreen(
                         if (textStatistics != null) {
                             repository.saveMangaTextStatistics(bookRoot, textStatistics)
                         }
-                    }
-                }
+                        // After the writes, like the branch above: onLeave schedules the
+                        // statistics push that reads these files.
+                        httpSyncHooks.onLeave()
+                    },
+                )
+            } else {
                 // No pending debounced save, but we may still have unpushed turns from
                 // earlier saves that fired before the threshold was reached.
                 httpSyncHooks.onLeave()

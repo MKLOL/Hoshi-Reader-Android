@@ -5,9 +5,12 @@ import android.net.Uri
 import androidx.documentfile.provider.DocumentFile
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.KSerializer
@@ -27,6 +30,7 @@ import moe.antimony.hoshi.mokuro.MokuroImporter
 import java.io.File
 import java.time.Instant
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 import java.util.zip.ZipInputStream
 
 /**
@@ -161,17 +165,23 @@ class BookRepository(
      * plain overwrite would drop days that a sync import added while the book was open.
      */
     override suspend fun saveStatistics(bookRoot: File, statistics: List<ReadingStatistics>) {
-        bookLocks.withBookLock(bookRoot) {
-            val onDisk = sidecarDataSource.loadStatistics(bookRoot).orEmpty()
-            sidecarDataSource.saveStatistics(bookRoot, (statistics + onDisk).deduplicateReadingStatistics())
+        // Not cancellable: the manga reader cancels its debounced save when the next page turn
+        // arrives, and a write that has already reached the file must still signal the change.
+        withContext(NonCancellable) {
+            bookLocks.withBookLock(bookRoot) {
+                val onDisk = sidecarDataSource.loadStatistics(bookRoot).orEmpty()
+                sidecarDataSource.saveStatistics(bookRoot, (statistics + onDisk).deduplicateReadingStatistics())
+            }
+            statisticsChangeCounter.update { it + 1 }
         }
-        statisticsChangeCounter.update { it + 1 }
     }
 
     /** Overwrites the sidecar wholesale, for a sync in Replace mode; readers never call this. */
     suspend fun replaceStatistics(bookRoot: File, statistics: List<ReadingStatistics>) {
-        bookLocks.withBookLock(bookRoot) { sidecarDataSource.saveStatistics(bookRoot, statistics) }
-        statisticsChangeCounter.update { it + 1 }
+        withContext(NonCancellable) {
+            bookLocks.withBookLock(bookRoot) { sidecarDataSource.saveStatistics(bookRoot, statistics) }
+            statisticsChangeCounter.update { it + 1 }
+        }
     }
 
     suspend fun loadMangaTextStatistics(bookRoot: File): List<MangaTextStatistic> =
@@ -179,16 +189,40 @@ class BookRepository(
 
     /** Same day-by-day merge as [saveStatistics]. */
     suspend fun saveMangaTextStatistics(bookRoot: File, statistics: List<MangaTextStatistic>) {
-        bookLocks.withBookLock(bookRoot) {
-            val onDisk = sidecarDataSource.loadMangaTextStatistics(bookRoot).orEmpty()
-            sidecarDataSource.saveMangaTextStatistics(bookRoot, (statistics + onDisk).deduplicateMangaTextStatistics())
+        withContext(NonCancellable) {
+            bookLocks.withBookLock(bookRoot) {
+                val onDisk = sidecarDataSource.loadMangaTextStatistics(bookRoot).orEmpty()
+                sidecarDataSource.saveMangaTextStatistics(bookRoot, (statistics + onDisk).deduplicateMangaTextStatistics())
+            }
+            statisticsChangeCounter.update { it + 1 }
         }
-        statisticsChangeCounter.update { it + 1 }
     }
 
     /** For paths that replace book directories wholesale (backup restore) and cannot go through a save. */
     fun notifyStatisticsChanged() {
         statisticsChangeCounter.update { it + 1 }
+    }
+
+    private val pendingStatisticsSaves = ConcurrentHashMap<String, MutableSet<Job>>()
+
+    /**
+     * Registers a statistics write a reader launched fire-and-forget (its dispose, ON_STOP and
+     * toggle saves) so [awaitPendingStatisticsSaves] can wait for it. Call it right where the
+     * coroutine is launched: the write takes the book lock only after its first IO hop, and a
+     * reader opened on the same book in that gap (back, then the same cover again; the
+     * sentence reader pushed over the EPUB reader; the activity recreated) would otherwise
+     * read the sidecar before the previous session's final entry is in it, then overwrite that
+     * entry with one built on the stale day.
+     */
+    fun trackStatisticsSave(bookRoot: File, save: Job) {
+        val saves = pendingStatisticsSaves.computeIfAbsent(bookRoot.absolutePath) { ConcurrentHashMap.newKeySet() }
+        saves += save
+        save.invokeOnCompletion { saves -= save }
+    }
+
+    /** Waits for every tracked write of [bookRoot]'s statistics; readers call it before their initial load. */
+    suspend fun awaitPendingStatisticsSaves(bookRoot: File) {
+        pendingStatisticsSaves[bookRoot.absolutePath]?.toList()?.joinAll()
     }
 
     private val statisticsChangeCounter = MutableStateFlow(0L)

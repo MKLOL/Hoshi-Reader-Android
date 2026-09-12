@@ -36,7 +36,9 @@ class MangaTextReadCounterTest {
         assertEquals(
             listOf(
                 MangaTextStatistic("2026-09-11", 300, lastModified = 5),
-                MangaTextStatistic("2026-09-12", 60, lastModified = 1_000L),
+                // Every add stamps strictly newer than the entry it replaces; the clock stood
+                // still across the two adds, so the second is one past it.
+                MangaTextStatistic("2026-09-12", 60, lastModified = 1_001L),
             ),
             counter.statisticsForPersistenceOrNull(),
         )

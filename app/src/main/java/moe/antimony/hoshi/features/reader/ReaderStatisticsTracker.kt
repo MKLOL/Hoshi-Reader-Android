@@ -36,22 +36,31 @@ class ReaderStatisticsTracker(
     private var lastCharacterCount: Int = 0
     private var hasUpdated = false
 
-    var state: ReaderStatisticsState = ReaderStatisticsState(
+    private var currentState: ReaderStatisticsState = ReaderStatisticsState(
         isTracking = false,
         session = defaultStatistic(clock.currentDate()),
         today = statisticForDate(clock.currentDate()),
         allTime = allTimeStatistic(statistics),
     )
-        private set
+
+    /**
+     * The sheet's numbers. "Today" follows the clock even while tracking is stopped, so a
+     * sheet read after midnight labels the new day as today exactly like the Statistics page.
+     */
+    val state: ReaderStatisticsState
+        get() {
+            rollTodayIfNeeded()
+            return currentState
+        }
 
     fun start(currentCharacter: Int) {
         if (!enabled) return
-        state = state.copy(isTracking = true)
+        currentState = currentState.copy(isTracking = true)
         resetBaseline(currentCharacter)
     }
 
     fun startForPageTurnIfNeeded(currentCharacter: Int) {
-        if (!state.isTracking) {
+        if (!currentState.isTracking) {
             start(currentCharacter)
         }
     }
@@ -61,30 +70,36 @@ class ReaderStatisticsTracker(
     }
 
     fun pause(currentCharacter: Int): Boolean {
-        if (!state.isTracking) return false
+        if (!currentState.isTracking) return false
         update(currentCharacter)
-        state = state.copy(isTracking = false)
+        currentState = currentState.copy(isTracking = false)
         return true
     }
 
     fun update(currentCharacter: Int) {
-        if (!enabled || !state.isTracking) return
+        if (!enabled || !currentState.isTracking) return
         rollTodayIfNeeded()
         val now = clock.currentTimeMillis()
-        val timeDiff = (now - lastTimestampMillis).toDouble() / 1000.0
-        if (timeDiff <= 0.0) return
+        val elapsedMillis = now - lastTimestampMillis
+        if (elapsedMillis < 0L) {
+            // The wall clock was set back: lose this one tick, not every tick until the clock
+            // passes the value it had before the correction.
+            lastTimestampMillis = now
+        }
+        if (elapsedMillis <= 0L) return
+        val timeDiff = elapsedMillis.toDouble() / 1000.0
 
         val charDiff = currentCharacter - lastCharacterCount
-        val finalCharDiff = if (charDiff < 0 && abs(charDiff) > state.session.charactersRead) {
-            -state.session.charactersRead
+        val finalCharDiff = if (charDiff < 0 && abs(charDiff) > currentState.session.charactersRead) {
+            -currentState.session.charactersRead
         } else {
             charDiff
         }
         val modified = clock.currentTimeMillis()
-        state = state.copy(
-            session = state.session.updated(timeDiff, finalCharDiff, modified),
-            today = state.today.updated(timeDiff, finalCharDiff, modified),
-            allTime = state.allTime.updated(timeDiff, finalCharDiff, modified),
+        currentState = currentState.copy(
+            session = currentState.session.updated(timeDiff, finalCharDiff, modified),
+            today = currentState.today.updated(timeDiff, finalCharDiff, modified),
+            allTime = currentState.allTime.updated(timeDiff, finalCharDiff, modified),
         )
         hasUpdated = true
         lastTimestampMillis = now
@@ -96,11 +111,17 @@ class ReaderStatisticsTracker(
         lastTimestampMillis = clock.currentTimeMillis()
     }
 
+    /** The list to write, or null when this session has not added anything (nothing to save, nothing to sync). */
     fun statisticsForPersistenceOrNull(): List<ReadingStatistics>? =
-        if (enabled && (hasUpdated || statistics.isNotEmpty())) statisticsForPersistence() else null
+        if (enabled && hasUpdated) statisticsForPersistence() else null
 
     fun statisticsForPersistence(): List<ReadingStatistics> {
-        val today = state.today
+        rollTodayIfNeeded()
+        return storeToday()
+    }
+
+    private fun storeToday(): List<ReadingStatistics> {
+        val today = currentState.today
         val next = statistics.toMutableList()
         val index = next.indexOfFirst { it.dateKey == today.dateKey }
         if (index >= 0) {
@@ -115,9 +136,9 @@ class ReaderStatisticsTracker(
     private fun rollTodayIfNeeded() {
         val currentDate = clock.currentDate()
         val currentDateKey = currentDate.toString()
-        if (state.today.dateKey == currentDateKey) return
-        statisticsForPersistence()
-        state = state.copy(today = statisticForDate(currentDate))
+        if (currentState.today.dateKey == currentDateKey) return
+        storeToday()
+        currentState = currentState.copy(today = statisticForDate(currentDate))
     }
 
     private fun statisticForDate(date: LocalDate): ReadingStatistics =
@@ -160,6 +181,9 @@ private fun ReadingStatistics.updated(
         } else {
             altMinReadingSpeed
         },
-        lastStatisticModified = lastStatisticModified,
+        // Strictly newer than the entry this one was derived from, so the per-day merge on
+        // save (newest stamp wins) can never prefer the on-disk base over the session built on
+        // it, whatever the wall clock says (a fast clock on another device, or this one set back).
+        lastStatisticModified = maxOf(lastStatisticModified, this.lastStatisticModified + 1),
     )
 }

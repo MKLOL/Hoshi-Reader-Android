@@ -418,6 +418,9 @@ fun ReaderWebView(
     }
     LaunchedEffect(bookRoot, bookRepository) {
         persistedStatistics = if (bookRoot != null) {
+            // Start from the previous instance's final save when this reader replaced it within
+            // that write (see BookRepository.trackStatisticsSave).
+            bookRepository.awaitPendingStatisticsSaves(bookRoot)
             bookRepository.loadStatistics(bookRoot)
         } else {
             emptyList()

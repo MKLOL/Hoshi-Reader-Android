@@ -192,7 +192,7 @@ internal fun ReaderRouteDestination(
                 onReaderSettingsChange = onReaderSettingsChange,
                 onReaderKeyEventHandlerChange = onReaderKeyEventHandlerChange,
                 onSaveBookmark = { chapterIndex, progress, statistics ->
-                    autoSyncExportController.launchSave {
+                    val save = autoSyncExportController.launchSave {
                         stateHolder.saveBookmark(
                             state = state,
                             chapterIndex = chapterIndex,
@@ -201,12 +201,16 @@ internal fun ReaderRouteDestination(
                             onBookmarkSaved = onBookmarkSaved,
                         )
                     }
+                    if (statistics != null) {
+                        appContainer.bookRepository.trackStatisticsSave(state.bookRoot, save)
+                    }
                     scheduleExport(state.entry)
                 },
                 onSaveStatistics = { statistics ->
-                    autoSyncExportController.launchSave {
+                    val save = autoSyncExportController.launchSave {
                         stateHolder.saveStatistics(state = state, statistics = statistics)
                     }
+                    appContainer.bookRepository.trackStatisticsSave(state.bookRoot, save)
                 },
                 onFlushAutoSyncExport = ::flushExport,
                 onForegroundAutoSyncImport = { importOnForeground(state.entry) },

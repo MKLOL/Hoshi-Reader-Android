@@ -103,8 +103,9 @@ fun summarizeReadingStatistics(
             ContentType.Epub -> totals.charactersRead
             ContentType.Mokuro -> mangaText.sumOf { it.charactersRead }
         }
-        // Anything the reader's sheet would show as read is listed here too.
-        if (totals.readingTime <= 0.0 && charactersRead <= 0) return@mapNotNull null
+        // Anything the reader's sheet would show as read is listed here too: time, characters,
+        // or manga pages recorded without either.
+        if (totals.readingTime <= 0.0 && charactersRead <= 0 && totals.charactersRead <= 0) return@mapNotNull null
         // Only listed books feed the per-day totals, so "today" can never exceed "all time".
         days.forEach { day ->
             dailySeconds[day.dateKey] = (dailySeconds[day.dateKey] ?: 0.0) + day.seconds
