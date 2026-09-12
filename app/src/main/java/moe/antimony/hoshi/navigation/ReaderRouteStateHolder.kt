@@ -16,7 +16,8 @@ internal class ReaderRouteStateHolder(
     private val parser: ReaderRouteEpubParser = DefaultReaderRouteEpubParser,
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
     private val onBookmarkPersisted: suspend (File, String?, String?) -> Unit = { _, _, _ -> },
-    private val onStatisticsPersisted: suspend (File, String?, String?) -> Unit = { _, _, _ -> },
+    /** `flush` is true when the reader is being left or backgrounded, so the push should not wait. */
+    private val onStatisticsPersisted: suspend (File, String?, String?, Boolean) -> Unit = { _, _, _, _ -> },
 ) {
     suspend fun load(
         bookId: String,
@@ -82,7 +83,7 @@ internal class ReaderRouteStateHolder(
             state.entry.metadata.syncId,
         )
         if (statistics != null) {
-            onStatisticsPersisted(state.bookRoot, state.entry.metadata.title, state.entry.metadata.syncId)
+            onStatisticsPersisted(state.bookRoot, state.entry.metadata.title, state.entry.metadata.syncId, false)
         }
         onBookmarkSaved()
     }
@@ -92,7 +93,7 @@ internal class ReaderRouteStateHolder(
         withContext(ioDispatcher) {
             repository.saveStatistics(state.bookRoot, statistics)
         }
-        onStatisticsPersisted(state.bookRoot, state.entry.metadata.title, state.entry.metadata.syncId)
+        onStatisticsPersisted(state.bookRoot, state.entry.metadata.title, state.entry.metadata.syncId, true)
     }
 }
 

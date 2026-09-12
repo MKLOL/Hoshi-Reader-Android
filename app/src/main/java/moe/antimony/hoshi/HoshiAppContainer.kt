@@ -229,8 +229,12 @@ internal class HoshiAppContainer(context: Context) {
             onBookmarkPersisted = { root, title, syncId ->
                 httpSyncBookmarkScheduler.onBookmarkChanged(root, title, syncId)
             },
-            onStatisticsPersisted = { root, title, syncId ->
-                httpSyncStatisticsPushScheduler.onStatisticsChanged(root, title.orEmpty(), syncId)
+            onStatisticsPersisted = { root, title, syncId, flush ->
+                if (flush) {
+                    httpSyncStatisticsPushScheduler.flushNow(root, title.orEmpty(), syncId)
+                } else {
+                    httpSyncStatisticsPushScheduler.onStatisticsChanged(root, title.orEmpty(), syncId)
+                }
             },
         )
 

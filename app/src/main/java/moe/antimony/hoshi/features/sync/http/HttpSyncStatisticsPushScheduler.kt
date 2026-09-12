@@ -1,5 +1,6 @@
 package moe.antimony.hoshi.features.sync.http
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -61,17 +62,21 @@ class HttpSyncStatisticsPushScheduler(
 
     private suspend fun pushNow(bookRoot: File, title: String, persistedSyncId: String?) {
         if (clock() < suppressUntilMs) return
-        val settings = currentSettings() ?: return
-        if (!settings.isConfigured) return
-        runCatching { push(bookRoot, title, settings, persistedSyncId) }
-            .onSuccess { consecutiveFailures = 0 }
-            .onFailure {
-                consecutiveFailures += 1
-                if (consecutiveFailures >= FAILURE_THRESHOLD) {
-                    suppressUntilMs = clock() + BACKOFF_MS
-                    consecutiveFailures = 0
-                }
+        try {
+            val settings = currentSettings() ?: return
+            if (!settings.isConfigured) return
+            push(bookRoot, title, settings, persistedSyncId)
+            consecutiveFailures = 0
+        } catch (cancelled: CancellationException) {
+            // Superseded by a newer change for the same book: not a failure.
+            throw cancelled
+        } catch (error: Exception) {
+            consecutiveFailures += 1
+            if (consecutiveFailures >= FAILURE_THRESHOLD) {
+                suppressUntilMs = clock() + BACKOFF_MS
+                consecutiveFailures = 0
             }
+        }
     }
 
     companion object {

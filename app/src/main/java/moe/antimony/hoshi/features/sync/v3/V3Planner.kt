@@ -1,6 +1,7 @@
 package moe.antimony.hoshi.features.sync.v3
 
 import moe.antimony.hoshi.features.ai.PRETRANSLATIONS_FILENAME
+import moe.antimony.hoshi.features.sync.http.MAX_STATISTICS_BLOB_BYTES
 import moe.antimony.hoshi.features.sync.http.StatisticsSyncKind
 import moe.antimony.hoshi.features.sync.http.HttpSyncContentType
 import moe.antimony.hoshi.features.sync.http.HttpSyncPayloadKeys
@@ -402,10 +403,18 @@ class V3Planner {
                     }
                 }
                 // Statistics merge both ways for every book; the executor skips converged books
-                // without a request.
-                syncStatistics += V3Action.SyncStatistics(l.root, syncId, StatisticsSyncKind.Reading, r?.statisticsKey, r?.statisticsSize, r?.statisticsLastModified)
+                // without a request. An oversized remote blob is reported, never downloaded.
+                if ((r?.statisticsSize ?: 0) > MAX_STATISTICS_BLOB_BYTES) {
+                    plannerErrors += V3Error(syncId, "SyncStatistics", "remote statistics exceed the $MAX_STATISTICS_BLOB_BYTES-byte limit")
+                } else {
+                    syncStatistics += V3Action.SyncStatistics(l.root, syncId, StatisticsSyncKind.Reading, r?.statisticsKey, r?.statisticsSize, r?.statisticsLastModified)
+                }
                 if (l.contentType == moe.antimony.hoshi.epub.ContentType.Mokuro) {
-                    syncStatistics += V3Action.SyncStatistics(l.root, syncId, StatisticsSyncKind.MangaText, r?.mangaStatisticsKey, r?.mangaStatisticsSize, r?.mangaStatisticsLastModified)
+                    if ((r?.mangaStatisticsSize ?: 0) > MAX_STATISTICS_BLOB_BYTES) {
+                        plannerErrors += V3Error(syncId, "SyncStatistics", "remote manga statistics exceed the $MAX_STATISTICS_BLOB_BYTES-byte limit")
+                    } else {
+                        syncStatistics += V3Action.SyncStatistics(l.root, syncId, StatisticsSyncKind.MangaText, r?.mangaStatisticsKey, r?.mangaStatisticsSize, r?.mangaStatisticsLastModified)
+                    }
                 }
                 if (l.contentType == moe.antimony.hoshi.epub.ContentType.Epub) {
                     val sentencesKey = r?.sentencesKey

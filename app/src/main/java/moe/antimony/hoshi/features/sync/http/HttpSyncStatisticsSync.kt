@@ -134,6 +134,7 @@ class HttpSyncStatisticsSync(
                     saveLocal = { bookRepository.saveStatistics(bookRoot, it) },
                     merge = { it.deduplicateReadingStatistics() },
                     dateKey = { it.dateKey },
+                    stamp = { it.lastStatisticModified },
                     encode = { entries ->
                         json.encodeToString(HttpSyncStatisticsBlob.serializer(), HttpSyncStatisticsBlob(syncId = syncId, entries = entries))
                     },
@@ -156,6 +157,7 @@ class HttpSyncStatisticsSync(
                     saveLocal = { bookRepository.saveMangaTextStatistics(bookRoot, it) },
                     merge = { it.deduplicateMangaTextStatistics() },
                     dateKey = { it.dateKey },
+                    stamp = { it.lastModified },
                     encode = { entries ->
                         json.encodeToString(HttpSyncMangaStatisticsBlob.serializer(), HttpSyncMangaStatisticsBlob(syncId = syncId, entries = entries))
                     },
@@ -182,6 +184,7 @@ class HttpSyncStatisticsSync(
         saveLocal: suspend (List<T>) -> Unit,
         merge: (List<T>) -> List<T>,
         dateKey: (T) -> String,
+        stamp: (T) -> Long,
         encode: (List<T>) -> String,
         decode: (String) -> List<T>,
         readState: (StatisticsSyncState) -> StatisticsSyncStateEntry?,
@@ -198,7 +201,9 @@ class HttpSyncStatisticsSync(
                 val sameStamp = remote.lastModified == null || last?.remoteLastModified == remote.lastModified
                 if (unchangedLocally && last.remoteSize == remote.size && sameStamp) return StatisticsSyncOutcome.NONE
             }
-            StatisticsRemoteListing.Unknown -> if (unchangedLocally) return StatisticsSyncOutcome.NONE
+            // Nothing local and never exchanged: there is nothing to push, and a reconcile with a
+            // listing pulls remote days, so the reader path must not fetch on every save.
+            StatisticsRemoteListing.Unknown -> if (unchangedLocally || (last == null && local.isEmpty())) return StatisticsSyncOutcome.NONE
             StatisticsRemoteListing.Absent -> return uploadWhole(transport, bookRoot, key, local, localBody, localSha, state, writeState)
         }
         val fetched = transport.getBounded(key, MAX_STATISTICS_BLOB_BYTES)
@@ -210,7 +215,10 @@ class HttpSyncStatisticsSync(
         } catch (error: Exception) {
             throw HttpSyncException("Statistics at $key: malformed JSON (${error.message ?: error.javaClass.simpleName})")
         }
-        val merged = merge(local + remoteEntries).sortedBy(dateKey)
+        // The dedupe keeps the first entry it sees for a day when stamps tie, so order the
+        // candidates the same way on every device: newest stamp first, then by content.
+        val candidates = (local + remoteEntries).sortedWith(compareByDescending<T> { stamp(it) }.thenByDescending { it.toString() })
+        val merged = merge(candidates).sortedBy(dateKey)
         val downloaded = merged != local
         if (downloaded) {
             saveLocal(merged)
