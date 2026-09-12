@@ -40,6 +40,7 @@ import moe.antimony.hoshi.features.settings.GroupDivider
 import moe.antimony.hoshi.features.settings.SettingsDetailScaffold
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
+import java.util.Locale
 
 /** One book's statistics: dates, totals, pace and the per-day history. Reloads like [StatisticsScreen]. */
 @Composable
@@ -75,7 +76,7 @@ fun BookStatisticsContent(
 ) {
     val colorScheme = MaterialTheme.colorScheme
     SettingsDetailScaffold(
-        title = summary?.title ?: stringResource(R.string.reader_statistics),
+        title = stringResource(R.string.reader_statistics),
         onClose = onClose,
         modifier = modifier.fillMaxSize(),
         containerColor = colorScheme.background,
@@ -218,7 +219,10 @@ private fun PaceCard(summary: BookReadingSummary, pace: BookPace) {
 
 @Composable
 private fun HistoryCard(summary: BookReadingSummary) {
-    val formatter = remember { DateTimeFormatter.ofPattern("MMM d") }
+    val formatter = remember {
+        val locale = Locale.getDefault()
+        DateTimeFormatter.ofPattern(android.text.format.DateFormat.getBestDateTimePattern(locale, "MMMd"), locale)
+    }
     val max = summary.days.maxOfOrNull { it.seconds } ?: 0.0
     GroupCard {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {

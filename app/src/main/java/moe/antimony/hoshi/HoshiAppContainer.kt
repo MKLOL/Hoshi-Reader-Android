@@ -51,6 +51,7 @@ import moe.antimony.hoshi.features.sync.GoogleDriveClient
 import moe.antimony.hoshi.features.sync.SyncManager
 import moe.antimony.hoshi.features.sync.SyncSettingsRepository
 import moe.antimony.hoshi.features.sync.syncSettingsRepository
+import moe.antimony.hoshi.features.sync.http.HttpSyncStatisticsPushScheduler
 import moe.antimony.hoshi.features.sync.http.HttpSyncAutoPush
 import moe.antimony.hoshi.features.sync.http.HttpSyncBatchState
 import moe.antimony.hoshi.features.sync.http.HttpSyncBookmarkScheduler
@@ -215,8 +216,8 @@ internal class HoshiAppContainer(context: Context) {
     )
 
     /** Debounced statistics pushes from both readers; see HttpSyncStatisticsSync for the merge. */
-    val httpSyncStatisticsPushScheduler: moe.antimony.hoshi.features.sync.http.HttpSyncStatisticsPushScheduler =
-        moe.antimony.hoshi.features.sync.http.HttpSyncStatisticsPushScheduler(
+    val httpSyncStatisticsPushScheduler: HttpSyncStatisticsPushScheduler =
+        HttpSyncStatisticsPushScheduler(
             scope = appScope,
             currentSettings = { httpSyncSettingsRepository.settings.first() },
             push = httpSyncPusher::pushStatistics,

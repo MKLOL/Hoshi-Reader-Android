@@ -157,10 +157,10 @@ class V3Planner {
                         }
                     }
                     r.statisticsKey?.let { key ->
-                        syncStatistics += V3Action.SyncStatistics(sentinelRoot(syncId), syncId, StatisticsSyncKind.Reading, key, r.statisticsSize)
+                        syncStatistics += V3Action.SyncStatistics(sentinelRoot(syncId), syncId, StatisticsSyncKind.Reading, key, r.statisticsSize, r.statisticsLastModified)
                     }
                     r.mangaStatisticsKey?.takeIf { r.manifest.format == HttpSyncContentType.Mokuro }?.let { key ->
-                        syncStatistics += V3Action.SyncStatistics(sentinelRoot(syncId), syncId, StatisticsSyncKind.MangaText, key, r.mangaStatisticsSize)
+                        syncStatistics += V3Action.SyncStatistics(sentinelRoot(syncId), syncId, StatisticsSyncKind.MangaText, key, r.mangaStatisticsSize, r.mangaStatisticsLastModified)
                     }
                     if (
                         r.manifest.format == HttpSyncContentType.Epub &&
@@ -403,9 +403,9 @@ class V3Planner {
                 }
                 // Statistics merge both ways for every book; the executor skips converged books
                 // without a request.
-                syncStatistics += V3Action.SyncStatistics(l.root, syncId, StatisticsSyncKind.Reading, r?.statisticsKey, r?.statisticsSize)
+                syncStatistics += V3Action.SyncStatistics(l.root, syncId, StatisticsSyncKind.Reading, r?.statisticsKey, r?.statisticsSize, r?.statisticsLastModified)
                 if (l.contentType == moe.antimony.hoshi.epub.ContentType.Mokuro) {
-                    syncStatistics += V3Action.SyncStatistics(l.root, syncId, StatisticsSyncKind.MangaText, r?.mangaStatisticsKey, r?.mangaStatisticsSize)
+                    syncStatistics += V3Action.SyncStatistics(l.root, syncId, StatisticsSyncKind.MangaText, r?.mangaStatisticsKey, r?.mangaStatisticsSize, r?.mangaStatisticsLastModified)
                 }
                 if (l.contentType == moe.antimony.hoshi.epub.ContentType.Epub) {
                     val sentencesKey = r?.sentencesKey

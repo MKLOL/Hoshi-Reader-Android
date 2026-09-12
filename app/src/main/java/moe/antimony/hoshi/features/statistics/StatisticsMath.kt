@@ -1,6 +1,7 @@
 package moe.antimony.hoshi.features.statistics
 
 import moe.antimony.hoshi.epub.ContentType
+import moe.antimony.hoshi.epub.ReadingTotals
 import moe.antimony.hoshi.features.reader.BookReadingSummary
 import moe.antimony.hoshi.features.reader.DailyReading
 import java.time.DayOfWeek
@@ -111,10 +112,14 @@ fun buildReadingHeatmap(
     val grid = (0 until weeks).map { weekIndex ->
         val start = firstWeekStart.plusWeeks(weekIndex.toLong())
         if (start.monthValue != lastMonth) {
-            // Drop a label that would sit right next to the previous one (a month that starts
-            // in the window's first days), so labels never overlap.
-            if (labels.isEmpty() || weekIndex - labels.last().first >= HEATMAP_MIN_LABEL_GAP_WEEKS) {
-                labels += weekIndex to start.month.getDisplayName(TextStyle.SHORT, locale)
+            val label = weekIndex to start.month.getDisplayName(TextStyle.SHORT, locale)
+            val previous = labels.lastOrNull()
+            if (previous == null || weekIndex - previous.first >= HEATMAP_MIN_LABEL_GAP_WEEKS) {
+                labels += label
+            } else {
+                // Two month starts within the gap can only be the window's partial leading month
+                // followed by the month that owns the next columns: the latter gets the label.
+                labels[labels.lastIndex] = label
             }
             lastMonth = start.monthValue
         }
@@ -144,12 +149,12 @@ data class BookPace(
 )
 
 fun bookPace(summary: BookReadingSummary): BookPace {
-    val hours = summary.totalSeconds / 3600.0
     val units = when (summary.contentType) {
         ContentType.Mokuro -> summary.pagesRead ?: 0
         ContentType.Epub -> summary.charactersRead
     }
-    val unitsPerHour = if (hours > 0.0) (units / hours).toInt() else 0
+    // The reader sheet shows ReadingTotals.readingSpeed; the same arithmetic, so the same integer.
+    val unitsPerHour = ReadingTotals(readingTime = summary.totalSeconds, charactersRead = units).readingSpeed
     val secondsPerUnit = when (summary.contentType) {
         ContentType.Mokuro -> summary.pagesRead?.takeIf { it > 0 }?.let { summary.totalSeconds / it }
         ContentType.Epub -> summary.charactersRead.takeIf { it > 0 }?.let { summary.totalSeconds / (it / 100.0) }

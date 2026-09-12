@@ -61,8 +61,8 @@ enum class StatisticsSyncKind {
 
 /** What the caller knows about the remote key before the exchange. */
 sealed interface StatisticsRemoteListing {
-    /** The key was in the listing with this body size. */
-    data class Listed(val size: Int) : StatisticsRemoteListing
+    /** The key was in the listing with this body size and (when the listing carries it) modification stamp. */
+    data class Listed(val size: Int, val lastModified: String? = null) : StatisticsRemoteListing
 
     /** The listing did not contain the key. */
     data object Absent : StatisticsRemoteListing
@@ -78,7 +78,12 @@ data class StatisticsSyncOutcome(val downloaded: Boolean, val uploaded: Boolean)
 }
 
 @Serializable
-internal data class StatisticsSyncStateEntry(val localSha256: String, val remoteSize: Int)
+internal data class StatisticsSyncStateEntry(
+    val localSha256: String,
+    val remoteSize: Int,
+    /** The server's stamp for the body we last read or wrote; a same-size edit elsewhere changes it. */
+    val remoteLastModified: String? = null,
+)
 
 @Serializable
 internal data class StatisticsSyncState(
@@ -189,7 +194,10 @@ class HttpSyncStatisticsSync(
         val last = readState(state)
         val unchangedLocally = last != null && last.localSha256 == localSha
         when (remote) {
-            is StatisticsRemoteListing.Listed -> if (unchangedLocally && last.remoteSize == remote.size) return StatisticsSyncOutcome.NONE
+            is StatisticsRemoteListing.Listed -> {
+                val sameStamp = remote.lastModified == null || last?.remoteLastModified == remote.lastModified
+                if (unchangedLocally && last.remoteSize == remote.size && sameStamp) return StatisticsSyncOutcome.NONE
+            }
             StatisticsRemoteListing.Unknown -> if (unchangedLocally) return StatisticsSyncOutcome.NONE
             StatisticsRemoteListing.Absent -> return uploadWhole(transport, bookRoot, key, local, localBody, localSha, state, writeState)
         }
@@ -209,14 +217,20 @@ class HttpSyncStatisticsSync(
         }
         val uploaded = merged != remoteEntries
         val mergedBody = encode(merged)
-        val remoteSize = if (uploaded) {
+        val remoteSize: Int
+        val remoteStamp: String?
+        if (uploaded) {
             val bytes = mergedBody.toByteArray(Charsets.UTF_8)
-            transport.put(key = key, contentType = JSON_CONTENT_TYPE, body = bytes)
-            bytes.size
+            remoteStamp = transport.put(key = key, contentType = JSON_CONTENT_TYPE, body = bytes).lastModified
+            remoteSize = bytes.size
         } else {
-            fetched.body.size
+            remoteSize = fetched.body.size
+            remoteStamp = fetched.lastModified
         }
-        saveState(bookRoot, writeState(state, StatisticsSyncStateEntry(localSha256 = sha256(mergedBody), remoteSize = remoteSize)))
+        saveState(
+            bookRoot,
+            writeState(state, StatisticsSyncStateEntry(localSha256 = sha256(mergedBody), remoteSize = remoteSize, remoteLastModified = remoteStamp)),
+        )
         return StatisticsSyncOutcome(downloaded = downloaded, uploaded = uploaded)
     }
 
@@ -232,8 +246,11 @@ class HttpSyncStatisticsSync(
     ): StatisticsSyncOutcome {
         if (local.isEmpty()) return StatisticsSyncOutcome.NONE
         val bytes = localBody.toByteArray(Charsets.UTF_8)
-        transport.put(key = key, contentType = JSON_CONTENT_TYPE, body = bytes)
-        saveState(bookRoot, writeState(state, StatisticsSyncStateEntry(localSha256 = localSha, remoteSize = bytes.size)))
+        val written = transport.put(key = key, contentType = JSON_CONTENT_TYPE, body = bytes)
+        saveState(
+            bookRoot,
+            writeState(state, StatisticsSyncStateEntry(localSha256 = localSha, remoteSize = bytes.size, remoteLastModified = written.lastModified)),
+        )
         return StatisticsSyncOutcome(downloaded = false, uploaded = true)
     }
 

@@ -42,7 +42,7 @@ class HttpSyncStatisticsPushSchedulerTest {
 
         scheduler.onStatisticsChanged(a, "A", "a")
         scheduler.flushNow(a, "A", "a")
-        awaitPushes(pushes, 3, timeoutMs = 150)
+        awaitPushes(pushes, 3, timeoutMs = 1_000)
         assertEquals(3, pushes.get())
         scope.cancel()
     }

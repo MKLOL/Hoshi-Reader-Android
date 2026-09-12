@@ -727,7 +727,7 @@ class HttpSyncReconciler(
                         }
                     BookKeyKind.Statistics, BookKeyKind.MangaStatistics -> {
                         val kind = if (parsed.kind == BookKeyKind.Statistics) StatisticsSyncKind.Reading else StatisticsSyncKind.MangaText
-                        val outcome = statisticsSync.sync(transport, root, parsed.syncId, kind, StatisticsRemoteListing.Listed(meta.size))
+                        val outcome = statisticsSync.sync(transport, root, parsed.syncId, kind, StatisticsRemoteListing.Listed(meta.size, meta.lastModified))
                         if (outcome.downloaded) downloadedStatistics += 1
                         if (outcome.uploaded) uploadedStatisticsWhilePulling += 1
                     }

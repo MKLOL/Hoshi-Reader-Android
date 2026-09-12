@@ -216,7 +216,7 @@
     <string name="reader_image_save_failed">Could not save image.</string>
     <string name="reader_chapters">Chapters</string>
     <string name="reader_highlights">Highlights</string>
-    <string name="reader_statistics" comment="Reader menu label, intentionally matching the Settings statistics page.">Statistics</string>
+    <string name="reader_statistics" comment="Reader menu label and the Statistics screen title.">Statistics</string>
     <string name="reader_untitled_chapter">Untitled</string>
     <string name="reader_jump_to_character">Jump to Character</string>
     <string name="reader_character">Character</string>
@@ -233,9 +233,7 @@
     <string name="reader_statistics_reading_speed">Reading Speed:</string>
     <string name="reader_statistics_reading_time">Reading Time:</string>
     <string name="reader_statistics_sync_behaviour">Sync Behaviour</string>
-    <string name="reader_statistics_settings_hint">Statistics can be accessed from the Reader\'s context menu.</string>
     <string name="statistics_overview_total_reading_time">Total reading time</string>
-    <string name="statistics_overview_always_on">Reading time is tracked automatically for every book and manga.</string>
     <string name="statistics_overview_per_book">Time per book</string>
     <string name="statistics_overview_empty">No reading time recorded yet.</string>
     <string name="statistics_overview_loading">Loading statistics…</string>
@@ -243,7 +241,17 @@
     <string name="statistics_overview_characters_total">Characters read</string>
     <string name="statistics_overview_characters_today">Characters read today</string>
     <string name="bookshelf_statistics">Reading statistics</string>
-    <string name="statistics_streak_summary_format">Longest %1$d days · %2$d days on goal</string>
+    <string name="statistics_streak_start_format">Read %1$s today to start a streak</string>
+    <string name="statistics_streak_keep_format">%1$s more today keeps your streak</string>
+    <string name="statistics_streak_new_record">new record</string>
+    <plurals name="statistics_streak_longest_days">
+        <item quantity="one">Longest %1$d day</item>
+        <item quantity="other">Longest %1$d days</item>
+    </plurals>
+    <plurals name="statistics_streak_goal_days">
+        <item quantity="one">%1$d day on goal</item>
+        <item quantity="other">%1$d days on goal</item>
+    </plurals>
     <string name="statistics_streak_today_done">Today\'s goal reached</string>
     <string name="statistics_streak_today_progress_format">%1$s of %2$s today</string>
     <string name="statistics_streak_goal">Daily goal</string>

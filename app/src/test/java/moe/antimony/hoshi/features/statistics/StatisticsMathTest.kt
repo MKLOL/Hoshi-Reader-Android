@@ -102,9 +102,9 @@ class StatisticsMathTest {
         assertEquals(0, lastWeek.cells[1]?.level)
         assertEquals(LocalDate.of(2026, 5, 25), heatmap.weeks.first().cells[0]?.date)
         assertEquals(40 * 60.0, heatmap.maxSeconds, 0.0)
-        assertEquals(listOf("May", "Jul", "Aug", "Sep"), heatmap.monthLabels.map { it.second }) // Jun starts one week in
+        assertEquals(listOf("Jun", "Jul", "Aug", "Sep"), heatmap.monthLabels.map { it.second }) // May only owns a partial column
         assertTrue(heatmap.monthLabels.zipWithNext().all { (a, b) -> b.first - a.first >= HEATMAP_MIN_LABEL_GAP_WEEKS })
-        assertEquals(0, heatmap.monthLabels.first().first)
+        assertEquals(1, heatmap.monthLabels.first().first)
     }
 
     @Test

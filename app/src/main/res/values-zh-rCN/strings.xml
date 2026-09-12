@@ -214,7 +214,7 @@
     <string name="reader_image_save_failed">无法保存图片。</string>
     <string name="reader_chapters">章节</string>
     <string name="reader_highlights">标注</string>
-    <string name="reader_statistics" comment="Reader menu label, intentionally matching the Settings statistics page.">统计</string>
+    <string name="reader_statistics" comment="Reader menu label and the Statistics screen title.">统计</string>
     <string name="reader_untitled_chapter">未命名</string>
     <string name="reader_jump_to_character">跳转到字符</string>
     <string name="reader_character">字符</string>
@@ -231,9 +231,7 @@
     <string name="reader_statistics_reading_speed">阅读速度：</string>
     <string name="reader_statistics_reading_time">阅读时间：</string>
     <string name="reader_statistics_sync_behaviour">同步行为</string>
-    <string name="reader_statistics_settings_hint">可从阅读器菜单访问统计。</string>
     <string name="statistics_overview_total_reading_time">总阅读时间</string>
-    <string name="statistics_overview_always_on">每本书和漫画的阅读时间都会自动记录。</string>
     <string name="statistics_overview_per_book">每本书的时间</string>
     <string name="statistics_overview_empty">尚未记录阅读时间。</string>
     <string name="statistics_overview_loading">正在加载统计…</string>
@@ -241,7 +239,17 @@
     <string name="statistics_overview_characters_total">已读字符</string>
     <string name="statistics_overview_characters_today">今天已读字符</string>
     <string name="bookshelf_statistics">阅读统计</string>
-    <string name="statistics_streak_summary_format">最长 %1$d 天 · 达标 %2$d 天</string>
+    <string name="statistics_streak_start_format">今天阅读 %1$s 即可开始连续记录</string>
+    <string name="statistics_streak_keep_format">今天再读 %1$s 即可保持连续</string>
+    <string name="statistics_streak_new_record">新纪录</string>
+    <plurals name="statistics_streak_longest_days">
+        <item quantity="one">最长 %1$d 天</item>
+        <item quantity="other">最长 %1$d 天</item>
+    </plurals>
+    <plurals name="statistics_streak_goal_days">
+        <item quantity="one">达标 %1$d 天</item>
+        <item quantity="other">达标 %1$d 天</item>
+    </plurals>
     <string name="statistics_streak_today_done">今天的目标已达成</string>
     <string name="statistics_streak_today_progress_format">今天 %1$s / %2$s</string>
     <string name="statistics_streak_goal">每日目标</string>

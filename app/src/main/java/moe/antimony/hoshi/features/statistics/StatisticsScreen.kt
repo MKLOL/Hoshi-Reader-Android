@@ -18,7 +18,14 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.LocalFireDepartment
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.Switch
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Icon
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
@@ -26,7 +33,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -42,6 +48,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import moe.antimony.hoshi.LocalHoshiAppContainer
 import moe.antimony.hoshi.R
@@ -56,8 +63,12 @@ import moe.antimony.hoshi.features.reader.loadReadingStatisticsOverview
 import moe.antimony.hoshi.features.settings.GroupCard
 import moe.antimony.hoshi.features.settings.GroupDivider
 import moe.antimony.hoshi.features.settings.SettingsDetailScaffold
+import moe.antimony.hoshi.features.settings.collectAsLoadedSettings
+import moe.antimony.hoshi.features.sync.StatisticsSyncMode
 import moe.antimony.hoshi.ui.theme.LocalHoshiEInkMode
+import java.time.Duration
 import java.time.LocalDate
+import java.time.LocalDateTime
 
 /** Daily goal choices for the streak, in minutes. */
 val STREAK_GOAL_MINUTES: List<Int> = listOf(5, 10, 15, 30)
@@ -77,13 +88,20 @@ fun StatisticsScreen(
     val appContainer = LocalHoshiAppContainer.current
     val scope = rememberCoroutineScope()
     val statisticsVersion by appContainer.bookRepository.statisticsChanges.collectAsStateWithLifecycle()
-    val readerSettings by appContainer.readerSettingsRepository.settings.collectAsState(initial = ReaderSettings())
+    val readerSettings by appContainer.readerSettingsRepository.settings.collectAsStateWithLifecycle(initialValue = ReaderSettings())
+    val syncSettings = appContainer.syncSettingsRepository.settings.collectAsLoadedSettings()
     var overview by remember { mutableStateOf<ReadingStatisticsOverview?>(null) }
     var today by remember { mutableStateOf(SystemReaderStatisticsClock.currentDate()) }
     val resumeCount = rememberResumeCount()
-    LaunchedEffect(statisticsVersion, resumeCount) {
+    LaunchedEffect(statisticsVersion, resumeCount, today) {
         today = SystemReaderStatisticsClock.currentDate()
         overview = loadReadingStatisticsOverview(appContainer.bookRepository, today.toString())
+    }
+    // A screen left open across midnight moves "today" (and the streak) to the new day.
+    LaunchedEffect(today) {
+        val untilMidnight = Duration.between(LocalDateTime.now(), today.plusDays(1).atStartOfDay()).toMillis()
+        delay(untilMidnight.coerceAtLeast(1_000L))
+        today = SystemReaderStatisticsClock.currentDate()
     }
     StatisticsScreenContent(
         overview = overview,
@@ -97,8 +115,23 @@ fun StatisticsScreen(
         onOpenBook = onOpenBook,
         onClose = onClose,
         modifier = modifier,
+        driveSync = if (syncSettings?.enabled == true) {
+            DriveStatisticsSyncOptions(readerSettings.statisticsSyncEnabled, readerSettings.statisticsSyncMode)
+        } else {
+            null
+        },
+        onDriveSyncChange = { options ->
+            scope.launch {
+                appContainer.readerSettingsRepository.update {
+                    it.copy(statisticsSyncEnabled = options.enabled, statisticsSyncMode = options.mode)
+                }
+            }
+        },
     )
 }
+
+/** Google Drive (ッツ) statistics sync: only offered while Drive sync itself is configured. */
+data class DriveStatisticsSyncOptions(val enabled: Boolean, val mode: StatisticsSyncMode)
 
 @Composable
 fun StatisticsScreenContent(
@@ -109,6 +142,8 @@ fun StatisticsScreenContent(
     onOpenBook: (bookId: String) -> Unit,
     onClose: () -> Unit,
     modifier: Modifier = Modifier,
+    driveSync: DriveStatisticsSyncOptions? = null,
+    onDriveSyncChange: (DriveStatisticsSyncOptions) -> Unit = {},
 ) {
     val colorScheme = MaterialTheme.colorScheme
     val streak = remember(overview, minimumMinutes, today) {
@@ -127,14 +162,35 @@ fun StatisticsScreenContent(
                 .fillMaxSize()
                 .padding(innerPadding)
                 .padding(horizontal = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(18.dp),
             contentPadding = PaddingValues(bottom = 24.dp),
         ) {
-            item { StreakCard(streak, minimumMinutes, onMinimumMinutesChange) }
-            item { TotalsCard(overview) }
-            item { HeatmapCard(heatmap) }
-            item { WeekdayCard(weekdays) }
-            item { BooksCard(overview, onOpenBook) }
+            item { StreakCard(streak, minimumMinutes, onMinimumMinutesChange); Spacer(Modifier.height(18.dp)) }
+            item { TotalsCard(overview); Spacer(Modifier.height(18.dp)) }
+            item { HeatmapCard(heatmap); Spacer(Modifier.height(18.dp)) }
+            item { WeekdayCard(weekdays); Spacer(Modifier.height(18.dp)) }
+            if (driveSync != null) {
+                item { DriveSyncCard(driveSync, onDriveSyncChange); Spacer(Modifier.height(18.dp)) }
+            }
+            item {
+                Text(
+                    text = stringResource(R.string.statistics_overview_per_book),
+                    color = colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.padding(start = 16.dp, bottom = 8.dp),
+                )
+            }
+            // One lazy item per book: a manga library is one book per volume, and every row
+            // decodes a cover, so composing them all at once would hold every bitmap.
+            val books = overview?.books
+            when {
+                books == null -> item { GroupCard { StatisticsMessageRow(stringResource(R.string.statistics_overview_loading)) } }
+                books.isEmpty() -> item { GroupCard { StatisticsMessageRow(stringResource(R.string.statistics_overview_empty)) } }
+                else -> items(books, key = { it.bookId }) { book ->
+                    BookRowCard { BookReadingRow(book, onClick = { onOpenBook(book.bookId) }) }
+                    Spacer(Modifier.height(8.dp))
+                }
+            }
         }
     }
 }
@@ -144,28 +200,35 @@ private fun StreakCard(streak: ReadingStreak?, minimumMinutes: Int, onMinimumMin
     val colorScheme = MaterialTheme.colorScheme
     val eInk = LocalHoshiEInkMode.current
     val current = streak?.currentDays ?: 0
+    val atRisk = streak != null && current > 0 && !streak.todayQualifies
     GroupCard {
         Column(modifier = Modifier.padding(16.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(
                     imageVector = Icons.Rounded.LocalFireDepartment,
                     contentDescription = null,
-                    tint = if (current > 0 && !eInk) colorScheme.primary else colorScheme.onSurfaceVariant,
+                    tint = when {
+                        eInk || streak == null || current == 0 -> colorScheme.onSurfaceVariant
+                        atRisk -> colorScheme.tertiary
+                        else -> colorScheme.primary
+                    },
                     modifier = Modifier.size(44.dp),
                 )
                 Spacer(Modifier.width(12.dp))
                 Column {
                     Text(
-                        text = pluralStringResource(R.plurals.statistics_streak_days, current, current),
+                        text = if (streak == null) "…" else pluralStringResource(R.plurals.statistics_streak_days, current, current),
                         style = MaterialTheme.typography.titleLarge,
                         fontWeight = FontWeight.SemiBold,
                     )
                     Text(
-                        text = stringResource(
-                            R.string.statistics_streak_summary_format,
-                            streak?.longestDays ?: 0,
-                            streak?.qualifyingDays ?: 0,
-                        ),
+                        text = if (streak == null) {
+                            "…"
+                        } else {
+                            pluralStringResource(R.plurals.statistics_streak_longest_days, streak.longestDays, streak.longestDays) +
+                                " · " +
+                                pluralStringResource(R.plurals.statistics_streak_goal_days, streak.qualifyingDays, streak.qualifyingDays)
+                        },
                         style = MaterialTheme.typography.bodyMedium,
                         color = colorScheme.onSurfaceVariant,
                     )
@@ -194,14 +257,21 @@ private fun StreakCard(streak: ReadingStreak?, minimumMinutes: Int, onMinimumMin
             }
             Spacer(Modifier.height(6.dp))
             Text(
-                text = if (streak?.todayQualifies == true) {
-                    stringResource(R.string.statistics_streak_today_done)
-                } else {
-                    stringResource(
+                text = when {
+                    streak == null -> "…"
+                    streak.todayQualifies && current > 1 && current == streak.longestDays ->
+                        stringResource(R.string.statistics_streak_today_done) + " · " + stringResource(R.string.statistics_streak_new_record)
+                    streak.todayQualifies -> stringResource(R.string.statistics_streak_today_done)
+                    atRisk -> stringResource(
+                        R.string.statistics_streak_keep_format,
+                        formatDurationSeconds((goalSeconds - todaySeconds).coerceAtLeast(0.0)),
+                    )
+                    todaySeconds > 0.0 -> stringResource(
                         R.string.statistics_streak_today_progress_format,
                         formatDurationSeconds(todaySeconds),
                         formatGoalDuration(goalSeconds),
                     )
+                    else -> stringResource(R.string.statistics_streak_start_format, formatGoalDuration(goalSeconds))
                 },
                 style = MaterialTheme.typography.bodyMedium,
                 color = colorScheme.onSurfaceVariant,
@@ -297,28 +367,59 @@ private fun WeekdayCard(weekdays: List<Double>?) {
 }
 
 @Composable
-private fun BooksCard(overview: ReadingStatisticsOverview?, onOpenBook: (String) -> Unit) {
-    Column {
-        Text(
-            text = stringResource(R.string.statistics_overview_per_book),
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.SemiBold,
-            modifier = Modifier.padding(start = 16.dp, bottom = 8.dp),
+private fun DriveSyncCard(options: DriveStatisticsSyncOptions, onChange: (DriveStatisticsSyncOptions) -> Unit) {
+    var modeMenuExpanded by remember { mutableStateOf(false) }
+    GroupCard {
+        ListItem(
+            colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+            headlineContent = { Text(stringResource(R.string.sync_ttu_sync)) },
+            trailingContent = {
+                Switch(
+                    checked = options.enabled,
+                    onCheckedChange = { onChange(options.copy(enabled = it)) },
+                )
+            },
         )
-        GroupCard {
-            val books = overview?.books
-            when {
-                books == null -> StatisticsMessageRow(stringResource(R.string.statistics_overview_loading))
-                books.isEmpty() -> StatisticsMessageRow(stringResource(R.string.statistics_overview_empty))
-                else -> books.forEachIndexed { index, book ->
-                    BookReadingRow(book, onClick = { onOpenBook(book.bookId) })
-                    if (index != books.lastIndex) {
-                        GroupDivider()
+        GroupDivider()
+        ListItem(
+            colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+            headlineContent = { Text(stringResource(R.string.reader_statistics_sync_behaviour)) },
+            trailingContent = {
+                Box {
+                    TextButton(onClick = { modeMenuExpanded = true }) {
+                        Text(options.mode.rawValue)
+                    }
+                    DropdownMenu(
+                        expanded = modeMenuExpanded,
+                        onDismissRequest = { modeMenuExpanded = false },
+                    ) {
+                        StatisticsSyncMode.entries.forEach { mode ->
+                            DropdownMenuItem(
+                                text = { Text(mode.rawValue) },
+                                onClick = {
+                                    modeMenuExpanded = false
+                                    onChange(options.copy(mode = mode))
+                                },
+                            )
+                        }
                     }
                 }
-            }
-        }
+            },
+        )
+    }
+}
+
+/** One book row in its own small card, so the list can stay lazy. */
+@Composable
+private fun BookRowCard(content: @Composable () -> Unit) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(20.dp),
+        color = MaterialTheme.colorScheme.surface,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        tonalElevation = 0.dp,
+    ) {
+        content()
     }
 }
 

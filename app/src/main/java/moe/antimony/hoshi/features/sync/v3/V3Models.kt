@@ -112,8 +112,10 @@ data class V3RemoteBook(
     /** `books/{syncId}/statistics` and `books/{syncId}/manga_statistics`, with their listed sizes. */
     val statisticsKey: String? = null,
     val statisticsSize: Int? = null,
+    val statisticsLastModified: String? = null,
     val mangaStatisticsKey: String? = null,
     val mangaStatisticsSize: Int? = null,
+    val mangaStatisticsLastModified: String? = null,
     /**
      * Bug 5: per-field "remote returned bytes but they didn't decode" markers. The
      * decoded field (e.g. [metadata]) is left null on decode failure, but the planner
@@ -199,6 +201,7 @@ sealed interface V3Action {
         val kind: StatisticsSyncKind,
         val remoteKey: String?,
         val remoteSize: Int?,
+        val remoteLastModified: String? = null,
     ) : V3Action
     data class PushPayload(val root: File, override val syncId: String, val title: String, val format: HttpSyncContentType) : V3Action
     data class PushTombstone(override val syncId: String, val record: HttpSyncDeletedBookRecord) : V3Action

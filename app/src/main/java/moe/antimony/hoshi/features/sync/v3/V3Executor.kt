@@ -304,7 +304,7 @@ class V3Executor(
                         val listing = when {
                             action.remoteKey == null -> StatisticsRemoteListing.Absent
                             action.remoteSize == null -> StatisticsRemoteListing.Unknown
-                            else -> StatisticsRemoteListing.Listed(action.remoteSize)
+                            else -> StatisticsRemoteListing.Listed(action.remoteSize, action.remoteLastModified)
                         }
                         val outcome = statisticsSync.sync(transport, targetRoot, action.syncId, action.kind, listing)
                         if (outcome.downloaded) appliedStatistics += 1

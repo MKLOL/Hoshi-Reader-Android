@@ -20,10 +20,14 @@ internal fun rememberResumeCount(): Int {
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     var resumeCount by remember { mutableIntStateOf(0) }
     DisposableEffect(lifecycle) {
+        // addObserver replays the current state synchronously; that first ON_RESUME is not a
+        // return to the foreground, so it must not restart the load that is already running.
+        var registered = false
         val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME) resumeCount += 1
+            if (event == Lifecycle.Event.ON_RESUME && registered) resumeCount += 1
         }
         lifecycle.addObserver(observer)
+        registered = true
         onDispose { lifecycle.removeObserver(observer) }
     }
     return resumeCount

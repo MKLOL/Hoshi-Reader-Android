@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
@@ -122,7 +123,9 @@ internal fun StatisticsBarRow(label: String, value: String, fraction: Float, mod
         Text(
             text = label,
             style = MaterialTheme.typography.bodyMedium,
-            modifier = Modifier.width(72.dp),
+            maxLines = 1,
+            softWrap = false,
+            modifier = Modifier.widthIn(min = 72.dp),
         )
         Box(
             modifier = Modifier
@@ -144,7 +147,9 @@ internal fun StatisticsBarRow(label: String, value: String, fraction: Float, mod
             text = value,
             style = MaterialTheme.typography.bodyMedium,
             fontWeight = FontWeight.SemiBold,
-            modifier = Modifier.width(76.dp),
+            maxLines = 1,
+            softWrap = false,
+            modifier = Modifier.widthIn(min = 76.dp),
             textAlign = androidx.compose.ui.text.style.TextAlign.End,
         )
     }

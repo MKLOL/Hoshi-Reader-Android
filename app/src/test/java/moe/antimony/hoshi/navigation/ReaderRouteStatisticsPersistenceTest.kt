@@ -18,8 +18,9 @@ import java.nio.file.Files
 import java.time.LocalDate
 
 /**
- * The EPUB reader persists statistics only through `onSaveBookmark`, which lands in
- * [ReaderRouteStateHolder.saveBookmark] and from there in [BookRepository.saveStatistics].
+ * The EPUB reader persists statistics through `onSaveBookmark` (page turns) and
+ * `onSaveStatistics` (leaving or backgrounding), both landing in [ReaderRouteStateHolder]
+ * and from there in [BookRepository.saveStatistics].
  * These tests drive that route with the real repository, replaying the exact tracker calls
  * `ReaderWebView` makes at each lifecycle point, and check the Statistics page reads back
  * the sheet's numbers after every save.

@@ -172,4 +172,26 @@ class HttpSyncStatisticsSyncTest {
         assertEquals(StatisticsSyncOutcome.NONE, outcome)
         assertFalse(gone.exists())
     }
+
+    @Test
+    fun aRemoteEditThatKeepsTheBodySizeIsStillPulledBecauseTheStampChanged() = runBlocking {
+        val repository = BookRepository(temp.newFolder())
+        val root = book(repository)
+        val transport = FakeKvTransport()
+        val sync = HttpSyncStatisticsSync(repository)
+        repository.saveStatistics(root, listOf(day("2026-09-12", 1815.0, 4050, 100)))
+        sync.sync(transport, root, syncId, StatisticsSyncKind.Reading, StatisticsRemoteListing.Absent)
+        val before = transport.kv.getValue(key)
+
+        // Another device edits today's entry; digits change but the byte length does not.
+        transport.putStatistics(listOf(day("2026-09-12", 1915.0, 4120, 200)))
+        val after = transport.kv.getValue(key)
+        assertEquals(before.body.size, after.body.size)
+
+        val outcome = sync.sync(transport, root, syncId, StatisticsSyncKind.Reading, StatisticsRemoteListing.Listed(after.body.size, after.lastModified))
+
+        assertEquals(StatisticsSyncOutcome(downloaded = true, uploaded = false), outcome)
+        assertEquals(1915.0, repository.loadStatistics(root).single().readingTime, 0.0)
+        assertEquals(StatisticsSyncOutcome.NONE, sync.sync(transport, root, syncId, StatisticsSyncKind.Reading, StatisticsRemoteListing.Listed(after.body.size, after.lastModified)))
+    }
 }
