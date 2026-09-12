@@ -7,6 +7,8 @@ Semantic Versioning.
 
 ## [Unreleased]
 
+## [v0.11.12] - 2026-09-12
+
 ### Added
 - **Manga statistics count characters too.** The reader's Statistics sheet and Settings → Statistics show how many characters of manga text you have read, next to the pages.
 
