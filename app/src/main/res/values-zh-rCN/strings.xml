@@ -71,6 +71,7 @@
     <string name="ai_translation_epub_pretranslated_debug">离线 EPUB 预翻译</string>
     <string name="settings_appearance">外观</string>
     <string name="settings_behavior">行为</string>
+    <string name="settings_statistics">统计</string>
     <string name="settings_advanced">高级</string>
     <string name="settings_report_issue">反馈问题</string>
     <string name="settings_diagnostics">诊断</string>
@@ -213,7 +214,7 @@
     <string name="reader_image_save_failed">无法保存图片。</string>
     <string name="reader_chapters">章节</string>
     <string name="reader_highlights">标注</string>
-    <string name="reader_statistics" comment="Reader menu label, intentionally matching advanced statistics.">统计</string>
+    <string name="reader_statistics" comment="Reader menu label, intentionally matching the Settings statistics page.">统计</string>
     <string name="reader_untitled_chapter">未命名</string>
     <string name="reader_jump_to_character">跳转到字符</string>
     <string name="reader_character">字符</string>
@@ -229,12 +230,22 @@
     <string name="reader_statistics_characters_read">已读字符：</string>
     <string name="reader_statistics_reading_speed">阅读速度：</string>
     <string name="reader_statistics_reading_time">阅读时间：</string>
-    <string name="reader_statistics_autostart">自动开始</string>
-    <string name="reader_statistics_autostart_off">关闭</string>
-    <string name="reader_statistics_autostart_page_turn">翻页时</string>
-    <string name="reader_statistics_autostart_on">开启</string>
     <string name="reader_statistics_sync_behaviour">同步行为</string>
     <string name="reader_statistics_settings_hint">可从阅读器菜单访问统计。</string>
+    <string name="statistics_overview_total_reading_time">总阅读时间</string>
+    <string name="statistics_overview_always_on">每本书和漫画的阅读时间都会自动记录。</string>
+    <string name="statistics_overview_per_book">每本书的时间</string>
+    <string name="statistics_overview_empty">尚未记录阅读时间。</string>
+    <string name="statistics_overview_loading">正在加载统计…</string>
+    <string name="statistics_overview_last_read_format">上次阅读 %1$s</string>
+    <plurals name="statistics_overview_pages_read">
+        <item quantity="one">已读 %1$d 页</item>
+        <item quantity="other">已读 %1$d 页</item>
+    </plurals>
+    <plurals name="statistics_overview_characters_read">
+        <item quantity="one">已读 %1$d 字符</item>
+        <item quantity="other">已读 %1$d 字符</item>
+    </plurals>
     <string name="reader_appearance_theme">主题</string>
     <string name="reader_appearance_text">文本</string>
     <string name="reader_appearance_layout">布局</string>
@@ -356,8 +367,6 @@
     <string name="backup_archiving">正在归档...</string>
     <string name="backup_restoring">正在恢复...</string>
     <string name="advanced_audio">音频</string>
-    <string name="advanced_statistics" comment="Advanced settings row label, intentionally matching reader statistics label.">统计</string>
-    <string name="advanced_statistics_subtitle">跟踪每本书的阅读时间、速度和已读字符数</string>
     <string name="advanced_sasayaki_audiobooks">有声书</string>
     <string name="advanced_sasayaki_subtitle">配合已匹配的有声书字幕阅读</string>
     <string name="advanced_ttu_sync">ッツ 同步</string>
@@ -594,7 +603,6 @@
     <string name="manga_statistics_title">漫画统计</string>
     <string name="manga_statistics_page_of_format">第 %1$d 页，共 %2$d 页</string>
     <string name="manga_statistics_loading">正在加载统计...</string>
-    <string name="manga_statistics_off">统计已关闭。</string>
     <string name="manga_statistics_pages_remaining">剩余页数</string>
     <string name="manga_statistics_time_to_finish">读完还需</string>
     <string name="manga_statistics_pages_read">已读页数</string>

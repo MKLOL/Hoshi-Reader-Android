@@ -39,8 +39,6 @@ class ReaderSettingsRepositoryTest {
             assertFalse(settings.hideFurigana)
             assertFalse(settings.continuousMode)
             assertFalse(settings.blurImages)
-            assertFalse(settings.enableStatistics)
-            assertEquals(StatisticsAutostartMode.Off, settings.statisticsAutostartMode)
             assertFalse(settings.showStatisticsToggle)
             assertFalse(settings.showReadingSpeed)
             assertFalse(settings.showReadingTime)
@@ -143,8 +141,6 @@ class ReaderSettingsRepositoryTest {
                     hideFurigana = true,
                     continuousMode = true,
                     blurImages = true,
-                    enableStatistics = true,
-                    statisticsAutostartMode = StatisticsAutostartMode.PageTurn,
                     showStatisticsToggle = true,
                     showReadingSpeed = true,
                     showReadingTime = true,
@@ -193,8 +189,6 @@ class ReaderSettingsRepositoryTest {
             assertTrue(saved.hideFurigana)
             assertTrue(saved.continuousMode)
             assertTrue(saved.blurImages)
-            assertTrue(saved.enableStatistics)
-            assertEquals(StatisticsAutostartMode.PageTurn, saved.statisticsAutostartMode)
             assertTrue(saved.showStatisticsToggle)
             assertTrue(saved.showReadingSpeed)
             assertTrue(saved.showReadingTime)
@@ -224,27 +218,6 @@ class ReaderSettingsRepositoryTest {
             assertTrue(saved.volumeKeysSeekSasayaki)
             assertTrue(saved.reverseVolumeKeyDirection)
             assertTrue(saved.keepScreenOnWhileReading)
-        }
-    }
-
-    @Test
-    fun falseToTrueStatisticsRepositoryUpdateEnablesDisplayControls() = runBlocking {
-        repository().use { repository ->
-            repository.update {
-                it.copy(
-                    enableStatistics = true,
-                    showStatisticsToggle = false,
-                    showReadingSpeed = false,
-                    showReadingTime = false,
-                )
-            }
-
-            val saved = repository.settings.first()
-
-            assertTrue(saved.enableStatistics)
-            assertTrue(saved.showStatisticsToggle)
-            assertTrue(saved.showReadingSpeed)
-            assertTrue(saved.showReadingTime)
         }
     }
 

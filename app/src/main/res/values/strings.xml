@@ -71,6 +71,7 @@
     <string name="ai_translation_epub_pretranslated_debug">Offline EPUB pre-translation</string>
     <string name="settings_appearance">Appearance</string>
     <string name="settings_behavior">Behavior</string>
+    <string name="settings_statistics">Statistics</string>
     <string name="settings_advanced">Advanced</string>
     <string name="settings_report_issue">Report an Issue</string>
     <string name="settings_diagnostics">Diagnostics</string>
@@ -215,7 +216,7 @@
     <string name="reader_image_save_failed">Could not save image.</string>
     <string name="reader_chapters">Chapters</string>
     <string name="reader_highlights">Highlights</string>
-    <string name="reader_statistics" comment="Reader menu label, intentionally matching advanced statistics.">Statistics</string>
+    <string name="reader_statistics" comment="Reader menu label, intentionally matching the Settings statistics page.">Statistics</string>
     <string name="reader_untitled_chapter">Untitled</string>
     <string name="reader_jump_to_character">Jump to Character</string>
     <string name="reader_character">Character</string>
@@ -231,12 +232,22 @@
     <string name="reader_statistics_characters_read">Characters Read:</string>
     <string name="reader_statistics_reading_speed">Reading Speed:</string>
     <string name="reader_statistics_reading_time">Reading Time:</string>
-    <string name="reader_statistics_autostart">Autostart</string>
-    <string name="reader_statistics_autostart_off">Off</string>
-    <string name="reader_statistics_autostart_page_turn">Page Turn</string>
-    <string name="reader_statistics_autostart_on">On</string>
     <string name="reader_statistics_sync_behaviour">Sync Behaviour</string>
     <string name="reader_statistics_settings_hint">Statistics can be accessed from the Reader\'s context menu.</string>
+    <string name="statistics_overview_total_reading_time">Total reading time</string>
+    <string name="statistics_overview_always_on">Reading time is tracked automatically for every book and manga.</string>
+    <string name="statistics_overview_per_book">Time per book</string>
+    <string name="statistics_overview_empty">No reading time recorded yet.</string>
+    <string name="statistics_overview_loading">Loading statistics…</string>
+    <string name="statistics_overview_last_read_format">Last read %1$s</string>
+    <plurals name="statistics_overview_pages_read">
+        <item quantity="one">%1$d page read</item>
+        <item quantity="other">%1$d pages read</item>
+    </plurals>
+    <plurals name="statistics_overview_characters_read">
+        <item quantity="one">%1$d character read</item>
+        <item quantity="other">%1$d characters read</item>
+    </plurals>
     <string name="reader_appearance_theme">Theme</string>
     <string name="reader_appearance_text">Text</string>
     <string name="reader_appearance_layout">Layout</string>
@@ -358,8 +369,6 @@
     <string name="backup_archiving">Archiving...</string>
     <string name="backup_restoring">Restoring...</string>
     <string name="advanced_audio">Audio</string>
-    <string name="advanced_statistics" comment="Advanced settings row label, intentionally matching reader statistics label.">Statistics</string>
-    <string name="advanced_statistics_subtitle">Track per-book reading time, speed, and progress</string>
     <string name="advanced_sasayaki_audiobooks">Sasayaki (Audiobooks)</string>
     <string name="advanced_sasayaki_subtitle">Read along with matched audiobook subtitles</string>
     <string name="advanced_ttu_sync">ッツ Sync</string>
@@ -596,7 +605,6 @@
     <string name="manga_statistics_title">Manga Statistics</string>
     <string name="manga_statistics_page_of_format">Page %1$d of %2$d</string>
     <string name="manga_statistics_loading">Loading statistics...</string>
-    <string name="manga_statistics_off">Statistics are off.</string>
     <string name="manga_statistics_pages_remaining">Pages Remaining</string>
     <string name="manga_statistics_time_to_finish">Time to Finish</string>
     <string name="manga_statistics_pages_read">Pages Read</string>

@@ -44,6 +44,7 @@ import moe.antimony.hoshi.features.reader.ReaderAppearanceScreen
 import moe.antimony.hoshi.features.reader.ReaderBehaviorScreen
 import moe.antimony.hoshi.features.reader.ReaderFontManager
 import moe.antimony.hoshi.features.reader.ReaderSettings
+import moe.antimony.hoshi.features.reader.ReaderStatisticsSettingsView
 import moe.antimony.hoshi.features.reader.sentence.SentenceReaderScreen
 import moe.antimony.hoshi.features.sasayaki.SasayakiMatchView
 import moe.antimony.hoshi.features.sasayaki.SasayakiSettings
@@ -412,6 +413,12 @@ private fun SettingsDetailDestination(
             onClose = onClose,
             modifier = Modifier.fillMaxSize(),
         )
+        SettingsDetailSection.Statistics -> ReaderStatisticsSettingsView(
+            settings = readerSettings,
+            onSettingsChange = onReaderSettingsChange,
+            onClose = onClose,
+            modifier = Modifier.fillMaxSize(),
+        )
         SettingsDetailSection.Advanced -> AdvancedSettingsView(
             readerSettings = readerSettings,
             onReaderSettingsChange = onReaderSettingsChange,
@@ -443,6 +450,7 @@ private fun SettingsDestination.toSection(): SettingsDetailSection = when (this)
     SettingsDestination.ChatGpt -> SettingsDetailSection.ChatGpt
     SettingsDestination.Appearance -> SettingsDetailSection.Appearance
     SettingsDestination.Behavior -> SettingsDetailSection.Behavior
+    SettingsDestination.Statistics -> SettingsDetailSection.Statistics
     SettingsDestination.Advanced -> SettingsDetailSection.Advanced
     SettingsDestination.Diagnostics -> SettingsDetailSection.Diagnostics
     SettingsDestination.About -> SettingsDetailSection.About

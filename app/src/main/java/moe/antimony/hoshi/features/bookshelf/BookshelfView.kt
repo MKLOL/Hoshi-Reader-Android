@@ -58,6 +58,7 @@ import androidx.compose.material.icons.rounded.Inventory2
 import androidx.compose.material.icons.rounded.Keyboard
 import androidx.compose.material.icons.rounded.Palette
 import androidx.compose.material.icons.rounded.RadioButtonUnchecked
+import androidx.compose.material.icons.rounded.QueryStats
 import androidx.compose.material.icons.rounded.ReportProblem
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.SmartToy
@@ -1839,6 +1840,7 @@ private fun SettingsGlyph(destination: SettingsDestination, color: Color, modifi
         SettingsDestination.ChatGpt -> Icons.Rounded.SmartToy
         SettingsDestination.Appearance -> Icons.Rounded.Palette
         SettingsDestination.Behavior -> Icons.Rounded.Keyboard
+        SettingsDestination.Statistics -> Icons.Rounded.QueryStats
         SettingsDestination.Advanced -> Icons.Rounded.Settings
         SettingsDestination.ReportIssue -> Icons.Rounded.ReportProblem
         SettingsDestination.Diagnostics -> Icons.Rounded.BugReport

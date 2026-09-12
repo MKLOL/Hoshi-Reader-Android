@@ -36,7 +36,6 @@ class ReaderChromeTest {
             statistics = ReaderStatisticsChromeState(readingSpeed = 3600, readingTimeSeconds = 65.0),
         ).statisticsText(
             ReaderSettings(
-                enableStatistics = true,
                 showReadingSpeed = true,
                 showReadingTime = true,
             ),
@@ -260,7 +259,6 @@ class ReaderChromeTest {
             ReaderSettings(
                 alwaysShowProgress = false,
                 showProgressTop = false,
-                enableStatistics = true,
                 showReadingSpeed = true,
                 showReadingTime = true,
             ),

@@ -8,20 +8,15 @@ import org.junit.Test
 
 class ReaderAppearanceSasayakiTest {
     @Test
-    fun appearanceShowsStatisticsRowsWhenStatisticsAreEnabled() {
+    fun appearanceAlwaysOffersTheStatisticsRows() {
         assertEquals(
             listOf(
                 ReaderAppearanceStatisticsRow.Toggle,
                 ReaderAppearanceStatisticsRow.ReadingSpeed,
                 ReaderAppearanceStatisticsRow.ReadingTime,
             ),
-            readerAppearanceStatisticsRows(ReaderSettings(enableStatistics = true)),
+            readerAppearanceStatisticsRows(),
         )
-    }
-
-    @Test
-    fun appearanceHidesStatisticsRowsWhenStatisticsAreDisabled() {
-        assertTrue(readerAppearanceStatisticsRows(ReaderSettings(enableStatistics = false)).isEmpty())
     }
 
     @Test

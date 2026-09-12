@@ -55,6 +55,7 @@ enum class SettingsDetailSection {
     ChatGpt,
     Appearance,
     Behavior,
+    Statistics,
     Advanced,
     Diagnostics,
     About,

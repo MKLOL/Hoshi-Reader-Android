@@ -40,6 +40,7 @@ class MainShellUiTest {
                 R.string.settings_chatgpt,
                 R.string.settings_appearance,
                 R.string.settings_behavior,
+                R.string.settings_statistics,
                 R.string.settings_advanced,
             ),
             groups.first().map { it.labelRes },

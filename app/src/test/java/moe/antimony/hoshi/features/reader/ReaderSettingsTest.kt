@@ -29,55 +29,12 @@ class ReaderSettingsTest {
         assertEquals(0xFF999999L, settings.customInfoColor)
         assertFalse(settings.continuousMode)
         assertFalse(settings.blurImages)
-        assertFalse(settings.enableStatistics)
-        assertEquals(StatisticsAutostartMode.Off, settings.statisticsAutostartMode)
         assertFalse(settings.showStatisticsToggle)
         assertFalse(settings.showReadingSpeed)
         assertFalse(settings.showReadingTime)
         assertEquals(20, settings.chapterSwipeDistance)
         assertTrue(settings.popupSwipeToDismiss)
         assertEquals(30, settings.popupSwipeThreshold)
-    }
-
-    @Test
-    fun statisticsAutostartModesUseIosRawLabels() {
-        assertEquals("Off", StatisticsAutostartMode.Off.rawValue)
-        assertEquals("Page Turn", StatisticsAutostartMode.PageTurn.rawValue)
-        assertEquals("On", StatisticsAutostartMode.On.rawValue)
-    }
-
-    @Test
-    fun enablingStatisticsTurnsOnReaderDisplayStatisticsControls() {
-        val settings = ReaderSettings(
-            enableStatistics = false,
-            showStatisticsToggle = false,
-            showReadingSpeed = false,
-            showReadingTime = false,
-        )
-
-        val enabled = settings.withStatisticsEnabled(true)
-
-        assertTrue(enabled.enableStatistics)
-        assertTrue(enabled.showStatisticsToggle)
-        assertTrue(enabled.showReadingSpeed)
-        assertTrue(enabled.showReadingTime)
-    }
-
-    @Test
-    fun statisticsDisplayControlsRemainUserControlledAfterAlreadyEnabled() {
-        val settings = ReaderSettings(
-            enableStatistics = true,
-            showStatisticsToggle = false,
-            showReadingSpeed = false,
-            showReadingTime = false,
-        )
-
-        val enabled = settings.withStatisticsEnabled(true)
-
-        assertTrue(enabled.enableStatistics)
-        assertFalse(enabled.showStatisticsToggle)
-        assertFalse(enabled.showReadingSpeed)
-        assertFalse(enabled.showReadingTime)
     }
 
     @Test

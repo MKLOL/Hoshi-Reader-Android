@@ -50,10 +50,8 @@ class MangaStatisticsSheetInstrumentedTest {
                             lastReadingSpeed = 18,
                         ),
                     ),
-                    statisticsEnabled = true,
                     pageIndex = 2,
                     pageCount = 12,
-                    onEnableStatistics = {},
                     onToggleTracking = { toggleClicks += 1 },
                     onDismiss = {},
                 )
@@ -71,39 +69,13 @@ class MangaStatisticsSheetInstrumentedTest {
     }
 
     @Test
-    fun disabledSheetOffersEnableAction() {
-        var enableClicks = 0
-        composeRule.setContent {
-            MaterialTheme {
-                MangaStatisticsSheet(
-                    state = null,
-                    statisticsEnabled = false,
-                    pageIndex = 0,
-                    pageCount = 4,
-                    onEnableStatistics = { enableClicks += 1 },
-                    onToggleTracking = {},
-                    onDismiss = {},
-                )
-            }
-        }
-
-        composeRule.onNodeWithText("Statistics are off.").assertIsDisplayed()
-        composeRule.onNodeWithText("Enable").performClick()
-        composeRule.runOnIdle {
-            assertEquals(1, enableClicks)
-        }
-    }
-
-    @Test
     fun enabledSheetShowsLoadingStateBeforeStatisticsLoad() {
         composeRule.setContent {
             MaterialTheme {
                 MangaStatisticsSheet(
                     state = null,
-                    statisticsEnabled = true,
                     pageIndex = 0,
                     pageCount = 4,
-                    onEnableStatistics = {},
                     onToggleTracking = {},
                     onDismiss = {},
                 )

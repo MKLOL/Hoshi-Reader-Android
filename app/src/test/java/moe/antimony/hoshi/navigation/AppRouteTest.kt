@@ -51,6 +51,7 @@ class AppRouteTest {
                 "ChatGpt",
                 "Appearance",
                 "Behavior",
+                "Statistics",
                 "Advanced",
                 "Diagnostics",
                 "About",

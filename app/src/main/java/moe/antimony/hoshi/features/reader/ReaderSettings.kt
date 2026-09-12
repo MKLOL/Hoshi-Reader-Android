@@ -35,8 +35,6 @@ data class ReaderSettings(
     val hideFurigana: Boolean = false,
     val showSentenceTranslations: Boolean = true,
     val continuousMode: Boolean = false,
-    val enableStatistics: Boolean = false,
-    val statisticsAutostartMode: StatisticsAutostartMode = StatisticsAutostartMode.Off,
     val statisticsSyncEnabled: Boolean = false,
     val statisticsSyncMode: StatisticsSyncMode = StatisticsSyncMode.Merge,
     val showStatisticsToggle: Boolean = false,
@@ -184,18 +182,6 @@ data class ReaderSettings(
             ReaderTheme.Custom -> customTextColor.toReaderCssColor(includeAlpha = true)
         }
     }
-
-    fun withStatisticsEnabled(enabled: Boolean): ReaderSettings {
-        if (enabled && !enableStatistics) {
-            return copy(
-                enableStatistics = true,
-                showStatisticsToggle = true,
-                showReadingSpeed = true,
-                showReadingTime = true,
-            )
-        }
-        return copy(enableStatistics = enabled)
-    }
 }
 
 enum class ReaderTheme(val label: String) {
@@ -220,17 +206,6 @@ enum class ReaderInterfaceTheme(val label: String) {
     companion object {
         fun fromStorage(value: String?): ReaderInterfaceTheme =
             entries.firstOrNull { it.label == value || it.name == value } ?: System
-    }
-}
-
-enum class StatisticsAutostartMode(val rawValue: String, @get:StringRes val labelRes: Int) {
-    Off("Off", R.string.reader_statistics_autostart_off),
-    PageTurn("Page Turn", R.string.reader_statistics_autostart_page_turn),
-    On("On", R.string.reader_statistics_autostart_on);
-
-    companion object {
-        fun fromRawValue(rawValue: String?): StatisticsAutostartMode =
-            entries.firstOrNull { it.rawValue == rawValue } ?: Off
     }
 }
 
@@ -278,10 +253,6 @@ class ReaderSettingsStore(context: Context) : ReaderSettingsLegacySource {
         hideFurigana = preferences.getBoolean("readerHideFurigana", false),
         showSentenceTranslations = preferences.getBoolean("readerShowSentenceTranslations", true),
         continuousMode = preferences.getBoolean("continuousMode", false),
-        enableStatistics = preferences.getBoolean("enableStatistics", false),
-        statisticsAutostartMode = StatisticsAutostartMode.fromRawValue(
-            preferences.getString("statisticsAutostartMode", null),
-        ),
         statisticsSyncEnabled = preferences.getBoolean("statisticsEnableSync", false),
         statisticsSyncMode = StatisticsSyncMode.fromRawValue(preferences.getString("statisticsSyncMode", null)),
         showStatisticsToggle = preferences.getBoolean("readerShowStatisticsToggle", false),
@@ -338,8 +309,6 @@ class ReaderSettingsStore(context: Context) : ReaderSettingsLegacySource {
             .putBoolean("readerHideFurigana", settings.hideFurigana)
             .putBoolean("readerShowSentenceTranslations", settings.showSentenceTranslations)
             .putBoolean("continuousMode", settings.continuousMode)
-            .putBoolean("enableStatistics", settings.enableStatistics)
-            .putString("statisticsAutostartMode", settings.statisticsAutostartMode.rawValue)
             .putBoolean("statisticsEnableSync", settings.statisticsSyncEnabled)
             .putString("statisticsSyncMode", settings.statisticsSyncMode.rawValue)
             .putBoolean("readerShowStatisticsToggle", settings.showStatisticsToggle)
@@ -401,7 +370,7 @@ class ReaderSettingsRepository(
         migrateLegacySettingsIfNeeded()
         dataStore.edit { preferences ->
             val current = preferences.toReaderSettings()
-            preferences.writeReaderSettings(transform(current).withStatisticsTransitionFrom(current))
+            preferences.writeReaderSettings(transform(current))
             preferences[KEY_MIGRATED_FROM_SHARED_PREFERENCES] = true
         }
     }
@@ -435,8 +404,6 @@ class ReaderSettingsRepository(
             hideFurigana = this[KEY_HIDE_FURIGANA] ?: false,
             showSentenceTranslations = this[KEY_SHOW_SENTENCE_TRANSLATIONS] ?: true,
             continuousMode = this[KEY_CONTINUOUS_MODE] ?: false,
-            enableStatistics = this[KEY_ENABLE_STATISTICS] ?: false,
-            statisticsAutostartMode = StatisticsAutostartMode.fromRawValue(this[KEY_STATISTICS_AUTOSTART_MODE]),
             statisticsSyncEnabled = this[KEY_STATISTICS_SYNC_ENABLED] ?: false,
             statisticsSyncMode = StatisticsSyncMode.fromRawValue(this[KEY_STATISTICS_SYNC_MODE]),
             showStatisticsToggle = this[KEY_SHOW_STATISTICS_TOGGLE] ?: false,
@@ -492,8 +459,6 @@ class ReaderSettingsRepository(
         this[KEY_HIDE_FURIGANA] = settings.hideFurigana
         this[KEY_SHOW_SENTENCE_TRANSLATIONS] = settings.showSentenceTranslations
         this[KEY_CONTINUOUS_MODE] = settings.continuousMode
-        this[KEY_ENABLE_STATISTICS] = settings.enableStatistics
-        this[KEY_STATISTICS_AUTOSTART_MODE] = settings.statisticsAutostartMode.rawValue
         this[KEY_STATISTICS_SYNC_ENABLED] = settings.statisticsSyncEnabled
         this[KEY_STATISTICS_SYNC_MODE] = settings.statisticsSyncMode.rawValue
         this[KEY_SHOW_STATISTICS_TOGGLE] = settings.showStatisticsToggle
@@ -554,8 +519,6 @@ class ReaderSettingsRepository(
         private val KEY_HIDE_FURIGANA = booleanPreferencesKey("readerHideFurigana")
         private val KEY_SHOW_SENTENCE_TRANSLATIONS = booleanPreferencesKey("readerShowSentenceTranslations")
         private val KEY_CONTINUOUS_MODE = booleanPreferencesKey("continuousMode")
-        private val KEY_ENABLE_STATISTICS = booleanPreferencesKey("enableStatistics")
-        private val KEY_STATISTICS_AUTOSTART_MODE = stringPreferencesKey("statisticsAutostartMode")
         private val KEY_STATISTICS_SYNC_ENABLED = booleanPreferencesKey("statisticsEnableSync")
         private val KEY_STATISTICS_SYNC_MODE = stringPreferencesKey("statisticsSyncMode")
         private val KEY_SHOW_STATISTICS_TOGGLE = booleanPreferencesKey("readerShowStatisticsToggle")
@@ -595,17 +558,6 @@ class ReaderSettingsRepository(
         private val KEY_MANGA_USE_NOTO_SANS_JP = booleanPreferencesKey("mangaUseNotoSansJp")
     }
 }
-
-private fun ReaderSettings.withStatisticsTransitionFrom(previous: ReaderSettings): ReaderSettings =
-    if (enableStatistics && !previous.enableStatistics) {
-        copy(
-            showStatisticsToggle = true,
-            showReadingSpeed = true,
-            showReadingTime = true,
-        )
-    } else {
-        this
-    }
 
 internal fun Double.cssNumber(): String =
     String.format(Locale.US, "%.1f", this)

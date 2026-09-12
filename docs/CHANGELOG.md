@@ -7,6 +7,12 @@ Semantic Versioning.
 
 ## [Unreleased]
 
+### Added
+- **A Statistics page in Settings.** See your total and today's reading time, and how long you have spent in each book and manga.
+
+### Changed
+- **Reading statistics are always on.** Every book and manga session is tracked automatically, so there is no Enable switch or Autostart option to set.
+
 ## [v0.11.10] - 2026-09-12
 
 ### Fixed

@@ -35,7 +35,6 @@ data class ReaderChromeState(
 
     fun statisticsText(settings: ReaderSettings): String {
         val statistics = statistics ?: return ""
-        if (!settings.enableStatistics) return ""
         val parts = mutableListOf<String>()
         if (settings.showReadingSpeed) {
             parts += "${statistics.readingSpeed} / h"

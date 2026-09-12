@@ -45,10 +45,8 @@ import kotlin.math.max
 @Composable
 internal fun MangaStatisticsSheet(
     state: ReaderStatisticsState?,
-    statisticsEnabled: Boolean,
     pageIndex: Int,
     pageCount: Int,
-    onEnableStatistics: () -> Unit,
     onToggleTracking: () -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -69,15 +67,11 @@ internal fun MangaStatisticsSheet(
                     pageIndex = pageIndex,
                     pageCount = pageCount,
                     isTracking = state?.isTracking == true,
-                    showToggle = statisticsEnabled && state != null,
+                    showToggle = state != null,
                     onToggleTracking = onToggleTracking,
                 )
             }
-            if (!statisticsEnabled) {
-                item {
-                    MangaStatisticsDisabledCard(onEnableStatistics = onEnableStatistics)
-                }
-            } else if (state == null) {
+            if (state == null) {
                 item {
                     MangaStatisticsLoadingCard()
                 }
@@ -202,30 +196,6 @@ private fun MangaStatisticsLoadingCard() {
     }
 }
 
-@Composable
-private fun MangaStatisticsDisabledCard(onEnableStatistics: () -> Unit) {
-    Surface(
-        modifier = Modifier.fillMaxWidth(),
-        shape = MaterialTheme.shapes.medium,
-        color = MaterialTheme.colorScheme.surface,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-        tonalElevation = 0.dp,
-    ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                text = stringResource(R.string.manga_statistics_off),
-                style = MaterialTheme.typography.bodyLarge,
-                modifier = Modifier.weight(1f),
-            )
-            Button(onClick = onEnableStatistics) {
-                Text(stringResource(R.string.action_enable))
-            }
-        }
-    }
-}
 
 @Composable
 private fun MangaStatisticsSection(

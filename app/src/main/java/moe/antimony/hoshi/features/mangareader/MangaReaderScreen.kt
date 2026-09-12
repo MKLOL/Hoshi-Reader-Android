@@ -135,7 +135,6 @@ import moe.antimony.hoshi.features.reader.ReaderHardwareKeyAction
 import moe.antimony.hoshi.features.reader.usesDarkInterface
 import moe.antimony.hoshi.features.reader.ReaderStatisticsTracker
 import moe.antimony.hoshi.features.sync.http.rememberHttpSyncReaderHooks
-import moe.antimony.hoshi.features.reader.StatisticsAutostartMode
 import moe.antimony.hoshi.mokuro.MokuroBook
 import java.io.ByteArrayOutputStream
 import java.io.File
@@ -250,41 +249,23 @@ internal fun MangaReaderScreen(
         withContext(Dispatchers.IO) { PretranslationStore.preload(bookRoot) }
     }
 
-    LaunchedEffect(bookRoot, readerSettings.enableStatistics) {
+    LaunchedEffect(bookRoot) {
         persistedStatistics = null
     }
-    LaunchedEffect(bookRoot, repository, readerSettings.enableStatistics) {
-        persistedStatistics = if (readerSettings.enableStatistics) {
-            repository.loadStatistics(bookRoot)
-        } else {
-            emptyList()
-        }
+    LaunchedEffect(bookRoot, repository) {
+        persistedStatistics = repository.loadStatistics(bookRoot)
     }
-    val statisticsTracker = remember(
-        bookRoot,
-        book.title,
-        readerSettings.enableStatistics,
-        persistedStatistics,
-    ) {
-        if (!readerSettings.enableStatistics) {
-            null
-        } else {
-            persistedStatistics?.let { statistics ->
-                ReaderStatisticsTracker(
-                    title = book.title,
-                    initialStatistics = statistics,
-                    enabled = true,
-                )
-            }
+    val statisticsTracker = remember(bookRoot, book.title, persistedStatistics) {
+        persistedStatistics?.let { statistics ->
+            ReaderStatisticsTracker(
+                title = book.title,
+                initialStatistics = statistics,
+                enabled = true,
+            )
         }
     }
     var statisticsState by remember(statisticsTracker) { mutableStateOf(statisticsTracker?.state) }
     var resumeStatisticsTrackingOnStart by remember(statisticsTracker) { mutableStateOf(false) }
-
-    fun enableStatisticsFromSheet() {
-        persistedStatistics = null
-        onReaderSettingsChange(readerSettings.withStatisticsEnabled(true))
-    }
 
     fun syncStatisticsState() {
         statisticsState = statisticsTracker?.state
@@ -317,13 +298,6 @@ internal fun MangaReaderScreen(
             }
         } else {
             tracker.start(currentPosition)
-            syncStatisticsState()
-        }
-    }
-
-    fun startStatisticsForPageTurnIfNeeded(fromCounter: Int) {
-        if (readerSettings.statisticsAutostartMode == StatisticsAutostartMode.PageTurn) {
-            statisticsTracker?.startForPageTurnIfNeeded(fromCounter)
             syncStatisticsState()
         }
     }
@@ -383,7 +357,6 @@ internal fun MangaReaderScreen(
         readyTransition = null
         val previousPageIndex = pageIndex
         val previousStatisticsCounter = statisticsPageCounter
-        startStatisticsForPageTurnIfNeeded(previousStatisticsCounter)
         statisticsPageCounter = mangaStatisticsCounterAfterPageChange(
             currentCounter = previousStatisticsCounter,
             fromPageIndex = previousPageIndex,
@@ -790,11 +763,10 @@ internal fun MangaReaderScreen(
         onReaderKeyEventHandlerChange { event -> currentKeyHandler.value(event) }
         onDispose { onReaderKeyEventHandlerChange(null) }
     }
-    LaunchedEffect(statisticsTracker, readerSettings.statisticsAutostartMode) {
-        if (readerSettings.enableStatistics && readerSettings.statisticsAutostartMode == StatisticsAutostartMode.On) {
-            statisticsTracker?.start(statisticsPageCounterState.intValue)
-            syncStatisticsState()
-        }
+    LaunchedEffect(statisticsTracker) {
+        // Statistics are always on: every opened manga starts a tracking session.
+        statisticsTracker?.start(statisticsPageCounterState.intValue)
+        syncStatisticsState()
     }
     LaunchedEffect(statisticsTracker, statisticsState?.isTracking) {
         val tracker = statisticsTracker ?: return@LaunchedEffect
@@ -1201,10 +1173,8 @@ internal fun MangaReaderScreen(
         if (showStatistics) {
             MangaStatisticsSheet(
                 state = statisticsState,
-                statisticsEnabled = readerSettings.enableStatistics,
                 pageIndex = pageIndex,
                 pageCount = pageCount,
-                onEnableStatistics = ::enableStatisticsFromSheet,
                 onToggleTracking = ::toggleStatisticsTracking,
                 onDismiss = { showStatistics = false },
             )

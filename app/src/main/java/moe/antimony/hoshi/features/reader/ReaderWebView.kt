@@ -414,19 +414,19 @@ fun ReaderWebView(
     var persistedStatistics by remember(bookRoot) {
         mutableStateOf<List<ReadingStatistics>?>(if (bookRoot == null) emptyList() else null)
     }
-    LaunchedEffect(bookRoot, bookRepository, effectiveSettings.enableStatistics) {
-        persistedStatistics = if (bookRoot != null && effectiveSettings.enableStatistics) {
+    LaunchedEffect(bookRoot, bookRepository) {
+        persistedStatistics = if (bookRoot != null) {
             bookRepository.loadStatistics(bookRoot)
         } else {
             emptyList()
         }
     }
-    val statisticsTracker = remember(bookRoot, book.title, effectiveSettings.enableStatistics, persistedStatistics) {
+    val statisticsTracker = remember(bookRoot, book.title, persistedStatistics) {
         persistedStatistics?.let { statistics ->
             ReaderStatisticsTracker(
                 title = book.title,
                 initialStatistics = statistics,
-                enabled = effectiveSettings.enableStatistics,
+                enabled = true,
             )
         }
     }
@@ -447,12 +447,6 @@ fun ReaderWebView(
     }
     fun syncStatisticsState() {
         statisticsState = statisticsTracker?.state
-    }
-    fun startStatisticsForProgressChangeIfNeeded() {
-        if (effectiveSettings.statisticsAutostartMode == StatisticsAutostartMode.PageTurn) {
-            statisticsTracker?.startForPageTurnIfNeeded(currentDisplayedCharacter())
-            syncStatisticsState()
-        }
     }
     fun recordStatisticsAtDisplayedPosition() {
         statisticsTracker?.update(currentDisplayedCharacter())
@@ -543,11 +537,10 @@ fun ReaderWebView(
         statisticsTracker?.start(currentDisplayedCharacter())
         syncStatisticsState()
     }
-    LaunchedEffect(statisticsTracker, effectiveSettings.statisticsAutostartMode) {
-        if (effectiveSettings.enableStatistics && effectiveSettings.statisticsAutostartMode == StatisticsAutostartMode.On) {
-            statisticsTracker?.start(currentDisplayedCharacter())
-            syncStatisticsState()
-        }
+    LaunchedEffect(statisticsTracker) {
+        // Statistics are always on: every opened book starts a tracking session.
+        statisticsTracker?.start(currentDisplayedCharacter())
+        syncStatisticsState()
     }
     LaunchedEffect(statisticsTracker, statisticsState?.isTracking) {
         val tracker = statisticsTracker ?: return@LaunchedEffect
@@ -699,7 +692,6 @@ fun ReaderWebView(
     }
     fun goToNextChapter(): Boolean {
         if (!stateHolder.canAcceptReaderNavigationInput()) return false
-        startStatisticsForProgressChangeIfNeeded()
         val next = stateHolder.goToNextChapter(book.chapters.lastIndex)
         if (next != null) {
             stateHolder.clearForwardHistoryAfterManualMovement()
@@ -711,7 +703,6 @@ fun ReaderWebView(
     }
     fun goToPreviousChapter(): Boolean {
         if (!stateHolder.canAcceptReaderNavigationInput()) return false
-        startStatisticsForProgressChangeIfNeeded()
         val previous = stateHolder.goToPreviousChapter()
         if (previous != null) {
             stateHolder.clearForwardHistoryAfterManualMovement()
@@ -723,7 +714,6 @@ fun ReaderWebView(
     }
     fun saveDisplayedProgress(progress: Double) {
         stateHolder.enterFocusModeForReaderInteraction()
-        startStatisticsForProgressChangeIfNeeded()
         val savedPosition = stateHolder.recordDisplayedProgress(progress)
         stateHolder.clearForwardHistoryAfterManualMovement()
         recordStatisticsAtDisplayedPosition()
@@ -731,19 +721,16 @@ fun ReaderWebView(
     }
     fun displayPagedTurnProgress(progress: Double) {
         stateHolder.enterFocusModeForReaderInteraction()
-        startStatisticsForProgressChangeIfNeeded()
         stateHolder.recordDisplayedProgress(progress)
         stateHolder.clearForwardHistoryAfterManualMovement()
         recordStatisticsAtDisplayedPosition()
     }
     fun displayContinuousScrollProgress(progress: Double, restoreEpoch: Int) {
-        startStatisticsForProgressChangeIfNeeded()
         stateHolder.recordContinuousScrollDisplayProgress(progress, restoreEpoch) ?: return
         stateHolder.clearForwardHistoryAfterManualMovement()
         recordStatisticsAtDisplayedPosition()
     }
     fun saveContinuousScrollProgress(progress: Double, restoreEpoch: Int) {
-        startStatisticsForProgressChangeIfNeeded()
         val savedPosition = stateHolder.recordContinuousScrollProgress(progress, restoreEpoch) ?: return
         stateHolder.clearForwardHistoryAfterManualMovement()
         recordStatisticsAtDisplayedPosition()
@@ -1065,7 +1052,6 @@ fun ReaderWebView(
             ReaderPaginationScripts.highlightSasayakiCueInvocation(cue.toCueRange(), reveal),
         ) { progressResult ->
             ReaderPaginationScripts.doubleResult(progressResult)?.let { progress ->
-                startStatisticsForProgressChangeIfNeeded()
                 val savedPosition = stateHolder.recordDisplayedProgress(progress)
                 recordStatisticsAtDisplayedPosition()
                 saveReaderPosition(savedPosition)
@@ -1302,7 +1288,7 @@ fun ReaderWebView(
         state = chromeState,
         settings = effectiveSettings,
         showSasayakiToggle = reserveSasayakiTopToggle || showSasayakiTopToggle,
-        showStatisticsToggle = effectiveSettings.enableStatistics && effectiveSettings.showStatisticsToggle,
+        showStatisticsToggle = effectiveSettings.showStatisticsToggle,
         focusMode = focusMode,
         topSystemInsetDp = stableStatusBarPadding.value.roundToInt().coerceAtLeast(0),
     )
@@ -1325,12 +1311,12 @@ fun ReaderWebView(
         chromeState,
         effectiveSettings,
         showSasayakiToggle = reserveSasayakiTopToggle || showSasayakiTopToggle,
-        showStatisticsToggle = effectiveSettings.enableStatistics && effectiveSettings.showStatisticsToggle,
+        showStatisticsToggle = effectiveSettings.showStatisticsToggle,
         focusMode = focusMode,
     )
     val chromeVisibility = readerChromeVisibility(
         focusMode = focusMode,
-        hasStatisticsToggle = effectiveSettings.enableStatistics && effectiveSettings.showStatisticsToggle,
+        hasStatisticsToggle = effectiveSettings.showStatisticsToggle,
         hasSasayakiToggle = onSasayakiTopToggle != null,
         hasBackJump = stateHolder.backTargetPosition != null,
         hasForwardJump = stateHolder.forwardTargetPosition != null,
@@ -1543,7 +1529,7 @@ fun ReaderWebView(
             state = chromeState,
             settings = effectiveSettings,
             colors = readerChromeColors(effectiveSettings, systemDarkTheme),
-            onStatisticsToggle = if (effectiveSettings.enableStatistics && effectiveSettings.showStatisticsToggle) {
+            onStatisticsToggle = if (effectiveSettings.showStatisticsToggle) {
                 ::toggleStatisticsTracking
             } else {
                 null
@@ -1601,11 +1587,7 @@ fun ReaderWebView(
             onChapters = stateHolder::openChaptersFromMenu,
             onHighlights = stateHolder::openHighlightsFromMenu,
             onAppearance = stateHolder::openAppearanceFromMenu,
-            onStatistics = if (effectiveSettings.enableStatistics) {
-                stateHolder::openStatisticsFromMenu
-            } else {
-                null
-            },
+            onStatistics = stateHolder::openStatisticsFromMenu,
             onSasayaki = if (sasayakiSettings.enabled && sasayakiMatchData != null) {
                 stateHolder::openSasayakiFromMenu
             } else {
