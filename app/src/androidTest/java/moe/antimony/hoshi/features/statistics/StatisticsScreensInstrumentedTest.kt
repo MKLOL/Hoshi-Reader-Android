@@ -123,7 +123,7 @@ class StatisticsScreensInstrumentedTest {
         val row = overview.books.single()
         composeRule.onAllNodes(hasScrollAction()).onFirst().performScrollToNode(hasText("All Time"))
         composeRule.onAllNodesWithText(formatDurationSeconds(row.totalSeconds))[0].assertIsDisplayed()
-        composeRule.onAllNodesWithText(row.pagesRead.toString())[0].assertIsDisplayed()
-        composeRule.onAllNodesWithText(row.charactersRead.toString())[0].assertIsDisplayed()
+        composeRule.onAllNodesWithText(formatStatisticsCount(row.pagesRead!!))[0].assertIsDisplayed()
+        composeRule.onAllNodesWithText("4,050")[0].assertIsDisplayed() // grouped like the Statistics screens
     }
 }

@@ -39,6 +39,7 @@ import moe.antimony.hoshi.features.reader.ReaderStatisticsState
 import moe.antimony.hoshi.features.reader.formatDurationSeconds
 import moe.antimony.hoshi.features.reader.readerSheetDensityMetrics
 import moe.antimony.hoshi.features.reader.readerSheetStyle
+import moe.antimony.hoshi.features.statistics.formatStatisticsCount
 import java.util.Locale
 import kotlin.math.max
 
@@ -239,13 +240,13 @@ private fun MangaStatisticsSection(
             }
             MangaStatisticRow(
                 stringResource(R.string.manga_statistics_pages_read),
-                statistic.charactersRead.toString(),
+                formatStatisticsCount(statistic.charactersRead),
             )
             if (charactersRead != null) {
                 MangaStatisticsDivider()
                 MangaStatisticRow(
                     stringResource(R.string.manga_statistics_characters_read),
-                    charactersRead.toString(),
+                    formatStatisticsCount(charactersRead),
                 )
             }
             MangaStatisticsDivider()

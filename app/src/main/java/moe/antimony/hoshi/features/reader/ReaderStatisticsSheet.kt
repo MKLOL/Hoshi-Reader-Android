@@ -185,7 +185,7 @@ internal fun formatDurationSeconds(seconds: Double): String {
     val minutes = (totalSeconds % 3600) / 60
     val remainingSeconds = totalSeconds % 60
     return when {
-        hours > 0 -> "${hours}h ${minutes}m ${remainingSeconds}s"
+        hours > 0 -> "${hours}h ${minutes}m"
         minutes > 0 -> "${minutes}m ${remainingSeconds}s"
         else -> "${remainingSeconds}s"
     }
