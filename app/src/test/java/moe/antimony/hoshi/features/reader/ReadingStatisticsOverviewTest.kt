@@ -2,6 +2,7 @@ package moe.antimony.hoshi.features.reader
 
 import moe.antimony.hoshi.epub.ContentType
 import moe.antimony.hoshi.epub.ReadingStatistics
+import moe.antimony.hoshi.mokuro.MangaTextStatistic
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -37,7 +38,11 @@ class ReadingStatisticsOverviewTest {
         assertEquals(listOf("b", "a"), overview.books.map { it.bookId })
         val manga = overview.books.first()
         assertEquals(1200.0, manga.totalSeconds, 0.0)
-        assertEquals(52, manga.unitsRead)
+        assertEquals(52, manga.pagesRead)
+        assertEquals(0, manga.charactersRead)
+        val epub = overview.books.last()
+        assertEquals(null, epub.pagesRead)
+        assertEquals(500, epub.charactersRead)
         assertEquals("2026-09-02", manga.lastReadDateKey)
         assertEquals(ContentType.Mokuro, manga.contentType)
         assertEquals(1260.0, overview.totalSeconds, 0.0)
@@ -88,7 +93,7 @@ class ReadingStatisticsOverviewTest {
 
         val summary = overview.books.single()
         assertEquals(250.0, summary.totalSeconds, 0.0)
-        assertEquals(25, summary.unitsRead)
+        assertEquals(25, summary.charactersRead)
         assertEquals(250.0, overview.todaySeconds, 0.0)
     }
 
@@ -106,11 +111,35 @@ class ReadingStatisticsOverviewTest {
     }
 
     @Test
+    fun mangaCharactersComeFromTheTextSidecarAndCountTowardsTotals() {
+        val manga = BookStatisticsInput(
+            bookId = "m", title = "Manga", contentType = ContentType.Mokuro,
+            statistics = listOf(day("2026-09-12", 120.0, units = 3), day("2026-09-10", 60.0, units = 9)),
+            mangaTextStatistics = listOf(
+                MangaTextStatistic("2026-09-12", 450, lastModified = 1),
+                MangaTextStatistic("2026-09-10", 1_200, lastModified = 1),
+            ),
+        )
+        val epub = book("e", "Book", ContentType.Epub, day("2026-09-12", 30.0, units = 800))
+
+        val overview = summarizeReadingStatistics(listOf(manga, epub), todayKey = "2026-09-12")
+
+        val mangaSummary = overview.books.first { it.bookId == "m" }
+        assertEquals(12, mangaSummary.pagesRead)
+        assertEquals(1_650, mangaSummary.charactersRead)
+        assertEquals(2_450, overview.totalCharacters)
+        assertEquals(1_250, overview.todayCharacters)
+        assertEquals(150.0, overview.todaySeconds, 0.0)
+    }
+
+    @Test
     fun emptyLibraryProducesAnEmptyOverview() {
         val overview = summarizeReadingStatistics(emptyList(), todayKey = "2026-09-12")
 
         assertTrue(overview.books.isEmpty())
         assertEquals(0.0, overview.totalSeconds, 0.0)
+        assertEquals(0, overview.totalCharacters)
+        assertEquals(0, overview.todayCharacters)
         assertNull(overview.books.firstOrNull())
     }
 }

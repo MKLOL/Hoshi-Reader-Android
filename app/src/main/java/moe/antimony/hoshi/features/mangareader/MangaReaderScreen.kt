@@ -135,7 +135,9 @@ import moe.antimony.hoshi.features.reader.ReaderHardwareKeyAction
 import moe.antimony.hoshi.features.reader.usesDarkInterface
 import moe.antimony.hoshi.features.reader.ReaderStatisticsTracker
 import moe.antimony.hoshi.features.sync.http.rememberHttpSyncReaderHooks
+import moe.antimony.hoshi.mokuro.MangaTextStatistic
 import moe.antimony.hoshi.mokuro.MokuroBook
+import moe.antimony.hoshi.mokuro.ocrCharactersTurnedPast
 import java.io.ByteArrayOutputStream
 import java.io.File
 import kotlin.coroutines.resume
@@ -242,6 +244,7 @@ internal fun MangaReaderScreen(
     val pageRenderCache = remember(book) { MangaPageRenderCache() }
 
     var persistedStatistics by remember(bookRoot) { mutableStateOf<List<ReadingStatistics>?>(null) }
+    var persistedTextStatistics by remember(bookRoot) { mutableStateOf<List<MangaTextStatistic>?>(null) }
     // Parse the offline translation blob off the main thread. `serveOfflinePretranslation` is
     // called synchronously from the bubble-tap handler, and a multi-MB blob parsed there would
     // freeze the reader on the first tap of a book.
@@ -251,9 +254,11 @@ internal fun MangaReaderScreen(
 
     LaunchedEffect(bookRoot) {
         persistedStatistics = null
+        persistedTextStatistics = null
     }
     LaunchedEffect(bookRoot, repository) {
         persistedStatistics = repository.loadStatistics(bookRoot)
+        persistedTextStatistics = repository.loadMangaTextStatistics(bookRoot)
     }
     val statisticsTracker = remember(bookRoot, book.title, persistedStatistics) {
         persistedStatistics?.let { statistics ->
@@ -266,10 +271,18 @@ internal fun MangaReaderScreen(
     }
     var statisticsState by remember(statisticsTracker) { mutableStateOf(statisticsTracker?.state) }
     var resumeStatisticsTrackingOnStart by remember(statisticsTracker) { mutableStateOf(false) }
+    // OCR characters read, kept next to the page counter above (see MangaTextReadCounter).
+    val textReadCounter = remember(bookRoot, persistedTextStatistics) {
+        persistedTextStatistics?.let { MangaTextReadCounter(initialStatistics = it) }
+    }
+    var textReadState by remember(textReadCounter) { mutableStateOf(textReadCounter?.state) }
 
     fun syncStatisticsState() {
         statisticsState = statisticsTracker?.state
+        textReadState = textReadCounter?.state
     }
+
+    fun textStatisticsForSave(): List<MangaTextStatistic>? = textReadCounter?.statisticsForPersistenceOrNull()
 
     fun recordStatisticsAtCounter(counter: Int) {
         statisticsTracker?.update(counter)
@@ -291,9 +304,15 @@ internal fun MangaReaderScreen(
             tracker.stop(currentPosition)
             syncStatisticsState()
             val statistics = tracker.statisticsForPersistenceOrNull()
-            if (statistics != null) {
+            val textStatistics = textStatisticsForSave()
+            if (statistics != null || textStatistics != null) {
                 persistenceScope.launch {
-                    repository.saveStatistics(bookRoot, statistics)
+                    if (statistics != null) {
+                        repository.saveStatistics(bookRoot, statistics)
+                    }
+                    if (textStatistics != null) {
+                        repository.saveMangaTextStatistics(bookRoot, textStatistics)
+                    }
                 }
             }
         } else {
@@ -304,6 +323,9 @@ internal fun MangaReaderScreen(
 
     val currentStatisticsForDispose = rememberUpdatedState<(Boolean) -> List<ReadingStatistics>?> { syncState ->
         statisticsForSave(counter = statisticsPageCounterState.intValue, syncState = syncState)
+    }
+    val currentTextStatisticsForDispose = rememberUpdatedState<() -> List<MangaTextStatistic>?> {
+        textStatisticsForSave()
     }
 
     fun scheduleBookmarkSave(index: Int) {
@@ -317,6 +339,9 @@ internal fun MangaReaderScreen(
             )
             statisticsForSave(statisticsPageCounter)?.let { statistics ->
                 repository.saveStatistics(bookRoot, statistics)
+            }
+            textStatisticsForSave()?.let { statistics ->
+                repository.saveMangaTextStatistics(bookRoot, statistics)
             }
             pendingBookmarkPage.value = null
             currentOnBookmarkSaved.value()
@@ -362,6 +387,7 @@ internal fun MangaReaderScreen(
             fromPageIndex = previousPageIndex,
             toPageIndex = clamped,
         )
+        textReadCounter?.add(book.ocrCharactersTurnedPast(previousPageIndex, clamped))
         pageIndex = clamped
         recordStatisticsAtCounter(statisticsPageCounter)
         scheduleBookmarkSave(clamped)
@@ -790,9 +816,15 @@ internal fun MangaReaderScreen(
                             syncStatisticsState()
                         }
                         val statistics = tracker.statisticsForPersistenceOrNull()
-                        if (statistics != null) {
+                        val textStatistics = textStatisticsForSave()
+                        if (statistics != null || textStatistics != null) {
                             persistenceScope.launch {
-                                repository.saveStatistics(bookRoot, statistics)
+                                if (statistics != null) {
+                                    repository.saveStatistics(bookRoot, statistics)
+                                }
+                                if (textStatistics != null) {
+                                    repository.saveMangaTextStatistics(bookRoot, textStatistics)
+                                }
                             }
                         }
                     }
@@ -853,6 +885,7 @@ internal fun MangaReaderScreen(
             lookupSelectionJob?.cancel()
             val unsaved = pendingBookmarkPage.value
             val statistics = currentStatisticsForDispose.value(false)
+            val textStatistics = currentTextStatisticsForDispose.value()
             if (unsaved != null) {
                 pendingBookmarkPage.value = null
                 persistenceScope.launch {
@@ -863,13 +896,21 @@ internal fun MangaReaderScreen(
                     if (statistics != null) {
                         repository.saveStatistics(bookRoot, statistics)
                     }
+                    if (textStatistics != null) {
+                        repository.saveMangaTextStatistics(bookRoot, textStatistics)
+                    }
                     // onLeave queues this just-saved final position before flushing the map.
                     httpSyncHooks.onLeave()
                 }
             } else {
-                if (statistics != null) {
+                if (statistics != null || textStatistics != null) {
                     persistenceScope.launch {
-                        repository.saveStatistics(bookRoot, statistics)
+                        if (statistics != null) {
+                            repository.saveStatistics(bookRoot, statistics)
+                        }
+                        if (textStatistics != null) {
+                            repository.saveMangaTextStatistics(bookRoot, textStatistics)
+                        }
                     }
                 }
                 // No pending debounced save, but we may still have unpushed turns from
@@ -1173,6 +1214,7 @@ internal fun MangaReaderScreen(
         if (showStatistics) {
             MangaStatisticsSheet(
                 state = statisticsState,
+                textState = textReadState,
                 pageIndex = pageIndex,
                 pageCount = pageCount,
                 onToggleTracking = ::toggleStatisticsTracking,

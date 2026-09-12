@@ -32,12 +32,12 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import moe.antimony.hoshi.LocalHoshiAppContainer
 import moe.antimony.hoshi.R
-import moe.antimony.hoshi.epub.ContentType
 import moe.antimony.hoshi.features.settings.GroupCard
 import moe.antimony.hoshi.features.settings.GroupDivider
 import moe.antimony.hoshi.features.settings.SettingsDetailScaffold
 import moe.antimony.hoshi.features.settings.collectAsLoadedSettings
 import moe.antimony.hoshi.features.sync.StatisticsSyncMode
+import java.text.NumberFormat
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle
@@ -90,8 +90,18 @@ fun ReaderStatisticsSettingsView(
                     )
                     GroupDivider()
                     StatisticsTotalRow(
+                        label = stringResource(R.string.statistics_overview_characters_total),
+                        value = overview?.let { formatCount(it.totalCharacters) },
+                    )
+                    GroupDivider()
+                    StatisticsTotalRow(
                         label = stringResource(R.string.reader_statistics_today),
                         value = overview?.let { formatDurationSeconds(it.todaySeconds) },
+                    )
+                    GroupDivider()
+                    StatisticsTotalRow(
+                        label = stringResource(R.string.statistics_overview_characters_today),
+                        value = overview?.let { formatCount(it.todayCharacters) },
                     )
                 }
                 Text(
@@ -207,17 +217,21 @@ private fun StatisticsMessageRow(message: String) {
 
 @Composable
 private fun BookReadingTimeRow(book: BookReadingSummary) {
-    val unitsRead = when (book.contentType) {
-        ContentType.Mokuro -> pluralStringResource(R.plurals.statistics_overview_pages_read, book.unitsRead, book.unitsRead)
-        ContentType.Epub -> pluralStringResource(R.plurals.statistics_overview_characters_read, book.unitsRead, book.unitsRead)
+    val pagesRead = book.pagesRead?.let { pages ->
+        pluralStringResource(R.plurals.statistics_overview_pages_read, pages, formatCount(pages))
     }
+    val charactersRead = pluralStringResource(
+        R.plurals.statistics_overview_characters_read,
+        book.charactersRead,
+        formatCount(book.charactersRead),
+    )
     val lastRead = book.lastReadDateKey?.let { dateKey ->
         stringResource(R.string.statistics_overview_last_read_format, formatStatisticsDate(dateKey))
     }
     ListItem(
         colors = ListItemDefaults.colors(containerColor = Color.Transparent),
         headlineContent = { Text(text = book.title, maxLines = 2, overflow = TextOverflow.Ellipsis) },
-        supportingContent = { Text(listOfNotNull(unitsRead, lastRead).joinToString(" · ")) },
+        supportingContent = { Text(listOfNotNull(pagesRead, charactersRead, lastRead).joinToString(" · ")) },
         trailingContent = {
             Text(
                 text = formatDurationSeconds(book.totalSeconds),
@@ -227,6 +241,8 @@ private fun BookReadingTimeRow(book: BookReadingSummary) {
         },
     )
 }
+
+private fun formatCount(value: Int): String = NumberFormat.getIntegerInstance().format(value)
 
 private fun formatStatisticsDate(dateKey: String): String =
     runCatching { LocalDate.parse(dateKey).format(DateTimeFormatter.ofLocalizedDate(FormatStyle.MEDIUM)) }

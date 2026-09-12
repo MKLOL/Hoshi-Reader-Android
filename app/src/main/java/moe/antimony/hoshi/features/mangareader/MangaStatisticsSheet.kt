@@ -45,6 +45,7 @@ import kotlin.math.max
 @Composable
 internal fun MangaStatisticsSheet(
     state: ReaderStatisticsState?,
+    textState: MangaTextReadState?,
     pageIndex: Int,
     pageCount: Int,
     onToggleTracking: () -> Unit,
@@ -81,6 +82,7 @@ internal fun MangaStatisticsSheet(
                         title = stringResource(R.string.reader_statistics_session),
                         icon = Icons.Rounded.Timer,
                         statistic = state.session,
+                        charactersRead = textState?.sessionCharacters,
                         accentColor = MaterialTheme.colorScheme.primary,
                         extraRows = listOf(
                             stringResource(R.string.manga_statistics_pages_remaining) to
@@ -100,6 +102,7 @@ internal fun MangaStatisticsSheet(
                         title = stringResource(R.string.reader_statistics_today),
                         icon = Icons.Rounded.QueryStats,
                         statistic = state.today,
+                        charactersRead = textState?.todayCharacters,
                         accentColor = MaterialTheme.colorScheme.tertiary,
                     )
                 }
@@ -108,6 +111,7 @@ internal fun MangaStatisticsSheet(
                         title = stringResource(R.string.reader_statistics_all_time),
                         icon = Icons.Rounded.QueryStats,
                         statistic = state.allTime,
+                        charactersRead = textState?.allTimeCharacters,
                         accentColor = MaterialTheme.colorScheme.secondary,
                     )
                 }
@@ -203,6 +207,7 @@ private fun MangaStatisticsSection(
     icon: ImageVector,
     statistic: ReadingStatistics,
     accentColor: Color,
+    charactersRead: Int? = null,
     extraRows: List<Pair<String, String>> = emptyList(),
 ) {
     val metrics = readerSheetDensityMetrics()
@@ -236,6 +241,13 @@ private fun MangaStatisticsSection(
                 stringResource(R.string.manga_statistics_pages_read),
                 statistic.charactersRead.toString(),
             )
+            if (charactersRead != null) {
+                MangaStatisticsDivider()
+                MangaStatisticRow(
+                    stringResource(R.string.manga_statistics_characters_read),
+                    charactersRead.toString(),
+                )
+            }
             MangaStatisticsDivider()
             MangaStatisticRow(
                 stringResource(R.string.manga_statistics_pace),

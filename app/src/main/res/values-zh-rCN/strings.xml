@@ -238,13 +238,15 @@
     <string name="statistics_overview_empty">尚未记录阅读时间。</string>
     <string name="statistics_overview_loading">正在加载统计…</string>
     <string name="statistics_overview_last_read_format">上次阅读 %1$s</string>
+    <string name="statistics_overview_characters_total">已读字符</string>
+    <string name="statistics_overview_characters_today">今天已读字符</string>
     <plurals name="statistics_overview_pages_read">
-        <item quantity="one">已读 %1$d 页</item>
-        <item quantity="other">已读 %1$d 页</item>
+        <item quantity="one">已读 %1$s 页</item>
+        <item quantity="other">已读 %1$s 页</item>
     </plurals>
     <plurals name="statistics_overview_characters_read">
-        <item quantity="one">已读 %1$d 字符</item>
-        <item quantity="other">已读 %1$d 字符</item>
+        <item quantity="one">已读 %1$s 字符</item>
+        <item quantity="other">已读 %1$s 字符</item>
     </plurals>
     <string name="reader_appearance_theme">主题</string>
     <string name="reader_appearance_text">文本</string>
@@ -608,6 +610,7 @@
     <string name="manga_statistics_pages_read">已读页数</string>
     <string name="manga_statistics_pace">速度</string>
     <string name="manga_statistics_reading_time">阅读时间</string>
+    <string name="manga_statistics_characters_read">已读字符</string>
     <!-- Manga screenshot crop overlay + clipboard (features/mangareader) -->
     <string name="manga_screenshot_translate">翻译</string>
     <string name="manga_clipboard_bubble_copied">已复制气泡文本</string>

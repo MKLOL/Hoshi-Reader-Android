@@ -9,6 +9,8 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.builtins.ListSerializer
+import moe.antimony.hoshi.mokuro.MangaTextStatistic
+import moe.antimony.hoshi.mokuro.deduplicateMangaTextStatistics
 import kotlinx.serialization.json.Json
 import moe.antimony.hoshi.features.sync.http.HttpSyncActiveBooks
 import moe.antimony.hoshi.features.sync.http.HttpSyncBookLocks
@@ -151,6 +153,13 @@ class BookRepository(
 
     override suspend fun saveStatistics(bookRoot: File, statistics: List<ReadingStatistics>) {
         sidecarDataSource.saveStatistics(bookRoot, statistics)
+    }
+
+    suspend fun loadMangaTextStatistics(bookRoot: File): List<MangaTextStatistic> =
+        sidecarDataSource.loadMangaTextStatistics(bookRoot).orEmpty()
+
+    suspend fun saveMangaTextStatistics(bookRoot: File, statistics: List<MangaTextStatistic>) {
+        sidecarDataSource.saveMangaTextStatistics(bookRoot, statistics)
     }
 
     suspend fun loadHighlights(bookRoot: File): List<ReaderHighlight> =
@@ -534,6 +543,19 @@ class BookSidecarDataSource(
         )
     }
 
+    suspend fun loadMangaTextStatistics(bookRoot: File): List<MangaTextStatistic>? =
+        loadJson(ListSerializer(MangaTextStatistic.serializer()), bookRoot.resolve(MANGA_STATISTICS_FILE_NAME))
+            ?.deduplicateMangaTextStatistics()
+
+    suspend fun saveMangaTextStatistics(bookRoot: File, statistics: List<MangaTextStatistic>) {
+        saveJson(
+            bookRoot,
+            MANGA_STATISTICS_FILE_NAME,
+            ListSerializer(MangaTextStatistic.serializer()),
+            statistics.deduplicateMangaTextStatistics(),
+        )
+    }
+
     suspend fun loadHighlights(bookRoot: File): List<ReaderHighlight>? =
         loadJson(ListSerializer(ReaderHighlight.serializer()), bookRoot.resolve(HIGHLIGHTS_FILE_NAME))
 
@@ -620,6 +642,8 @@ object SystemBookClock : BookClock {
 private const val METADATA_FILE_NAME = "metadata.json"
 private const val BOOKMARK_FILE_NAME = "bookmark.json"
 private const val STATISTICS_FILE_NAME = "statistics.json"
+// Android-only per-day OCR character counts for manga; already in PAYLOAD_EXCLUDED_FILES.
+private const val MANGA_STATISTICS_FILE_NAME = "manga_statistics.json"
 private const val HIGHLIGHTS_FILE_NAME = "highlights.json"
 private const val BOOKINFO_FILE_NAME = "bookinfo.json"
 private const val SHELVES_FILE_NAME = "shelves.json"

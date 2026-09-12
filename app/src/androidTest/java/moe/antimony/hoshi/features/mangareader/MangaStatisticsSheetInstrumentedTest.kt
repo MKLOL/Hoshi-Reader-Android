@@ -50,6 +50,7 @@ class MangaStatisticsSheetInstrumentedTest {
                             lastReadingSpeed = 18,
                         ),
                     ),
+                    textState = MangaTextReadState(sessionCharacters = 321, todayCharacters = 654, allTimeCharacters = 987),
                     pageIndex = 2,
                     pageCount = 12,
                     onToggleTracking = { toggleClicks += 1 },
@@ -62,6 +63,8 @@ class MangaStatisticsSheetInstrumentedTest {
         composeRule.onNodeWithText("Page 3 of 12").assertIsDisplayed()
         composeRule.onAllNodesWithText("Pages Read")[0].assertIsDisplayed()
         composeRule.onAllNodesWithText("18 pages / h")[0].assertIsDisplayed()
+        composeRule.onAllNodesWithText("Characters Read")[0].assertIsDisplayed()
+        composeRule.onNodeWithText("321").assertIsDisplayed()
         composeRule.onNodeWithContentDescription("Start statistics").performClick()
         composeRule.runOnIdle {
             assertEquals(1, toggleClicks)
@@ -74,6 +77,7 @@ class MangaStatisticsSheetInstrumentedTest {
             MaterialTheme {
                 MangaStatisticsSheet(
                     state = null,
+                    textState = null,
                     pageIndex = 0,
                     pageCount = 4,
                     onToggleTracking = {},
