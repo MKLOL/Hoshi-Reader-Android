@@ -111,6 +111,7 @@ This file is the short operational handoff for future agents.
 - Preserve HTTP Sync per-key revision sidecars for bookmark/metadata edits; manual sync and auto-push paths must keep tombstones, shelf placement, imports, and bookmark writes revisioned so stale devices cannot overwrite newer remote state.
 - Keep never-moved unshelved metadata timestamp-free (`V3PlannerTest`). Keep the existing-KV logical two-map HTTP sync and durable five-second EPUB/manga bookmark outbox covered: unchanged libraries stay at one metadata GET, any number of dirty positions use one per-install shard PUT, concurrent devices cannot overwrite each other, and upgraded installs retain already-downloaded books after one content-hash computation.
 - Device-validate the first Android Google Drive sync slice with `testdata/test.epub` on a user-configured Device Code OAuth client from the same project as iOS/ッツ: connect/sign-out state, transient network backoff and another-device authorization guidance, long-press manual import/export result dialogs, reader-open import-only, iOS-aligned paginated/continuous auto-export timing, close/background flush export, statistics Merge/Replace, and Sasayaki last-position sync.
+- Investigate `CrossEngineIntegrationTest.shelfLwwBetweenV2AndV3PicksNewerSide`: it intermittently fails in the full JVM suite (Shelf A instead of B) while the isolated class passes.
 
 ### News
 
@@ -146,4 +147,4 @@ page images) that reuses the bookshelf, dictionary lookup, and Anki mining.
 
 ## Required Validation
 
-- Follow [Validation entry points](VALIDATION.md) for build/test/lint commands and regression matrices. Investigate `CrossEngineIntegrationTest.shelfLwwBetweenV2AndV3PicksNewerSide`: intermittently fails in the full JVM suite (Shelf A instead of B), while the isolated class passes; sync production code is unchanged by the manga/news fixes.
+- Follow [Validation entry points](VALIDATION.md) for build/test/lint commands, cross-platform sync checks, and the reader, theme, localization, audio, and device regression matrices.
