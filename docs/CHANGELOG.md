@@ -7,6 +7,13 @@ Semantic Versioning.
 
 ## [Unreleased]
 
+### Added
+- **A Statistics screen, one tap from Books.** The chart button in the Books bar (also Settings → Statistics) shows a reading streak against a daily goal you choose (5, 10, 15 or 30 minutes), total and today's reading time and characters, a 16-week reading heatmap, time by weekday, and every book with its cover. Tap a book for when you started it, last read it and finished it, your reading speed, time per page, best day and a day-by-day history.
+- **Reading statistics sync between devices.** HTTP sync now merges each book's per-day reading time and characters (and manga pages) across devices, so a manga read on the phone shows the same numbers on the tablet.
+
+### Fixed
+- **Statistics always reflect what you just read.** The Statistics page could keep showing an old total after more reading; it now reloads whenever statistics change. The EPUB reader also saves the time spent on the last page when you close or background it, and manga pages and characters no longer count while tracking is paused or when jumping with "Go to page".
+
 ## [v0.11.12] - 2026-09-12
 
 ### Added

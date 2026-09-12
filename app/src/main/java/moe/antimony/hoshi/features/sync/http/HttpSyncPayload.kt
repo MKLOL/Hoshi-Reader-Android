@@ -86,6 +86,7 @@ internal val PAYLOAD_EXCLUDED_FILES: Set<String> = setOf(
     "metadata.json",
     "statistics.json",
     "manga_statistics.json",
+    STATISTICS_SYNC_STATE_FILENAME, // per-device record of the last statistics exchange
     "sasayaki_match.json",
     "sasayaki_playback.json",
     "bookinfo.json",

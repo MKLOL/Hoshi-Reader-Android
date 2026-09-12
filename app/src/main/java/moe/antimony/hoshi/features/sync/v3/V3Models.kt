@@ -4,6 +4,7 @@ import moe.antimony.hoshi.epub.Bookmark
 import moe.antimony.hoshi.epub.ContentType
 import moe.antimony.hoshi.features.ai.AiChatEntry
 import moe.antimony.hoshi.features.ai.AiChatSettings
+import moe.antimony.hoshi.features.sync.http.StatisticsSyncKind
 import moe.antimony.hoshi.features.sync.http.HttpSyncAiChatSettingsBlob
 import moe.antimony.hoshi.features.sync.http.HttpSyncBookmarkBlob
 import moe.antimony.hoshi.features.sync.http.HttpSyncContentType
@@ -108,6 +109,11 @@ data class V3RemoteBook(
     /** `books/{syncId}/sentences`, when the server has EPUB sentence translations. */
     val sentencesKey: String? = null,
     val sentencesSize: Int? = null,
+    /** `books/{syncId}/statistics` and `books/{syncId}/manga_statistics`, with their listed sizes. */
+    val statisticsKey: String? = null,
+    val statisticsSize: Int? = null,
+    val mangaStatisticsKey: String? = null,
+    val mangaStatisticsSize: Int? = null,
     /**
      * Bug 5: per-field "remote returned bytes but they didn't decode" markers. The
      * decoded field (e.g. [metadata]) is left null on decode failure, but the planner
@@ -183,6 +189,17 @@ sealed interface V3Action {
         val expectedRemote: HttpSyncMetadataBlob? = null,
     ) : V3Action
     data class PushChat(val root: File, override val syncId: String, val entry: AiChatEntry, val key: String) : V3Action
+    /**
+     * Two-way, per-day merge of one statistics sidecar with the server; [remoteKey] and
+     * [remoteSize] are what the listing showed (null when the key is absent).
+     */
+    data class SyncStatistics(
+        val root: File,
+        override val syncId: String,
+        val kind: StatisticsSyncKind,
+        val remoteKey: String?,
+        val remoteSize: Int?,
+    ) : V3Action
     data class PushPayload(val root: File, override val syncId: String, val title: String, val format: HttpSyncContentType) : V3Action
     data class PushTombstone(override val syncId: String, val record: HttpSyncDeletedBookRecord) : V3Action
     data class PushAiSettings(val local: AiChatSettings) : V3Action {
@@ -219,6 +236,7 @@ data class V3SyncResult(
 
 data class V3AppliedCounts(
     val bookmarks: Int = 0,
+    val statistics: Int = 0,
     val chatEntries: Int = 0,
     val payloads: Int = 0,
     val sentenceTranslations: Int = 0,
@@ -226,18 +244,19 @@ data class V3AppliedCounts(
     val shelfPlacements: Int = 0,
     val aiSettings: Int = 0,
 ) {
-    val total: Int get() = bookmarks + chatEntries + payloads + sentenceTranslations + metadataDeletes + shelfPlacements + aiSettings
+    val total: Int get() = bookmarks + statistics + chatEntries + payloads + sentenceTranslations + metadataDeletes + shelfPlacements + aiSettings
 }
 
 data class V3PushedCounts(
     val bookmarks: Int = 0,
+    val statistics: Int = 0,
     val chatEntries: Int = 0,
     val metadata: Int = 0,
     val payloads: Int = 0,
     val tombstones: Int = 0,
     val aiSettings: Int = 0,
 ) {
-    val total: Int get() = bookmarks + chatEntries + metadata + payloads + tombstones + aiSettings
+    val total: Int get() = bookmarks + statistics + chatEntries + metadata + payloads + tombstones + aiSettings
 }
 
 data class V3Error(

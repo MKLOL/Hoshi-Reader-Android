@@ -60,6 +60,8 @@ class HttpSyncReaderHooks internal constructor(
     private val pushChatEntryWithSyncId: (suspend (String, AiChatEntry, HttpSyncSettings, String?) -> Unit)? = null,
     private val queueBookmark: (suspend (File, String, String?) -> Unit)? = null,
     private val flushQueuedBookmarks: (() -> Unit)? = null,
+    private val queueStatistics: ((File, String, String?) -> Unit)? = null,
+    private val flushStatistics: ((File, String, String?) -> Unit)? = null,
 ) {
     private var unpushedPageTurns: Int = 0
     private var consecutiveFailures: Int = 0
@@ -81,8 +83,18 @@ class HttpSyncReaderHooks internal constructor(
         }
     }
 
+    /** Call this after a statistics sidecar was written; the push is debounced per book. */
+    fun onStatisticsPersisted() {
+        if (!identityReady()) return
+        if (activeSettings() == null) return
+        queueStatistics?.invoke(bookRoot, title, persistedSyncIdProvider())
+    }
+
     /** Call this from the reader's `onDispose` after the local-side flush has been scheduled. */
     fun onLeave() {
+        if (identityReady() && activeSettings() != null) {
+            flushStatistics?.invoke(bookRoot, title, persistedSyncIdProvider())
+        }
         if (queueBookmark != null) {
             // Queue the bookmark in the same coroutine before starting the network flush. This
             // includes a final debounced save that completed during disposal and avoids a race
@@ -212,6 +224,7 @@ fun rememberHttpSyncReaderHooks(
     val appContainer = LocalHoshiAppContainer.current
     val pusher = appContainer.httpSyncPusher
     val bookmarkScheduler = appContainer.httpSyncBookmarkScheduler
+    val statisticsScheduler = appContainer.httpSyncStatisticsPushScheduler
     val manualSyncSuccessAt = appContainer.httpSyncManualSyncSuccessAt
     val settings by appContainer.httpSyncSettingsRepository.settings.collectAsState(initial = null)
     val settingsRef = rememberUpdatedState(settings)
@@ -242,6 +255,8 @@ fun rememberHttpSyncReaderHooks(
             pushChatEntryWithSyncId = pusher::pushChatEntry,
             queueBookmark = bookmarkScheduler::onBookmarkChanged,
             flushQueuedBookmarks = bookmarkScheduler::flushNow,
+            queueStatistics = statisticsScheduler::onStatisticsChanged,
+            flushStatistics = statisticsScheduler::flushNow,
         )
     }
 }

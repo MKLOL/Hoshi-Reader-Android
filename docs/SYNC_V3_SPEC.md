@@ -264,6 +264,10 @@ Planner rules (deterministic):
   is absent, action is `PushPayload`. An EPUB backed only by legacy Android
   `payload.*` is imported and republished under `epub.*` in the same pass. Existing
   canonical manifests retain the conservative no-repush policy.
+- **Reading statistics.** `statistics` (every book) and `manga_statistics` (manga) are merged
+  both ways per day by `HttpSyncStatisticsSync`: union of days, newest modification stamp wins
+  per day, no revision counter. A per-device `.http_sync_statistics.json` remembers the last
+  exchange so a converged book makes no request. Emitted as `SyncStatistics` in the apply bucket.
 - **Offline translations.** Mokuro `pretranslations` and EPUB `sentences` are
   download-only. EPUB sentence blobs are size-bounded, fail-closed against sync id,
   spine count, address and text hash, and installed atomically.

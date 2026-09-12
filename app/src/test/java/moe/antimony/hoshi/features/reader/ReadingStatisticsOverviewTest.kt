@@ -56,18 +56,20 @@ class ReadingStatisticsOverviewTest {
     }
 
     @Test
-    fun booksWithoutReadingTimeAreOmitted() {
+    fun booksWithNeitherTimeNorCharactersAreOmitted() {
         val overview = summarizeReadingStatistics(
             listOf(
                 book("empty", "Never opened"),
-                book("zero", "Opened but idle", ContentType.Epub, day("2026-09-10", 0.0, units = 3)),
+                book("idle", "Opened but idle", ContentType.Epub, day("2026-09-10", 0.0, units = 0)),
+                book("chars", "Characters, no time", ContentType.Epub, day("2026-09-10", 0.0, units = 3)),
                 book("read", "Read", ContentType.Epub, day("2026-09-10", 45.0)),
             ),
             todayKey = "2026-09-12",
         )
 
-        assertEquals(listOf("read"), overview.books.map { it.bookId })
+        assertEquals(listOf("read", "chars"), overview.books.map { it.bookId })
         assertEquals(45.0, overview.totalSeconds, 0.0)
+        assertEquals(3, overview.totalCharacters)
     }
 
     @Test
@@ -159,9 +161,9 @@ class ReadingStatisticsOverviewTest {
             todayKey = "2026-09-12",
         )
 
-        assertEquals(listOf("read"), overview.books.map { it.bookId })
-        assertEquals(300, overview.totalCharacters)
-        assertEquals(300, overview.todayCharacters)
+        assertEquals(listOf("read", "timeless"), overview.books.map { it.bookId })
+        assertEquals(5_300, overview.totalCharacters)
+        assertEquals(5_300, overview.todayCharacters)
         assertEquals(120.0, overview.todaySeconds, 0.0)
         assertEquals(listOf("2026-09-12"), overview.daily.map { it.dateKey })
         assertTrue(overview.todayCharacters <= overview.totalCharacters)

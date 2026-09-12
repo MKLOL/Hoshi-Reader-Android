@@ -214,11 +214,22 @@ internal class HoshiAppContainer(context: Context) {
         updateStore = updateDownloadStore,
     )
 
+    /** Debounced statistics pushes from both readers; see HttpSyncStatisticsSync for the merge. */
+    val httpSyncStatisticsPushScheduler: moe.antimony.hoshi.features.sync.http.HttpSyncStatisticsPushScheduler =
+        moe.antimony.hoshi.features.sync.http.HttpSyncStatisticsPushScheduler(
+            scope = appScope,
+            currentSettings = { httpSyncSettingsRepository.settings.first() },
+            push = httpSyncPusher::pushStatistics,
+        )
+
     fun readerRouteStateHolder(): ReaderRouteStateHolder =
         ReaderRouteStateHolder(
             repository = bookRepository,
             onBookmarkPersisted = { root, title, syncId ->
                 httpSyncBookmarkScheduler.onBookmarkChanged(root, title, syncId)
+            },
+            onStatisticsPersisted = { root, title, syncId ->
+                httpSyncStatisticsPushScheduler.onStatisticsChanged(root, title.orEmpty(), syncId)
             },
         )
 

@@ -1,6 +1,7 @@
 package moe.antimony.hoshi.features.sync.v3
 
 import moe.antimony.hoshi.features.ai.PRETRANSLATIONS_FILENAME
+import moe.antimony.hoshi.features.sync.http.StatisticsSyncKind
 import moe.antimony.hoshi.features.sync.http.HttpSyncContentType
 import moe.antimony.hoshi.features.sync.http.HttpSyncPayloadKeys
 import moe.antimony.hoshi.features.sync.http.MAX_EPUB_SENTENCES_BLOB_BYTES
@@ -42,6 +43,7 @@ class V3Planner {
         val importChats = mutableListOf<V3Action.ImportChat>()
         val importPretranslations = mutableListOf<V3Action.ImportPretranslations>()
         val importSentences = mutableListOf<V3Action.ImportSentences>()
+        val syncStatistics = mutableListOf<V3Action.SyncStatistics>()
         val applyAiSettings = mutableListOf<V3Action.ApplyAiSettings>()
         val pushBookmarks = mutableListOf<V3Action.PushBookmark>()
         val pushChats = mutableListOf<V3Action.PushChat>()
@@ -153,6 +155,12 @@ class V3Planner {
                                 key = key,
                             )
                         }
+                    }
+                    r.statisticsKey?.let { key ->
+                        syncStatistics += V3Action.SyncStatistics(sentinelRoot(syncId), syncId, StatisticsSyncKind.Reading, key, r.statisticsSize)
+                    }
+                    r.mangaStatisticsKey?.takeIf { r.manifest.format == HttpSyncContentType.Mokuro }?.let { key ->
+                        syncStatistics += V3Action.SyncStatistics(sentinelRoot(syncId), syncId, StatisticsSyncKind.MangaText, key, r.mangaStatisticsSize)
                     }
                     if (
                         r.manifest.format == HttpSyncContentType.Epub &&
@@ -393,6 +401,12 @@ class V3Planner {
                         }
                     }
                 }
+                // Statistics merge both ways for every book; the executor skips converged books
+                // without a request.
+                syncStatistics += V3Action.SyncStatistics(l.root, syncId, StatisticsSyncKind.Reading, r?.statisticsKey, r?.statisticsSize)
+                if (l.contentType == moe.antimony.hoshi.epub.ContentType.Mokuro) {
+                    syncStatistics += V3Action.SyncStatistics(l.root, syncId, StatisticsSyncKind.MangaText, r?.mangaStatisticsKey, r?.mangaStatisticsSize)
+                }
                 if (l.contentType == moe.antimony.hoshi.epub.ContentType.Epub) {
                     val sentencesKey = r?.sentencesKey
                     if (sentencesKey != null) {
@@ -496,6 +510,7 @@ class V3Planner {
             addAll(importChats.sortedWith(compareBy({ it.syncId }, { it.key })))
             addAll(importPretranslations.sortedBy { it.syncId })
             addAll(importSentences.sortedBy { it.syncId })
+            addAll(syncStatistics.sortedWith(compareBy({ it.syncId }, { it.kind })))
             addAll(applyAiSettings)
             // Push bucket: bookmark, chat, payload, metadata, ai settings.
             addAll(pushBookmarks.sortedBy { it.syncId })

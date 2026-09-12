@@ -69,6 +69,7 @@ class HttpSyncReconciler(
     },
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
 ) {
+    private val statisticsSync = HttpSyncStatisticsSync(bookRepository, bookLocks)
     private val json = Json {
         ignoreUnknownKeys = true
         encodeDefaults = true
@@ -109,6 +110,8 @@ class HttpSyncReconciler(
             downloadedPayloads = inbound.downloadedPayloads,
             downloadedPretranslations = inbound.downloadedPretranslations,
             downloadedSentenceTranslations = inbound.downloadedSentenceTranslations,
+            uploadedStatistics = outbound.uploadedStatistics + inbound.uploadedStatistics,
+            downloadedStatistics = inbound.downloadedStatistics + outbound.downloadedStatistics,
             downloadedAppSettings = appSettings.downloaded,
             remoteOnlyBooks = inbound.remoteOnlyBooks,
             errors = inbound.errors + outbound.errors + appSettings.errors,
@@ -345,6 +348,9 @@ class HttpSyncReconciler(
     private data class InboundResult(
         val downloadedBookmarks: Int,
         val downloadedChatEntries: Int,
+        val downloadedStatistics: Int = 0,
+        /** Statistics merged and re-uploaded while applying listed keys. */
+        val uploadedStatistics: Int = 0,
         /** Books whose offline pre-translation blob was pulled this pass. */
         val downloadedPretranslations: Int,
         val downloadedSentenceTranslations: Int,
@@ -382,6 +388,8 @@ class HttpSyncReconciler(
         var downloadedBookmarks = 0
         var downloadedChatEntries = 0
         var downloadedPretranslations = 0
+        var downloadedStatistics = 0
+        var uploadedStatisticsWhilePulling = 0
         var downloadedSentenceTranslations = 0
         var downloadedPayloads = 0
         var maxHandledLastModified: String? = null
@@ -478,7 +486,8 @@ class HttpSyncReconciler(
                 remoteSyncIds += parsed.syncId
                 when (parsed.kind) {
                     BookKeyKind.PayloadManifest, BookKeyKind.EpubManifest -> payloadManifests += parsed to meta
-                    BookKeyKind.Bookmark, BookKeyKind.Chat, BookKeyKind.Pretranslations, BookKeyKind.Sentences ->
+                    BookKeyKind.Bookmark, BookKeyKind.Chat, BookKeyKind.Pretranslations, BookKeyKind.Sentences,
+                    BookKeyKind.Statistics, BookKeyKind.MangaStatistics ->
                         bookmarksAndChats += parsed to meta
                     BookKeyKind.PayloadZip, BookKeyKind.EpubZip -> markHandled(meta) // followed via the manifest
                     BookKeyKind.Metadata -> metadataKeys += parsed to meta
@@ -716,6 +725,12 @@ class HttpSyncReconciler(
                         if (applySentencesFromRemote(transport, parsed.syncId, root, meta)) {
                             downloadedSentenceTranslations += 1
                         }
+                    BookKeyKind.Statistics, BookKeyKind.MangaStatistics -> {
+                        val kind = if (parsed.kind == BookKeyKind.Statistics) StatisticsSyncKind.Reading else StatisticsSyncKind.MangaText
+                        val outcome = statisticsSync.sync(transport, root, parsed.syncId, kind, StatisticsRemoteListing.Listed(meta.size))
+                        if (outcome.downloaded) downloadedStatistics += 1
+                        if (outcome.uploaded) uploadedStatisticsWhilePulling += 1
+                    }
                     else -> Unit
                 }
                 markHandled(meta)
@@ -796,6 +811,8 @@ class HttpSyncReconciler(
         return InboundResult(
             downloadedBookmarks = downloadedBookmarks,
             downloadedChatEntries = downloadedChatEntries,
+            downloadedStatistics = downloadedStatistics,
+            uploadedStatistics = uploadedStatisticsWhilePulling,
             downloadedPretranslations = downloadedPretranslations,
             downloadedSentenceTranslations = downloadedSentenceTranslations,
             downloadedPayloads = downloadedPayloads,
@@ -1138,6 +1155,8 @@ class HttpSyncReconciler(
     private data class OutboundResult(
         val uploadedBookmarks: Int,
         val uploadedChatEntries: Int,
+        val uploadedStatistics: Int = 0,
+        val downloadedStatistics: Int = 0,
         val uploadedMetadata: Int,
         val uploadedPayloads: Int,
         val maxLastModified: String?,
@@ -1460,9 +1479,27 @@ class HttpSyncReconciler(
         // above went through atomic per-key helpers under the store's lock so a
         // concurrent `BookshelfRepository.recordHttpSyncTombstone` can't be
         // clobbered. See the Bug 3 comment at the top of `pushAllLocal`.
+        // Statistics merge both ways for every live local book; converged books cost nothing
+        // (see HttpSyncStatisticsSync). Books deleted above no longer have a directory.
+        var uploadedStatistics = 0
+        var downloadedStatistics = 0
+        for (book in localBooks) {
+            if (!book.root.isDirectory || !File(book.root, "metadata.json").isFile) continue
+            try {
+                for (kind in StatisticsSyncKind.entries) {
+                    val outcome = statisticsSync.sync(transport, book.root, book.syncId, kind, StatisticsRemoteListing.Unknown)
+                    if (outcome.uploaded) uploadedStatistics += 1
+                    if (outcome.downloaded) downloadedStatistics += 1
+                }
+            } catch (e: Exception) {
+                errors += "statistics ${book.syncId}: ${e.message ?: e.javaClass.simpleName}"
+            }
+        }
         return OutboundResult(
             uploadedBookmarks = uploadedBookmarks,
             uploadedChatEntries = uploadedChatEntries,
+            uploadedStatistics = uploadedStatistics,
+            downloadedStatistics = downloadedStatistics,
             uploadedMetadata = uploadedMetadata,
             uploadedPayloads = uploadedPayloads,
             maxLastModified = maxLastModified,
@@ -1614,6 +1651,8 @@ class HttpSyncReconciler(
         EpubZip,
         Pretranslations,
         Sentences,
+        Statistics,
+        MangaStatistics,
     }
 
     private data class ParsedBookKey(val syncId: String, val kind: BookKeyKind)
@@ -1640,6 +1679,8 @@ class HttpSyncReconciler(
             suffix == "epub.zip" -> BookKeyKind.EpubZip
             suffix == "pretranslations" -> BookKeyKind.Pretranslations
             suffix == "sentences" -> BookKeyKind.Sentences
+            suffix == "statistics" -> BookKeyKind.Statistics
+            suffix == "manga_statistics" -> BookKeyKind.MangaStatistics
             suffix.startsWith("chat/") -> BookKeyKind.Chat
             else -> return null
         }
@@ -1838,6 +1879,10 @@ data class HttpSyncResult(
     val downloadedPretranslations: Int = 0,
     /** EPUBs whose sentence translation blob was pulled this pass. */
     val downloadedSentenceTranslations: Int = 0,
+    /** Books whose reading statistics were merged up to the server this pass. */
+    val uploadedStatistics: Int = 0,
+    /** Books whose local reading statistics gained days from the server this pass. */
+    val downloadedStatistics: Int = 0,
     val downloadedAppSettings: Boolean = false,
     val remoteOnlyBooks: Int,
     val errors: List<String>,
@@ -1863,6 +1908,8 @@ data class HttpSyncResult(
         if (downloadedSentenceTranslations > 0) {
             parts += "$downloadedSentenceTranslations EPUB translation set${plural(downloadedSentenceTranslations)} down"
         }
+        if (uploadedStatistics > 0) parts += "$uploadedStatistics statistics up"
+        if (downloadedStatistics > 0) parts += "$downloadedStatistics statistics down"
         if (downloadedAppSettings) parts += "ChatGPT settings down"
         if (remoteOnlyBooks > 0) parts += "$remoteOnlyBooks remote-only book${plural(remoteOnlyBooks)}"
         if (parts.isEmpty()) parts += "nothing to sync"

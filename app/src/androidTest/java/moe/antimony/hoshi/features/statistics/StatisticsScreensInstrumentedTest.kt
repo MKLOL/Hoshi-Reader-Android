@@ -2,6 +2,10 @@ package moe.antimony.hoshi.features.statistics
 
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.hasScrollAction
+import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.onFirst
+import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
@@ -71,11 +75,13 @@ class StatisticsScreensInstrumentedTest {
                 )
             }
         }
-        composeRule.onAllNodesWithText("35m 15s")[0].assertIsDisplayed()
-        composeRule.onNodeWithText("Shirokuma").assertIsDisplayed()
-        composeRule.onNodeWithText("52 pages read · 4,050 characters read · Last read Sep 12, 2026").assertIsDisplayed()
         composeRule.onNodeWithText("1 day streak").assertIsDisplayed()
         composeRule.onNodeWithText("Today's goal reached").assertIsDisplayed()
+        composeRule.onAllNodesWithText("35m 15s")[0].assertIsDisplayed() // totals card
+        composeRule.onAllNodes(hasScrollAction()).onFirst().performScrollToNode(hasText("Shirokuma"))
+        composeRule.onNodeWithText("Shirokuma").assertIsDisplayed()
+        composeRule.onNodeWithText("52 pages read · 4,050 characters read · Last read Sep 12, 2026").assertIsDisplayed()
+        composeRule.onAllNodesWithText("35m 15s")[1].assertIsDisplayed() // the book row
         composeRule.onNodeWithText("Shirokuma").performClick()
         composeRule.runOnIdle { assertEquals("m", opened) }
     }
@@ -91,8 +97,11 @@ class StatisticsScreensInstrumentedTest {
         composeRule.onAllNodesWithText("Sep 10, 2026")[0].assertIsDisplayed() // started
         composeRule.onAllNodesWithText("Sep 12, 2026")[0].assertIsDisplayed() // last read
         composeRule.onNodeWithText("Not finished · 30.0%").assertIsDisplayed()
+        val list = composeRule.onAllNodes(hasScrollAction()).onFirst()
+        list.performScrollToNode(hasText("52"))
         composeRule.onNodeWithText("52").assertIsDisplayed() // pages read
         composeRule.onNodeWithText("4,050").assertIsDisplayed() // characters read
+        list.performScrollToNode(hasText("88 pages / h"))
         composeRule.onNodeWithText("88 pages / h").assertIsDisplayed()
     }
 
@@ -112,6 +121,7 @@ class StatisticsScreensInstrumentedTest {
             }
         }
         val row = overview.books.single()
+        composeRule.onAllNodes(hasScrollAction()).onFirst().performScrollToNode(hasText("All Time"))
         composeRule.onAllNodesWithText(formatDurationSeconds(row.totalSeconds))[0].assertIsDisplayed()
         composeRule.onAllNodesWithText(row.pagesRead.toString())[0].assertIsDisplayed()
         composeRule.onAllNodesWithText(row.charactersRead.toString())[0].assertIsDisplayed()

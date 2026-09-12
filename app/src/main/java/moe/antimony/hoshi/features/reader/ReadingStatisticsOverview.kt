@@ -52,7 +52,7 @@ data class ReadingStatisticsOverview(
     val todaySeconds: Double,
     val totalCharacters: Int,
     val todayCharacters: Int,
-    /** Books with recorded reading time, longest first. */
+    /** Books with recorded reading time or characters, longest first. */
     val books: List<BookReadingSummary>,
     /** Reading per day across every book, newest first. */
     val daily: List<DailyReading>,
@@ -99,7 +99,12 @@ fun summarizeReadingStatistics(
             .sortedByDescending { it.dateKey }
         // The same totals the reader's Statistics sheet shows as "All Time".
         val totals = statistics.readingTotals()
-        if (totals.readingTime <= 0.0) return@mapNotNull null
+        val charactersRead = when (input.contentType) {
+            ContentType.Epub -> totals.charactersRead
+            ContentType.Mokuro -> mangaText.sumOf { it.charactersRead }
+        }
+        // Anything the reader's sheet would show as read is listed here too.
+        if (totals.readingTime <= 0.0 && charactersRead <= 0) return@mapNotNull null
         // Only listed books feed the per-day totals, so "today" can never exceed "all time".
         days.forEach { day ->
             dailySeconds[day.dateKey] = (dailySeconds[day.dateKey] ?: 0.0) + day.seconds
@@ -111,10 +116,7 @@ fun summarizeReadingStatistics(
             title = input.title,
             contentType = input.contentType,
             totalSeconds = totals.readingTime,
-            charactersRead = when (input.contentType) {
-                ContentType.Epub -> totals.charactersRead
-                ContentType.Mokuro -> mangaText.sumOf { it.charactersRead }
-            },
+            charactersRead = charactersRead,
             pagesRead = when (input.contentType) {
                 ContentType.Epub -> null
                 ContentType.Mokuro -> totals.charactersRead

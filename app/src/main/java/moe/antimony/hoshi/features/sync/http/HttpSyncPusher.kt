@@ -251,6 +251,23 @@ class HttpSyncPusher(
         }
     }
 
+    private val statisticsSync = HttpSyncStatisticsSync(bookRepository, bookLocks)
+
+    /**
+     * Merges a book's statistics with the server from the reader path. Without a listing the
+     * exchange only costs a request when the local files changed since the last exchange.
+     */
+    suspend fun pushStatistics(bookRoot: File, title: String, settings: HttpSyncSettings, persistedSyncId: String?) {
+        require(settings.isConfigured) { "HTTP sync is not configured." }
+        val syncId = persistedSyncId ?: deriveSyncId(title)
+            ?: throw HttpSyncException("Book '$title' has no title to derive a syncId from.")
+        withContext(ioDispatcher) {
+            val transport = transportFactory(settings)
+            statisticsSync.sync(transport, bookRoot, syncId, StatisticsSyncKind.Reading, StatisticsRemoteListing.Unknown)
+            statisticsSync.sync(transport, bookRoot, syncId, StatisticsSyncKind.MangaText, StatisticsRemoteListing.Unknown)
+        }
+    }
+
     internal companion object {
         const val JSON_CONTENT_TYPE = "application/json; charset=utf-8"
     }

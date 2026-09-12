@@ -213,6 +213,8 @@ The Android client uses this layout under one shared root prefix `books/`:
 | `books/{syncId}/epub.zip` | `application/zip` | zip of an extracted EPUB directory | overwrite (rare; effectively immutable) | 1 MB – 200 MB |
 | `books/{syncId}/epub.manifest` | `application/json` | `{sha256, sizeBytes, originalName, format: "epub"}` | overwrite | ~150 B |
 | `books/{syncId}/sentences` | `application/json` | validated EPUB sentence translations | download-only | 1 MB – 5 MB typical |
+| `books/{syncId}/statistics` | `application/json` | `{version, syncId, entries: [per-day ReadingStatistics]}` | two-way, merged per day (newest `lastStatisticModified` wins); a converged book costs no request | ~250 B per day read |
+| `books/{syncId}/manga_statistics` | `application/json` | `{version, syncId, entries: [per-day OCR characters]}` | as above, manga only | ~80 B per day read |
 
 - `syncId` is persisted in `metadata.json`. New imports derive it from title plus a folder
   hash only when duplicate-title folder uniquification requires one; legacy records backfill

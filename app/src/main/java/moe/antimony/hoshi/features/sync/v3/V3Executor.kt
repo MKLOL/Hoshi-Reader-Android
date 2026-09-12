@@ -14,6 +14,8 @@ import moe.antimony.hoshi.features.ai.PRETRANSLATIONS_FILENAME
 import moe.antimony.hoshi.features.ai.EPUB_TRANSLATIONS_FILENAME
 import moe.antimony.hoshi.features.ai.EpubTranslationStore
 import moe.antimony.hoshi.features.ai.AiChatHistoryStore
+import moe.antimony.hoshi.features.sync.http.HttpSyncStatisticsSync
+import moe.antimony.hoshi.features.sync.http.StatisticsRemoteListing
 import moe.antimony.hoshi.features.sync.http.HttpSyncActiveBooks
 import moe.antimony.hoshi.features.sync.http.HttpSyncBookLocks
 import moe.antimony.hoshi.features.sync.http.HttpSyncBookmarkBlob
@@ -66,6 +68,7 @@ class V3Executor(
     private val shelfStateStore = HttpSyncShelfStateStore(json)
     private val deletedBookStateStore = HttpSyncDeletedBookStateStore(json)
     private val revisionStore = HttpSyncRevisionStore(json)
+    private val statisticsSync = HttpSyncStatisticsSync(bookRepository, bookLocks)
 
     suspend fun run(
         plan: V3Plan,
@@ -76,6 +79,8 @@ class V3Executor(
         var appliedChatEntries = 0
         var appliedPretranslations = 0
         var appliedSentenceTranslations = 0
+        var appliedStatistics = 0
+        var pushedStatistics = 0
         var appliedPayloads = 0
         var appliedMetadataDeletes = 0
         var appliedShelfPlacements = 0
@@ -293,6 +298,18 @@ class V3Executor(
                         EpubTranslationStore.invalidate(targetRoot)
                         appliedSentenceTranslations += 1
                     }
+                    is V3Action.SyncStatistics -> {
+                        val targetRoot = resolveRoot(action.root, action.syncId, rootBySyncId)
+                            ?: continue
+                        val listing = when {
+                            action.remoteKey == null -> StatisticsRemoteListing.Absent
+                            action.remoteSize == null -> StatisticsRemoteListing.Unknown
+                            else -> StatisticsRemoteListing.Listed(action.remoteSize)
+                        }
+                        val outcome = statisticsSync.sync(transport, targetRoot, action.syncId, action.kind, listing)
+                        if (outcome.downloaded) appliedStatistics += 1
+                        if (outcome.uploaded) pushedStatistics += 1
+                    }
                     is V3Action.ImportChat -> {
                         val targetRoot = resolveRoot(action.root, action.syncId, rootBySyncId)
                             ?: continue
@@ -421,6 +438,7 @@ class V3Executor(
                 chatEntries = appliedChatEntries,
                 payloads = appliedPayloads,
                 sentenceTranslations = appliedSentenceTranslations,
+                statistics = appliedStatistics,
                 metadataDeletes = appliedMetadataDeletes,
                 shelfPlacements = appliedShelfPlacements,
                 aiSettings = appliedAiSettings,
@@ -428,6 +446,7 @@ class V3Executor(
             pushed = V3PushedCounts(
                 bookmarks = pushedBookmarks,
                 chatEntries = pushedChatEntries,
+                statistics = pushedStatistics,
                 metadata = pushedMetadata,
                 payloads = pushedPayloads,
                 tombstones = pushedTombstones,
@@ -719,6 +738,7 @@ class V3Executor(
         is V3Action.ImportChat,
         is V3Action.ImportPretranslations,
         is V3Action.ImportSentences,
+        is V3Action.SyncStatistics,
         is V3Action.ApplyAiSettings -> V3Phase.ApplyingRemoteState
         is V3Action.PushBookmark,
         is V3Action.PushChat,

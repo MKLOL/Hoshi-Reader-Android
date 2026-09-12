@@ -313,6 +313,7 @@ internal fun MangaReaderScreen(
                     if (textStatistics != null) {
                         repository.saveMangaTextStatistics(bookRoot, textStatistics)
                     }
+                    httpSyncHooks.onStatisticsPersisted()
                 }
             }
         } else {
@@ -346,6 +347,7 @@ internal fun MangaReaderScreen(
             pendingBookmarkPage.value = null
             currentOnBookmarkSaved.value()
             httpSyncHooks.onPageTurnPersisted()
+            httpSyncHooks.onStatisticsPersisted()
         }
     }
 
@@ -827,6 +829,7 @@ internal fun MangaReaderScreen(
                                 if (textStatistics != null) {
                                     repository.saveMangaTextStatistics(bookRoot, textStatistics)
                                 }
+                                httpSyncHooks.onStatisticsPersisted()
                             }
                         }
                     }
