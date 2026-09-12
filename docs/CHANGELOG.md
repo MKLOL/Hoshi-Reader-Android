@@ -7,6 +7,8 @@ Semantic Versioning.
 
 ## [Unreleased]
 
+## [v0.11.11] - 2026-09-12
+
 ### Added
 - **A Statistics page in Settings.** See your total and today's reading time, and how long you have spent in each book and manga.
 
