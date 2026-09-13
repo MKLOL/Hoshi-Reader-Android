@@ -7,6 +7,8 @@ Semantic Versioning.
 
 ## [Unreleased]
 
+## [v0.11.13] - 2026-09-13
+
 ### Added
 - **A Statistics screen, one tap from Books.** The chart button in the Books bar (also Settings → Statistics) shows a reading streak against a daily goal you choose (5, 10, 15 or 30 minutes), total and today's reading time and characters, a 16-week reading heatmap, time by weekday, and every book with its cover. Tap a book for when you started it, last read it and finished it, your reading speed, time per page, best day and a day-by-day history. A "By device" card on both pages shows how much you read on each device (phone, tablet, …); every day is recorded per device, so two devices reading the same day add up instead of overwriting each other.
 - **Reading statistics sync between devices.** HTTP sync now merges each book's per-day reading time and characters (and manga pages) across devices, so a manga read on the phone shows the same numbers on the tablet. Each device's reading is kept separately, so two devices reading the same book on the same day add up. Reading recorded before this version counts for the device it is on; if you restored the same library onto a second device before upgrading, that older history is counted on both.
