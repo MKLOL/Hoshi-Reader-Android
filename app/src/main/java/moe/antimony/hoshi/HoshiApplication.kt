@@ -1,6 +1,7 @@
 package moe.antimony.hoshi
 
 import android.app.Application
+import moe.antimony.hoshi.features.sync.http.httpSyncSettingsRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -16,6 +17,11 @@ import moe.antimony.hoshi.features.update.UpdateStartupSnapshot
 import moe.antimony.hoshi.features.update.updateDownloadStore
 
 class HoshiApplication : Application() {
+    internal val podcastRepository by lazy {
+        moe.antimony.hoshi.features.podcasts.PodcastRepository(
+            this, httpSyncSettingsRepository(),
+        )
+    }
     override fun onCreate() {
         super.onCreate()
         installCrashDiagnostics(this)

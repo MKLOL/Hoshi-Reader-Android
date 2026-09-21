@@ -22,10 +22,10 @@ class MainShellUiTest {
     fun mainTabsKeepIosOrderWithNewsAfterBooks() {
         // iOS has Books, Dictionary and Settings in this order. News is Android-only and sits right
         // after Books; the iOS tabs must keep their relative order around it.
-        assertEquals(listOf(MainTab.Books, MainTab.News, MainTab.Dictionary, MainTab.Settings), MainTab.entries)
+        assertEquals(listOf(MainTab.Books, MainTab.News, MainTab.Dictionary, MainTab.Settings), visibleMainTabs(false))
         assertEquals(
             listOf(R.string.main_tab_books, R.string.main_tab_news, R.string.main_tab_dictionary, R.string.main_tab_settings),
-            MainTab.entries.map { it.labelRes },
+            visibleMainTabs(false).map { it.labelRes },
         )
     }
 

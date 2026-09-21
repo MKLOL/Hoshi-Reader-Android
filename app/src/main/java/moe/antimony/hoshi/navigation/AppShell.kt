@@ -38,6 +38,8 @@ import moe.antimony.hoshi.features.bookshelf.SettingsTab
 import moe.antimony.hoshi.epub.ContentType
 import moe.antimony.hoshi.features.diagnostics.DiagnosticsView
 import moe.antimony.hoshi.features.dictionary.DictionarySearchView
+import moe.antimony.hoshi.features.podcasts.PodcastsView
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import moe.antimony.hoshi.features.news.NewsFeedView
 import moe.antimony.hoshi.features.dictionary.DictionaryView
 import moe.antimony.hoshi.features.reader.ReaderAppearanceScreen
@@ -64,6 +66,8 @@ private val NoPredictiveNavContentTransition:
 
 @Composable
 fun AppShell(
+    pendingPodcasts: Boolean = false,
+    onPendingPodcastsConsumed: () -> Unit = {},
     pendingImportUri: Uri? = null,
     onPendingImportConsumed: () -> Unit = {},
     pendingNewsUrl: String? = null,
@@ -81,6 +85,13 @@ fun AppShell(
     val sasayakiMatchRequestStore = remember { SasayakiMatchRequestStore() }
     val initialRoute = AppRoute.BooksRoute
     val backStack = rememberNavBackStack(initialRoute)
+    val podcastAccess by appContainer.podcastRepository.access.collectAsStateWithLifecycle()
+    LaunchedEffect(pendingPodcasts, podcastAccess) {
+        if (pendingPodcasts && podcastAccess) {
+            backStack.selectTopLevelRoute(AppRoute.PodcastsRoute)
+            onPendingPodcastsConsumed()
+        }
+    }
     val bookRepository = appContainer.bookRepository
     val readerRouteStateHolder = remember(appContainer) { appContainer.readerRouteStateHolder() }
     val readerFontManager = appContainer.readerFontManager
@@ -179,8 +190,8 @@ fun AppShell(
                         bookshelfRefreshKey = bookshelfRefreshKey,
                         onSelectedTabChange = { selectTopLevelRoute(it.toRoute()) },
                     )
-                    AppRoute.NewsRoute -> TopLevelRouteContent(
-                        selectedTab = MainTab.News,
+                    AppRoute.NewsRoute, AppRoute.PodcastsRoute -> TopLevelRouteContent(
+                        selectedTab = if (route == AppRoute.PodcastsRoute) MainTab.Podcasts else MainTab.News,
                         pendingImportUri = pendingImportUri,
                         onPendingImportConsumed = onPendingImportConsumed,
                         pendingNewsUrl = pendingNewsUrl,
@@ -338,7 +349,12 @@ private fun TopLevelRouteContent(
     pendingNewsUrl: String? = null,
     onPendingNewsUrlConsumed: () -> Unit = {},
 ) {
+    val podcastAccess by LocalHoshiAppContainer.current.podcastRepository.access.collectAsStateWithLifecycle()
+    LaunchedEffect(podcastAccess, selectedTab) {
+        if (!podcastAccess && selectedTab == MainTab.Podcasts) onSelectedTabChange(MainTab.Books)
+    }
     HoshiMainShell(
+        podcastsAvailable = podcastAccess,
         selectedTab = selectedTab,
         onSelectedTabChange = onSelectedTabChange,
     ) { contentModifier, layoutSpec ->
@@ -359,6 +375,7 @@ private fun TopLevelRouteContent(
                 onPendingSharedUrlConsumed = onPendingNewsUrlConsumed,
                 modifier = contentModifier,
             )
+            MainTab.Podcasts -> if (podcastAccess) PodcastsView(modifier = contentModifier)
             MainTab.Dictionary -> DictionarySearchView(
                 readerSettings = readerSettings,
                 modifier = contentModifier.fillMaxSize(),
@@ -433,6 +450,7 @@ private fun SettingsDetailDestination(
 private fun MainTab.toRoute(): AppRoute = when (this) {
     MainTab.Books -> AppRoute.BooksRoute
     MainTab.News -> AppRoute.NewsRoute
+    MainTab.Podcasts -> AppRoute.PodcastsRoute
     MainTab.Dictionary -> AppRoute.DictionaryRoute
     MainTab.Settings -> AppRoute.SettingsRoute
 }

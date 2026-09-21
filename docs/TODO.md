@@ -1,8 +1,6 @@
 # Hoshi Android Agent TODO
 
-Last updated: 2026-09-10
-
-This file is the short operational handoff for future agents.
+Last updated: 2026-09-21
 
 ## Maintenance Rules
 
@@ -16,6 +14,8 @@ This file is the short operational handoff for future agents.
 - Keep `docs/CHANGELOG.md` `[Unreleased]` free of fixup notes for not-yet-released features; fold them into the original feature entry or omit them until they describe a fix to already shipped user-visible behavior.
 
 ## Open Alignment Work
+
+- Podcasts implemented and emulator-verified; see `docs/PODCASTS.md`. Production worker activation remains a deployment step in game-collection `docs/podcasts.md`.
 
 ### Architecture And Hardening
 

@@ -29,6 +29,7 @@ import moe.antimony.hoshi.ui.theme.HoshiReaderTheme
 
 class MainActivity : ComponentActivity() {
     private var pendingImportUri by mutableStateOf<Uri?>(null)
+    private var pendingPodcasts by mutableStateOf(false)
     private var pendingNewsUrl by mutableStateOf<String?>(null)
     private var readerKeyEventHandler: ((KeyEvent) -> Boolean)? = null
 
@@ -36,6 +37,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         pendingImportUri = intent.importUri()
         pendingNewsUrl = intent.sharedNewsUrl()
+        pendingPodcasts = intent.getBooleanExtra("openPodcasts", false)
         enableEdgeToEdge()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             window.isNavigationBarContrastEnforced = false
@@ -62,6 +64,8 @@ class MainActivity : ComponentActivity() {
                 ) {
                     val loadedReaderSettings = readerSettings ?: return@HoshiReaderTheme
                     AppShell(
+                        pendingPodcasts = pendingPodcasts,
+                        onPendingPodcastsConsumed = { pendingPodcasts = false },
                         pendingImportUri = pendingImportUri,
                         onPendingImportConsumed = { pendingImportUri = null },
                         pendingNewsUrl = pendingNewsUrl,
@@ -96,6 +100,7 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
+        if (intent.getBooleanExtra("openPodcasts", false)) pendingPodcasts = true
         intent.importUri()?.let { pendingImportUri = it }
         intent.sharedNewsUrl()?.let { pendingNewsUrl = it }
     }

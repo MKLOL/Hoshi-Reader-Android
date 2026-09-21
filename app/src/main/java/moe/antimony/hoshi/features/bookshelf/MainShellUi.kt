@@ -9,6 +9,7 @@ import moe.antimony.hoshi.epub.BookSortOption
 enum class MainTab(@param:StringRes val labelRes: Int) {
     Books(R.string.main_tab_books),
     News(R.string.main_tab_news),
+    Podcasts(R.string.main_tab_podcasts),
     Dictionary(R.string.main_tab_dictionary),
     Settings(R.string.main_tab_settings),
 }
@@ -258,3 +259,6 @@ fun bookshelfProgressText(progress: Double): String {
     }
     return String.format(java.util.Locale.US, "%.1f%%", percentage)
 }
+
+internal fun visibleMainTabs(podcastsAvailable: Boolean): List<MainTab> =
+    MainTab.entries.filter { it != MainTab.Podcasts || podcastsAvailable }

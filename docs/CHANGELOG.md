@@ -7,6 +7,9 @@ Semantic Versioning.
 
 ## [Unreleased]
 
+### Added
+- **NHK learning podcasts.** A validated book-sync token unlocks Podcasts: filter news by original length, prepare a shared Japanese/English lesson with vocabulary replay, download it, and listen with seeking, playback speed and lock-screen controls. Downloads and saved lessons remain available between visits.
+
 ## [v0.11.9] - 2026-09-10
 
 ### Added

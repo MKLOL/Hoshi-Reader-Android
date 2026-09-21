@@ -61,6 +61,7 @@ import androidx.compose.material.icons.rounded.RadioButtonUnchecked
 import androidx.compose.material.icons.rounded.ReportProblem
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.SmartToy
+import androidx.compose.material.icons.rounded.Podcasts
 import androidx.compose.material.icons.rounded.Newspaper
 import androidx.compose.material.icons.rounded.Translate
 import androidx.compose.material3.AlertDialog
@@ -502,6 +503,7 @@ fun BookshelfView(
 
 @Composable
 internal fun HoshiMainShell(
+    podcastsAvailable: Boolean = false,
     selectedTab: MainTab,
     onSelectedTabChange: (MainTab) -> Unit,
     modifier: Modifier = Modifier,
@@ -520,6 +522,7 @@ internal fun HoshiMainShell(
                         selectedTab = selectedTab,
                         onSelectedTabChange = onSelectedTabChange,
                         layoutSpec = layoutSpec,
+                        podcastsAvailable = podcastsAvailable,
                     )
                 },
             ) { innerPadding ->
@@ -543,7 +546,7 @@ internal fun HoshiMainShell(
                 modifier = Modifier.fillMaxSize(),
                 layoutType = layoutSpec.toNavigationSuiteType(),
                 navigationSuiteItems = {
-                    MainTab.entries.forEach { tab ->
+                    visibleMainTabs(podcastsAvailable).forEach { tab ->
                         item(
                             selected = tab == selectedTab,
                             onClick = { onSelectedTabChange(tab) },
@@ -568,6 +571,7 @@ internal const val CompactNavigationBarTag = "compact-navigation-bar"
 
 @Composable
 private fun HoshiCompactBottomNavigation(
+    podcastsAvailable: Boolean,
     selectedTab: MainTab,
     onSelectedTabChange: (MainTab) -> Unit,
     layoutSpec: MainShellLayoutSpec,
@@ -591,7 +595,7 @@ private fun HoshiCompactBottomNavigation(
                 tonalElevation = 0.dp,
                 windowInsets = WindowInsets(0.dp, 0.dp, 0.dp, 0.dp),
             ) {
-                MainTab.entries.forEach { tab ->
+                visibleMainTabs(podcastsAvailable).forEach { tab ->
                     NavigationBarItem(
                         selected = tab == selectedTab,
                         onClick = { onSelectedTabChange(tab) },
@@ -1820,6 +1824,7 @@ private fun BottomTabGlyph(tab: MainTab, modifier: Modifier = Modifier) {
     val icon = when (tab) {
         MainTab.Books -> Icons.AutoMirrored.Rounded.MenuBook
         MainTab.News -> Icons.Rounded.Newspaper
+        MainTab.Podcasts -> Icons.Rounded.Podcasts
         MainTab.Dictionary -> Icons.Rounded.Translate
         MainTab.Settings -> Icons.Rounded.Settings
     }

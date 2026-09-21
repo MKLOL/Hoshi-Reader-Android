@@ -19,6 +19,9 @@ sealed interface AppRoute : NavKey {
     data object NewsRoute : AppRoute
 
     @Serializable
+    data object PodcastsRoute : AppRoute
+
+    @Serializable
     data object SettingsRoute : AppRoute
 
     @Serializable
