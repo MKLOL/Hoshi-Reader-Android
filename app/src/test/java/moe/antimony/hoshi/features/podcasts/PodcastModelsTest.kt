@@ -73,6 +73,7 @@ class PodcastModelsTest {
         assertNull(podcastDisplayText(null)); assertNull(podcastDisplayText("  \n "))
         assertEquals("OpenAI could not be reached during translation.", podcastDisplayText(" OpenAI could not be\nreached during   translation. "))
         assertEquals(300, podcastDisplayText("x".repeat(1000))!!.length)
+        assertEquals("a b c", podcastDisplayText("a\u3000\u00a0b\u202e\u200d\u0007c"))
         assertFalse(podcastWorkerNeedsAttention(null))
         assertFalse(podcastWorkerNeedsAttention(PodcastWorkerStatus(alive = true)))
         assertTrue(podcastWorkerNeedsAttention(PodcastWorkerStatus(alive = false)))

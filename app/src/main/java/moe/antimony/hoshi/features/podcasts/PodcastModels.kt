@@ -41,9 +41,13 @@ internal data class PodcastCatalogue(
 internal fun podcastAttemptsLeft(maxFailures: Int?, failureCount: Int): Int? =
     maxFailures?.let { (it - failureCount).coerceAtLeast(0) }
 
-/** Server-supplied text as one bounded line, or null when there is nothing to show. */
+/**
+ * Server-supplied text as one bounded line, or null when there is nothing to show. Unicode
+ * separators, control and format characters (ideographic space, zero-width joiners, bidi
+ * overrides) collapse too, so a sentence cannot reorder or hide the text around it.
+ */
 internal fun podcastDisplayText(text: String?): String? =
-    text?.replace(Regex("\\s+"), " ")?.trim()?.take(300)?.takeIf { it.isNotEmpty() }
+    text?.replace(Regex("[\\p{Z}\\p{Cc}\\p{Cf}]+"), " ")?.trim()?.take(300)?.takeIf { it.isNotEmpty() }
 
 /** The worker banner appears when the worker is down or recorded start-up problems. */
 internal fun podcastWorkerNeedsAttention(status: PodcastWorkerStatus?): Boolean =
