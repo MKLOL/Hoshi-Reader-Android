@@ -33,8 +33,32 @@ internal data class PodcastCatalogue(
     val episodes: List<PodcastEpisode>,
     @SerialName("feed_stale") val feedStale: Boolean = false,
     val worker: PodcastWorkerStatus? = null,
-    @SerialName("max_failures") val maxFailures: Int = 3,
+    /** Null when the server did not say; the app then shows no attempt count. */
+    @SerialName("max_failures") val maxFailures: Int? = null,
 )
+
+/** Attempts left before the server refuses Prepare, or null when the server did not say. */
+internal fun podcastAttemptsLeft(maxFailures: Int?, failureCount: Int): Int? =
+    maxFailures?.let { (it - failureCount).coerceAtLeast(0) }
+
+/** Server-supplied text as one bounded line, or null when there is nothing to show. */
+internal fun podcastDisplayText(text: String?): String? =
+    text?.replace(Regex("\\s+"), " ")?.trim()?.take(300)?.takeIf { it.isNotEmpty() }
+
+/** The worker banner appears when the worker is down or recorded start-up problems. */
+internal fun podcastWorkerNeedsAttention(status: PodcastWorkerStatus?): Boolean =
+    status != null && (!status.alive || status.problems.isNotEmpty())
+
+/** Download outcome codes the worker reports (see [DownloadProblem]); prose lives in resources. */
+internal fun podcastDownloadReasonRes(code: String): Int? = when (code) {
+    "account_changed" -> moe.antimony.hoshi.R.string.podcasts_reason_account_changed
+    "content_type" -> moe.antimony.hoshi.R.string.podcasts_reason_content_type
+    "empty" -> moe.antimony.hoshi.R.string.podcasts_reason_empty
+    "too_large" -> moe.antimony.hoshi.R.string.podcasts_reason_too_large
+    "incomplete" -> moe.antimony.hoshi.R.string.podcasts_reason_incomplete
+    "save_failed" -> moe.antimony.hoshi.R.string.podcasts_reason_save_failed
+    else -> null
+}
 
 @Serializable
 internal data class PodcastAccess(val enabled: Boolean = false)

@@ -22,7 +22,7 @@ internal data class PodcastUiState(
     val errorDetail: String? = null,
     val feedStale: Boolean = false,
     val worker: PodcastWorkerStatus? = null,
-    val maxFailures: Int = 3,
+    val maxFailures: Int? = null,
     val downloaded: Set<String> = emptySet(),
     val downloads: Map<String, Int> = emptyMap(),
     /** Enqueued but not running: waiting for the network or a retry back-off. */
@@ -53,7 +53,7 @@ internal class PodcastViewModel(val repository: PodcastRepository) : ViewModel()
                 if (account != null) {
                     withContext(Dispatchers.IO) { repository.files.loadCatalogue(account) }?.let { cached ->
                         val downloaded = withContext(Dispatchers.IO) { cached.episodes.filter { validPodcastId(it.id) && repository.files.audio(account, it.id).isFile }.map { it.id }.toSet() }
-                        _state.update { it.copy(episodes = cached.episodes.filter { item -> validPodcastId(item.id) }, downloaded = downloaded) }
+                        _state.update { it.copy(episodes = cached.episodes.filter { item -> validPodcastId(item.id) }, downloaded = downloaded, worker = cached.worker, maxFailures = cached.maxFailures) }
                     }
                     launch { observeDownloads() }
                     while (true) { refresh(); delay(10_000) }
@@ -93,7 +93,7 @@ internal class PodcastViewModel(val repository: PodcastRepository) : ViewModel()
             try {
                 val updated = repository.api.prepare(settings, episode.id)
                 if (settings == repository.credentials && repository.access.value) {
-                    _state.update { it.copy(episodes = it.episodes.map { item -> if (item.id == updated.id) updated else item }, errorRes = null) }
+                    _state.update { it.copy(episodes = it.episodes.map { item -> if (item.id == updated.id) updated else item }, errorRes = null, errorDetail = null) }
                 }
             } catch (cancelled: CancellationException) { throw cancelled
             } catch (error: Exception) { handle(error, settings)

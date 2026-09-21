@@ -704,13 +704,15 @@
     <string name="podcasts_queue_full">The preparation queue is full. Try again later.</string>
     <string name="podcasts_cached_feed">Showing saved episode listings; NHK could not be refreshed.</string>
     <string name="podcasts_generation_failed">Preparation failed. Tap Prepare to try again.</string>
-    <string name="podcasts_download_failed">Download failed. Tap Download to retry.</string>
-    <string name="podcasts_playback_error">Could not play this lesson. Tap Play to retry.</string>
     <string name="podcasts_playback_error_detail">Could not play this lesson (%1$s). Tap Play to retry.</string>
     <string name="podcasts_error_detail">Details: %1$s</string>
     <string name="podcasts_worker_down">The server’s lesson worker is not running, so Prepare will fail until it is started.</string>
-    <string name="podcasts_worker_last_seen">It last reported in %1$d minutes ago.</string>
     <string name="podcasts_worker_never_seen">It has never reported in.</string>
+    <string name="podcasts_worker_last_seen_recent">It last reported in less than a minute ago.</string>
+    <plurals name="podcasts_worker_last_seen_minutes">
+        <item quantity="one">It last reported in %d minute ago.</item>
+        <item quantity="other">It last reported in %d minutes ago.</item>
+    </plurals>
     <string name="podcasts_worker_problem">Worker problem: %1$s</string>
     <string name="podcasts_generation_failed_detail">Preparation failed: %1$s</string>
     <string name="podcasts_attempts_left">%1$d of %2$d attempts left. Tap Prepare to try again.</string>
@@ -718,4 +720,11 @@
     <string name="podcasts_download_failed_detail">Download failed (%1$s). Tap Download to retry.</string>
     <string name="podcasts_reason_unknown">unknown reason</string>
     <string name="podcasts_reason_file_missing">file missing</string>
+    <string name="podcasts_reason_http">HTTP %1$d</string>
+    <string name="podcasts_reason_account_changed">the sync account changed</string>
+    <string name="podcasts_reason_content_type">the server did not send audio</string>
+    <string name="podcasts_reason_empty">the server sent an empty file</string>
+    <string name="podcasts_reason_too_large">the file is larger than allowed</string>
+    <string name="podcasts_reason_incomplete">the transfer stopped early</string>
+    <string name="podcasts_reason_save_failed">the file could not be saved</string>
 </resources>

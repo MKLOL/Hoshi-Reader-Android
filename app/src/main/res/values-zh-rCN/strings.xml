@@ -702,13 +702,15 @@
     <string name="podcasts_queue_full">课程准备队列已满。请稍后重试。</string>
     <string name="podcasts_cached_feed">无法刷新 NHK，正在显示已保存的节目列表。</string>
     <string name="podcasts_generation_failed">准备失败。点击“准备”重试。</string>
-    <string name="podcasts_download_failed">下载失败。请点击下载重试。</string>
-    <string name="podcasts_playback_error">无法播放此课程。请点击播放重试。</string>
     <string name="podcasts_playback_error_detail">无法播放此课程（%1$s）。点击“播放”重试。</string>
     <string name="podcasts_error_detail">详情：%1$s</string>
     <string name="podcasts_worker_down">服务器的课程生成程序未运行，启动前“准备”都会失败。</string>
-    <string name="podcasts_worker_last_seen">它上次汇报在 %1$d 分钟前。</string>
     <string name="podcasts_worker_never_seen">它从未汇报过。</string>
+    <string name="podcasts_worker_last_seen_recent">它上次汇报在不到一分钟前。</string>
+    <plurals name="podcasts_worker_last_seen_minutes">
+        <item quantity="one">它上次汇报在 %d 分钟前。</item>
+        <item quantity="other">它上次汇报在 %d 分钟前。</item>
+    </plurals>
     <string name="podcasts_worker_problem">生成程序问题：%1$s</string>
     <string name="podcasts_generation_failed_detail">准备失败：%1$s</string>
     <string name="podcasts_attempts_left">还剩 %1$d/%2$d 次尝试。点击“准备”重试。</string>
@@ -716,4 +718,11 @@
     <string name="podcasts_download_failed_detail">下载失败（%1$s）。点击“下载”重试。</string>
     <string name="podcasts_reason_unknown">原因未知</string>
     <string name="podcasts_reason_file_missing">文件丢失</string>
+    <string name="podcasts_reason_http">HTTP %1$d</string>
+    <string name="podcasts_reason_account_changed">同步账户已更改</string>
+    <string name="podcasts_reason_content_type">服务器未返回音频</string>
+    <string name="podcasts_reason_empty">服务器返回了空文件</string>
+    <string name="podcasts_reason_too_large">文件超过允许的大小</string>
+    <string name="podcasts_reason_incomplete">传输提前中断</string>
+    <string name="podcasts_reason_save_failed">无法保存文件</string>
 </resources>

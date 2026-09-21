@@ -15,7 +15,7 @@ Semantic Versioning.
 - **Numbers no longer lie on their side in vertical reading.** Japanese news articles are saved with full-width digits, so 4, 5, 6 and years stand upright when the reader is in vertical mode.
 
 ### Added
-- **NHK learning podcasts.** A validated book-sync token unlocks Podcasts: filter news by original length, prepare a shared Japanese/English lesson with vocabulary replay, download it, and listen with seeking, playback speed and lock-screen controls. Downloads and saved lessons remain available between visits.
+- **NHK learning podcasts.** A validated book-sync token unlocks Podcasts: filter news by original length, prepare a shared Japanese/English lesson with vocabulary replay, download it, and listen with seeking, playback speed and lock-screen controls. Downloads and saved lessons remain available between visits. When something fails, the screen says which step failed and why, how many attempts remain, whether the server's worker is running, and why a download or playback failed.
 
 
 ## [v0.11.9] - 2026-09-10

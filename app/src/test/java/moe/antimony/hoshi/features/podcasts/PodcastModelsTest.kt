@@ -58,11 +58,29 @@ class PodcastModelsTest {
         assertEquals("OpenAI could not be reached during translation.", episode.errorMessage)
         assertEquals(2, episode.failureCount)
         assertEquals(3, rich.maxFailures)
+        assertEquals(1, podcastAttemptsLeft(rich.maxFailures, episode.failureCount))
         assertEquals(PodcastWorkerStatus(alive = false, lastSeenSeconds = 720, problems = listOf("ffmpeg is not on PATH")), rich.worker)
         // An older server without these fields still decodes; nothing is reported as broken.
         val plain = json.decodeFromString<PodcastCatalogue>("""{"episodes":[{"id":"${"c".repeat(64)}","title":"t","published_at":"p","duration_seconds":60,"status":"available"}]}""")
-        assertNull(plain.worker); assertEquals(3, plain.maxFailures)
+        assertNull(plain.worker); assertNull(plain.maxFailures)
         assertNull(plain.episodes.single().errorMessage); assertEquals(0, plain.episodes.single().failureCount)
+        assertNull(podcastAttemptsLeft(plain.maxFailures, 5))
+    }
+
+    @Test fun failureTextIsBoundedAttemptsClampAndReasonCodesMapToResources() {
+        assertEquals(0, podcastAttemptsLeft(3, 7))
+        assertEquals(3, podcastAttemptsLeft(3, 0))
+        assertNull(podcastDisplayText(null)); assertNull(podcastDisplayText("  \n "))
+        assertEquals("OpenAI could not be reached during translation.", podcastDisplayText(" OpenAI could not be\nreached during   translation. "))
+        assertEquals(300, podcastDisplayText("x".repeat(1000))!!.length)
+        assertFalse(podcastWorkerNeedsAttention(null))
+        assertFalse(podcastWorkerNeedsAttention(PodcastWorkerStatus(alive = true)))
+        assertTrue(podcastWorkerNeedsAttention(PodcastWorkerStatus(alive = false)))
+        assertTrue(podcastWorkerNeedsAttention(PodcastWorkerStatus(alive = true, problems = listOf("ffmpeg is not on PATH"))))
+        for (code in listOf("account_changed", "content_type", "empty", "too_large", "incomplete", "save_failed")) {
+            assertNotNull(code, podcastDownloadReasonRes(code))
+        }
+        assertNull(podcastDownloadReasonRes("http:503")); assertNull(podcastDownloadReasonRes("exception:SocketTimeoutException"))
     }
 
     @Test fun serverCatalogueDecodesAndFiltersReadyEpisodeByOriginalLength() {

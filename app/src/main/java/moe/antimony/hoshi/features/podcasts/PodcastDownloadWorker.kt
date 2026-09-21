@@ -21,6 +21,9 @@ import kotlinx.coroutines.withContext
 import moe.antimony.hoshi.R
 import moe.antimony.hoshi.features.sync.http.httpSyncSettingsRepository
 
+/** A download outcome the episode row can name by code; the view maps codes to localized text. */
+internal class DownloadProblem(val code: String) : IOException(code)
+
 class PodcastDownloadWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
         val account = inputData.getString(PodcastKeys.INPUT_ACCOUNT) ?: return@withContext Result.failure()
@@ -28,7 +31,7 @@ class PodcastDownloadWorker(context: Context, params: WorkerParameters) : Corout
         if (!validPodcastId(account) || !validPodcastId(id)) return@withContext Result.failure()
         val settingsRepo = applicationContext.httpSyncSettingsRepository()
         val settings = settingsRepo.settings.first()
-        if (account != podcastAccount(settings)) return@withContext failed("account changed")
+        if (account != podcastAccount(settings)) return@withContext failed("account_changed")
         val destination = PodcastFiles(applicationContext).audio(account, id)
         val temporary = java.io.File(destination.path + ".part")
         try {
@@ -41,13 +44,13 @@ class PodcastDownloadWorker(context: Context, params: WorkerParameters) : Corout
                     if (response.code in listOf(401, 403) && account == podcastAccount(settingsRepo.settings.first())) {
                         PodcastRepository.getInstance(applicationContext).invalidate()
                     }
-                    return@withContext if (response.code in listOf(429, 503) && runAttemptCount < 2) Result.retry() else failed("HTTP ${response.code}")
+                    return@withContext if (response.code in listOf(429, 503) && runAttemptCount < 2) Result.retry() else failed("http:${response.code}")
                 }
-                if (response.header("Content-Type")?.substringBefore(';') != "audio/mpeg") throw IOException("unexpected content type")
-                val body = response.body ?: throw IOException("empty response")
+                if (response.header("Content-Type")?.substringBefore(';') != "audio/mpeg") throw DownloadProblem("content_type")
+                val body = response.body ?: throw DownloadProblem("empty")
                 val total = body.contentLength()
                 val limit = 512L * 1024 * 1024
-                if (total > limit) throw IOException("file larger than allowed")
+                if (total > limit) throw DownloadProblem("too_large")
                 destination.parentFile?.mkdirs()
                 var downloaded = 0L
                 var lastProgress = 0L
@@ -56,11 +59,11 @@ class PodcastDownloadWorker(context: Context, params: WorkerParameters) : Corout
                         val buffer = ByteArray(256 * 1024)
                         while (true) {
                             currentCoroutineContext().ensureActive()
-                            if (account != podcastAccount(settingsRepo.settings.first())) return@withContext failed("account changed")
+                            if (account != podcastAccount(settingsRepo.settings.first())) return@withContext failed("account_changed")
                             val size = source.read(buffer)
                             if (size < 0) break
                             downloaded += size
-                            if (downloaded > limit) throw IOException("file larger than allowed")
+                            if (downloaded > limit) throw DownloadProblem("too_large")
                             target.write(buffer, 0, size)
                             if (downloaded - lastProgress >= 1024 * 1024) {
                                 setProgress(workDataOf(PodcastKeys.PROGRESS_PERCENT to if (total > 0) (downloaded * 100 / total).toInt() else 0))
@@ -69,23 +72,23 @@ class PodcastDownloadWorker(context: Context, params: WorkerParameters) : Corout
                         }
                     }
                 }
-                if (downloaded == 0L || (total >= 0 && total != downloaded)) throw IOException("incomplete transfer")
-                if (account != podcastAccount(settingsRepo.settings.first())) return@withContext failed("account changed")
-                if (!temporary.renameTo(destination)) throw IOException("could not save the file")
+                if (downloaded == 0L || (total >= 0 && total != downloaded)) throw DownloadProblem("incomplete")
+                if (account != podcastAccount(settingsRepo.settings.first())) return@withContext failed("account_changed")
+                if (!temporary.renameTo(destination)) throw DownloadProblem("save_failed")
             }
             Result.success()
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (error: Exception) {
             Log.w("PodcastDownloadWorker", "Download attempt ${runAttemptCount + 1} failed (${error.javaClass.simpleName})")
-            if (runAttemptCount < 2) Result.retry() else failed(error.message?.takeIf { error is IOException && it.isNotBlank() } ?: error.javaClass.simpleName)
+            if (runAttemptCount < 2) Result.retry() else failed(if (error is DownloadProblem) error.code else "exception:" + error.javaClass.simpleName)
         } finally {
             temporary.delete()
         }
     }
 
-    /** The final outcome carries a short reason the episode row can show (no URLs, no token). */
-    private fun failed(reason: String): Result = Result.failure(workDataOf(PodcastKeys.OUTPUT_REASON to reason.take(120)))
+    /** The final outcome carries a code the episode row can name; never a path, URL or token. */
+    private fun failed(code: String): Result = Result.failure(workDataOf(PodcastKeys.OUTPUT_REASON to code.take(80)))
 
     override suspend fun getForegroundInfo(): ForegroundInfo {
         val manager = applicationContext.getSystemService(NotificationManager::class.java)

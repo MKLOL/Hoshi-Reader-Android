@@ -28,6 +28,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -73,7 +74,7 @@ internal fun PodcastsView(modifier: Modifier = Modifier) {
                 controller = it
                 it.addListener(listener)
                 playingTitle = it.currentMediaItem?.mediaMetadata?.title?.toString().orEmpty()
-            }.onFailure { playerError = it.javaClass.simpleName }
+            }.onFailure { playerError = (it.cause ?: it).javaClass.simpleName }
         }, ContextCompat.getMainExecutor(context))
         onDispose {
             controller?.removeListener(listener)
@@ -117,18 +118,22 @@ internal fun PodcastsView(modifier: Modifier = Modifier) {
                 if (state.feedStale) Text(stringResource(R.string.podcasts_cached_feed), style = MaterialTheme.typography.bodySmall)
                 // The server's worker prepares every lesson; when it is down or misconfigured, say so
                 // with its own words before the user wonders why Prepare fails.
-                state.worker?.takeIf { !it.alive || it.problems.isNotEmpty() }?.let { worker ->
+                state.worker?.takeIf(::podcastWorkerNeedsAttention)?.let { worker ->
                     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                         if (!worker.alive) {
                             Text(stringResource(R.string.podcasts_worker_down), color = MaterialTheme.colorScheme.error)
+                            val seen = worker.lastSeenSeconds
                             Text(
-                                worker.lastSeenSeconds?.let { stringResource(R.string.podcasts_worker_last_seen, it / 60) }
-                                    ?: stringResource(R.string.podcasts_worker_never_seen),
+                                when {
+                                    seen == null -> stringResource(R.string.podcasts_worker_never_seen)
+                                    seen < 60 -> stringResource(R.string.podcasts_worker_last_seen_recent)
+                                    else -> pluralStringResource(R.plurals.podcasts_worker_last_seen_minutes, seen / 60, seen / 60)
+                                },
                                 style = MaterialTheme.typography.bodySmall,
                             )
                         }
-                        worker.problems.forEach { problem ->
-                            Text(stringResource(R.string.podcasts_worker_problem, problem), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                        worker.problems.mapNotNull(::podcastDisplayText).forEach { problem ->
+                            Text(stringResource(R.string.podcasts_worker_problem, problem), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error, maxLines = 3)
                         }
                     }
                 }
@@ -138,7 +143,7 @@ internal fun PodcastsView(modifier: Modifier = Modifier) {
                             Text(stringResource(message), modifier = Modifier.weight(1f), color = MaterialTheme.colorScheme.error)
                             TextButton(onClick = model::retry) { Text(stringResource(R.string.podcasts_retry)) }
                         }
-                        state.errorDetail?.let { Text(stringResource(R.string.podcasts_error_detail, it), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                        podcastDisplayText(state.errorDetail)?.let { Text(stringResource(R.string.podcasts_error_detail, it), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 3) }
                     }
                 }
                 if (state.loading) CircularProgressIndicator()
@@ -150,19 +155,25 @@ internal fun PodcastsView(modifier: Modifier = Modifier) {
                 Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text(episode.title, style = MaterialTheme.typography.titleMedium)
                     Text(stringResource(R.string.podcasts_original_duration, episode.durationSeconds / 60, episode.durationSeconds % 60), style = MaterialTheme.typography.bodySmall)
-                    val attemptsLeft = (state.maxFailures - episode.failureCount).coerceAtLeast(0)
+                    val attemptsLeft = podcastAttemptsLeft(state.maxFailures, episode.failureCount)
                     if (episode.status == "failed") {
+                        val reason = podcastDisplayText(episode.errorMessage) ?: episode.errorCode?.takeIf { it.isNotBlank() }
                         Text(
-                            stringResource(R.string.podcasts_generation_failed_detail, episode.errorMessage ?: episode.errorCode ?: stringResource(R.string.podcasts_generation_failed)),
+                            reason?.let { stringResource(R.string.podcasts_generation_failed_detail, it) } ?: stringResource(R.string.podcasts_generation_failed),
                             color = MaterialTheme.colorScheme.error,
+                            maxLines = 4,
                         )
-                        Text(
-                            if (attemptsLeft > 0) stringResource(R.string.podcasts_attempts_left, attemptsLeft, state.maxFailures) else stringResource(R.string.podcasts_attempts_exhausted),
-                            style = MaterialTheme.typography.bodySmall,
-                        )
+                        // Only a server that reports its limit gets an attempt count.
+                        val maxFailures = state.maxFailures
+                        if (attemptsLeft != null && maxFailures != null) {
+                            Text(
+                                if (attemptsLeft > 0) stringResource(R.string.podcasts_attempts_left, attemptsLeft, maxFailures) else stringResource(R.string.podcasts_attempts_exhausted),
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
                     }
-                    state.downloadFailures[episode.id]?.let { reason ->
-                        Text(stringResource(R.string.podcasts_download_failed_detail, reason.ifBlank { stringResource(R.string.podcasts_reason_unknown) }), color = MaterialTheme.colorScheme.error)
+                    state.downloadFailures[episode.id]?.let { code ->
+                        Text(stringResource(R.string.podcasts_download_failed_detail, downloadReason(code)), color = MaterialTheme.colorScheme.error, maxLines = 3)
                     }
                     when {
                         episode.id in state.downloaded -> Button(enabled = controller != null, onClick = {
@@ -198,4 +209,12 @@ internal fun PodcastsView(modifier: Modifier = Modifier) {
             }
         }
     }
+}
+
+/** A download outcome code as the user's language; an exception name stays as the identifier it is. */
+@Composable
+private fun downloadReason(code: String): String = when {
+    code.startsWith("http:") -> stringResource(R.string.podcasts_reason_http, code.removePrefix("http:").toIntOrNull() ?: 0)
+    code.startsWith("exception:") -> code.removePrefix("exception:")
+    else -> podcastDownloadReasonRes(code)?.let { stringResource(it) } ?: stringResource(R.string.podcasts_reason_unknown)
 }
