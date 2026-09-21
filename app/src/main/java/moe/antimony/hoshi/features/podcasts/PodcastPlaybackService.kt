@@ -39,25 +39,30 @@ class PodcastPlaybackService : MediaSessionService() {
             override fun onPlaybackStateChanged(playbackState: Int) { savePosition() }
             override fun onIsPlayingChanged(isPlaying: Boolean) { savePosition() }
             override fun onPositionDiscontinuity(oldPosition: Player.PositionInfo, newPosition: Player.PositionInfo, reason: Int) {
-                oldPosition.mediaItem?.mediaId?.let { positions.edit().putLong(it, oldPosition.positionMs).apply() }
+                // A seek within the lesson must remember where it landed, not where it left.
+                if (reason == Player.DISCONTINUITY_REASON_SEEK || reason == Player.DISCONTINUITY_REASON_SEEK_ADJUSTMENT) savePosition()
+                else oldPosition.mediaItem?.mediaId?.let { positions.edit().putLong(it, oldPosition.positionMs).apply() }
             }
         })
-        val activity = PendingIntent.getActivity(this, 902, Intent(this, MainActivity::class.java).putExtra("openPodcasts", true), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+        val activity = PendingIntent.getActivity(this, 902, Intent(this, MainActivity::class.java).putExtra(PodcastKeys.OPEN_EXTRA, true), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         session = MediaSession.Builder(this, player).setSessionActivity(activity)
             .setCallback(object : MediaSession.Callback {
                 override fun onAddMediaItems(mediaSession: MediaSession, controller: MediaSession.ControllerInfo, mediaItems: List<MediaItem>): ListenableFuture<List<MediaItem>> {
-                    val account = PodcastSessionGate.account.value
+                    val account = repository.account.value
                     val accepted = mediaItems.mapNotNull { item ->
                         val parts = item.mediaId.split(':')
                         if (account == null || parts.size != 2 || parts[0] != account || !validPodcastId(parts[1])) return@mapNotNull null
-                        val file = PodcastFiles(this@PodcastPlaybackService).audio(account, parts[1])
-                        if (!file.isFile) null else item.buildUpon().setUri(android.net.Uri.fromFile(file)).build()
+                        val file = repository.files.audio(account, parts[1])
+                        // Only the id and title come from the controller; the file and everything else are ours.
+                        if (!file.isFile) null
+                        else MediaItem.Builder().setMediaId(item.mediaId).setUri(android.net.Uri.fromFile(file))
+                            .setMediaMetadata(androidx.media3.common.MediaMetadata.Builder().setTitle(item.mediaMetadata.title).build()).build()
                     }
                     return Futures.immediateFuture(accepted)
                 }
             }).build()
         scope.launch {
-            PodcastSessionGate.account.collect { account ->
+            repository.account.collect { account ->
                 val currentAccount = player.currentMediaItem?.mediaId?.substringBefore(':')
                 if (account == null || (currentAccount != null && currentAccount != account)) {
                     savePosition()
