@@ -4,10 +4,14 @@
         <exclude domain="file" path="datastore/ai-chat-settings.preferences_pb" />
         <exclude domain="file" path="datastore/http-sync-settings.preferences_pb" />
         <exclude domain="sharedpref" path="google-drive-device-code-auth.xml" />
+        <exclude domain="sharedpref" path="podcast-access.xml" />
+        <exclude domain="sharedpref" path="podcast-positions.xml" />
     </cloud-backup>
     <device-transfer>
         <exclude domain="file" path="datastore/ai-chat-settings.preferences_pb" />
         <exclude domain="file" path="datastore/http-sync-settings.preferences_pb" />
         <exclude domain="sharedpref" path="google-drive-device-code-auth.xml" />
+        <exclude domain="sharedpref" path="podcast-access.xml" />
+        <exclude domain="sharedpref" path="podcast-positions.xml" />
     </device-transfer>
 </data-extraction-rules>

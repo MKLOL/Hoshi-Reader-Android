@@ -16,19 +16,15 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import moe.antimony.hoshi.MainActivity
-
-internal object PodcastSessionGate {
-    val account = MutableStateFlow<String?>(null)
-}
 
 @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 class PodcastPlaybackService : MediaSessionService() {
     private var session: MediaSession? = null
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
-    private val positions by lazy { getSharedPreferences("podcast-positions", MODE_PRIVATE) }
+    private val positions by lazy { getSharedPreferences(PodcastKeys.POSITIONS_PREFS, MODE_PRIVATE) }
+    private val repository by lazy { PodcastRepository.getInstance(this) }
 
     override fun onCreate() {
         super.onCreate()

@@ -32,4 +32,12 @@ internal class PodcastFiles(context: Context) {
         require(validPodcastId(account) && validPodcastId(id))
         return File(File(root, account), "$id.mp3")
     }
+    /** Removes every account's lessons, catalogue and partial downloads except [keep]'s. */
+    fun pruneExcept(keep: String?) {
+        root.listFiles()?.filter { it.isDirectory && it.name != keep }?.forEach { it.deleteRecursively() }
+    }
+    fun deleteAccount(account: String) {
+        require(validPodcastId(account))
+        File(root, account).deleteRecursively()
+    }
 }
