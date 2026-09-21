@@ -111,7 +111,10 @@ internal class HoshiAppContainer(context: Context) {
         drive = googleDriveClient,
     )
     val httpSyncSettingsRepository: HttpSyncSettingsRepository = appContext.httpSyncSettingsRepository()
-    val podcastRepository = moe.antimony.hoshi.features.podcasts.PodcastRepository.getInstance(appContext)
+    /** Lazy: only the main shell needs podcasts; the text-lookup entry point must not start its polling. */
+    val podcastRepository: moe.antimony.hoshi.features.podcasts.PodcastRepository by lazy {
+        moe.antimony.hoshi.features.podcasts.PodcastRepository.getInstance(appContext)
+    }
     val aiChatSettingsRepository: AiChatSettingsRepository = appContext.aiChatSettingsRepository()
     // Wallclock of the most recent successful manual Sync now. The reader hooks read it
     // to clear their circuit breaker on the next page turn after a successful manual sync.

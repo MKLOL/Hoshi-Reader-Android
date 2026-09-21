@@ -26,6 +26,7 @@ import moe.antimony.hoshi.features.news.NewsSharedUrl
 import moe.antimony.hoshi.features.update.UpdateConfig
 import moe.antimony.hoshi.navigation.AppShell
 import moe.antimony.hoshi.ui.theme.HoshiReaderTheme
+import moe.antimony.hoshi.features.podcasts.PodcastKeys
 
 class MainActivity : ComponentActivity() {
     private var pendingImportUri by mutableStateOf<Uri?>(null)
@@ -37,7 +38,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         pendingImportUri = intent.importUri()
         pendingNewsUrl = intent.sharedNewsUrl()
-        pendingPodcasts = intent.getBooleanExtra("openPodcasts", false)
+        pendingPodcasts = intent.getBooleanExtra(PodcastKeys.OPEN_EXTRA, false)
         enableEdgeToEdge()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             window.isNavigationBarContrastEnforced = false
@@ -100,7 +101,7 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        if (intent.getBooleanExtra("openPodcasts", false)) pendingPodcasts = true
+        if (intent.getBooleanExtra(PodcastKeys.OPEN_EXTRA, false)) pendingPodcasts = true
         intent.importUri()?.let { pendingImportUri = it }
         intent.sharedNewsUrl()?.let { pendingNewsUrl = it }
     }
