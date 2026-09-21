@@ -34,6 +34,21 @@ class RssFeedParserTest {
     }
 
     @Test
+    fun rssSummariesDecodeHtmlWithoutDuplicatingFurigana() {
+        val html = """<p><ruby>雨<rp>(</rp><rt>あめ</rt><rp>)</rp></ruby>のニュース &amp; 天気</p><img src="https://example.jp/rain.jpg">"""
+        val escaped = html.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        for (description in listOf("<![CDATA[$html]]>", escaped)) {
+            val item = RssFeedParser.parse("""
+                <rss><item><title>雨 &lt;ニュース&gt;</title><link>https://example.jp/rain</link>
+                <description>$description</description></item></rss>
+            """.trimIndent()).single()
+            assertEquals("雨 <ニュース>", item.title)
+            assertEquals("雨 のニュース & 天気", item.summary)
+            assertEquals("https://example.jp/rain.jpg", item.imageUrl)
+        }
+    }
+
+    @Test
     fun parsesAtomEntriesWithHrefLinksAndIsoDates() {
         val feed = """
             <feed xmlns="http://www.w3.org/2005/Atom">
@@ -54,6 +69,16 @@ class RssFeedParserTest {
         assertEquals(1788829200000L, items[0].publishedAt)
         assertEquals("要約です。", items[0].summary)
         assertNull(items[0].imageUrl)
+    }
+
+    @Test
+    fun atomPlainTextSummaryPreservesLiteralAngleBrackets() {
+        val item = RssFeedParser.parse("""
+            <feed><entry><link href="https://example.jp/markup"/>
+            <summary>Use &lt;ruby&gt; for readings; 1 &lt; 2 and 3 &gt; 2.</summary>
+            </entry></feed>
+        """.trimIndent()).single()
+        assertEquals("Use <ruby> for readings; 1 < 2 and 3 > 2.", item.summary)
     }
 
     @Test

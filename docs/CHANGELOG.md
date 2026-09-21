@@ -7,6 +7,9 @@ Semantic Versioning.
 
 ## [Unreleased]
 
+### Added
+- **NHK learning podcasts.** A validated book-sync token unlocks Podcasts: filter news by original length, prepare a shared Japanese/English lesson with vocabulary replay, download it, and listen with seeking, playback speed and lock-screen controls. Downloads and saved lessons remain available between visits. When something fails, the screen says which step failed and why, how many attempts remain, whether the server's worker is running, and why a download or playback failed.
+
 ### Changed
 - **Pre-translate with your own instructions.** The pre-translate dialog has a field for your own task description for cloud models (for example literal translations with particle notes). It replaces the built-in wording, the reply format is added automatically, and the text is remembered for the next article. Leave it empty for the default.
 
@@ -14,9 +17,34 @@ Semantic Versioning.
 - **News headlines keep their furigana.** An article saved from the News tab now shows the headline with the readings the site provides instead of plain text.
 - **Numbers no longer lie on their side in vertical reading.** Japanese news articles are saved with full-width digits, so 4, 5, 6 and years stand upright when the reader is in vertical mode.
 
-### Added
-- **NHK learning podcasts.** A validated book-sync token unlocks Podcasts: filter news by original length, prepare a shared Japanese/English lesson with vocabulary replay, download it, and listen with seeking, playback speed and lock-screen controls. Downloads and saved lessons remain available between visits. When something fails, the screen says which step failed and why, how many attempts remain, whether the server's worker is running, and why a download or playback failed.
+## [v0.11.13] - 2026-09-13
 
+### Added
+- **A Statistics screen, one tap from Books.** The chart button in the Books bar (also Settings → Statistics) shows a reading streak against a daily goal you choose (5, 10, 15 or 30 minutes), total and today's reading time and characters, a 16-week reading heatmap, time by weekday, and every book with its cover. Tap a book for when you started it, last read it and finished it, your reading speed, time per page, best day and a day-by-day history. A "By device" card on both pages shows how much you read on each device (phone, tablet, …); every day is recorded per device, so two devices reading the same day add up instead of overwriting each other.
+- **Reading statistics sync between devices.** HTTP sync now merges each book's per-day reading time and characters (and manga pages) across devices, so a manga read on the phone shows the same numbers on the tablet. Each device's reading is kept separately, so two devices reading the same book on the same day add up. Reading recorded before this version counts for the device it is on; if you restored the same library onto a second device before upgrading, that older history is counted on both.
+
+### Fixed
+- **Manga and books open faster.** Opening a book no longer waits more than 1.5 seconds for the HTTP sync bookmark check; on a slow connection it opens on the local bookmark and jumps to a newer remote one if it arrives later. Opening a manga also stops re-reading and rewriting its sidecar files every time, and its first page is no longer loaded twice while the system bars hide.
+- **Statistics always reflect what you just read.** The Statistics page could keep showing an old total after more reading; it now reloads whenever statistics change. The EPUB reader also saves the time spent on the last page when you close or background it, and manga pages and characters no longer count while tracking is paused or when jumping with "Go to page".
+
+## [v0.11.12] - 2026-09-12
+
+### Added
+- **Manga statistics count characters too.** The reader's Statistics sheet and Settings → Statistics show how many characters of manga text you have read, next to the pages.
+
+## [v0.11.11] - 2026-09-12
+
+### Added
+- **A Statistics page in Settings.** See your total and today's reading time, and how long you have spent in each book and manga.
+
+### Changed
+- **Reading statistics are always on.** Every book and manga session is tracked automatically, so there is no Enable switch or Autostart option to set.
+
+## [v0.11.10] - 2026-09-12
+
+### Fixed
+- **Manga swipes work on pages with overflowing OCR text.** Invisible text and rounded starting zoom no longer make fitted pages act like they can be panned; pinch zoom and ordinary page turns keep their existing behavior.
+- **News shows current articles first.** NHK Easier and Slow Communication provide dated easy-Japanese news, undated articles no longer jump to the top after refresh, and Watanoc's 2016 archive is now off by default (re-enable it under Sources).
 
 ## [v0.11.9] - 2026-09-10
 

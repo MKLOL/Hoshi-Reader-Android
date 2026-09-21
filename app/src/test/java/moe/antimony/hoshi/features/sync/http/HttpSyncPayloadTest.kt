@@ -382,6 +382,7 @@ class HttpSyncPayloadTest {
             resolve("metadata.json").writeText("""{"title":"T","id":"abc","lastAccess":12345}""")
             resolve("statistics.json").writeText("""[{"chapterIndex":1,"timestampSeconds":1.0}]""")
             resolve("manga_statistics.json").writeText("""{"pages":1}""")
+            resolve(STATISTICS_SYNC_STATE_FILENAME).writeText("""{"reading":{"localSha256":"x","remoteSize":1}}""")
             resolve("sasayaki_match.json").writeText("""{"deviceId":"a"}""")
             resolve("sasayaki_playback.json").writeText("""{"playheadPosition":10.0}""")
             resolve("bookinfo.json").writeText("""{"characterCount":1}""")
@@ -401,6 +402,7 @@ class HttpSyncPayloadTest {
             "metadata.json",
             "statistics.json",
             "manga_statistics.json",
+            STATISTICS_SYNC_STATE_FILENAME,
             "sasayaki_match.json",
             "sasayaki_playback.json",
             "bookinfo.json",

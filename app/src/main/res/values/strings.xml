@@ -71,6 +71,7 @@
     <string name="ai_translation_epub_pretranslated_debug">Offline EPUB pre-translation</string>
     <string name="settings_appearance">Appearance</string>
     <string name="settings_behavior">Behavior</string>
+    <string name="settings_statistics">Statistics</string>
     <string name="settings_advanced">Advanced</string>
     <string name="settings_report_issue">Report an Issue</string>
     <string name="settings_diagnostics">Diagnostics</string>
@@ -215,7 +216,7 @@
     <string name="reader_image_save_failed">Could not save image.</string>
     <string name="reader_chapters">Chapters</string>
     <string name="reader_highlights">Highlights</string>
-    <string name="reader_statistics" comment="Reader menu label, intentionally matching advanced statistics.">Statistics</string>
+    <string name="reader_statistics" comment="Reader menu label and the Statistics screen title.">Statistics</string>
     <string name="reader_untitled_chapter">Untitled</string>
     <string name="reader_jump_to_character">Jump to Character</string>
     <string name="reader_character">Character</string>
@@ -231,12 +232,71 @@
     <string name="reader_statistics_characters_read">Characters Read:</string>
     <string name="reader_statistics_reading_speed">Reading Speed:</string>
     <string name="reader_statistics_reading_time">Reading Time:</string>
-    <string name="reader_statistics_autostart">Autostart</string>
-    <string name="reader_statistics_autostart_off">Off</string>
-    <string name="reader_statistics_autostart_page_turn">Page Turn</string>
-    <string name="reader_statistics_autostart_on">On</string>
     <string name="reader_statistics_sync_behaviour">Sync Behaviour</string>
-    <string name="reader_statistics_settings_hint">Statistics can be accessed from the Reader\'s context menu.</string>
+    <string name="statistics_overview_total_reading_time">Total reading time</string>
+    <string name="statistics_overview_per_book">Time per book</string>
+    <string name="statistics_overview_empty">No reading time recorded yet.</string>
+    <string name="statistics_overview_loading">Loading statistics…</string>
+    <string name="statistics_overview_last_read_format">Last read %1$s</string>
+    <string name="statistics_overview_characters_total">Characters read</string>
+    <string name="statistics_overview_characters_today">Characters read today</string>
+    <string name="bookshelf_statistics">Reading statistics</string>
+    <string name="statistics_streak_start_format">Read %1$s today to start a streak</string>
+    <string name="statistics_streak_keep_format">%1$s more today keeps your streak</string>
+    <string name="statistics_streak_new_record">new record</string>
+    <plurals name="statistics_streak_longest_days">
+        <item quantity="one">Longest %1$d day</item>
+        <item quantity="other">Longest %1$d days</item>
+    </plurals>
+    <plurals name="statistics_streak_goal_days">
+        <item quantity="one">%1$d day on goal</item>
+        <item quantity="other">%1$d days on goal</item>
+    </plurals>
+    <string name="statistics_streak_today_done">Today\'s goal reached</string>
+    <string name="statistics_streak_today_progress_format">%1$s of %2$s today</string>
+    <string name="statistics_streak_goal">Daily goal</string>
+    <string name="statistics_streak_goal_minutes_format">%1$d min</string>
+    <string name="statistics_heatmap_title">Last 16 weeks</string>
+    <string name="statistics_heatmap_less">Less</string>
+    <string name="statistics_heatmap_more">More</string>
+    <string name="statistics_weekday_title">Time by weekday</string>
+    <string name="statistics_book_started">Started</string>
+    <string name="statistics_book_last_read">Last read</string>
+    <string name="statistics_book_finished">Finished</string>
+    <string name="statistics_book_not_finished_format">Not finished · %1$s</string>
+    <string name="statistics_book_reading_time">Reading time</string>
+    <string name="statistics_book_pages_read">Pages read</string>
+    <string name="statistics_book_days_read">Days read</string>
+    <string name="statistics_book_average_per_day">Average per day</string>
+    <string name="statistics_book_reading_speed">Reading speed</string>
+    <string name="statistics_book_speed_pages_format">%1$s pages / h</string>
+    <string name="statistics_book_speed_characters_format">%1$s characters / h</string>
+    <string name="statistics_book_per_page">Per page</string>
+    <string name="statistics_book_per_hundred_characters">Per 100 characters</string>
+    <string name="statistics_book_best_day">Best day</string>
+    <string name="statistics_book_history">History</string>
+    <string name="statistics_book_type_manga">Manga</string>
+    <string name="statistics_book_type_book">Book</string>
+    <string name="statistics_book_not_found">This book is no longer in your library.</string>
+    <string name="statistics_devices_title">By device</string>
+    <string name="statistics_this_device">This device</string>
+    <string name="statistics_unknown_device">Unknown device</string>
+    <plurals name="statistics_device_books">
+        <item quantity="one">%1$s book</item>
+        <item quantity="other">%1$s books</item>
+    </plurals>
+    <plurals name="statistics_streak_days">
+        <item quantity="one">%1$d day streak</item>
+        <item quantity="other">%1$d day streak</item>
+    </plurals>
+    <plurals name="statistics_overview_pages_read">
+        <item quantity="one">%1$s page read</item>
+        <item quantity="other">%1$s pages read</item>
+    </plurals>
+    <plurals name="statistics_overview_characters_read">
+        <item quantity="one">%1$s character read</item>
+        <item quantity="other">%1$s characters read</item>
+    </plurals>
     <string name="reader_appearance_theme">Theme</string>
     <string name="reader_appearance_text">Text</string>
     <string name="reader_appearance_layout">Layout</string>
@@ -358,8 +418,6 @@
     <string name="backup_archiving">Archiving...</string>
     <string name="backup_restoring">Restoring...</string>
     <string name="advanced_audio">Audio</string>
-    <string name="advanced_statistics" comment="Advanced settings row label, intentionally matching reader statistics label.">Statistics</string>
-    <string name="advanced_statistics_subtitle">Track per-book reading time, speed, and progress</string>
     <string name="advanced_sasayaki_audiobooks">Sasayaki (Audiobooks)</string>
     <string name="advanced_sasayaki_subtitle">Read along with matched audiobook subtitles</string>
     <string name="advanced_ttu_sync">ッツ Sync</string>
@@ -596,12 +654,12 @@
     <string name="manga_statistics_title">Manga Statistics</string>
     <string name="manga_statistics_page_of_format">Page %1$d of %2$d</string>
     <string name="manga_statistics_loading">Loading statistics...</string>
-    <string name="manga_statistics_off">Statistics are off.</string>
     <string name="manga_statistics_pages_remaining">Pages Remaining</string>
     <string name="manga_statistics_time_to_finish">Time to Finish</string>
     <string name="manga_statistics_pages_read">Pages Read</string>
     <string name="manga_statistics_pace">Pace</string>
     <string name="manga_statistics_reading_time">Reading Time</string>
+    <string name="manga_statistics_characters_read">Characters Read</string>
     <!-- Manga screenshot crop overlay + clipboard (features/mangareader) -->
     <string name="manga_screenshot_translate">Translate</string>
     <string name="manga_clipboard_bubble_copied">Bubble text copied</string>

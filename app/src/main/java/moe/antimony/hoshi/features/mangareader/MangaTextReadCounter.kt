@@ -1,0 +1,63 @@
+package moe.antimony.hoshi.features.mangareader
+
+import moe.antimony.hoshi.epub.DeviceIdentity
+import moe.antimony.hoshi.features.reader.ReaderStatisticsClock
+import moe.antimony.hoshi.features.reader.SystemReaderStatisticsClock
+import moe.antimony.hoshi.mokuro.MangaTextStatistic
+import moe.antimony.hoshi.mokuro.deduplicateMangaTextStatistics
+
+data class MangaTextReadState(
+    val sessionCharacters: Int,
+    val todayCharacters: Int,
+    val allTimeCharacters: Int,
+)
+
+/**
+ * Counts OCR characters read, per day, next to the page-based
+ * [moe.antimony.hoshi.features.reader.ReaderStatisticsTracker]. Only forward page turns add
+ * characters (see `MokuroBook.ocrCharactersTurnedPast`); turning back adds nothing, and turning
+ * forward again over the same pages counts them again, exactly like the page counter.
+ */
+class MangaTextReadCounter(
+    initialStatistics: List<MangaTextStatistic>,
+    private val clock: ReaderStatisticsClock = SystemReaderStatisticsClock,
+    /** The device whose per-day entry this counter adds to; other devices' entries are left as they are. */
+    private val device: DeviceIdentity? = null,
+) {
+    private var statistics = initialStatistics.deduplicateMangaTextStatistics()
+    private var sessionCharacters = 0
+    private var hasChanges = false
+
+    val state: MangaTextReadState
+        get() {
+            val today = clock.currentDate().toString()
+            return MangaTextReadState(
+                sessionCharacters = sessionCharacters,
+                // Every device's characters for today, like the Statistics page's history.
+                todayCharacters = statistics.filter { it.dateKey == today }.sumOf { it.charactersRead },
+                allTimeCharacters = statistics.sumOf { it.charactersRead },
+            )
+        }
+
+    fun add(characters: Int) {
+        if (characters <= 0) return
+        val today = clock.currentDate().toString()
+        val existing = statistics.firstOrNull { it.dateKey == today && it.deviceId == device?.id }
+        val updated = MangaTextStatistic(
+            dateKey = today,
+            charactersRead = (existing?.charactersRead ?: 0) + characters,
+            // Strictly newer than the day this count was built on, so the merge on save keeps
+            // it even when the clock is behind that day's stamp (see ReaderStatisticsTracker).
+            lastModified = maxOf(clock.currentTimeMillis(), (existing?.lastModified ?: 0L) + 1),
+            deviceId = device?.id,
+            deviceName = device?.name,
+        )
+        statistics = statistics.filterNot { it.dateKey == today && it.deviceId == device?.id } + updated
+        sessionCharacters += characters
+        hasChanges = true
+    }
+
+    /** Every day's count once something was read in this session; null while nothing changed. */
+    fun statisticsForPersistenceOrNull(): List<MangaTextStatistic>? =
+        if (hasChanges) statistics else null
+}

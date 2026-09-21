@@ -57,6 +57,33 @@ class ReaderRouteStateHolderTest {
     }
 
     @Test
+    fun loadRunsThePreOpenHookBeforeParsingAndSignalsRightBeforeTheBookmarkRead() = runBlocking {
+        val root = File("book-a")
+        val repository = FakeReaderRouteBookRepository(
+            entry = BookEntry(root, BookMetadata("book-a", "Book", null, "book-a", 0.0)),
+            bookmark = Bookmark(chapterIndex = 0, progress = 0.1, characterCount = 1, lastModified = 10.0),
+            now = 42.0,
+        )
+        val remoteWinner = Bookmark(chapterIndex = 3, progress = 0.9, characterCount = 9, lastModified = 20.0)
+        val stateHolder = ReaderRouteStateHolder(repository, FakeReaderRouteEpubParser(readerBook()))
+        val order = mutableListOf<String>()
+
+        val state = stateHolder.load(
+            bookId = "book-a",
+            beforeBookmarkLoad = { order += "beforeBookmarkLoad" },
+            beforeBookmarkRead = {
+                order += "beforeBookmarkRead"
+                // A remote winner landing at this very moment is still what this load opens on,
+                // which is why the route only starts reloading on remote updates from here.
+                repository.bookmark = remoteWinner
+            },
+        )
+
+        assertEquals(listOf("beforeBookmarkLoad", "beforeBookmarkRead"), order)
+        assertEquals(remoteWinner, (state as ReaderRouteLoadState.Ready).bookmark)
+    }
+
+    @Test
     fun loadErrorReportsMissingBook() = runBlocking {
         val stateHolder = ReaderRouteStateHolder(
             repository = FakeReaderRouteBookRepository(entry = null),
@@ -164,9 +191,37 @@ class ReaderRouteStateHolderTest {
         assertEquals(statistics, repository.savedStatistics)
     }
 
+    @Test
+    fun saveStatisticsAloneWritesTheSidecarWithoutABookmarkOrASyncQueueEntry() = runBlocking {
+        val root = File("book-a")
+        val book = readerBook(html = "1234567890")
+        val statistics = listOf(ReadingStatistics(title = "Book", dateKey = "2026-09-12", readingTime = 95.0, charactersRead = 40))
+        val repository = FakeReaderRouteBookRepository(entry = null, now = 99.0)
+        var bookmarkQueued = false
+        val stateHolder = ReaderRouteStateHolder(
+            repository,
+            FakeReaderRouteEpubParser(book),
+            onBookmarkPersisted = { _, _, _ -> bookmarkQueued = true },
+        )
+
+        stateHolder.saveStatistics(
+            state = ReaderRouteLoadState.Ready(
+                entry = BookEntry(root, BookMetadata("book-a", "Book", null, "book-a", 0.0)),
+                bookRoot = root,
+                book = book,
+                bookmark = null,
+            ),
+            statistics = statistics,
+        )
+
+        assertEquals(statistics, repository.savedStatistics)
+        assertEquals(null, repository.savedBookmark)
+        assertEquals(false, bookmarkQueued)
+    }
+
     private class FakeReaderRouteBookRepository(
         private val entry: BookEntry?,
-        private val bookmark: Bookmark? = null,
+        var bookmark: Bookmark? = null,
         private val bookInfo: BookInfo? = null,
         private val now: Double = 1.0,
     ) : ReaderRouteBookRepository {

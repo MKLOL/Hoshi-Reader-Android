@@ -39,6 +39,15 @@ internal fun MutableList<NavKey>.openSentenceReaderRoute(bookId: String) {
     add(AppRoute.SentenceReaderRoute(bookId))
 }
 
+/** Pushed on top of whatever the user is looking at, so Back returns there. */
+internal fun MutableList<NavKey>.openStatisticsRoute() {
+    add(AppRoute.StatisticsRoute)
+}
+
+internal fun MutableList<NavKey>.openBookStatisticsRoute(bookId: String) {
+    add(AppRoute.StatisticsBookRoute(bookId))
+}
+
 internal fun MutableList<NavKey>.openSasayakiMatchRoute(bookId: String) {
     selectTopLevelRoute(AppRoute.BooksRoute)
     add(AppRoute.SasayakiMatchRoute(bookId))

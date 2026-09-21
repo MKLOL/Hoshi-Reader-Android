@@ -49,6 +49,8 @@ import moe.antimony.hoshi.features.reader.ReaderSettings
 import moe.antimony.hoshi.features.reader.sentence.SentenceReaderScreen
 import moe.antimony.hoshi.features.sasayaki.SasayakiMatchView
 import moe.antimony.hoshi.features.sasayaki.SasayakiSettings
+import moe.antimony.hoshi.features.statistics.BookStatisticsScreen
+import moe.antimony.hoshi.features.statistics.StatisticsScreen
 import moe.antimony.hoshi.features.settings.AdvancedSettingsView
 import moe.antimony.hoshi.features.update.AboutScreen
 import kotlinx.coroutines.launch
@@ -188,6 +190,7 @@ fun AppShell(
                         onOpenReader = ::openReader,
                         onOpenSasayakiMatch = ::openSasayakiMatch,
                         bookshelfRefreshKey = bookshelfRefreshKey,
+                        onOpenStatistics = { backStack.openStatisticsRoute() },
                         onSelectedTabChange = { selectTopLevelRoute(it.toRoute()) },
                     )
                     AppRoute.NewsRoute, AppRoute.PodcastsRoute -> TopLevelRouteContent(
@@ -227,6 +230,7 @@ fun AppShell(
                         onSettingsDestination = { destination ->
                             when (destination) {
                                 SettingsDestination.Anki -> openSettingsDetail(destination.toSection())
+                                SettingsDestination.Statistics -> backStack.openStatisticsRoute()
                                 SettingsDestination.ReportIssue -> context.startActivity(
                                     Intent(
                                         Intent.ACTION_VIEW,
@@ -245,7 +249,10 @@ fun AppShell(
                         onSasayakiSettingsChange = ::updateSasayakiSettings,
                         readerFontManager = readerFontManager,
                         onClose = ::popRoute,
-                        onBooksRestored = { bookshelfRefreshKey += 1 },
+                        onBooksRestored = {
+                            bookshelfRefreshKey += 1
+                            appContainer.bookRepository.notifyStatisticsChanged()
+                        },
                         onSelectedTabChange = { selectTopLevelRoute(it.toRoute()) },
                     )
                     is AppRoute.ReaderRoute -> {
@@ -261,6 +268,16 @@ fun AppShell(
                             modifier = Modifier.fillMaxSize(),
                         )
                     }
+                    AppRoute.StatisticsRoute -> StatisticsScreen(
+                        onOpenBook = { bookId -> backStack.openBookStatisticsRoute(bookId) },
+                        onClose = ::popRoute,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                    is AppRoute.StatisticsBookRoute -> BookStatisticsScreen(
+                        bookId = route.bookId,
+                        onClose = ::popRoute,
+                        modifier = Modifier.fillMaxSize(),
+                    )
                     is AppRoute.SentenceReaderRoute -> {
                         SentenceReaderScreen(
                             bookId = route.bookId,
@@ -346,6 +363,7 @@ private fun TopLevelRouteContent(
     bookshelfRefreshKey: Int,
     onSelectedTabChange: (MainTab) -> Unit,
     onSettingsDestination: (SettingsDestination) -> Unit = {},
+    onOpenStatistics: () -> Unit = {},
     pendingNewsUrl: String? = null,
     onPendingNewsUrlConsumed: () -> Unit = {},
 ) {
@@ -364,6 +382,7 @@ private fun TopLevelRouteContent(
                 onPendingImportConsumed = onPendingImportConsumed,
                 onOpenReader = onOpenReader,
                 onOpenSasayakiMatch = onOpenSasayakiMatch,
+                onOpenStatistics = onOpenStatistics,
                 refreshKey = bookshelfRefreshKey,
                 layoutSpec = layoutSpec,
                 modifier = contentModifier,
@@ -461,6 +480,7 @@ private fun SettingsDestination.toSection(): SettingsDetailSection = when (this)
     SettingsDestination.ChatGpt -> SettingsDetailSection.ChatGpt
     SettingsDestination.Appearance -> SettingsDetailSection.Appearance
     SettingsDestination.Behavior -> SettingsDetailSection.Behavior
+    SettingsDestination.Statistics -> error("Statistics is its own route (see openStatisticsRoute).")
     SettingsDestination.Advanced -> SettingsDetailSection.Advanced
     SettingsDestination.Diagnostics -> SettingsDetailSection.Diagnostics
     SettingsDestination.About -> SettingsDetailSection.About

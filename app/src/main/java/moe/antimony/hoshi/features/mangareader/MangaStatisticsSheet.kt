@@ -39,16 +39,16 @@ import moe.antimony.hoshi.features.reader.ReaderStatisticsState
 import moe.antimony.hoshi.features.reader.formatDurationSeconds
 import moe.antimony.hoshi.features.reader.readerSheetDensityMetrics
 import moe.antimony.hoshi.features.reader.readerSheetStyle
+import moe.antimony.hoshi.features.statistics.formatStatisticsCount
 import java.util.Locale
 import kotlin.math.max
 
 @Composable
 internal fun MangaStatisticsSheet(
     state: ReaderStatisticsState?,
-    statisticsEnabled: Boolean,
+    textState: MangaTextReadState?,
     pageIndex: Int,
     pageCount: Int,
-    onEnableStatistics: () -> Unit,
     onToggleTracking: () -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -69,15 +69,11 @@ internal fun MangaStatisticsSheet(
                     pageIndex = pageIndex,
                     pageCount = pageCount,
                     isTracking = state?.isTracking == true,
-                    showToggle = statisticsEnabled && state != null,
+                    showToggle = state != null,
                     onToggleTracking = onToggleTracking,
                 )
             }
-            if (!statisticsEnabled) {
-                item {
-                    MangaStatisticsDisabledCard(onEnableStatistics = onEnableStatistics)
-                }
-            } else if (state == null) {
+            if (state == null) {
                 item {
                     MangaStatisticsLoadingCard()
                 }
@@ -87,6 +83,7 @@ internal fun MangaStatisticsSheet(
                         title = stringResource(R.string.reader_statistics_session),
                         icon = Icons.Rounded.Timer,
                         statistic = state.session,
+                        charactersRead = textState?.sessionCharacters,
                         accentColor = MaterialTheme.colorScheme.primary,
                         extraRows = listOf(
                             stringResource(R.string.manga_statistics_pages_remaining) to
@@ -106,6 +103,7 @@ internal fun MangaStatisticsSheet(
                         title = stringResource(R.string.reader_statistics_today),
                         icon = Icons.Rounded.QueryStats,
                         statistic = state.today,
+                        charactersRead = textState?.todayCharacters,
                         accentColor = MaterialTheme.colorScheme.tertiary,
                     )
                 }
@@ -114,6 +112,7 @@ internal fun MangaStatisticsSheet(
                         title = stringResource(R.string.reader_statistics_all_time),
                         icon = Icons.Rounded.QueryStats,
                         statistic = state.allTime,
+                        charactersRead = textState?.allTimeCharacters,
                         accentColor = MaterialTheme.colorScheme.secondary,
                     )
                 }
@@ -202,30 +201,6 @@ private fun MangaStatisticsLoadingCard() {
     }
 }
 
-@Composable
-private fun MangaStatisticsDisabledCard(onEnableStatistics: () -> Unit) {
-    Surface(
-        modifier = Modifier.fillMaxWidth(),
-        shape = MaterialTheme.shapes.medium,
-        color = MaterialTheme.colorScheme.surface,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-        tonalElevation = 0.dp,
-    ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                text = stringResource(R.string.manga_statistics_off),
-                style = MaterialTheme.typography.bodyLarge,
-                modifier = Modifier.weight(1f),
-            )
-            Button(onClick = onEnableStatistics) {
-                Text(stringResource(R.string.action_enable))
-            }
-        }
-    }
-}
 
 @Composable
 private fun MangaStatisticsSection(
@@ -233,6 +208,7 @@ private fun MangaStatisticsSection(
     icon: ImageVector,
     statistic: ReadingStatistics,
     accentColor: Color,
+    charactersRead: Int? = null,
     extraRows: List<Pair<String, String>> = emptyList(),
 ) {
     val metrics = readerSheetDensityMetrics()
@@ -264,8 +240,15 @@ private fun MangaStatisticsSection(
             }
             MangaStatisticRow(
                 stringResource(R.string.manga_statistics_pages_read),
-                statistic.charactersRead.toString(),
+                formatStatisticsCount(statistic.charactersRead),
             )
+            if (charactersRead != null) {
+                MangaStatisticsDivider()
+                MangaStatisticRow(
+                    stringResource(R.string.manga_statistics_characters_read),
+                    formatStatisticsCount(charactersRead),
+                )
+            }
             MangaStatisticsDivider()
             MangaStatisticRow(
                 stringResource(R.string.manga_statistics_pace),
@@ -317,6 +300,14 @@ internal fun mangaStatisticsCounterAfterPageChange(
     toPageIndex: Int,
 ): Int =
     currentCounter.coerceAtLeast(0) + max(toPageIndex - fromPageIndex, 0)
+
+/**
+ * Whether a page change counts as reading for both the page counter and the OCR character
+ * counter: only while statistics are tracking (a paused session records nothing, like the
+ * time) and only for real turns, never for a "Go to page" jump.
+ */
+internal fun mangaPageChangeCountsAsRead(isTracking: Boolean, countAsRead: Boolean): Boolean =
+    isTracking && countAsRead
 
 internal fun mangaRemainingPages(pageIndex: Int, pageCount: Int): Int =
     max(pageCount - mangaStatisticsPosition(pageIndex), 0)

@@ -229,6 +229,9 @@ internal object MangaPageHtml {
           -webkit-text-size-adjust: 100%;
         }
         .page {
+          /* OCR text may extend beyond the artwork. Keep it from making a fitted page
+             horizontally scrollable, which would block page-turn swipes. */
+          overflow: hidden;
           /* A definite pixel-sized box covering the viewport, sized from the host-provided
              viewport (see build()). It deliberately does not pin itself with viewport-edge
              insets: those resolve against the CSS layout viewport, which a WebView can

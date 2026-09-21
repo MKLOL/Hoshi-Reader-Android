@@ -10,6 +10,7 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.Serializable
@@ -693,9 +694,17 @@ class HttpSyncBookmarkScheduler(
         refreshNow()
     }
 
-    suspend fun refreshBeforeOpen() {
-        runMaps()
-    }
+    /**
+     * Refreshes the bookmark maps before a reader opens, waiting at most [timeoutMillis] for
+     * the network. A slow or offline connection must not keep the book on its loading
+     * spinner: once the timeout passes the reader opens on the local bookmark while the
+     * refresh keeps running in the background, and [HttpSyncBatchState.remoteBookmarkUpdates]
+     * reloads the reader if that late refresh pulls a newer remote bookmark for the open book.
+     *
+     * @return `true` when the refresh finished within the timeout.
+     */
+    suspend fun refreshBeforeOpen(timeoutMillis: Long = REFRESH_BEFORE_OPEN_TIMEOUT_MS): Boolean =
+        withTimeoutOrNull(timeoutMillis) { runMaps() } != null
 
     fun flushNow() = refreshNow()
 
@@ -782,6 +791,9 @@ class HttpSyncBookmarkScheduler(
 
     companion object {
         const val BOOKMARK_SYNC_INTERVAL_MS: Long = 5_000L
+
+        /** Longest a reader waits on the pre-open map refresh before opening on the local bookmark. */
+        const val REFRESH_BEFORE_OPEN_TIMEOUT_MS: Long = 1_500L
         private const val FULL_SYNC_RETRY_BACKOFF_MS: Long = 60_000L
     }
 }

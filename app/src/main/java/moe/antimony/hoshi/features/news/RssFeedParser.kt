@@ -28,8 +28,8 @@ object RssFeedParser {
         val published = (element(block, "pubDate") ?: element(block, "published") ?: element(block, "updated") ?: element(block, "dc:date"))
             ?.trim()
             ?.let(::parseDate)
-        val summary = (element(block, "description") ?: element(block, "summary") ?: element(block, "content"))
-            ?.let(::cleanText)
+        val summary = (element(block, "description")?.let(::cleanSummary)
+            ?: (element(block, "summary") ?: element(block, "content"))?.let(::cleanText))
             ?.trim()
             ?.takeIf { it.isNotEmpty() }
             ?.take(400)
@@ -61,6 +61,13 @@ object RssFeedParser {
      * text and survive, which is why tags are stripped before entities are decoded.
      */
     private fun cleanText(raw: String): String = decodeEntities(stripTags(unwrapCdata(raw)))
+
+    /** RSS descriptions contain HTML, either XML-escaped or wrapped in CDATA. */
+    private fun cleanSummary(raw: String): String {
+        val html = CDATA.matchEntire(raw.trim())?.groupValues?.get(1) ?: decodeEntities(raw)
+        // Furigana is useful in the reader, but duplicates words in a plain-text preview.
+        return decodeEntities(stripTags(RUBY_ANNOTATION.replace(html, "")))
+    }
 
     /** Unwraps CDATA, then decodes the handful of entities feeds actually use. */
     internal fun decode(raw: String): String = decodeEntities(unwrapCdata(raw))
@@ -105,6 +112,7 @@ object RssFeedParser {
     private val CDATA = Regex("""^<!\[CDATA\[(.*?)]]>$""", RegexOption.DOT_MATCHES_ALL)
     private val NUMERIC_ENTITY = Regex("""&#(x?[0-9a-fA-F]+);""")
     private val TAG = Regex("""<[^>]+>""")
+    private val RUBY_ANNOTATION = Regex("""<(rt|rp)\b[^>]*>.*?</\1>""", setOf(RegexOption.DOT_MATCHES_ALL, RegexOption.IGNORE_CASE))
     private val WHITESPACE = Regex("""\s+""")
     private val IMG_SRC = Regex("""<img\b[^>]*\ssrc\s*=\s*["']([^"']+)["']""", RegexOption.IGNORE_CASE)
     private val FALLBACK_DATE_PATTERNS = listOf(

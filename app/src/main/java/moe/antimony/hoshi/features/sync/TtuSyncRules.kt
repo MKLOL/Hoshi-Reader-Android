@@ -129,6 +129,11 @@ object TtuSyncRules {
             "${averageWeightedCharactersRead}_${averageReadingSpeed}_${averageWeightedReadingSpeed}_na.json"
     }
 
+    /**
+     * Per-day merge for ッツ statistics files. Both lists must hold one device-less entry per
+     * day (`collapsedByDay()` for the local side): the merge keys by day alone and would
+     * silently drop other devices' entries if handed a raw per-device sidecar.
+     */
     fun mergeStatistics(
         localStatistics: List<ReadingStatistics>,
         externalStatistics: List<ReadingStatistics>,

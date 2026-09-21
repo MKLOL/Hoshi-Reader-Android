@@ -135,8 +135,9 @@ import moe.antimony.hoshi.features.reader.ReaderHardwareKeyAction
 import moe.antimony.hoshi.features.reader.usesDarkInterface
 import moe.antimony.hoshi.features.reader.ReaderStatisticsTracker
 import moe.antimony.hoshi.features.sync.http.rememberHttpSyncReaderHooks
-import moe.antimony.hoshi.features.reader.StatisticsAutostartMode
+import moe.antimony.hoshi.mokuro.MangaTextStatistic
 import moe.antimony.hoshi.mokuro.MokuroBook
+import moe.antimony.hoshi.mokuro.ocrCharactersTurnedPast
 import java.io.ByteArrayOutputStream
 import java.io.File
 import kotlin.coroutines.resume
@@ -231,6 +232,7 @@ internal fun MangaReaderScreen(
     // A scope that outlives the reader route, used only to flush a pending bookmark save on
     // exit — rememberCoroutineScope is cancelled on dispose, which would drop the save.
     val persistenceScope = LocalHoshiAppContainer.current.appScope
+    val statisticsDevice = LocalHoshiAppContainer.current.deviceIdentity
     var bookmarkSaveJob by remember(book) { mutableStateOf<Job?>(null) }
     // The page index awaiting the debounced bookmark write, or null when nothing is pending.
     val pendingBookmarkPage = remember(book) { mutableStateOf<Int?>(null) }
@@ -243,6 +245,7 @@ internal fun MangaReaderScreen(
     val pageRenderCache = remember(book) { MangaPageRenderCache() }
 
     var persistedStatistics by remember(bookRoot) { mutableStateOf<List<ReadingStatistics>?>(null) }
+    var persistedTextStatistics by remember(bookRoot) { mutableStateOf<List<MangaTextStatistic>?>(null) }
     // Parse the offline translation blob off the main thread. `serveOfflinePretranslation` is
     // called synchronously from the bubble-tap handler, and a multi-MB blob parsed there would
     // freeze the reader on the first tap of a book.
@@ -250,45 +253,41 @@ internal fun MangaReaderScreen(
         withContext(Dispatchers.IO) { PretranslationStore.preload(bookRoot) }
     }
 
-    LaunchedEffect(bookRoot, readerSettings.enableStatistics) {
+    LaunchedEffect(bookRoot) {
         persistedStatistics = null
+        persistedTextStatistics = null
     }
-    LaunchedEffect(bookRoot, repository, readerSettings.enableStatistics) {
-        persistedStatistics = if (readerSettings.enableStatistics) {
-            repository.loadStatistics(bookRoot)
-        } else {
-            emptyList()
-        }
+    LaunchedEffect(bookRoot, repository) {
+        // Start from the previous instance's final save when this reader replaced it within
+        // that write (see BookRepository.trackStatisticsSave).
+        repository.awaitPendingStatisticsSaves(bookRoot)
+        persistedStatistics = repository.loadStatistics(bookRoot)
+        persistedTextStatistics = repository.loadMangaTextStatistics(bookRoot)
     }
-    val statisticsTracker = remember(
-        bookRoot,
-        book.title,
-        readerSettings.enableStatistics,
-        persistedStatistics,
-    ) {
-        if (!readerSettings.enableStatistics) {
-            null
-        } else {
-            persistedStatistics?.let { statistics ->
-                ReaderStatisticsTracker(
-                    title = book.title,
-                    initialStatistics = statistics,
-                    enabled = true,
-                )
-            }
+    val statisticsTracker = remember(bookRoot, book.title, persistedStatistics) {
+        persistedStatistics?.let { statistics ->
+            ReaderStatisticsTracker(
+                title = book.title,
+                initialStatistics = statistics,
+                enabled = true,
+                device = statisticsDevice,
+            )
         }
     }
     var statisticsState by remember(statisticsTracker) { mutableStateOf(statisticsTracker?.state) }
     var resumeStatisticsTrackingOnStart by remember(statisticsTracker) { mutableStateOf(false) }
-
-    fun enableStatisticsFromSheet() {
-        persistedStatistics = null
-        onReaderSettingsChange(readerSettings.withStatisticsEnabled(true))
+    // OCR characters read, kept next to the page counter above (see MangaTextReadCounter).
+    val textReadCounter = remember(bookRoot, persistedTextStatistics) {
+        persistedTextStatistics?.let { MangaTextReadCounter(initialStatistics = it, device = statisticsDevice) }
     }
+    var textReadState by remember(textReadCounter) { mutableStateOf(textReadCounter?.state) }
 
     fun syncStatisticsState() {
         statisticsState = statisticsTracker?.state
+        textReadState = textReadCounter?.state
     }
+
+    fun textStatisticsForSave(): List<MangaTextStatistic>? = textReadCounter?.statisticsForPersistenceOrNull()
 
     fun recordStatisticsAtCounter(counter: Int) {
         statisticsTracker?.update(counter)
@@ -310,10 +309,20 @@ internal fun MangaReaderScreen(
             tracker.stop(currentPosition)
             syncStatisticsState()
             val statistics = tracker.statisticsForPersistenceOrNull()
-            if (statistics != null) {
-                persistenceScope.launch {
-                    repository.saveStatistics(bookRoot, statistics)
-                }
+            val textStatistics = textStatisticsForSave()
+            if (statistics != null || textStatistics != null) {
+                repository.trackStatisticsSave(
+                    bookRoot,
+                    persistenceScope.launch {
+                        if (statistics != null) {
+                            repository.saveStatistics(bookRoot, statistics)
+                        }
+                        if (textStatistics != null) {
+                            repository.saveMangaTextStatistics(bookRoot, textStatistics)
+                        }
+                        httpSyncHooks.onStatisticsPersisted()
+                    },
+                )
             }
         } else {
             tracker.start(currentPosition)
@@ -321,15 +330,11 @@ internal fun MangaReaderScreen(
         }
     }
 
-    fun startStatisticsForPageTurnIfNeeded(fromCounter: Int) {
-        if (readerSettings.statisticsAutostartMode == StatisticsAutostartMode.PageTurn) {
-            statisticsTracker?.startForPageTurnIfNeeded(fromCounter)
-            syncStatisticsState()
-        }
-    }
-
     val currentStatisticsForDispose = rememberUpdatedState<(Boolean) -> List<ReadingStatistics>?> { syncState ->
         statisticsForSave(counter = statisticsPageCounterState.intValue, syncState = syncState)
+    }
+    val currentTextStatisticsForDispose = rememberUpdatedState<() -> List<MangaTextStatistic>?> {
+        textStatisticsForSave()
     }
 
     fun scheduleBookmarkSave(index: Int) {
@@ -344,9 +349,13 @@ internal fun MangaReaderScreen(
             statisticsForSave(statisticsPageCounter)?.let { statistics ->
                 repository.saveStatistics(bookRoot, statistics)
             }
+            textStatisticsForSave()?.let { statistics ->
+                repository.saveMangaTextStatistics(bookRoot, statistics)
+            }
             pendingBookmarkPage.value = null
             currentOnBookmarkSaved.value()
             httpSyncHooks.onPageTurnPersisted()
+            httpSyncHooks.onStatisticsPersisted()
         }
     }
 
@@ -357,7 +366,7 @@ internal fun MangaReaderScreen(
         lookupPopups = emptyList()
     }
 
-    fun goToPage(index: Int) {
+    fun goToPage(index: Int, countAsRead: Boolean = true) {
         val clamped = index.coerceIn(0, book.pages.lastIndex.coerceAtLeast(0))
         if (clamped == pageIndex) return
         val direction = if (clamped > pageIndex) {
@@ -383,12 +392,14 @@ internal fun MangaReaderScreen(
         readyTransition = null
         val previousPageIndex = pageIndex
         val previousStatisticsCounter = statisticsPageCounter
-        startStatisticsForPageTurnIfNeeded(previousStatisticsCounter)
-        statisticsPageCounter = mangaStatisticsCounterAfterPageChange(
-            currentCounter = previousStatisticsCounter,
-            fromPageIndex = previousPageIndex,
-            toPageIndex = clamped,
-        )
+        if (mangaPageChangeCountsAsRead(isTracking = statisticsTracker?.state?.isTracking == true, countAsRead = countAsRead)) {
+            statisticsPageCounter = mangaStatisticsCounterAfterPageChange(
+                currentCounter = previousStatisticsCounter,
+                fromPageIndex = previousPageIndex,
+                toPageIndex = clamped,
+            )
+            textReadCounter?.add(book.ocrCharactersTurnedPast(previousPageIndex, clamped))
+        }
         pageIndex = clamped
         recordStatisticsAtCounter(statisticsPageCounter)
         scheduleBookmarkSave(clamped)
@@ -790,11 +801,10 @@ internal fun MangaReaderScreen(
         onReaderKeyEventHandlerChange { event -> currentKeyHandler.value(event) }
         onDispose { onReaderKeyEventHandlerChange(null) }
     }
-    LaunchedEffect(statisticsTracker, readerSettings.statisticsAutostartMode) {
-        if (readerSettings.enableStatistics && readerSettings.statisticsAutostartMode == StatisticsAutostartMode.On) {
-            statisticsTracker?.start(statisticsPageCounterState.intValue)
-            syncStatisticsState()
-        }
+    LaunchedEffect(statisticsTracker) {
+        // Statistics are always on: every opened manga starts a tracking session.
+        statisticsTracker?.start(statisticsPageCounterState.intValue)
+        syncStatisticsState()
     }
     LaunchedEffect(statisticsTracker, statisticsState?.isTracking) {
         val tracker = statisticsTracker ?: return@LaunchedEffect
@@ -806,7 +816,7 @@ internal fun MangaReaderScreen(
             }
         }
     }
-    DisposableEffect(lifecycle, statisticsTracker, bookRoot) {
+    DisposableEffect(lifecycle, statisticsTracker, textReadCounter, bookRoot) {
         val tracker = statisticsTracker
         val observer = LifecycleEventObserver { _, event ->
             when (event) {
@@ -818,10 +828,20 @@ internal fun MangaReaderScreen(
                             syncStatisticsState()
                         }
                         val statistics = tracker.statisticsForPersistenceOrNull()
-                        if (statistics != null) {
-                            persistenceScope.launch {
-                                repository.saveStatistics(bookRoot, statistics)
-                            }
+                        val textStatistics = textStatisticsForSave()
+                        if (statistics != null || textStatistics != null) {
+                            repository.trackStatisticsSave(
+                                bookRoot,
+                                persistenceScope.launch {
+                                    if (statistics != null) {
+                                        repository.saveStatistics(bookRoot, statistics)
+                                    }
+                                    if (textStatistics != null) {
+                                        repository.saveMangaTextStatistics(bookRoot, textStatistics)
+                                    }
+                                    httpSyncHooks.onStatisticsPersisted()
+                                },
+                            )
                         }
                     }
                 }
@@ -840,37 +860,6 @@ internal fun MangaReaderScreen(
             lifecycle?.removeObserver(observer)
         }
     }
-    DisposableEffect(context, view, lifecycle) {
-        val activity = context.findHoshiActivity()
-        val window = activity?.window
-        val controller = window?.let { currentWindow ->
-            WindowCompat.getInsetsController(currentWindow, view)
-        }
-        val previousSystemBarsBehavior = controller?.systemBarsBehavior
-        fun applyReaderSystemBars() {
-            if (readerShouldUseImmersiveSystemBars(focusMode = false, immersiveReaderContent = true)) {
-                controller?.systemBarsBehavior =
-                    WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-                controller?.hide(WindowInsetsCompat.Type.systemBars())
-            } else {
-                controller?.show(WindowInsetsCompat.Type.systemBars())
-            }
-        }
-        applyReaderSystemBars()
-        val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME) {
-                applyReaderSystemBars()
-            }
-        }
-        lifecycle?.addObserver(observer)
-        onDispose {
-            lifecycle?.removeObserver(observer)
-            if (previousSystemBarsBehavior != null) {
-                controller?.systemBarsBehavior = previousSystemBarsBehavior
-            }
-            controller?.show(WindowInsetsCompat.Type.systemBars())
-        }
-    }
 
     // Flush a still-pending debounced bookmark save when the reader is left, so closing it
     // within the debounce window doesn't lose the last page turn. rememberCoroutineScope is
@@ -881,25 +870,42 @@ internal fun MangaReaderScreen(
             lookupSelectionJob?.cancel()
             val unsaved = pendingBookmarkPage.value
             val statistics = currentStatisticsForDispose.value(false)
+            val textStatistics = currentTextStatisticsForDispose.value()
             if (unsaved != null) {
                 pendingBookmarkPage.value = null
-                persistenceScope.launch {
-                    repository.saveBookmark(
-                        bookRoot,
-                        mangaBookmark(unsaved, repository.currentAppleReferenceDateSeconds()),
-                    )
-                    if (statistics != null) {
-                        repository.saveStatistics(bookRoot, statistics)
-                    }
-                    // onLeave queues this just-saved final position before flushing the map.
-                    httpSyncHooks.onLeave()
-                }
-            } else {
-                if (statistics != null) {
+                repository.trackStatisticsSave(
+                    bookRoot,
                     persistenceScope.launch {
-                        repository.saveStatistics(bookRoot, statistics)
-                    }
-                }
+                        repository.saveBookmark(
+                            bookRoot,
+                            mangaBookmark(unsaved, repository.currentAppleReferenceDateSeconds()),
+                        )
+                        if (statistics != null) {
+                            repository.saveStatistics(bookRoot, statistics)
+                        }
+                        if (textStatistics != null) {
+                            repository.saveMangaTextStatistics(bookRoot, textStatistics)
+                        }
+                        // onLeave queues this just-saved final position before flushing the map.
+                        httpSyncHooks.onLeave()
+                    },
+                )
+            } else if (statistics != null || textStatistics != null) {
+                repository.trackStatisticsSave(
+                    bookRoot,
+                    persistenceScope.launch {
+                        if (statistics != null) {
+                            repository.saveStatistics(bookRoot, statistics)
+                        }
+                        if (textStatistics != null) {
+                            repository.saveMangaTextStatistics(bookRoot, textStatistics)
+                        }
+                        // After the writes, like the branch above: onLeave schedules the
+                        // statistics push that reads these files.
+                        httpSyncHooks.onLeave()
+                    },
+                )
+            } else {
                 // No pending debounced save, but we may still have unpushed turns from
                 // earlier saves that fired before the threshold was reached.
                 httpSyncHooks.onLeave()
@@ -1201,10 +1207,9 @@ internal fun MangaReaderScreen(
         if (showStatistics) {
             MangaStatisticsSheet(
                 state = statisticsState,
-                statisticsEnabled = readerSettings.enableStatistics,
+                textState = textReadState,
                 pageIndex = pageIndex,
                 pageCount = pageCount,
-                onEnableStatistics = ::enableStatisticsFromSheet,
                 onToggleTracking = ::toggleStatisticsTracking,
                 onDismiss = { showStatistics = false },
             )
@@ -1216,7 +1221,7 @@ internal fun MangaReaderScreen(
                 onDismiss = { showGoToPageDialog = false },
                 onConfirm = { page ->
                     showGoToPageDialog = false
-                    goToPage(page - 1)
+                    goToPage(page - 1, countAsRead = false)
                 },
             )
         }
@@ -1720,5 +1725,50 @@ internal fun cropWebViewBitmapPng(bitmap: Bitmap, rect: MangaScreenshotCropRect)
             cropped?.recycle()
         }
         bitmap.recycle()
+    }
+}
+
+/**
+ * Puts the window into the manga reader's immersive system-bars mode for as long as the caller
+ * is composed, restoring the previous behaviour on dispose. [MangaReaderRouteDestination]
+ * composes it for the whole route, loading spinner included: hiding the bars only once the page
+ * composed made the WebView lay out against the inset-padded viewport first and reload the page
+ * a moment later when the bars finished hiding — two full page loads for one open.
+ */
+@Composable
+internal fun MangaReaderSystemBarsEffect() {
+    val context = LocalContext.current
+    val view = LocalView.current
+    val lifecycle = view.findViewTreeLifecycleOwner()?.lifecycle
+    DisposableEffect(context, view, lifecycle) {
+        val activity = context.findHoshiActivity()
+        val window = activity?.window
+        val controller = window?.let { currentWindow ->
+            WindowCompat.getInsetsController(currentWindow, view)
+        }
+        val previousSystemBarsBehavior = controller?.systemBarsBehavior
+        fun applyReaderSystemBars() {
+            if (readerShouldUseImmersiveSystemBars(focusMode = false, immersiveReaderContent = true)) {
+                controller?.systemBarsBehavior =
+                    WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+                controller?.hide(WindowInsetsCompat.Type.systemBars())
+            } else {
+                controller?.show(WindowInsetsCompat.Type.systemBars())
+            }
+        }
+        applyReaderSystemBars()
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                applyReaderSystemBars()
+            }
+        }
+        lifecycle?.addObserver(observer)
+        onDispose {
+            lifecycle?.removeObserver(observer)
+            if (previousSystemBarsBehavior != null) {
+                controller?.systemBarsBehavior = previousSystemBarsBehavior
+            }
+            controller?.show(WindowInsetsCompat.Type.systemBars())
+        }
     }
 }

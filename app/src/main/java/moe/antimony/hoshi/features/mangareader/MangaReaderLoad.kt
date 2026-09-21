@@ -24,15 +24,25 @@ internal class MangaReaderLoader(
     private val parser: MokuroBookParser = MokuroBookParser(),
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
 ) {
+    /**
+     * @param beforeParse runs once the entry is known (with its sync id), before `mokuro.json`
+     *   is parsed — the route's sync lease and time-bounded map refresh.
+     * @param beforeBookmarkRead runs immediately before the saved bookmark is read. From this
+     *   point on a remote bookmark landing on disk can no longer be picked up by this load, so
+     *   the route starts honouring `remoteBookmarkUpdates` here (and not earlier: a remote
+     *   winner written before the read is simply the page this load opens on).
+     */
     suspend fun load(
         bookId: String,
         beforeParse: suspend (String?) -> Unit = {},
+        beforeBookmarkRead: () -> Unit = {},
     ): MangaReaderLoadState = withContext(ioDispatcher) {
         runCatching {
             val entry = repository.loadBookEntry(bookId) ?: error("Book not found.")
             val syncId = syncIdForMetadata(entry.metadata)
             beforeParse(syncId)
             val book = parser.parse(entry.root)
+            beforeBookmarkRead()
             val bookmark = repository.loadBookmark(entry.root)
             MangaReaderLoadState.Ready(
                 bookRoot = entry.root,

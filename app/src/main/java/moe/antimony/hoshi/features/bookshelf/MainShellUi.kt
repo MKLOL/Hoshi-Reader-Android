@@ -145,6 +145,7 @@ enum class SettingsDestination {
     ChatGpt,
     Appearance,
     Behavior,
+    Statistics,
     Advanced,
     ReportIssue,
     Diagnostics,
@@ -185,6 +186,7 @@ fun settingsGroups(): List<List<SettingsRowModel>> = listOf(
         SettingsRowModel(R.string.settings_chatgpt, SettingsDestination.ChatGpt),
         SettingsRowModel(R.string.settings_appearance, SettingsDestination.Appearance),
         SettingsRowModel(R.string.settings_behavior, SettingsDestination.Behavior),
+        SettingsRowModel(R.string.settings_statistics, SettingsDestination.Statistics),
         SettingsRowModel(R.string.settings_advanced, SettingsDestination.Advanced),
     ),
     listOf(

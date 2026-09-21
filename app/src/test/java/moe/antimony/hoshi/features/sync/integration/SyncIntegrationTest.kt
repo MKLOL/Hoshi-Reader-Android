@@ -4,6 +4,8 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.builtins.MapSerializer
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
+import moe.antimony.hoshi.epub.ReadingStatistics
+import moe.antimony.hoshi.mokuro.MangaTextStatistic
 import moe.antimony.hoshi.epub.GENERATED_COVER_FILENAME
 import moe.antimony.hoshi.features.ai.AiChatEntry
 import moe.antimony.hoshi.features.ai.PretranslationStore
@@ -198,6 +200,46 @@ class SyncIntegrationTest(private val engineA: SyncEngine, private val engineB: 
             assertEquals("etag of $key unchanged", before[key], after[key])
         }
         assertEquals("no key appeared or disappeared", before.keys, after.keys)
+    }
+
+    @Test
+    fun statisticsMergePerDayAcrossDevicesAndStayQuietOnceConverged() = runBlocking {
+        val (a, b) = publishLibraryAndSyncFreshDevice()
+        val mangaA = a.book(SyncCorpus.MANGA_SYNC_ID)
+        val mangaB = b.book(SyncCorpus.MANGA_SYNC_ID)
+        a.repo.saveStatistics(mangaA.root, listOf(ReadingStatistics("m", "2026-09-10", charactersRead = 12, readingTime = 600.0, lastStatisticModified = 10)))
+        a.repo.saveMangaTextStatistics(mangaA.root, listOf(MangaTextStatistic("2026-09-10", 3_000, lastModified = 10)))
+        b.repo.saveStatistics(
+            mangaB.root,
+            listOf(
+                ReadingStatistics("m", "2026-09-11", charactersRead = 5, readingTime = 300.0, lastStatisticModified = 11),
+                ReadingStatistics("m", "2026-09-10", charactersRead = 1, readingTime = 1.0, lastStatisticModified = 1), // older copy of A's day
+            ),
+        )
+
+        assertClean(a.sync())
+        assertClean(b.sync())
+        assertClean(a.sync())
+
+        for (device in listOf(a, b)) {
+            val root = device.book(SyncCorpus.MANGA_SYNC_ID).root
+            val days = device.repo.loadStatistics(root).sortedBy { it.dateKey }
+            assertEquals("${device.name} has both days", listOf("2026-09-10", "2026-09-11"), days.map { it.dateKey })
+            assertEquals("${device.name}: A's newer entry for the 10th wins", 600.0, days[0].readingTime, 0.0)
+            assertEquals("${device.name}: B's 11th arrived", 300.0, days[1].readingTime, 0.0)
+            assertEquals("${device.name} has the manga characters", 3_000, device.repo.loadMangaTextStatistics(root).single().charactersRead)
+        }
+
+        assertClean(b.sync())
+        for (device in listOf(a, b)) {
+            server.clearRequests()
+            assertClean(device.sync())
+            assertEquals(
+                "a converged ${device.name} still costs one listing: ${server.requests()}",
+                listOf(true),
+                server.requests().map { it.isListing },
+            )
+        }
     }
 
     @Test

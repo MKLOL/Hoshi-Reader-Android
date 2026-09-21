@@ -50,10 +50,9 @@ class MangaStatisticsSheetInstrumentedTest {
                             lastReadingSpeed = 18,
                         ),
                     ),
-                    statisticsEnabled = true,
+                    textState = MangaTextReadState(sessionCharacters = 321, todayCharacters = 654, allTimeCharacters = 987),
                     pageIndex = 2,
                     pageCount = 12,
-                    onEnableStatistics = {},
                     onToggleTracking = { toggleClicks += 1 },
                     onDismiss = {},
                 )
@@ -64,33 +63,11 @@ class MangaStatisticsSheetInstrumentedTest {
         composeRule.onNodeWithText("Page 3 of 12").assertIsDisplayed()
         composeRule.onAllNodesWithText("Pages Read")[0].assertIsDisplayed()
         composeRule.onAllNodesWithText("18 pages / h")[0].assertIsDisplayed()
+        composeRule.onAllNodesWithText("Characters Read")[0].assertIsDisplayed()
+        composeRule.onNodeWithText("321").assertIsDisplayed()
         composeRule.onNodeWithContentDescription("Start statistics").performClick()
         composeRule.runOnIdle {
             assertEquals(1, toggleClicks)
-        }
-    }
-
-    @Test
-    fun disabledSheetOffersEnableAction() {
-        var enableClicks = 0
-        composeRule.setContent {
-            MaterialTheme {
-                MangaStatisticsSheet(
-                    state = null,
-                    statisticsEnabled = false,
-                    pageIndex = 0,
-                    pageCount = 4,
-                    onEnableStatistics = { enableClicks += 1 },
-                    onToggleTracking = {},
-                    onDismiss = {},
-                )
-            }
-        }
-
-        composeRule.onNodeWithText("Statistics are off.").assertIsDisplayed()
-        composeRule.onNodeWithText("Enable").performClick()
-        composeRule.runOnIdle {
-            assertEquals(1, enableClicks)
         }
     }
 
@@ -100,10 +77,9 @@ class MangaStatisticsSheetInstrumentedTest {
             MaterialTheme {
                 MangaStatisticsSheet(
                     state = null,
-                    statisticsEnabled = true,
+                    textState = null,
                     pageIndex = 0,
                     pageCount = 4,
-                    onEnableStatistics = {},
                     onToggleTracking = {},
                     onDismiss = {},
                 )

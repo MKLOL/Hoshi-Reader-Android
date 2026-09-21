@@ -84,4 +84,23 @@ class ReadingStatisticsSidecarTest {
         assertTrue(root.resolve("statistics.json").isFile)
         assertEquals(12, repository.loadStatistics(root).single().charactersRead)
     }
+
+    @Test
+    fun saveMergesByDayWhileReplaceOverwritesWholesale() = runBlocking {
+        val repository = BookRepository(Files.createTempDirectory("hoshi-statistics-merge").toFile())
+        val root = repository.createBookDirectory("book-b")
+        repository.saveStatistics(root, listOf(ReadingStatistics("Book", "2026-09-10", charactersRead = 10, readingTime = 60.0, lastStatisticModified = 1)))
+
+        repository.saveStatistics(root, listOf(ReadingStatistics("Book", "2026-09-12", charactersRead = 5, readingTime = 30.0, lastStatisticModified = 2)))
+        assertEquals(listOf("2026-09-12", "2026-09-10"), repository.loadStatistics(root).map { it.dateKey })
+
+        repository.saveStatistics(root, listOf(ReadingStatistics("Book", "2026-09-10", charactersRead = 99, readingTime = 600.0, lastStatisticModified = 3)))
+        assertEquals(600.0, repository.loadStatistics(root).first { it.dateKey == "2026-09-10" }.readingTime, 0.0)
+
+        repository.saveStatistics(root, listOf(ReadingStatistics("Book", "2026-09-10", charactersRead = 1, readingTime = 1.0, lastStatisticModified = 0)))
+        assertEquals(600.0, repository.loadStatistics(root).first { it.dateKey == "2026-09-10" }.readingTime, 0.0)
+
+        repository.replaceStatistics(root, listOf(ReadingStatistics("Book", "2026-01-01", readingTime = 5.0, lastStatisticModified = 9)))
+        assertEquals(listOf("2026-01-01"), repository.loadStatistics(root).map { it.dateKey })
+    }
 }

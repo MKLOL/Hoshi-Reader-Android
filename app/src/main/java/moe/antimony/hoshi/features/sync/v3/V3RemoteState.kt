@@ -95,6 +95,12 @@ class V3RemoteState {
             var pretranslationsSize: Int? = null
             var sentencesKey: String? = null
             var sentencesSize: Int? = null
+            var statisticsKey: String? = null
+            var statisticsSize: Int? = null
+            var statisticsLastModified: String? = null
+            var mangaStatisticsKey: String? = null
+            var mangaStatisticsSize: Int? = null
+            var mangaStatisticsLastModified: String? = null
             for (k in grouped.getValue(syncId)) {
                 when (k.kind) {
                     BookKind.Metadata -> {
@@ -150,6 +156,16 @@ class V3RemoteState {
                     BookKind.Sentences -> {
                         sentencesKey = k.key
                         sentencesSize = k.size
+                    }
+                    BookKind.Statistics -> {
+                        statisticsKey = k.key
+                        statisticsSize = k.size
+                        statisticsLastModified = k.lastModified
+                    }
+                    BookKind.MangaStatistics -> {
+                        mangaStatisticsKey = k.key
+                        mangaStatisticsSize = k.size
+                        mangaStatisticsLastModified = k.lastModified
                     }
                     BookKind.PayloadZip, BookKind.EpubZip -> Unit // body not fetched here
                 }
@@ -247,6 +263,12 @@ class V3RemoteState {
                 pretranslationsSize = pretranslationsSize,
                 sentencesKey = sentencesKey,
                 sentencesSize = sentencesSize,
+                statisticsKey = statisticsKey,
+                statisticsSize = statisticsSize,
+                statisticsLastModified = statisticsLastModified,
+                mangaStatisticsKey = mangaStatisticsKey,
+                mangaStatisticsSize = mangaStatisticsSize,
+                mangaStatisticsLastModified = mangaStatisticsLastModified,
                 metadataMalformed = metadataMalformed,
                 manifestMalformed = manifestMalformed,
                 bookmarkMalformed = bookmarkMalformed,
@@ -299,6 +321,8 @@ class V3RemoteState {
         EpubZip,
         Pretranslations,
         Sentences,
+        Statistics,
+        MangaStatistics,
     }
 
     /**
@@ -321,6 +345,8 @@ class V3RemoteState {
             suffix == "epub.manifest" -> BookKind.EpubManifest
             suffix == "epub.zip" -> BookKind.EpubZip
             suffix == "sentences" -> BookKind.Sentences
+            suffix == "statistics" -> BookKind.Statistics
+            suffix == "manga_statistics" -> BookKind.MangaStatistics
             suffix.startsWith("chat/") && suffix.length > 5 -> BookKind.Chat
             else -> return null
         }

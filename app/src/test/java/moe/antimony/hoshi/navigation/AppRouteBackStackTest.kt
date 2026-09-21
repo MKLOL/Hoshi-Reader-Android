@@ -65,4 +65,17 @@ class AppRouteBackStackTest {
             backStack,
         )
     }
+
+    @Test
+    fun statisticsRoutesPushOnTopOfTheCurrentTabSoBackReturnsThere() {
+        val backStack = mutableListOf<NavKey>(AppRoute.SettingsRoute)
+
+        backStack.openStatisticsRoute()
+        backStack.openBookStatisticsRoute("book-1")
+
+        assertEquals(
+            listOf<NavKey>(AppRoute.SettingsRoute, AppRoute.StatisticsRoute, AppRoute.StatisticsBookRoute("book-1")),
+            backStack,
+        )
+    }
 }
