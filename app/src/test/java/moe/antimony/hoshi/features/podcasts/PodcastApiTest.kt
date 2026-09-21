@@ -35,6 +35,24 @@ class PodcastApiTest {
         } }
     }
 
+    @Test fun serverErrorSentenceIsKeptForTheUserButNotTheRawBody() = runBlocking {
+        MockWebServer().use { server ->
+            server.enqueue(MockResponse().setResponseCode(429).setBody("""{"error":"Podcast queue is full; try again later","details":{"secret":"x"}}"""))
+            server.enqueue(MockResponse().setResponseCode(503).setBody("<html>gateway</html>"))
+            val settings = HttpSyncSettings(server.url("/api/book_sync").toString(), "fixture-token")
+            try { PodcastApi().prepare(settings, "a".repeat(64)); fail("accepted") } catch (error: PodcastHttpException) {
+                assertEquals(429, error.status)
+                assertEquals("Podcast queue is full; try again later", error.serverMessage)
+                assertEquals("Podcast queue is full; try again later", error.message)
+            }
+            try { PodcastApi().catalogue(settings); fail("accepted") } catch (error: PodcastHttpException) {
+                assertEquals(503, error.status)
+                assertNull(error.serverMessage)
+                assertEquals("HTTP 503", error.message)
+            }
+        }
+    }
+
     @Test fun revokedTokenRemainsAnAuthFailure() = runBlocking {
         MockWebServer().use { server ->
             server.enqueue(MockResponse().setResponseCode(401))

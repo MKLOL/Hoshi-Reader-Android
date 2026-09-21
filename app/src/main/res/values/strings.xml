@@ -706,4 +706,16 @@
     <string name="podcasts_generation_failed">Preparation failed. Tap Prepare to try again.</string>
     <string name="podcasts_download_failed">Download failed. Tap Download to retry.</string>
     <string name="podcasts_playback_error">Could not play this lesson. Tap Play to retry.</string>
+    <string name="podcasts_playback_error_detail">Could not play this lesson (%1$s). Tap Play to retry.</string>
+    <string name="podcasts_error_detail">Details: %1$s</string>
+    <string name="podcasts_worker_down">The server’s lesson worker is not running, so Prepare will fail until it is started.</string>
+    <string name="podcasts_worker_last_seen">It last reported in %1$d minutes ago.</string>
+    <string name="podcasts_worker_never_seen">It has never reported in.</string>
+    <string name="podcasts_worker_problem">Worker problem: %1$s</string>
+    <string name="podcasts_generation_failed_detail">Preparation failed: %1$s</string>
+    <string name="podcasts_attempts_left">%1$d of %2$d attempts left. Tap Prepare to try again.</string>
+    <string name="podcasts_attempts_exhausted">No attempts left. Ask the server administrator to reset this episode.</string>
+    <string name="podcasts_download_failed_detail">Download failed (%1$s). Tap Download to retry.</string>
+    <string name="podcasts_reason_unknown">unknown reason</string>
+    <string name="podcasts_reason_file_missing">file missing</string>
 </resources>

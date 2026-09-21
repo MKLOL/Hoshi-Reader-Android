@@ -60,19 +60,20 @@ internal fun PodcastsView(modifier: Modifier = Modifier) {
     val context = LocalContext.current
     var controller by remember { mutableStateOf<MediaController?>(null) }
     var playingTitle by remember { mutableStateOf("") }
-    var playerFailed by remember { mutableStateOf(false) }
+    var playerError by remember { mutableStateOf<String?>(null) }
+    val fileMissingReason = stringResource(R.string.podcasts_reason_file_missing)
     DisposableEffect(available) {
         val future = if (available) MediaController.Builder(context, SessionToken(context, ComponentName(context, PodcastPlaybackService::class.java))).buildAsync() else null
         val listener = object : Player.Listener {
             override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) { playingTitle = mediaItem?.mediaMetadata?.title?.toString().orEmpty() }
-            override fun onPlayerError(error: androidx.media3.common.PlaybackException) { playerFailed = true }
+            override fun onPlayerError(error: androidx.media3.common.PlaybackException) { playerError = error.errorCodeName }
         }
         future?.addListener({
             if (!future.isCancelled) runCatching { future.get() }.onSuccess {
                 controller = it
                 it.addListener(listener)
                 playingTitle = it.currentMediaItem?.mediaMetadata?.title?.toString().orEmpty()
-            }.onFailure { playerFailed = true }
+            }.onFailure { playerError = it.javaClass.simpleName }
         }, ContextCompat.getMainExecutor(context))
         onDispose {
             controller?.removeListener(listener)
@@ -112,12 +113,32 @@ internal fun PodcastsView(modifier: Modifier = Modifier) {
                         modifier = Modifier.fillMaxWidth().height(220.dp),
                     )
                 }
-                if (playerFailed) Text(stringResource(R.string.podcasts_playback_error), color = MaterialTheme.colorScheme.error)
+                playerError?.let { Text(stringResource(R.string.podcasts_playback_error_detail, it), color = MaterialTheme.colorScheme.error) }
                 if (state.feedStale) Text(stringResource(R.string.podcasts_cached_feed), style = MaterialTheme.typography.bodySmall)
+                // The server's worker prepares every lesson; when it is down or misconfigured, say so
+                // with its own words before the user wonders why Prepare fails.
+                state.worker?.takeIf { !it.alive || it.problems.isNotEmpty() }?.let { worker ->
+                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        if (!worker.alive) {
+                            Text(stringResource(R.string.podcasts_worker_down), color = MaterialTheme.colorScheme.error)
+                            Text(
+                                worker.lastSeenSeconds?.let { stringResource(R.string.podcasts_worker_last_seen, it / 60) }
+                                    ?: stringResource(R.string.podcasts_worker_never_seen),
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
+                        worker.problems.forEach { problem ->
+                            Text(stringResource(R.string.podcasts_worker_problem, problem), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                        }
+                    }
+                }
                 state.errorRes?.let { message ->
-                    Row {
-                        Text(stringResource(message), modifier = Modifier.weight(1f), color = MaterialTheme.colorScheme.error)
-                        TextButton(onClick = model::retry) { Text(stringResource(R.string.podcasts_retry)) }
+                    Column {
+                        Row {
+                            Text(stringResource(message), modifier = Modifier.weight(1f), color = MaterialTheme.colorScheme.error)
+                            TextButton(onClick = model::retry) { Text(stringResource(R.string.podcasts_retry)) }
+                        }
+                        state.errorDetail?.let { Text(stringResource(R.string.podcasts_error_detail, it), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
                     }
                 }
                 if (state.loading) CircularProgressIndicator()
@@ -129,15 +150,27 @@ internal fun PodcastsView(modifier: Modifier = Modifier) {
                 Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text(episode.title, style = MaterialTheme.typography.titleMedium)
                     Text(stringResource(R.string.podcasts_original_duration, episode.durationSeconds / 60, episode.durationSeconds % 60), style = MaterialTheme.typography.bodySmall)
-                    if (episode.status == "failed") Text(stringResource(R.string.podcasts_generation_failed), color = MaterialTheme.colorScheme.error)
-                    if (episode.id in state.downloadFailures) Text(stringResource(R.string.podcasts_download_failed), color = MaterialTheme.colorScheme.error)
+                    val attemptsLeft = (state.maxFailures - episode.failureCount).coerceAtLeast(0)
+                    if (episode.status == "failed") {
+                        Text(
+                            stringResource(R.string.podcasts_generation_failed_detail, episode.errorMessage ?: episode.errorCode ?: stringResource(R.string.podcasts_generation_failed)),
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                        Text(
+                            if (attemptsLeft > 0) stringResource(R.string.podcasts_attempts_left, attemptsLeft, state.maxFailures) else stringResource(R.string.podcasts_attempts_exhausted),
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                    state.downloadFailures[episode.id]?.let { reason ->
+                        Text(stringResource(R.string.podcasts_download_failed_detail, reason.ifBlank { stringResource(R.string.podcasts_reason_unknown) }), color = MaterialTheme.colorScheme.error)
+                    }
                     when {
                         episode.id in state.downloaded -> Button(enabled = controller != null, onClick = {
                             val account = podcastAccount(repository.credentials)
                             val id = "$account:${episode.id}"
                             if (!repository.files.audio(account, episode.id).isFile) {
                                 // The file went away since the last refresh: say so instead of playing nothing.
-                                playerFailed = true
+                                playerError = fileMissingReason
                                 model.retry()
                                 return@Button
                             }
@@ -148,7 +181,7 @@ internal fun PodcastsView(modifier: Modifier = Modifier) {
                                     player.setMediaItem(MediaItem.Builder().setMediaId(id).setMediaMetadata(MediaMetadata.Builder().setTitle(episode.title).build()).build(), position)
                                     player.prepare()
                                 }
-                                playerFailed = false
+                                playerError = null
                                 androidx.media3.common.util.Util.handlePlayButtonAction(player)
                             }
                         }) { Text(stringResource(R.string.podcasts_play)) }
@@ -157,6 +190,8 @@ internal fun PodcastsView(modifier: Modifier = Modifier) {
                         episode.status == "ready" -> Button(onClick = { repository.download(episode) }) { Text(stringResource(R.string.podcasts_download)) }
                         episode.status == "queued" || episode.id in state.preparing -> Text(stringResource(R.string.podcasts_queued))
                         episode.status == "preparing" -> Text(stringResource(R.string.podcasts_preparing))
+                        // The server refuses further attempts (409); an administrator resets the count.
+                        episode.status == "failed" && attemptsLeft == 0 -> Unit
                         else -> Button(onClick = { model.prepare(episode) }) { Text(stringResource(R.string.podcasts_prepare)) }
                     }
                 }

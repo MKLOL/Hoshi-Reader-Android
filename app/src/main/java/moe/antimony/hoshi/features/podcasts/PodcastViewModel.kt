@@ -18,12 +18,17 @@ internal data class PodcastUiState(
     val length: PodcastLength = PodcastLength.All,
     val loading: Boolean = false,
     val errorRes: Int? = null,
+    /** The server's error sentence or the failing exception's type, shown under [errorRes]. */
+    val errorDetail: String? = null,
     val feedStale: Boolean = false,
+    val worker: PodcastWorkerStatus? = null,
+    val maxFailures: Int = 3,
     val downloaded: Set<String> = emptySet(),
     val downloads: Map<String, Int> = emptyMap(),
     /** Enqueued but not running: waiting for the network or a retry back-off. */
     val waiting: Set<String> = emptySet(),
-    val downloadFailures: Set<String> = emptySet(),
+    /** Episode id to the reason its last download failed. */
+    val downloadFailures: Map<String, String> = emptyMap(),
     val preparing: Set<String> = emptySet(),
 ) {
     val filtered get() = episodes.filter(length::includes)
@@ -72,7 +77,10 @@ internal class PodcastViewModel(val repository: PodcastRepository) : ViewModel()
                 episodes.filter { repository.files.audio(podcastAccount(settings), it.id).isFile }.map { it.id }.toSet()
             }
             if (settings != repository.credentials || !repository.access.value) return
-            _state.update { it.copy(episodes = episodes, downloaded = downloaded, loading = false, errorRes = null, feedStale = catalogue.feedStale) }
+            _state.update {
+                it.copy(episodes = episodes, downloaded = downloaded, loading = false, errorRes = null, errorDetail = null,
+                    feedStale = catalogue.feedStale, worker = catalogue.worker, maxFailures = catalogue.maxFailures)
+            }
         } catch (cancelled: CancellationException) { throw cancelled
         } catch (error: Exception) { handle(error, settings) }
     }
@@ -96,12 +104,15 @@ internal class PodcastViewModel(val repository: PodcastRepository) : ViewModel()
     private fun handle(error: Exception, settings: moe.antimony.hoshi.features.sync.http.HttpSyncSettings) {
         if (settings != repository.credentials) return
         if (error is PodcastHttpException && error.status in listOf(401, 403)) repository.invalidate()
-        val message = when ((error as? PodcastHttpException)?.status) {
+        val http = error as? PodcastHttpException
+        val message = when (http?.status) {
             429 -> R.string.podcasts_queue_full
             503 -> R.string.podcasts_unavailable
             else -> R.string.podcasts_error
         }
-        _state.update { it.copy(loading = false, errorRes = message) }
+        // The server's own sentence when it sent one, else the failure type (never a URL or token).
+        val detail = http?.serverMessage ?: http?.let { "HTTP ${it.status}" } ?: error.javaClass.simpleName
+        _state.update { it.copy(loading = false, errorRes = message, errorDetail = detail) }
     }
 
     private suspend fun observeDownloads() {
@@ -109,13 +120,13 @@ internal class PodcastViewModel(val repository: PodcastRepository) : ViewModel()
         repository.workManager.getWorkInfosByTagFlow(PodcastKeys.accountTag(account)).collect { infos ->
             val active = mutableMapOf<String, Int>()
             val waiting = mutableSetOf<String>()
-            val failed = mutableSetOf<String>()
+            val failed = mutableMapOf<String, String>()
             val completed = mutableSetOf<String>()
             infos.forEach { info ->
                 val id = info.tags.firstOrNull { it.startsWith(PodcastKeys.EPISODE_TAG_PREFIX) }?.removePrefix(PodcastKeys.EPISODE_TAG_PREFIX) ?: return@forEach
                 when (info.state) {
                     WorkInfo.State.SUCCEEDED -> completed += id
-                    WorkInfo.State.FAILED -> failed += id
+                    WorkInfo.State.FAILED -> failed[id] = info.outputData.getString(PodcastKeys.OUTPUT_REASON).orEmpty()
                     WorkInfo.State.CANCELLED -> Unit
                     WorkInfo.State.ENQUEUED, WorkInfo.State.BLOCKED -> waiting += id
                     else -> active[id] = info.progress.getInt(PodcastKeys.PROGRESS_PERCENT, 0)
@@ -124,7 +135,10 @@ internal class PodcastViewModel(val repository: PodcastRepository) : ViewModel()
             val downloaded = withContext(Dispatchers.IO) {
                 (_state.value.downloaded + completed).filter { repository.files.audio(account, it).isFile }.toSet()
             }
-            _state.update { it.copy(downloaded = downloaded, downloads = active, waiting = waiting - active.keys, downloadFailures = failed - active.keys - waiting - downloaded) }
+            _state.update {
+                it.copy(downloaded = downloaded, downloads = active, waiting = waiting - active.keys,
+                    downloadFailures = failed.filterKeys { id -> id !in active && id !in waiting && id !in downloaded })
+            }
         }
     }
 }

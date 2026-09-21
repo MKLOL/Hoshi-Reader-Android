@@ -9,6 +9,9 @@ import okhttp3.Call
 import okhttp3.Callback
 import okhttp3.Response
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import moe.antimony.hoshi.BuildConfig
 import moe.antimony.hoshi.features.sync.http.HttpSyncSettings
 import okhttp3.OkHttpClient
@@ -16,7 +19,10 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.HttpUrl.Companion.toHttpUrl
 
-internal class PodcastHttpException(val status: Int) : IOException()
+/** [serverMessage] is the server's `error` text when the body carried one; shown to the user. */
+internal class PodcastHttpException(val status: Int, val serverMessage: String? = null) : IOException(serverMessage ?: "HTTP $status")
+
+private const val MAX_ERROR_BYTES = 8L * 1024
 
 internal class PodcastApi {
     companion object {
@@ -47,7 +53,7 @@ internal class PodcastApi {
                 override fun onResponse(call: Call, response: Response) {
                     try {
                         response.use {
-                            if (!it.isSuccessful) throw PodcastHttpException(it.code)
+                            if (!it.isSuccessful) throw PodcastHttpException(it.code, serverMessage(it))
                             val source = it.body?.source() ?: throw IOException()
                             source.request(2L * 1024 * 1024 + 1)
                             if (source.buffer.size > 2 * 1024 * 1024) throw IOException()
@@ -57,6 +63,14 @@ internal class PodcastApi {
                 }
             })
         }
+
+    /** The `error` field of a bounded JSON error body, or null; never the raw body. */
+    private fun serverMessage(response: Response): String? = runCatching {
+        val source = response.body?.source() ?: return null
+        source.request(MAX_ERROR_BYTES)
+        val raw = source.buffer.readUtf8(minOf(source.buffer.size, MAX_ERROR_BYTES))
+        json.parseToJsonElement(raw).jsonObject["error"]?.jsonPrimitive?.contentOrNull?.trim()?.take(300)?.takeIf { it.isNotEmpty() }
+    }.getOrNull()
 
     suspend fun access(settings: HttpSyncSettings): Boolean =
         json.decodeFromString<PodcastAccess>(text(settings, "/access")).enabled

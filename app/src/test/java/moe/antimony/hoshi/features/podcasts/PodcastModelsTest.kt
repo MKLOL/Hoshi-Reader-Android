@@ -47,6 +47,24 @@ class PodcastModelsTest {
         assertFalse(validPodcastId("../episode"))
     }
 
+    @Test fun failureDetailsAndWorkerHealthDecodeWithSafeDefaults() {
+        val json = Json { ignoreUnknownKeys = true }
+        val rich = json.decodeFromString<PodcastCatalogue>("""{
+            "episodes":[{"id":"${"c".repeat(64)}","title":"t","published_at":"p","duration_seconds":60,"status":"failed",
+            "error_code":"translation_provider_unreachable","error_message":"OpenAI could not be reached during translation.","failure_count":2}],
+            "feed_stale":false,"worker":{"alive":false,"last_seen_seconds":720,"problems":["ffmpeg is not on PATH"]},"max_failures":3
+        }""")
+        val episode = rich.episodes.single()
+        assertEquals("OpenAI could not be reached during translation.", episode.errorMessage)
+        assertEquals(2, episode.failureCount)
+        assertEquals(3, rich.maxFailures)
+        assertEquals(PodcastWorkerStatus(alive = false, lastSeenSeconds = 720, problems = listOf("ffmpeg is not on PATH")), rich.worker)
+        // An older server without these fields still decodes; nothing is reported as broken.
+        val plain = json.decodeFromString<PodcastCatalogue>("""{"episodes":[{"id":"${"c".repeat(64)}","title":"t","published_at":"p","duration_seconds":60,"status":"available"}]}""")
+        assertNull(plain.worker); assertEquals(3, plain.maxFailures)
+        assertNull(plain.episodes.single().errorMessage); assertEquals(0, plain.episodes.single().failureCount)
+    }
+
     @Test fun serverCatalogueDecodesAndFiltersReadyEpisodeByOriginalLength() {
         val decoded = Json { ignoreUnknownKeys = true }.decodeFromString<PodcastCatalogue>("""{
             "episodes":[{"id":"${"a".repeat(64)}","title":"ニュース","published_at":"2026-09-21T04:10:00+00:00",

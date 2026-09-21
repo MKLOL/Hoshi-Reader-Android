@@ -52,6 +52,18 @@ three independent Android reviews and three server reviews of the merged branch 
 their should-fix findings are addressed in the follow-up commits, and the remaining known
 limits are listed below.
 
+### What the screen says when something fails
+
+- A preparation failure shows the server's one-sentence reason (which stage failed and why:
+  a missing dependency, no OpenAI key, the NHK download, an OpenAI auth/rate-limit/outage, or
+  ffmpeg) and how many attempts remain before an administrator has to reset the episode; the
+  Prepare button disappears once they are used up.
+- When the server's worker is down or recorded start-up problems (for example "ffmpeg is not
+  on PATH"), the header says so, with the worker's own words and when it last reported in.
+- A request error shows the server's `error` sentence when it sent one, otherwise the HTTP
+  status or the failure type; a failed download shows its reason (HTTP status, content type,
+  size, incomplete transfer, account change); a playback error shows Media3's error code.
+
 ### Known limits
 
 - Playback speed is not remembered between sessions.

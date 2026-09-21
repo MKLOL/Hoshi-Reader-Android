@@ -28,7 +28,7 @@ class PodcastDownloadWorker(context: Context, params: WorkerParameters) : Corout
         if (!validPodcastId(account) || !validPodcastId(id)) return@withContext Result.failure()
         val settingsRepo = applicationContext.httpSyncSettingsRepository()
         val settings = settingsRepo.settings.first()
-        if (account != podcastAccount(settings)) return@withContext Result.failure()
+        if (account != podcastAccount(settings)) return@withContext failed("account changed")
         val destination = PodcastFiles(applicationContext).audio(account, id)
         val temporary = java.io.File(destination.path + ".part")
         try {
@@ -41,13 +41,13 @@ class PodcastDownloadWorker(context: Context, params: WorkerParameters) : Corout
                     if (response.code in listOf(401, 403) && account == podcastAccount(settingsRepo.settings.first())) {
                         PodcastRepository.getInstance(applicationContext).invalidate()
                     }
-                    return@withContext if (response.code in listOf(429, 503) && runAttemptCount < 2) Result.retry() else Result.failure()
+                    return@withContext if (response.code in listOf(429, 503) && runAttemptCount < 2) Result.retry() else failed("HTTP ${response.code}")
                 }
-                if (response.header("Content-Type")?.substringBefore(';') != "audio/mpeg") throw IOException()
-                val body = response.body ?: throw IOException()
+                if (response.header("Content-Type")?.substringBefore(';') != "audio/mpeg") throw IOException("unexpected content type")
+                val body = response.body ?: throw IOException("empty response")
                 val total = body.contentLength()
                 val limit = 512L * 1024 * 1024
-                if (total > limit) throw IOException()
+                if (total > limit) throw IOException("file larger than allowed")
                 destination.parentFile?.mkdirs()
                 var downloaded = 0L
                 var lastProgress = 0L
@@ -56,11 +56,11 @@ class PodcastDownloadWorker(context: Context, params: WorkerParameters) : Corout
                         val buffer = ByteArray(256 * 1024)
                         while (true) {
                             currentCoroutineContext().ensureActive()
-                            if (account != podcastAccount(settingsRepo.settings.first())) return@withContext Result.failure()
+                            if (account != podcastAccount(settingsRepo.settings.first())) return@withContext failed("account changed")
                             val size = source.read(buffer)
                             if (size < 0) break
                             downloaded += size
-                            if (downloaded > limit) throw IOException()
+                            if (downloaded > limit) throw IOException("file larger than allowed")
                             target.write(buffer, 0, size)
                             if (downloaded - lastProgress >= 1024 * 1024) {
                                 setProgress(workDataOf(PodcastKeys.PROGRESS_PERCENT to if (total > 0) (downloaded * 100 / total).toInt() else 0))
@@ -69,20 +69,23 @@ class PodcastDownloadWorker(context: Context, params: WorkerParameters) : Corout
                         }
                     }
                 }
-                if (downloaded == 0L || (total >= 0 && total != downloaded)) throw IOException()
-                if (account != podcastAccount(settingsRepo.settings.first())) return@withContext Result.failure()
-                if (!temporary.renameTo(destination)) throw IOException()
+                if (downloaded == 0L || (total >= 0 && total != downloaded)) throw IOException("incomplete transfer")
+                if (account != podcastAccount(settingsRepo.settings.first())) return@withContext failed("account changed")
+                if (!temporary.renameTo(destination)) throw IOException("could not save the file")
             }
             Result.success()
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (error: Exception) {
             Log.w("PodcastDownloadWorker", "Download attempt ${runAttemptCount + 1} failed (${error.javaClass.simpleName})")
-            if (runAttemptCount < 2) Result.retry() else Result.failure()
+            if (runAttemptCount < 2) Result.retry() else failed(error.message?.takeIf { error is IOException && it.isNotBlank() } ?: error.javaClass.simpleName)
         } finally {
             temporary.delete()
         }
     }
+
+    /** The final outcome carries a short reason the episode row can show (no URLs, no token). */
+    private fun failed(reason: String): Result = Result.failure(workDataOf(PodcastKeys.OUTPUT_REASON to reason.take(120)))
 
     override suspend fun getForegroundInfo(): ForegroundInfo {
         val manager = applicationContext.getSystemService(NotificationManager::class.java)

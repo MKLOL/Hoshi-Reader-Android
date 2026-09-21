@@ -15,12 +15,25 @@ data class PodcastEpisode(
     val status: String,
     @SerialName("lesson_duration_seconds") val lessonDurationSeconds: Double? = null,
     @SerialName("error_code") val errorCode: String? = null,
+    /** The server's one-sentence reason for the last failed preparation (stage and cause). */
+    @SerialName("error_message") val errorMessage: String? = null,
+    @SerialName("failure_count") val failureCount: Int = 0,
+)
+
+/** The server's lesson worker as seen by the web tier: heartbeat liveness and start-up problems. */
+@Serializable
+internal data class PodcastWorkerStatus(
+    val alive: Boolean = true,
+    @SerialName("last_seen_seconds") val lastSeenSeconds: Int? = null,
+    val problems: List<String> = emptyList(),
 )
 
 @Serializable
 internal data class PodcastCatalogue(
     val episodes: List<PodcastEpisode>,
     @SerialName("feed_stale") val feedStale: Boolean = false,
+    val worker: PodcastWorkerStatus? = null,
+    @SerialName("max_failures") val maxFailures: Int = 3,
 )
 
 @Serializable
@@ -43,6 +56,8 @@ internal object PodcastKeys {
     const val PROGRESS_PERCENT = "percent"
     const val INPUT_ACCOUNT = "account"
     const val INPUT_EPISODE = "episode"
+    /** Why a download finally failed, for the episode row. */
+    const val OUTPUT_REASON = "reason"
     fun accountTag(account: String) = "podcast-$account"
     fun workName(account: String, episode: String) = "podcast-$account-$episode"
 }

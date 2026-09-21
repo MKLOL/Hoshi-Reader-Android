@@ -704,4 +704,16 @@
     <string name="podcasts_generation_failed">准备失败。点击“准备”重试。</string>
     <string name="podcasts_download_failed">下载失败。请点击下载重试。</string>
     <string name="podcasts_playback_error">无法播放此课程。请点击播放重试。</string>
+    <string name="podcasts_playback_error_detail">无法播放此课程（%1$s）。点击“播放”重试。</string>
+    <string name="podcasts_error_detail">详情：%1$s</string>
+    <string name="podcasts_worker_down">服务器的课程生成程序未运行，启动前“准备”都会失败。</string>
+    <string name="podcasts_worker_last_seen">它上次汇报在 %1$d 分钟前。</string>
+    <string name="podcasts_worker_never_seen">它从未汇报过。</string>
+    <string name="podcasts_worker_problem">生成程序问题：%1$s</string>
+    <string name="podcasts_generation_failed_detail">准备失败：%1$s</string>
+    <string name="podcasts_attempts_left">还剩 %1$d/%2$d 次尝试。点击“准备”重试。</string>
+    <string name="podcasts_attempts_exhausted">没有剩余尝试次数。请让服务器管理员重置此集。</string>
+    <string name="podcasts_download_failed_detail">下载失败（%1$s）。点击“下载”重试。</string>
+    <string name="podcasts_reason_unknown">原因未知</string>
+    <string name="podcasts_reason_file_missing">文件丢失</string>
 </resources>
