@@ -27,6 +27,9 @@ class MainShellUiTest {
             listOf(R.string.main_tab_books, R.string.main_tab_news, R.string.main_tab_dictionary, R.string.main_tab_settings),
             visibleMainTabs(false).map { it.labelRes },
         )
+        // With a validated token, Podcasts joins the Android-only tabs after News.
+        assertEquals(listOf(MainTab.Books, MainTab.News, MainTab.Podcasts, MainTab.Dictionary, MainTab.Settings), visibleMainTabs(true))
+        assertEquals(visibleMainTabs(false), visibleMainTabs(true).filter { it != MainTab.Podcasts })
     }
 
     @Test

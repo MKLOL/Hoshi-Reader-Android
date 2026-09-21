@@ -2,6 +2,8 @@
 
 Last updated: 2026-09-21
 
+This file is the short operational handoff for future agents.
+
 ## Maintenance Rules
 
 - Keep this file under 150 lines.
@@ -15,7 +17,11 @@ Last updated: 2026-09-21
 
 ## Open Alignment Work
 
-- Podcasts implemented and emulator-verified; see `docs/PODCASTS.md`. Production worker activation remains a deployment step in game-collection `docs/podcasts.md`.
+### Podcasts
+
+- Implemented and emulator-verified; see `docs/PODCASTS.md`. Production worker activation remains a deployment step in game-collection `docs/podcasts.md`.
+- Regression entries: `PodcastApiTest`, `PodcastModelsTest`, `PodcastScreenSessionTest`, `AppRouteTest`, `MainShellUiTest`.
+- Known limits: no per-episode delete or storage cap (files go when the account changes or is rejected); playback speed not persisted; `pendingPodcasts` is consumed only once access is confirmed.
 
 ### Architecture And Hardening
 

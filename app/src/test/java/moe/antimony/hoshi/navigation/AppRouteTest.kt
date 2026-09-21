@@ -17,6 +17,7 @@ class AppRouteTest {
             "BooksRoute",
             "DictionaryRoute",
             "NewsRoute",
+            "PodcastsRoute",
             "SettingsRoute",
             "SettingsDetailRoute",
             "ReaderRoute",
