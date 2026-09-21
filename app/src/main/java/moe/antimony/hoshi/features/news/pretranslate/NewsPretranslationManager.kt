@@ -166,7 +166,7 @@ object NewsPretranslationManager {
         var root: File? = null
         var existingCount = 0
         val label = request.config.engine.label
-        val promptId = SentenceBatchPrompt.promptId(request.config.includeExplanations)
+        val promptId = SentenceBatchPrompt.promptId(request.config.includeExplanations, request.config.customInstructions)
 
         /**
          * Keeps what was already paid for when a job stops early: writes (and, when sync is
@@ -201,7 +201,7 @@ object NewsPretranslationManager {
             val syncId = syncIdForMetadata(entry.metadata)
                 ?: throw JobFailure(UiText.Resource(R.string.news_pretranslate_error_no_sync_id))
             val config = request.config.withEffectiveBatchSize()
-            val runnerPromptId = SentenceBatchPrompt.promptId(config.includeExplanations)
+            val runnerPromptId = SentenceBatchPrompt.promptId(config.includeExplanations, config.customInstructions)
             check(runnerPromptId == promptId)
             val translator: SentenceTranslator = when (val engine = config.engine) {
                 is PretranslationEngine.Cloud -> {

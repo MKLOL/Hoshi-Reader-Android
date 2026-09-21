@@ -634,6 +634,8 @@
     <string name="news_pretranslate_on_device_format">On device: %1$s</string>
     <string name="news_pretranslate_custom_model">Model from settings</string>
     <string name="news_pretranslate_include_notes">Include vocabulary and grammar notes</string>
+    <string name="news_pretranslate_instructions_label">Your instructions for the model (optional)</string>
+    <string name="news_pretranslate_instructions_hint">Replaces the default task above. The JSON reply format is added automatically. Leave empty to use the default; your text is remembered.</string>
     <string name="news_pretranslate_sentences_format">%1$d sentences · %2$d characters</string>
     <string name="news_pretranslate_tokens_format">About %1$s input and %2$s output tokens</string>
     <string name="news_pretranslate_cost_format">Estimated cost %1$s</string>

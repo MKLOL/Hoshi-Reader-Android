@@ -68,6 +68,7 @@ import moe.antimony.hoshi.epub.ContentType
 import moe.antimony.hoshi.features.ai.ModelPricing
 import moe.antimony.hoshi.features.bookshelf.MainShellLayoutSpec
 import moe.antimony.hoshi.features.news.pretranslate.PretranslationEngine
+import moe.antimony.hoshi.features.news.pretranslate.SentenceBatchPrompt
 import moe.antimony.hoshi.features.news.pretranslate.PretranslationJobState
 import moe.antimony.hoshi.ui.UiText
 import moe.antimony.hoshi.ui.resolve
@@ -184,6 +185,7 @@ internal fun NewsFeedView(
             state = dialog,
             onSelectEngine = { engine -> viewModel.updatePretranslateConfig { it.copy(engine = engine) } },
             onToggleNotes = { include -> viewModel.updatePretranslateConfig { it.copy(includeExplanations = include) } },
+            onInstructionsChange = viewModel::updatePretranslateInstructions,
             onStart = viewModel::startPretranslate,
             onDismiss = viewModel::dismissPretranslate,
         )
@@ -448,6 +450,7 @@ private fun PretranslateDialog(
     state: PretranslateDialogState,
     onSelectEngine: (PretranslationEngine) -> Unit,
     onToggleNotes: (Boolean) -> Unit,
+    onInstructionsChange: (String) -> Unit,
     onStart: () -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -499,6 +502,17 @@ private fun PretranslateDialog(
                         Text(stringResource(R.string.news_pretranslate_include_notes), modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
                         Switch(checked = state.config.includeExplanations, onCheckedChange = onToggleNotes)
                     }
+                    // The user's own task text replaces the default; the placeholder shows what it replaces.
+                    OutlinedTextField(
+                        value = state.config.customInstructions.orEmpty(),
+                        onValueChange = onInstructionsChange,
+                        label = { Text(stringResource(R.string.news_pretranslate_instructions_label)) },
+                        placeholder = { Text(SentenceBatchPrompt.defaultTask(state.config.includeExplanations), style = MaterialTheme.typography.bodySmall) },
+                        supportingText = { Text(stringResource(R.string.news_pretranslate_instructions_hint)) },
+                        minLines = 2,
+                        maxLines = 6,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
                 }
                 state.estimate?.let { estimate ->
                     val numbers = NumberFormat.getIntegerInstance()

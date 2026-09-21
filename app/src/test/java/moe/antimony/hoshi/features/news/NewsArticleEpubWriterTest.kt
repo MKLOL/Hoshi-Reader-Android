@@ -19,6 +19,26 @@ class NewsArticleEpubWriterTest {
     """.trimIndent()
 
     @Test
+    fun headlineMarkupKeepsFuriganaWhileMetadataStaysPlain() {
+        val root = temp.newFolder("ruby-title")
+        NewsArticleEpubWriter.write(
+            root,
+            NewsArticleEpubWriter.Input(
+                title = "台風13号",
+                bodyXhtml = body,
+                titleXhtml = "<ruby>台風<rt>たいふう</rt></ruby>１３号",
+                sourceName = "NHK NEWS WEB EASY",
+                sourceUrl = "https://news.web.nhk/news/easy/ne2/ne2.html",
+            ),
+        )
+
+        val article = java.io.File(root, NewsArticleEpubWriter.ARTICLE_HREF).readText()
+        assertTrue(article, article.contains("<h1><ruby>台風<rt>たいふう</rt></ruby>１３号</h1>"))
+        assertTrue(java.io.File(root, "OEBPS/content.opf").readText().contains("<dc:title>台風13号</dc:title>"))
+        assertEquals("台風13号", EpubBookParser().parse(root).title)
+    }
+
+    @Test
     fun writtenDirectoryParsesAsASingleChapterEpubWithTitleAndCover() {
         val root = temp.newFolder("article")
         NewsArticleEpubWriter.write(

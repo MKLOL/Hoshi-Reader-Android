@@ -18,6 +18,8 @@ data class NewsSettings(
     /** Source ids the user switched on explicitly (needed for built-ins that start disabled). */
     val enabledSourceIds: Set<String> = emptySet(),
     val customSources: List<NewsSource> = emptyList(),
+    /** The user's own pre-translation task text, or null for the built-in one. */
+    val pretranslateInstructions: String? = null,
 ) {
     /** Every listable source; the shared-link pseudo-source is not part of this. */
     val sources: List<NewsSource>
@@ -57,6 +59,13 @@ class NewsSettingsRepository(
         }
     }
 
+    suspend fun setPretranslateInstructions(text: String?) {
+        dataStore.edit { preferences ->
+            val trimmed = text?.trim().orEmpty()
+            if (trimmed.isEmpty()) preferences.remove(KEY_PRETRANSLATE_INSTRUCTIONS) else preferences[KEY_PRETRANSLATE_INSTRUCTIONS] = trimmed
+        }
+    }
+
     suspend fun addCustomRss(name: String, url: String): NewsSource {
         val source = NewsSourceCatalog.customRss(name, url)
         dataStore.edit { preferences ->
@@ -90,11 +99,13 @@ class NewsSettingsRepository(
         customSources = this[KEY_CUSTOM]
             ?.let { raw -> runCatching { json.decodeFromString(ListSerializer(NewsSource.serializer()), raw) }.getOrNull() }
             .orEmpty(),
+        pretranslateInstructions = this[KEY_PRETRANSLATE_INSTRUCTIONS]?.trim()?.takeIf { it.isNotEmpty() },
     )
 
     private companion object {
         val KEY_DISABLED = stringPreferencesKey("disabledSourceIds")
         val KEY_ENABLED = stringPreferencesKey("enabledSourceIds")
         val KEY_CUSTOM = stringPreferencesKey("customSources")
+        val KEY_PRETRANSLATE_INSTRUCTIONS = stringPreferencesKey("pretranslateInstructions")
     }
 }

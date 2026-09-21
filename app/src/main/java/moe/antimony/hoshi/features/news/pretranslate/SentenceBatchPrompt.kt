@@ -26,22 +26,39 @@ object SentenceBatchPrompt {
     private val THINK_BLOCK = Regex("""<think>.*?(</think>|$)""", RegexOption.DOT_MATCHES_ALL)
     private val CODE_FENCE = Regex("""```[a-zA-Z]*""")
 
-    fun instructions(includeExplanations: Boolean): String = buildString {
+    /** The default task description, shown as the placeholder of the user's own instructions. */
+    fun defaultTask(includeExplanations: Boolean): String = buildString {
         append("You translate sentences from an easy Japanese news article for a language learner. ")
         append("For every item in the JSON array below, write a natural English translation")
         if (includeExplanations) {
             append(" and a short note (one or two lines, Markdown allowed) on vocabulary or grammar a learner might find tricky; ")
             append("leave the note empty when nothing is tricky")
         }
-        append(". ")
+        append(".")
+    }
+
+    /**
+     * The complete batch instruction: the default task, or the user's [customInstructions] in its
+     * place, followed by the reply contract the parser depends on. The default text is unchanged
+     * from earlier releases, so saved translations keep matching their `promptId`.
+     */
+    fun instructions(includeExplanations: Boolean, customInstructions: String? = null): String = buildString {
+        append(task(includeExplanations, customInstructions))
+        append(' ')
         append("Reply with JSON only: an array with one object per input item, in the same order, ")
         append("shaped like {\"id\": string, \"translation\": string, \"explanation\": string}. ")
         append("Keep the id exactly as given. Do not add any text before or after the JSON.")
     }
 
     /** Stable identifier of the prompt, stored in the translation blob's `promptId`. */
-    fun promptId(includeExplanations: Boolean): String =
-        "sha256:" + sha256Hex(instructions(includeExplanations)).take(32)
+    fun promptId(includeExplanations: Boolean, customInstructions: String? = null): String =
+        "sha256:" + sha256Hex(instructions(includeExplanations, customInstructions)).take(32)
+
+    private fun task(includeExplanations: Boolean, customInstructions: String?): String {
+        val custom = customInstructions?.trim()?.takeIf { it.isNotEmpty() } ?: return defaultTask(includeExplanations)
+        return if (custom.last() in TERMINATORS) custom else "$custom."
+    }
+    private val TERMINATORS = setOf('.', '!', '?', ':', '。', '！', '？', '：')
 
     fun itemsJson(sentences: List<ReaderSentence>): String = json.encodeToString(
         JsonArray.serializer(),
@@ -53,9 +70,15 @@ object SentenceBatchPrompt {
     )
 
     /** The one-sentence prompt used when a batch reply left an item out. */
-    fun singleInstructions(includeExplanations: Boolean): String = buildString {
-        append("Translate this sentence from an easy Japanese news article into natural English")
-        if (includeExplanations) append(", then add a short note on tricky vocabulary or grammar if any")
+    fun singleInstructions(includeExplanations: Boolean, customInstructions: String? = null): String = buildString {
+        val custom = customInstructions?.trim()?.takeIf { it.isNotEmpty() }
+        if (custom != null) {
+            append(task(includeExplanations, custom))
+            append(" This request contains a single sentence")
+        } else {
+            append("Translate this sentence from an easy Japanese news article into natural English")
+            if (includeExplanations) append(", then add a short note on tricky vocabulary or grammar if any")
+        }
         append(". Reply with JSON only, shaped like {\"translation\": string, \"explanation\": string}.")
     }
 

@@ -632,6 +632,8 @@
     <string name="news_pretranslate_on_device_format">本机运行：%1$s</string>
     <string name="news_pretranslate_custom_model">设置中的模型</string>
     <string name="news_pretranslate_include_notes">包含词汇和语法说明</string>
+    <string name="news_pretranslate_instructions_label">给模型的指令（可选）</string>
+    <string name="news_pretranslate_instructions_hint">替换上方的默认任务说明。JSON 回复格式会自动附加。留空则使用默认指令；输入的内容会被记住。</string>
     <string name="news_pretranslate_sentences_format">%1$d 句 · %2$d 字</string>
     <string name="news_pretranslate_tokens_format">约 %1$s 输入和 %2$s 输出 token</string>
     <string name="news_pretranslate_cost_format">预计费用 %1$s</string>

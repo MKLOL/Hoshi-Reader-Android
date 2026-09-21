@@ -40,6 +40,32 @@ class NewsArticleXhtmlTest {
     }
 
     @Test
+    fun japaneseArticlesGetFullWidthDigitsSoVerticalTextKeepsThemUpright() {
+        val input = """<div xmlns="http://www.w3.org/1999/xhtml"><p>4人が2025年10月に来ました。</p><figure><img src="https://example.jp/1.jpg" alt="写真1"/></figure></div>"""
+
+        val output = NewsArticleXhtml.sanitize(input, fullWidthDigits = true)!!
+
+        assertTrue(output, output.contains("<p>４人が２０２５年１０月に来ました。</p>"))
+        // Attribute values (URLs, alt text) are data, not typeset text.
+        assertTrue(output, output.contains("""src="https://example.jp/1.jpg"""") && output.contains("""alt="写真1""""))
+        assertTrue(NewsArticleXhtml.sanitize(input)!!.contains("<p>4人が2025年10月に来ました。</p>"))
+        assertEquals("<p>４人</p>", NewsArticleXhtml.paragraphsFromText("4人", fullWidthDigits = true))
+        assertEquals("<p>4人</p>", NewsArticleXhtml.paragraphsFromText("4人"))
+        assertEquals("０１２３４５６７８９", NewsArticleXhtml.fullWidthDigits("0123456789"))
+    }
+
+    @Test
+    fun headlineKeepsRubyAndLosesWrappersLinksAndImages() {
+        val input = """<h1 xmlns="http://www.w3.org/1999/xhtml" class="title"><a href="/x"><ruby>台風<rt>たいふう</rt></ruby>13<span>号</span></a><img src="https://example.jp/i.png"/></h1>"""
+
+        assertEquals("<ruby>台風<rt>たいふう</rt></ruby>１３号", NewsArticleXhtml.sanitizeTitle(input, fullWidthDigits = true))
+        assertEquals("<ruby>台風<rt>たいふう</rt></ruby>13号", NewsArticleXhtml.sanitizeTitle(input))
+        assertEquals("<ruby>雨<rt>あめ</rt></ruby>です", NewsArticleXhtml.sanitizeTitle("""<div xmlns="http://www.w3.org/1999/xhtml"><h1><ruby>雨<rt>あめ</rt></ruby>です</h1></div>"""))
+        assertNull(NewsArticleXhtml.sanitizeTitle("""<h1 xmlns="http://www.w3.org/1999/xhtml"><img src="https://example.jp/i.png"/></h1>"""))
+        assertNull(NewsArticleXhtml.sanitizeTitle("<h1>unclosed"))
+    }
+
+    @Test
     fun malformedInputReturnsNull() {
         assertNull(NewsArticleXhtml.sanitize("<div><p>unclosed"))
         assertNull(NewsArticleXhtml.sanitize(""))

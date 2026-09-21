@@ -7,8 +7,16 @@ Semantic Versioning.
 
 ## [Unreleased]
 
+### Changed
+- **Pre-translate with your own instructions.** The pre-translate dialog has a field for your own task description for cloud models (for example literal translations with particle notes). It replaces the built-in wording, the reply format is added automatically, and the text is remembered for the next article. Leave it empty for the default.
+
+### Fixed
+- **News headlines keep their furigana.** An article saved from the News tab now shows the headline with the readings the site provides instead of plain text.
+- **Numbers no longer lie on their side in vertical reading.** Japanese news articles are saved with full-width digits, so 4, 5, 6 and years stand upright when the reader is in vertical mode.
+
 ### Added
 - **NHK learning podcasts.** A validated book-sync token unlocks Podcasts: filter news by original length, prepare a shared Japanese/English lesson with vocabulary replay, download it, and listen with seeking, playback speed and lock-screen controls. Downloads and saved lessons remain available between visits.
+
 
 ## [v0.11.9] - 2026-09-10
 

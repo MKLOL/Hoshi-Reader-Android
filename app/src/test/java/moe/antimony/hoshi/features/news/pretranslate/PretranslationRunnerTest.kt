@@ -19,11 +19,11 @@ class PretranslationRunnerTest {
     ) : SentenceTranslator {
         val batchCalls = mutableListOf<List<String>>()
         val singleCalls = mutableListOf<String>()
-        override suspend fun translateBatch(sentences: List<ReaderSentence>, includeExplanations: Boolean): Map<String, SentenceTranslation> {
+        override suspend fun translateBatch(sentences: List<ReaderSentence>, includeExplanations: Boolean, customInstructions: String?): Map<String, SentenceTranslation> {
             batchCalls += sentences.map { it.id }
             return batchBehavior(sentences)
         }
-        override suspend fun translateOne(sentence: ReaderSentence, includeExplanations: Boolean): SentenceTranslation? {
+        override suspend fun translateOne(sentence: ReaderSentence, includeExplanations: Boolean, customInstructions: String?): SentenceTranslation? {
             singleCalls += sentence.id
             return singleBehavior(sentence)
         }

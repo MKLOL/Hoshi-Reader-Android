@@ -12,10 +12,10 @@ interface SentenceTranslator {
     val supportsBatches: Boolean
 
     /** Translates several sentences in one request. May return a subset; missing ids are retried singly. */
-    suspend fun translateBatch(sentences: List<ReaderSentence>, includeExplanations: Boolean): Map<String, SentenceTranslation>
+    suspend fun translateBatch(sentences: List<ReaderSentence>, includeExplanations: Boolean, customInstructions: String? = null): Map<String, SentenceTranslation>
 
     /** Translates one sentence, or returns null when the reply was unusable. */
-    suspend fun translateOne(sentence: ReaderSentence, includeExplanations: Boolean): SentenceTranslation?
+    suspend fun translateOne(sentence: ReaderSentence, includeExplanations: Boolean, customInstructions: String? = null): SentenceTranslation?
 }
 
 /** Sends batches through the same clients the reader's live translation uses. */
@@ -26,23 +26,23 @@ class CloudSentenceTranslator(
 ) : SentenceTranslator {
     override val supportsBatches: Boolean = true
 
-    override suspend fun translateBatch(sentences: List<ReaderSentence>, includeExplanations: Boolean): Map<String, SentenceTranslation> {
+    override suspend fun translateBatch(sentences: List<ReaderSentence>, includeExplanations: Boolean, customInstructions: String?): Map<String, SentenceTranslation> {
         val reply = CloudChat.complete(
             provider = provider,
             apiKey = apiKey,
             model = modelId,
-            prompt = SentenceBatchPrompt.instructions(includeExplanations),
+            prompt = SentenceBatchPrompt.instructions(includeExplanations, customInstructions),
             bubbleText = SentenceBatchPrompt.itemsJson(sentences),
         )
         return SentenceBatchPrompt.parseBatch(reply, sentences.mapTo(HashSet()) { it.id })
     }
 
-    override suspend fun translateOne(sentence: ReaderSentence, includeExplanations: Boolean): SentenceTranslation? {
+    override suspend fun translateOne(sentence: ReaderSentence, includeExplanations: Boolean, customInstructions: String?): SentenceTranslation? {
         val reply = CloudChat.complete(
             provider = provider,
             apiKey = apiKey,
             model = modelId,
-            prompt = SentenceBatchPrompt.singleInstructions(includeExplanations),
+            prompt = SentenceBatchPrompt.singleInstructions(includeExplanations, customInstructions),
             bubbleText = sentence.text,
         )
         return SentenceBatchPrompt.parseSingle(reply, sentence.id)
@@ -54,10 +54,11 @@ class OnDeviceSentenceTranslator(context: Context) : SentenceTranslator {
     private val appContext = context.applicationContext
     override val supportsBatches: Boolean = false
 
-    override suspend fun translateBatch(sentences: List<ReaderSentence>, includeExplanations: Boolean): Map<String, SentenceTranslation> =
+    override suspend fun translateBatch(sentences: List<ReaderSentence>, includeExplanations: Boolean, customInstructions: String?): Map<String, SentenceTranslation> =
         emptyMap()
 
-    override suspend fun translateOne(sentence: ReaderSentence, includeExplanations: Boolean): SentenceTranslation? {
+    /** The on-device model keeps its fixed instruction; custom text is a cloud-model feature. */
+    override suspend fun translateOne(sentence: ReaderSentence, includeExplanations: Boolean, customInstructions: String?): SentenceTranslation? {
         val result = OfflineLlmManager.translate(
             appContext = appContext,
             instruction = ON_DEVICE_INSTRUCTION,

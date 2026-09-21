@@ -26,6 +26,8 @@ object NewsArticleEpubWriter {
         val publishedAt: Long? = null,
         /** JPEG, PNG or WebP bytes; anything else is ignored. */
         val cover: ByteArray? = null,
+        /** Inline XHTML for the visible headline (furigana kept); package metadata uses [title]. */
+        val titleXhtml: String? = null,
     )
 
     fun write(root: File, input: Input) {
@@ -93,7 +95,7 @@ object NewsArticleEpubWriter {
                 appendLine("""<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="${input.language}" lang="${input.language}">""")
                 appendLine("""<head><meta charset="utf-8"/><title>${NewsArticleXhtml.escape(title)}</title><link rel="stylesheet" type="text/css" href="style.css"/></head>""")
                 appendLine("""<body>""")
-                appendLine("""<h1>${NewsArticleXhtml.escape(title)}</h1>""")
+                appendLine("""<h1>${input.titleXhtml?.takeIf { it.isNotBlank() } ?: NewsArticleXhtml.escape(title)}</h1>""")
                 val sourceLine = listOfNotNull(input.sourceName.takeIf { it.isNotBlank() }, published).joinToString(" · ")
                 if (sourceLine.isNotEmpty()) appendLine("""<p class="hoshi-news-source">${NewsArticleXhtml.escape(sourceLine)}</p>""")
                 appendLine(input.bodyXhtml.trim())

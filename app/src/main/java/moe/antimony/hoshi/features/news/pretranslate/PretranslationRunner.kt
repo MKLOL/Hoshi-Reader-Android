@@ -55,7 +55,7 @@ class PretranslationRunner(
             var translated: Map<String, SentenceTranslation> = emptyMap()
             var replied = false
             attempt {
-                translated = translator.translateBatch(batch, config.includeExplanations).filterKeys { id -> batch.any { it.id == id } }
+                translated = translator.translateBatch(batch, config.includeExplanations, config.customInstructions).filterKeys { id -> batch.any { it.id == id } }
                 replied = true
             }
             sink += translated
@@ -78,7 +78,7 @@ class PretranslationRunner(
             if (sentence.id in sink) continue
             coroutineContext.ensureActive()
             attempt {
-                translator.translateOne(sentence, config.includeExplanations)?.let { sink[sentence.id] = it }
+                translator.translateOne(sentence, config.includeExplanations, config.customInstructions)?.let { sink[sentence.id] = it }
             }
             onProgress(sink.size, sentences.size)
         }

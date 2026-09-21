@@ -5,6 +5,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -73,6 +75,8 @@ data class NewsUiState(
     /** The job for an article's book, if any. */
     fun jobFor(article: NewsArticle): PretranslationJobState? = feed.saved[article.id]?.let { jobs[it.bookId] }
 }
+
+private const val INSTRUCTIONS_SAVE_DELAY_MS = 400L
 
 internal class NewsViewModel(
     private val appContext: Context,
@@ -194,8 +198,11 @@ internal class NewsViewModel(
     fun preparePretranslate(article: NewsArticle) {
         viewModelScope.launch {
             val engine = defaultEngine()
-            val defaultConfig = PretranslationConfig(engine = engine, includeExplanations = engine !is PretranslationEngine.OnDevice)
-                .withEffectiveBatchSize()
+            val defaultConfig = PretranslationConfig(
+                engine = engine,
+                includeExplanations = engine !is PretranslationEngine.OnDevice,
+                customInstructions = settingsRepository.current().pretranslateInstructions,
+            ).withEffectiveBatchSize()
             local.update { it.copy(dialog = PretranslateDialogState(article = article, config = defaultConfig)) }
             try {
                 val saved = repository.saveArticle(article)
@@ -230,6 +237,17 @@ internal class NewsViewModel(
             }
         }
     }
+
+    /** The user's own task text; the estimate follows it and it is remembered for the next article. */
+    fun updatePretranslateInstructions(text: String) {
+        updatePretranslateConfig { it.copy(customInstructions = text.takeIf { value -> value.isNotBlank() }) }
+        instructionsSave?.cancel()
+        instructionsSave = viewModelScope.launch {
+            delay(INSTRUCTIONS_SAVE_DELAY_MS)
+            settingsRepository.setPretranslateInstructions(text)
+        }
+    }
+    private var instructionsSave: Job? = null
 
     fun updatePretranslateConfig(transform: (PretranslationConfig) -> PretranslationConfig) {
         // Apply the change and its estimate atomically against the latest dialog, then fill in the
