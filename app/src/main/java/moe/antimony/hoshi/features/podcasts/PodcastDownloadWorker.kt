@@ -5,6 +5,7 @@ import android.app.NotificationManager
 import android.content.Context
 import android.content.pm.ServiceInfo
 import android.os.Build
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.work.CoroutineWorker
 import androidx.work.ForegroundInfo
@@ -31,8 +32,10 @@ class PodcastDownloadWorker(context: Context, params: WorkerParameters) : Corout
         val destination = PodcastFiles(applicationContext).audio(account, id)
         val temporary = java.io.File(destination.path + ".part")
         try {
-            setForeground(getForegroundInfo())
-            val api = PodcastApi()
+            // Android 12+ refuses a foreground promotion from the background (a deferred or retried
+            // start). The transfer is bounded and constrained, so it proceeds as ordinary work.
+            runCatching { setForeground(getForegroundInfo()) }
+            val api = PodcastRepository.getInstance(applicationContext).api
             api.client.newCall(api.request(settings, "/$id/audio")).execute().use { response ->
                 if (!response.isSuccessful) {
                     if (response.code in listOf(401, 403) && account == podcastAccount(settingsRepo.settings.first())) {
@@ -60,7 +63,7 @@ class PodcastDownloadWorker(context: Context, params: WorkerParameters) : Corout
                             if (downloaded > limit) throw IOException()
                             target.write(buffer, 0, size)
                             if (downloaded - lastProgress >= 1024 * 1024) {
-                                setProgress(workDataOf("percent" to if (total > 0) (downloaded * 100 / total).toInt() else 0))
+                                setProgress(workDataOf(PodcastKeys.PROGRESS_PERCENT to if (total > 0) (downloaded * 100 / total).toInt() else 0))
                                 lastProgress = downloaded
                             }
                         }
@@ -73,7 +76,8 @@ class PodcastDownloadWorker(context: Context, params: WorkerParameters) : Corout
             Result.success()
         } catch (cancelled: CancellationException) {
             throw cancelled
-        } catch (_: Exception) {
+        } catch (error: Exception) {
+            Log.w("PodcastDownloadWorker", "Download attempt ${runAttemptCount + 1} failed (${error.javaClass.simpleName})")
             if (runAttemptCount < 2) Result.retry() else Result.failure()
         } finally {
             temporary.delete()
