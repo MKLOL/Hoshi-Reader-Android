@@ -22,6 +22,11 @@ data class PretranslationConfig(
     val engine: PretranslationEngine,
     /** Ask for a short vocabulary/grammar note per sentence in addition to the translation. */
     val includeExplanations: Boolean = true,
+    /**
+     * The user's own task description for cloud models, replacing the default one; the JSON reply
+     * contract is always appended by [SentenceBatchPrompt]. Blank means the default.
+     */
+    val customInstructions: String? = null,
     val sentencesPerRequest: Int = DEFAULT_SENTENCES_PER_REQUEST,
 ) {
     /** The batch size the job will actually use: Anthropic's output cap forces smaller batches. */

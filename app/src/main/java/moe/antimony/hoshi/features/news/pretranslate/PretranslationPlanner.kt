@@ -43,7 +43,7 @@ object PretranslationPlanner {
     fun estimate(sentences: List<ReaderSentence>, config: PretranslationConfig): PretranslationEstimate {
         val characters = sentences.sumOf { it.text.length }
         val requests = if (sentences.isEmpty()) 0 else (sentences.size + config.sentencesPerRequest - 1) / config.sentencesPerRequest
-        val promptTokens = TokenEstimator.promptTokens(SentenceBatchPrompt.instructions(config.includeExplanations)) * requests
+        val promptTokens = TokenEstimator.promptTokens(SentenceBatchPrompt.instructions(config.includeExplanations, config.customInstructions)) * requests
         val inputTokens = promptTokens + sentences.sumOf { TokenEstimator.inputTokensForSentence(it.text) }
         val outputTokens = sentences.sumOf { TokenEstimator.outputTokensForSentence(it.text, config.includeExplanations) }
         val cost = when (val engine = config.engine) {

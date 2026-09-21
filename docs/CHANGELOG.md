@@ -7,6 +7,9 @@ Semantic Versioning.
 
 ## [Unreleased]
 
+### Changed
+- **Pre-translate with your own instructions.** The pre-translate dialog has a field for your own task description for cloud models (for example literal translations with particle notes). It replaces the built-in wording, the reply format is added automatically, and the text is remembered for the next article. Leave it empty for the default.
+
 ### Fixed
 - **News headlines keep their furigana.** An article saved from the News tab now shows the headline with the readings the site provides instead of plain text.
 - **Numbers no longer lie on their side in vertical reading.** Japanese news articles are saved with full-width digits, so 4, 5, 6 and years stand upright when the reader is in vertical mode.

@@ -2,12 +2,32 @@ package moe.antimony.hoshi.features.news.pretranslate
 
 import moe.antimony.hoshi.features.reader.sentence.ReaderSentence
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class SentenceBatchPromptTest {
     private fun sentence(start: Int, text: String) = ReaderSentence(spine = 0, start = start, length = text.length, text = text, paragraph = 0)
+
+    @Test
+    fun customInstructionsReplaceTheTaskButKeepTheReplyContract() {
+        val default = SentenceBatchPrompt.instructions(true)
+        val contract = default.substring(default.indexOf("Reply with JSON only"))
+        assertEquals(SentenceBatchPrompt.defaultTask(true) + " " + contract, default)
+
+        val custom = SentenceBatchPrompt.instructions(true, "  Translate literally and explain every particle  ")
+        assertEquals("Translate literally and explain every particle. $contract", custom)
+        assertEquals("ていねいに訳して。 $contract", SentenceBatchPrompt.instructions(false, "ていねいに訳して。"))
+        // Blank text means the default, byte for byte, so existing sidecars keep their promptId.
+        assertEquals(default, SentenceBatchPrompt.instructions(true, "  "))
+        assertEquals(SentenceBatchPrompt.promptId(true), SentenceBatchPrompt.promptId(true, null))
+        assertNotEquals(SentenceBatchPrompt.promptId(true), SentenceBatchPrompt.promptId(true, "Translate literally"))
+
+        val single = SentenceBatchPrompt.singleInstructions(false, "Be brief")
+        assertTrue(single, single.startsWith("Be brief. This request contains a single sentence. Reply with JSON only"))
+        assertEquals(SentenceBatchPrompt.singleInstructions(true), SentenceBatchPrompt.singleInstructions(true, ""))
+    }
 
     @Test
     fun itemsJsonCarriesIdsAndTextInOrder() {
