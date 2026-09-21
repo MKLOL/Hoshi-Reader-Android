@@ -58,7 +58,7 @@ class MangaReaderLoaderTest {
         assertTrue(state.toString(), state is MangaReaderLoadState.Ready)
         state as MangaReaderLoadState.Ready
         assertEquals(3, state.initialPageIndex)
-        assertEquals(root, state.bookRoot)
+        assertEquals(root.canonicalFile, state.bookRoot.canonicalFile) // macOS temp dirs resolve through /private
         assertEquals(listOf(syncIdForMetadata(metadata)), hookSyncIds)
         assertEquals(syncIdForMetadata(metadata), state.syncId)
     }

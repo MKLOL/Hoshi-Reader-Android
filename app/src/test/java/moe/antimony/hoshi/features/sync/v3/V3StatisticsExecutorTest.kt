@@ -142,7 +142,7 @@ class V3StatisticsExecutorTest {
             V3LocalState(repoB, AiChatHistoryStore(), null).read(),
             V3RemoteState().read(fake) {}.snapshot,
         )
-        assertTrue(plan.actions.any { it is V3Action.SyncStatistics && it.root == rootB })
+        assertTrue(plan.actions.any { it is V3Action.SyncStatistics && it.root.canonicalFile == rootB.canonicalFile })
         // The user deletes the book between planning and execution.
         assertTrue(rootB.deleteRecursively())
 
