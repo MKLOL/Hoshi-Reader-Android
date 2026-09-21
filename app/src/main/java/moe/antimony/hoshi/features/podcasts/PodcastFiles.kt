@@ -36,8 +36,4 @@ internal class PodcastFiles(context: Context) {
     fun pruneExcept(keep: String?) {
         root.listFiles()?.filter { it.isDirectory && it.name != keep }?.forEach { it.deleteRecursively() }
     }
-    fun deleteAccount(account: String) {
-        require(validPodcastId(account))
-        File(root, account).deleteRecursively()
-    }
 }

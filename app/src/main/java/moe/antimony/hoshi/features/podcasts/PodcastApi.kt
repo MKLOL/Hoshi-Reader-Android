@@ -19,6 +19,10 @@ import okhttp3.HttpUrl.Companion.toHttpUrl
 internal class PodcastHttpException(val status: Int) : IOException()
 
 internal class PodcastApi {
+    companion object {
+        /** One connection pool for the repository and the download worker, without the repository's polling. */
+        val shared by lazy { PodcastApi() }
+    }
     private val json = Json { ignoreUnknownKeys = true }
     val client = OkHttpClient.Builder().followRedirects(false).followSslRedirects(false)
         .connectTimeout(15, TimeUnit.SECONDS).readTimeout(30, TimeUnit.SECONDS).build()

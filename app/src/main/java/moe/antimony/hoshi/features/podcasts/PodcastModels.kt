@@ -41,7 +41,10 @@ internal object PodcastKeys {
     const val OPEN_EXTRA = "openPodcasts"
     const val EPISODE_TAG_PREFIX = "episode-"
     const val PROGRESS_PERCENT = "percent"
+    const val INPUT_ACCOUNT = "account"
+    const val INPUT_EPISODE = "episode"
     fun accountTag(account: String) = "podcast-$account"
+    fun workName(account: String, episode: String) = "podcast-$account-$episode"
 }
 
 internal fun podcastAccount(settings: HttpSyncSettings): String = MessageDigest.getInstance("SHA-256")

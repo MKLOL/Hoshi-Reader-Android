@@ -23,8 +23,8 @@ import moe.antimony.hoshi.features.sync.http.httpSyncSettingsRepository
 
 class PodcastDownloadWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
-        val account = inputData.getString("account") ?: return@withContext Result.failure()
-        val id = inputData.getString("episode") ?: return@withContext Result.failure()
+        val account = inputData.getString(PodcastKeys.INPUT_ACCOUNT) ?: return@withContext Result.failure()
+        val id = inputData.getString(PodcastKeys.INPUT_EPISODE) ?: return@withContext Result.failure()
         if (!validPodcastId(account) || !validPodcastId(id)) return@withContext Result.failure()
         val settingsRepo = applicationContext.httpSyncSettingsRepository()
         val settings = settingsRepo.settings.first()
@@ -34,8 +34,8 @@ class PodcastDownloadWorker(context: Context, params: WorkerParameters) : Corout
         try {
             // Android 12+ refuses a foreground promotion from the background (a deferred or retried
             // start). The transfer is bounded and constrained, so it proceeds as ordinary work.
-            runCatching { setForeground(getForegroundInfo()) }
-            val api = PodcastRepository.getInstance(applicationContext).api
+            try { setForeground(getForegroundInfo()) } catch (cancelled: CancellationException) { throw cancelled } catch (_: Exception) { }
+            val api = PodcastApi.shared
             api.client.newCall(api.request(settings, "/$id/audio")).execute().use { response ->
                 if (!response.isSuccessful) {
                     if (response.code in listOf(401, 403) && account == podcastAccount(settingsRepo.settings.first())) {

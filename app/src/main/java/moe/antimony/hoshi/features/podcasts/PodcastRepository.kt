@@ -29,7 +29,7 @@ internal class PodcastRepository(
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val validation = context.getSharedPreferences(PodcastKeys.ACCESS_PREFS, Context.MODE_PRIVATE)
-    val api = PodcastApi()
+    val api = PodcastApi.shared
     val files = PodcastFiles(context)
     private val _access = MutableStateFlow(false)
     val access = _access.asStateFlow()
@@ -54,14 +54,18 @@ internal class PodcastRepository(
                         workManager.cancelAllWorkByTag(PodcastKeys.accountTag(podcastAccount(old)))
                         context.stopService(Intent(context, PodcastPlaybackService::class.java))
                     }
-                    // Lessons belong to one server/token pair; another pair's files are dead weight.
-                    files.pruneExcept(cachedAccount)
                     if (settings.isConfigured) {
                         while (true) {
                             try {
                                 _access.value = api.access(settings)
                                 _account.value = if (_access.value) podcastAccount(settings) else null
-                                if (_access.value) validation.edit().putString(PodcastKeys.VALIDATED_ACCOUNT, podcastAccount(settings)).apply()
+                                if (_access.value) {
+                                    validation.edit().putString(PodcastKeys.VALIDATED_ACCOUNT, podcastAccount(settings)).apply()
+                                    // Only a pair the server just accepted retires the others' lessons: an
+                                    // unvalidated edit of the token (typed one character at a time) or a
+                                    // transient rejection must never delete anything.
+                                    files.pruneExcept(podcastAccount(settings))
+                                }
                                 if (!_access.value) invalidate()
                             } catch (cancelled: CancellationException) {
                                 throw cancelled
@@ -83,17 +87,17 @@ internal class PodcastRepository(
             (context.applicationContext as moe.antimony.hoshi.HoshiApplication).podcastRepository
     }
 
-    /** The server rejected or disabled the token: stop everything and drop that account's lessons. */
+    /**
+     * The server rejected or disabled the token: stop playback and downloads and hide the tab.
+     * Files stay: a rejection can be transient (proxy, maintenance, a flag flipped back) and are
+     * unusable without validation anyway; another account validating is what removes them.
+     */
     fun invalidate() {
         _access.value = false
         _account.value = null
         validation.edit().remove(PodcastKeys.VALIDATED_ACCOUNT).apply()
         context.stopService(Intent(context, PodcastPlaybackService::class.java))
-        if (credentials.isConfigured) {
-            val account = podcastAccount(credentials)
-            workManager.cancelAllWorkByTag(PodcastKeys.accountTag(account))
-            files.deleteAccount(account)
-        }
+        if (credentials.isConfigured) workManager.cancelAllWorkByTag(PodcastKeys.accountTag(podcastAccount(credentials)))
     }
 
     fun download(episode: PodcastEpisode) {
@@ -101,8 +105,8 @@ internal class PodcastRepository(
         val account = podcastAccount(credentials)
         val request = OneTimeWorkRequestBuilder<PodcastDownloadWorker>()
             .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).setRequiresStorageNotLow(true).build())
-            .setInputData(workDataOf("account" to account, "episode" to episode.id))
+            .setInputData(workDataOf(PodcastKeys.INPUT_ACCOUNT to account, PodcastKeys.INPUT_EPISODE to episode.id))
             .addTag(PodcastKeys.accountTag(account)).addTag(PodcastKeys.EPISODE_TAG_PREFIX + episode.id).build()
-        workManager.enqueueUniqueWork("podcast-$account-${episode.id}", ExistingWorkPolicy.KEEP, request)
+        workManager.enqueueUniqueWork(PodcastKeys.workName(account, episode.id), ExistingWorkPolicy.KEEP, request)
     }
 }

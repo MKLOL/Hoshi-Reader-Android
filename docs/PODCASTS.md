@@ -24,9 +24,9 @@ and foreground-worker patterns rather than copying an iOS implementation.
 
 - `PodcastRepository`: process-owned validated account and download scheduling; credentials
   come from the existing settings repository. It stores only an account fingerprint as
-  the successful validation marker, never another copy of the bearer token. Changing the
-  server or token, or a rejected token, deletes the previous account's lessons and catalogue;
-  only the current account's files are kept.
+  the successful validation marker, never another copy of the bearer token. Once a new
+  server/token pair validates, every other account's lessons and catalogue are removed; a
+  rejected or edited-but-unvalidated token keeps its files, since a rejection can be transient.
 - `PodcastApi`: typed server responses, HTTPS (debug loopback exception), no redirects,
   bounded JSON, cancellable requests. Tokens are headers and never URL parameters.
 - `PodcastViewModel`: immutable screen state, account-scoped observers, polling only while
@@ -49,15 +49,15 @@ cover original-duration boundaries, navigation gating, account IDs, JSON contrac
 headers, redirect rejection, auth cancellation and screen/account observer cancellation.
 The original integration was reviewed in-session without retained artifacts. On 2026-09-21
 three independent Android reviews and three server reviews of the merged branch were run;
-their should-fix findings are addressed in the follow-up commits (see the changelog for the
-user-visible ones) and the remaining known limits are listed below.
+their should-fix findings are addressed in the follow-up commits, and the remaining known
+limits are listed below.
 
 ### Known limits
 
 - Playback speed is not remembered between sessions.
 - The lesson recipe (sentence, translation, vocabulary order and voices) is defined by the
   server; the app only requests preparation.
-- Downloads are only removed when the account changes or its token is rejected; there is no
+- Downloads are only removed when another server/token pair validates; there is no
   per-episode delete or size cap yet.
 
 ### Completed checks (2026-09-21)
