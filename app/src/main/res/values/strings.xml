@@ -695,6 +695,7 @@
     <string name="podcasts_downloads">Podcast downloads</string>
     <string name="podcasts_downloading">Downloading podcast lesson…</string>
     <string name="podcasts_download_progress">Downloading… %1$d%%</string>
+    <string name="podcasts_download_waiting">Waiting for a connection…</string>
     <string name="podcasts_play">Play</string>
     <string name="podcasts_retry">Retry</string>
     <string name="podcasts_empty">No episodes in this length range.</string>
@@ -702,7 +703,7 @@
     <string name="podcasts_unavailable">The podcast service is temporarily unavailable. Try again later.</string>
     <string name="podcasts_queue_full">The preparation queue is full. Try again later.</string>
     <string name="podcasts_cached_feed">Showing saved episode listings; NHK could not be refreshed.</string>
-    <string name="podcasts_generation_failed">Preparation failed. Retry reuses completed work.</string>
+    <string name="podcasts_generation_failed">Preparation failed. Tap Prepare to try again.</string>
     <string name="podcasts_download_failed">Download failed. Tap Download to retry.</string>
     <string name="podcasts_playback_error">Could not play this lesson. Tap Play to retry.</string>
 </resources>

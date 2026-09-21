@@ -693,6 +693,7 @@
     <string name="podcasts_downloads">播客下载</string>
     <string name="podcasts_downloading">正在下载播客课程…</string>
     <string name="podcasts_download_progress">正在下载… %1$d%%</string>
+    <string name="podcasts_download_waiting">等待网络连接…</string>
     <string name="podcasts_play">播放</string>
     <string name="podcasts_retry">重试</string>
     <string name="podcasts_empty">此时长范围内没有节目。</string>
@@ -700,7 +701,7 @@
     <string name="podcasts_unavailable">播客服务暂时不可用。请稍后重试。</string>
     <string name="podcasts_queue_full">课程准备队列已满。请稍后重试。</string>
     <string name="podcasts_cached_feed">无法刷新 NHK，正在显示已保存的节目列表。</string>
-    <string name="podcasts_generation_failed">准备失败。重试将复用已完成的内容。</string>
+    <string name="podcasts_generation_failed">准备失败。点击“准备”重试。</string>
     <string name="podcasts_download_failed">下载失败。请点击下载重试。</string>
     <string name="podcasts_playback_error">无法播放此课程。请点击播放重试。</string>
 </resources>

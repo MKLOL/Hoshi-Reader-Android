@@ -135,9 +135,15 @@ internal fun PodcastsView(modifier: Modifier = Modifier) {
                         episode.id in state.downloaded -> Button(enabled = controller != null, onClick = {
                             val account = podcastAccount(repository.credentials)
                             val id = "$account:${episode.id}"
+                            if (!repository.files.audio(account, episode.id).isFile) {
+                                // The file went away since the last refresh: say so instead of playing nothing.
+                                playerFailed = true
+                                model.retry()
+                                return@Button
+                            }
                             controller?.let { player ->
                                 if (player.currentMediaItem?.mediaId != id) {
-                                    val savedPosition = context.getSharedPreferences("podcast-positions", Context.MODE_PRIVATE).getLong(id, 0)
+                                    val savedPosition = context.getSharedPreferences(PodcastKeys.POSITIONS_PREFS, Context.MODE_PRIVATE).getLong(id, 0)
                                     val position = podcastResumePosition(savedPosition, episode.lessonDurationSeconds)
                                     player.setMediaItem(MediaItem.Builder().setMediaId(id).setMediaMetadata(MediaMetadata.Builder().setTitle(episode.title).build()).build(), position)
                                     player.prepare()
@@ -147,6 +153,7 @@ internal fun PodcastsView(modifier: Modifier = Modifier) {
                             }
                         }) { Text(stringResource(R.string.podcasts_play)) }
                         episode.id in state.downloads -> Text(stringResource(R.string.podcasts_download_progress, state.downloads.getValue(episode.id)))
+                        episode.id in state.waiting -> Text(stringResource(R.string.podcasts_download_waiting))
                         episode.status == "ready" -> Button(onClick = { repository.download(episode) }) { Text(stringResource(R.string.podcasts_download)) }
                         episode.status == "queued" || episode.id in state.preparing -> Text(stringResource(R.string.podcasts_queued))
                         episode.status == "preparing" -> Text(stringResource(R.string.podcasts_preparing))

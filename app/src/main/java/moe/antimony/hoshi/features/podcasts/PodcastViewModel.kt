@@ -21,6 +21,8 @@ internal data class PodcastUiState(
     val feedStale: Boolean = false,
     val downloaded: Set<String> = emptySet(),
     val downloads: Map<String, Int> = emptyMap(),
+    /** Enqueued but not running: waiting for the network or a retry back-off. */
+    val waiting: Set<String> = emptySet(),
     val downloadFailures: Set<String> = emptySet(),
     val preparing: Set<String> = emptySet(),
 ) {
@@ -31,12 +33,18 @@ internal class PodcastViewModel(val repository: PodcastRepository) : ViewModel()
     private val _state = MutableStateFlow(PodcastUiState())
     val state = _state.asStateFlow()
     private val visible = MutableStateFlow(false)
+    private var sessionAccount: String? = null
     fun setVisible(value: Boolean) { visible.value = value }
 
     init {
         viewModelScope.launch {
             observePodcastScreenSession(repository.account, visible) { account ->
-                _state.value = PodcastUiState(length = _state.value.length)
+                // Leaving and returning keeps the list; only another account starts from scratch.
+                // A prepare request in flight (viewModelScope) keeps its marker either way.
+                if (account != null && account != sessionAccount) {
+                    _state.value = PodcastUiState(length = _state.value.length, preparing = _state.value.preparing)
+                    sessionAccount = account
+                }
                 if (account != null) {
                     withContext(Dispatchers.IO) { repository.files.loadCatalogue(account) }?.let { cached ->
                         val downloaded = withContext(Dispatchers.IO) { cached.episodes.filter { validPodcastId(it.id) && repository.files.audio(account, it.id).isFile }.map { it.id }.toSet() }
@@ -98,23 +106,25 @@ internal class PodcastViewModel(val repository: PodcastRepository) : ViewModel()
 
     private suspend fun observeDownloads() {
         val account = podcastAccount(repository.credentials)
-        repository.workManager.getWorkInfosByTagFlow("podcast-$account").collect { infos ->
+        repository.workManager.getWorkInfosByTagFlow(PodcastKeys.accountTag(account)).collect { infos ->
             val active = mutableMapOf<String, Int>()
+            val waiting = mutableSetOf<String>()
             val failed = mutableSetOf<String>()
             val completed = mutableSetOf<String>()
             infos.forEach { info ->
-                val id = info.tags.firstOrNull { it.startsWith("episode-") }?.removePrefix("episode-") ?: return@forEach
+                val id = info.tags.firstOrNull { it.startsWith(PodcastKeys.EPISODE_TAG_PREFIX) }?.removePrefix(PodcastKeys.EPISODE_TAG_PREFIX) ?: return@forEach
                 when (info.state) {
                     WorkInfo.State.SUCCEEDED -> completed += id
                     WorkInfo.State.FAILED -> failed += id
                     WorkInfo.State.CANCELLED -> Unit
-                    else -> active[id] = info.progress.getInt("percent", 0)
+                    WorkInfo.State.ENQUEUED, WorkInfo.State.BLOCKED -> waiting += id
+                    else -> active[id] = info.progress.getInt(PodcastKeys.PROGRESS_PERCENT, 0)
                 }
             }
             val downloaded = withContext(Dispatchers.IO) {
                 (_state.value.downloaded + completed).filter { repository.files.audio(account, it).isFile }.toSet()
             }
-            _state.update { it.copy(downloaded = downloaded, downloads = active, downloadFailures = failed - active.keys - downloaded) }
+            _state.update { it.copy(downloaded = downloaded, downloads = active, waiting = waiting - active.keys, downloadFailures = failed - active.keys - waiting - downloaded) }
         }
     }
 }
