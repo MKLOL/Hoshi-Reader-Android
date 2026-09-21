@@ -8,12 +8,22 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class PodcastModelsTest {
-    @Test fun durationFiltersUseOriginalAndHaveNoGapsOrOverlap() {
-        for (seconds in 1..3600) {
+    @Test fun durationFiltersUseOriginalAndHaveNoGapsOrOverlapOrCeiling() {
+        for (seconds in listOf(1, 599, 600, 601, 1200, 1201, 3600, 3601, 7200, Int.MAX_VALUE)) {
             val episode = PodcastEpisode("a".repeat(64), "news", "today", seconds, "ready", 9999.0)
-            assertTrue(PodcastLength.All.includes(episode))
-            assertEquals(1, PodcastLength.entries.drop(1).count { it.includes(episode) })
+            assertTrue("$seconds", PodcastLength.All.includes(episode))
+            assertEquals("$seconds", 1, PodcastLength.entries.drop(1).count { it.includes(episode) })
         }
+        assertTrue(PodcastLength.Long.includes(PodcastEpisode("a".repeat(64), "news", "today", 3601, "ready")))
+        // An unknown length is still listed, but only under "All lengths".
+        for (unknown in listOf(0, -5)) {
+            val episode = PodcastEpisode("a".repeat(64), "news", "today", unknown, "ready")
+            assertTrue(PodcastLength.All.includes(episode))
+            assertEquals(0, PodcastLength.entries.drop(1).count { it.includes(episode) })
+        }
+        val missing = Json { ignoreUnknownKeys = true }.decodeFromString<PodcastCatalogue>("""{"episodes":[{"id":"${"b".repeat(64)}","title":"t","published_at":"p","status":"available"}]}""")
+        assertEquals(0, missing.episodes.single().durationSeconds)
+        assertTrue(PodcastLength.All.includes(missing.episodes.single()))
     }
 
     @Test fun completedLessonRestartsButPartialPositionResumes() {
