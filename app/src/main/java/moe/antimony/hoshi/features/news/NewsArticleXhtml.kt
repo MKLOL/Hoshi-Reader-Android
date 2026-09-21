@@ -36,24 +36,62 @@ object NewsArticleXhtml {
         "textarea", "svg", "noscript", "video", "audio", "canvas", "object", "embed", "template", "head", "link", "meta",
     )
 
-    /** Returns the sanitized fragment, or null when [xhtml] is not well-formed XML. */
-    fun sanitize(xhtml: String): String? {
+    /**
+     * Returns the sanitized fragment, or null when [xhtml] is not well-formed XML. With
+     * [fullWidthDigits], ASCII digits in text become full-width so they stay upright when the
+     * reader shows the article vertically; attributes such as image URLs are untouched.
+     */
+    fun sanitize(xhtml: String, fullWidthDigits: Boolean = false): String? {
         val document = parse(xhtml) ?: return null
         val output = newDocument()
         val root = output.createElementNS(XHTML_NS, "div")
         output.appendChild(root)
-        copyChildren(document.documentElement, root, output)
+        copyChildren(document.documentElement, root, output, fullWidthDigits)
         dropEmptyBlocks(root)
         if (root.textContent.isNullOrBlank() && root.getElementsByTagName("img").length == 0) return null
         return serializeChildren(root)
     }
 
+    /**
+     * The headline as inline XHTML with its ruby kept, for the saved article's own `<h1>`, or
+     * null when [xhtml] is not well-formed or carries no text. Wrapping heading/paragraph elements
+     * are unwrapped and images dropped; links and spans lose their tags like everywhere else.
+     */
+    fun sanitizeTitle(xhtml: String, fullWidthDigits: Boolean = false): String? {
+        val document = parse(xhtml) ?: return null
+        val output = newDocument()
+        val root = output.createElementNS(XHTML_NS, "div")
+        output.appendChild(root)
+        copyChildren(document.documentElement, root, output, fullWidthDigits)
+        var container = root
+        while (container.childNodes.length == 1) {
+            val only = container.firstChild as? Element ?: break
+            if (only.localName !in TITLE_WRAPPERS) break
+            container = only
+        }
+        val images = container.getElementsByTagName("img")
+        for (index in images.length - 1 downTo 0) images.item(index).let { it.parentNode?.removeChild(it) }
+        if (container.textContent.isNullOrBlank()) return null
+        return serializeChildren(container)
+    }
+
     /** Escapes [text] into one `<p>` per non-blank line for the plain-text fallback. */
-    fun paragraphsFromText(text: String): String =
+    fun paragraphsFromText(text: String, fullWidthDigits: Boolean = false): String =
         text.lineSequence()
             .map { it.trim() }
             .filter { it.isNotEmpty() }
-            .joinToString("\n") { "<p>${escape(it)}</p>" }
+            .joinToString("\n") { "<p>${escape(if (fullWidthDigits) fullWidthDigits(it) else it)}</p>" }
+
+    /**
+     * ASCII digits as their full-width forms (`4` → `４`). Japanese vertical text rotates ASCII
+     * digits on their side; full-width digits stand upright there and read normally horizontally.
+     */
+    fun fullWidthDigits(text: String): String {
+        if (text.none { it in '0'..'9' }) return text
+        return buildString(text.length) {
+            for (char in text) append(if (char in '0'..'9') (FULL_WIDTH_ZERO + (char - '0')).toChar() else char)
+        }
+    }
 
     fun escape(text: String): String = buildString(text.length) {
         for (char in text) {
@@ -67,11 +105,14 @@ object NewsArticleXhtml {
         }
     }
 
-    private fun copyChildren(from: Node, to: Element, output: Document) {
+    private fun copyChildren(from: Node, to: Element, output: Document, fullWidthDigits: Boolean) {
         var child = from.firstChild
         while (child != null) {
             when (child.nodeType) {
-                Node.TEXT_NODE, Node.CDATA_SECTION_NODE -> to.appendChild(output.createTextNode(child.nodeValue.orEmpty()))
+                Node.TEXT_NODE, Node.CDATA_SECTION_NODE -> {
+                    val text = child.nodeValue.orEmpty()
+                    to.appendChild(output.createTextNode(if (fullWidthDigits) fullWidthDigits(text) else text))
+                }
                 Node.ELEMENT_NODE -> {
                     val element = child as Element
                     val name = element.localName?.lowercase() ?: element.tagName.substringAfter(':').lowercase()
@@ -91,10 +132,10 @@ object NewsArticleXhtml {
                                 element.getAttribute("alt").takeIf { it.isNotBlank() }?.let { copy.setAttribute("alt", it) }
                             }
                             to.appendChild(copy)
-                            copyChildren(element, copy, output)
+                            copyChildren(element, copy, output, fullWidthDigits)
                         }
                         // Unknown inline/structural wrappers (span, a, section, main, article...) are unwrapped.
-                        else -> copyChildren(element, to, output)
+                        else -> copyChildren(element, to, output, fullWidthDigits)
                     }
                 }
                 else -> Unit
@@ -155,4 +196,6 @@ object NewsArticleXhtml {
     }
 
     private const val MAX_DATA_URI = 200_000
+    private const val FULL_WIDTH_ZERO = 0xFF10
+    private val TITLE_WRAPPERS = setOf("h1", "h2", "h3", "h4", "h5", "h6", "p", "div")
 }

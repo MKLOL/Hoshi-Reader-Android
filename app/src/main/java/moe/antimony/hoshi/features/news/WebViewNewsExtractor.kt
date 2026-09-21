@@ -87,6 +87,7 @@ class WebViewNewsExtractor(
             text = text,
             publishedAt = result["publishedAt"]?.jsonPrimitive?.longOrNull,
             imageUrl = result.string("imageUrl"),
+            titleXhtml = result.string("titleXhtml")?.takeIf { it.isNotBlank() },
         )
     }
 

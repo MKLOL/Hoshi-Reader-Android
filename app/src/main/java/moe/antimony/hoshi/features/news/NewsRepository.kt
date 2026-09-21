@@ -136,13 +136,19 @@ internal class NewsRepository(
         _state.update { it.copy(saving = it.saving + article.id) }
         try {
             val extracted = extractor.extractArticle(source, article.url)
+            // Japanese text is read vertically as often as not; full-width digits stay upright there.
+            val japanese = source.language.startsWith("ja")
             val body = withContext(Dispatchers.Default) {
-                NewsArticleXhtml.sanitize(extracted.xhtml) ?: NewsArticleXhtml.paragraphsFromText(extracted.text)
+                NewsArticleXhtml.sanitize(extracted.xhtml, fullWidthDigits = japanese)
+                    ?: NewsArticleXhtml.paragraphsFromText(extracted.text, fullWidthDigits = japanese)
             }
             val cover = (extracted.imageUrl ?: article.imageUrl)?.let { url ->
                 runCatching { http.getBytes(url, MAX_COVER_BYTES) }.getOrNull()?.takeIf { it.isNotEmpty() }
             }
             val title = extracted.title.trim().ifEmpty { article.title }
+            // The visible headline keeps the page's furigana; the plain title stays in metadata.
+            val titleXhtml = extracted.titleXhtml?.let { NewsArticleXhtml.sanitizeTitle(it, fullWidthDigits = japanese) }
+                ?: if (japanese) NewsArticleXhtml.fullWidthDigits(NewsArticleXhtml.escape(title)) else null
             val tempRoot = withContext(ioDispatcher) {
                 File(filesDir, "ImportTemp/${UUID.randomUUID()}").canonicalFile.also { root ->
                     NewsArticleEpubWriter.write(
@@ -150,6 +156,7 @@ internal class NewsRepository(
                         NewsArticleEpubWriter.Input(
                             title = title,
                             bodyXhtml = body,
+                            titleXhtml = titleXhtml,
                             sourceName = source.name,
                             sourceUrl = article.url,
                             language = source.language,

@@ -7,6 +7,10 @@ Semantic Versioning.
 
 ## [Unreleased]
 
+### Fixed
+- **News headlines keep their furigana.** An article saved from the News tab now shows the headline with the readings the site provides instead of plain text.
+- **Numbers no longer lie on their side in vertical reading.** Japanese news articles are saved with full-width digits, so 4, 5, 6 and years stand upright when the reader is in vertical mode.
+
 ## [v0.11.9] - 2026-09-10
 
 ### Added

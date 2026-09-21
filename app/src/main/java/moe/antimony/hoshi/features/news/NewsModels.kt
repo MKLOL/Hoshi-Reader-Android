@@ -104,6 +104,8 @@ data class ExtractedNewsArticle(
     val text: String,
     val publishedAt: Long? = null,
     val imageUrl: String? = null,
+    /** The headline element serialized with its ruby, when the page marks it up; null otherwise. */
+    val titleXhtml: String? = null,
 )
 
 /** One entry read from a listing page or feed before it becomes a [NewsArticle]. */
