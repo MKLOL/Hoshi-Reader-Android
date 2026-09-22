@@ -316,6 +316,11 @@ tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach 
 tasks.withType<org.gradle.api.tasks.testing.Test>().configureEach {
     dependsOn(buildRustHost)
     systemProperty("jna.library.path", rustProjectDir.resolve("target/debug").absolutePath)
+    // NewsPublisherInteropTest executes these Python sources and fixtures. A Python-only
+    // edit must invalidate the JVM test result just like a Kotlin test-source edit does.
+    inputs.files(rootProject.fileTree("tools") {
+        include("news/**/*.py", "news/**/*.json", "news/tutor-prompt.md", "sync-test-server/sync_test_server.py")
+    }).withPropertyName("newsPublisherSources").withPathSensitivity(PathSensitivity.RELATIVE)
 }
 
 afterEvaluate {

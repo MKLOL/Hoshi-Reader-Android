@@ -30,6 +30,11 @@
 - 禁止对已连接设备或模拟器运行会清除、重装或卸载 app 数据的测试命令，例如 `connectedDebugAndroidTest`、`connectedAndroidTest`、`installDebugAndroidTest` 或其他 Android instrumentation Gradle 任务；除非用户明确指定一次性设备并允许清数据。需要此类覆盖时，先使用专用空模拟器或让用户确认。
 - 禁止使用手绘、自造或临时拼接的图标；新增或替换图标时使用 Material 3 / Material Icons 已有图标（Compose `Icons.*` 或官方 Material vector asset），只有明确的品牌资产需求才例外。
 
+## Agent-authored news
+
+- For finding Japanese news, preparing agent-authored sentence lessons, or publishing news EPUBs to HTTP sync, use [.agents/skills/hoshi-news/SKILL.md](.agents/skills/hoshi-news/SKILL.md) and `tools/news/hoshi_news.py`.
+- Keep article jobs in gitignored `.hoshi-news/`. A requested dry run is local-only: do not read server credentials or upload. Follow the skill's tutor prompt and validate every sentence/word before publishing.
+
 ## 参考源码
 
 - iOS：`reference/Hoshi-Reader-iOS`，上游分支 `develop`

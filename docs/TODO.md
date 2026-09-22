@@ -1,26 +1,20 @@
 # Hoshi Android Agent TODO
 
-Last updated: 2026-09-21
-
-This file is the short operational handoff for future agents.
+Last updated: 2026-09-22
 
 ## Maintenance Rules
 
-- Keep this file under 150 lines.
-- Record only current state, next actionable work, active blockers, and durable validation requirements.
-- Do not paste long emulator transcripts, adb details, screenshot observations, release notes, or per-commit history here.
-- Put user-visible shipped changes in `docs/CHANGELOG.md`.
+- Keep this file under 150 lines; record only current state, next actionable work, active blockers, and durable validation requirements.
+- Do not paste long emulator transcripts, adb details, screenshot observations, release notes, or per-commit history here; put user-visible shipped changes in `docs/CHANGELOG.md`.
 - Keep architecture-refactor slice state out of tracked docs; use the local `.codex/skills/hoshi-refactoring-workflow` skill when available.
-- Put detailed reproduction, verification logs, and investigation notes in the relevant issue, PR, commit message, or a focused doc.
-- When completing a task, update the smallest relevant line here in the same commit.
+- Put detailed reproduction, verification logs, and investigation notes in the relevant issue, PR, commit message, or a focused doc; update the smallest relevant line here in the same commit.
 - Keep `docs/CHANGELOG.md` `[Unreleased]` free of fixup notes for not-yet-released features; fold them into the original feature entry or omit them until they describe a fix to already shipped user-visible behavior.
 
 ## Open Alignment Work
 
 ### Podcasts
 
-- Implemented and emulator-verified; see `docs/PODCASTS.md`. Production worker activation remains a deployment step in game-collection `docs/podcasts.md`.
-- Regression entries: `PodcastApiTest`, `PodcastModelsTest`, `PodcastScreenSessionTest`, `AppRouteTest`, `MainShellUiTest`.
+- Implemented and emulator-verified; see `docs/PODCASTS.md`. Production worker activation remains a deployment step in game-collection `docs/podcasts.md`. Regression entries: `PodcastApiTest`, `PodcastModelsTest`, `PodcastScreenSessionTest`, `AppRouteTest`, `MainShellUiTest`.
 - Known limits: no per-episode delete or storage cap (files go only when another account validates); playback speed not persisted; `pendingPodcasts` is consumed only once access is confirmed.
 
 ### Architecture And Hardening
@@ -121,6 +115,8 @@ This file is the short operational handoff for future agents.
 
 ### News
 
+- Agent-authored publishing: `.agents/skills/hoshi-news/SKILL.md` and `tools/news/hoshi_news.py` prepare a single-spine EPUB, validate full sentence/word coverage, build offline tutor tables, and dry-run or publish to existing HTTP KV keys. Keep jobs in `.hoshi-news/`. Validation: `python3 -m unittest discover -s tools/news/tests -v` and `NewsPublisherInteropTest` (real Python publisher → Android sync/parser/lookup).
+- Blocked: first live news-publisher → Android visual validation awaits the user's requested dry run and subsequent upload; use the News shelf in Books, since the News tab's saved list is local-only. No production credentials or existing device data are used by automated publisher tests.
 - The News tab (`features/news/`) is additive: saved articles are written as extracted EPUB trees (`NewsArticleEpubWriter`, EPUB 3 + NCX for iOS) and registered through `BookshelfRepository.importExtractedEpubDirectory`, so the reader, sync and shelves see plain books; the only news-owned state lives in `files/News/` (`NewsFeedStore`). Listings come from RSS (`RssFeedParser`) or a hidden WebView (`WebViewNewsExtractor` + `assets/hoshi-news/extract.js`) because NHK's 2025 site is client-rendered behind a session token. Regression entries: `RssFeedParserTest`, `NewsFeedStoreTest`, `NewsArticleXhtmlTest`, `NewsArticleEpubWriterTest`.
 - Pre-translation (`features/news/pretranslate/`) is the app's first writer of `sentence_translations.json`: `PretranslationPlanner` segments with `EpubSentenceSegmenter`, `PretranslationRunner` batches through `CloudChat` or the on-device model, the blob is validated with `EpubTranslationStore.validationError` before `SentenceTranslationsWriter` stores it, and `SentenceTranslationsUploader` PUTs `books/{syncId}/sentences` (sync itself stays download-only and, by design, re-validates the listed blob on every sync even when the local copy matches: `HttpEpubSyncInteropTest` pins that an identical malformed blob is still rejected). Cost estimates come from `ModelPricing` (approximate list prices, dated) and `TokenEstimator`. Regression entries: `PretranslationPlannerTest`, `SentenceBatchPromptTest`, `PretranslationRunnerTest`, `SentenceTranslationsWriterTest`; incomplete reruns preserve other-model translations until replacement is complete.
 - Shared links (`MainActivity` "Save as article" share target, `NewsSharedUrl`, `NewsRepository.saveSharedUrl`) reuse the same extractor; a URL is attributed to the built-in source that owns its host so its hints apply, otherwise to the shared-link pseudo-source.
@@ -137,9 +133,6 @@ This file is the short operational handoff for future agents.
 - Device-validate split GitHub release APK updates on arm64-v8a and armeabi-v7a targets, including the transitional arm64 legacy-name APK alias.
 
 ## Mokuro Manga Support (Android-only)
-
-Branch `codex/mokuro-manga-support`. A parallel content path for mokuro manga (JSON +
-page images) that reuses the bookshelf, dictionary lookup, and Anki mining.
 
 - Working end to end, emulator-verified: import (`.zip`/`.cbz` bundle or SAF folder), bookshelf entry + cover, page WebView rendering, visible+selectable OCR text wired to the shared dictionary lookup, right-to-left navigation, volume-key paging, per-page resume. Content type is derived from disk (`mokuro.json` sidecar), never stored in the iOS-shared `metadata.json`; `Bookmark.chapterIndex` carries the page index. Accepted manga archive layout is documented in `docs/MOKURO_ZIP_FORMAT.md`; ambiguous fallback image paths are rejected instead of silently binding a page from another volume.
 - Architecture invariants for future work: keep using the shared `ReaderSelectionScripts` / `ReaderSelectionBridge` / `LookupPopupStackView` for lookup; the manga page WebView is sized from the host-provided viewport dimensions (CSS `vw`/`vh` resolve to 0 in this WebView config) — do not reintroduce `useWideViewPort`/`loadWithOverviewMode` or `vh`-based sizing. Keep `.page` overflow clipped and WebView initial scaling at its default: edge OCR and rounded initial zoom must not make fitted artwork horizontally pannable and block swipes (`MangaPageZoomInstrumentedTest`).

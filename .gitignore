@@ -22,5 +22,6 @@ local.properties
 # signing/README.md for the exact two-step build-then-re-sign flow that
 # keeps the cert matching every previously-released fork APK.
 /signing/
-tools/__pycache__/
+tools/**/__pycache__/
+/.hoshi-news/
 app/src/androidTest/assets/
