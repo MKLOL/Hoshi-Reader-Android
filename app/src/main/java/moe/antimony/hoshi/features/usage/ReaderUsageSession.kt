@@ -29,6 +29,7 @@ class ReaderUsageSession(
     private var openedAt: Long? = null
     private var readingSince: Long? = null
     private var closed = false
+    private val revealedBubbles = mutableSetOf<String>()
 
     val isReading: Boolean get() = readingSince != null
 
@@ -60,9 +61,17 @@ class ReaderUsageSession(
         log.append(event(UsageEventType.PageTurned).copy(chapter = chapter, character = character))
     }
 
-    fun pageTurned(fromPage: Int, toPage: Int) {
+    /** A manga page change; [jump] marks "Go to page" and similar, which are not page turns. */
+    fun pageTurned(fromPage: Int, toPage: Int, jump: Boolean = false) {
         if (closed || fromPage == toPage) return
-        log.append(event(UsageEventType.PageTurned).copy(page = toPage, fromPage = fromPage, toPage = toPage))
+        log.append(
+            event(UsageEventType.PageTurned).copy(
+                page = toPage,
+                fromPage = fromPage,
+                toPage = toPage,
+                source = if (jump) PAGE_JUMP else null,
+            ),
+        )
     }
 
     fun wordLookedUp(
@@ -84,7 +93,15 @@ class ReaderUsageSession(
         )
     }
 
-    fun bubbleRevealed(text: String?, page: Int?) = bubbleEvent(UsageEventType.BubbleRevealed, text, page)
+    /**
+     * A hidden bubble was shown. Tapping the artwork hides every bubble, so the same bubble is
+     * often revealed again; with its mokuro [blockId] known, only the first reveal in this
+     * session counts, so "per bubble" rates divide by bubbles and not by taps.
+     */
+    fun bubbleRevealed(text: String?, page: Int?, blockId: String? = null) {
+        if (closed || (blockId != null && !revealedBubbles.add(blockId))) return
+        bubbleEvent(UsageEventType.BubbleRevealed, text, page)
+    }
 
     fun bubbleTranslated(text: String?, page: Int?) = bubbleEvent(UsageEventType.BubbleTranslated, text, page)
 
@@ -116,8 +133,11 @@ class ReaderUsageSession(
             contentType = contentType.serialName,
         )
 
-    private companion object {
+    companion object {
+        /** [UsageEvent.source] of a page change that jumped rather than turned. */
+        const val PAGE_JUMP: String = "jump"
+
         /** Long enough for any bubble; stops a pathological selection from bloating the log. */
-        const val MAX_TEXT_LENGTH = 500
+        private const val MAX_TEXT_LENGTH = 500
     }
 }

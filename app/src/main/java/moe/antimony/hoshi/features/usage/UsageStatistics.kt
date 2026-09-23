@@ -1,5 +1,7 @@
 package moe.antimony.hoshi.features.usage
 
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.time.LocalDate
 import java.time.ZoneId
 
@@ -25,36 +27,46 @@ data class UsageStatistics(
     val firstLoggedDate: LocalDate?,
 )
 
-/** Reads today's timeline and [historyDays] days of daily totals, ending on [today]. */
+/**
+ * Reads today's timeline and daily totals ending on [today]: [historyDays] days plus the
+ * [averageWindow] - 1 before them, so the first day's trailing average is real rather than
+ * padded with days that were never read. Days before today are cached once read.
+ */
 suspend fun loadUsageStatistics(
     log: UsageLog,
     today: LocalDate,
     historyDays: Int,
     zone: ZoneId = ZoneId.systemDefault(),
-): UsageStatistics {
+    averageWindow: Int = 3,
+): UsageStatistics = withContext(Dispatchers.Default) {
     val firstLoggedDate = log.dayFiles().firstNotNullOfOrNull { file ->
         runCatching { LocalDate.parse(file.name.substringBefore('.')) }.getOrNull()
     }
     val days = mutableMapOf<LocalDate, UsageDayCounts>()
     var todaySummary: UsageDaySummary? = null
-    var date = today.minusDays(historyDays - 1L)
+    var date = today.minusDays(historyDays + averageWindow - 2L)
     if (firstLoggedDate != null && date < firstLoggedDate) date = firstLoggedDate
     while (!date.isAfter(today)) {
-        val summary = summarizeUsageDay(log.eventsOn(date), date, zone)
-        val counts = UsageDayCounts(
-            wordLookups = summary.wordLookups,
-            mangaPageLookups = summary.mangaPageLookups,
-            bubblesRevealed = summary.bubblesRevealed,
-            bubbleTranslations = summary.bubbleTranslations,
-            screenshotTranslations = summary.screenshotTranslations,
-        )
+        val cached = if (date < today) log.finishedDayCounts[date] else null
+        val counts = cached ?: run {
+            val summary = summarizeUsageDay(log.eventsOn(date), date, zone)
+            if (date == today) todaySummary = summary
+            summary.toCounts().also { if (date < today) log.finishedDayCounts[date] = it }
+        }
         if (!counts.isEmpty) days[date] = counts
-        if (date == today) todaySummary = summary
         date = date.plusDays(1)
     }
-    return UsageStatistics(
+    UsageStatistics(
         today = todaySummary ?: summarizeUsageDay(emptyList(), today, zone),
         days = days,
         firstLoggedDate = firstLoggedDate,
     )
 }
+
+private fun UsageDaySummary.toCounts() = UsageDayCounts(
+    wordLookups = wordLookups,
+    mangaPageLookups = mangaPageLookups,
+    bubblesRevealed = bubblesRevealed,
+    bubbleTranslations = bubbleTranslations,
+    screenshotTranslations = screenshotTranslations,
+)

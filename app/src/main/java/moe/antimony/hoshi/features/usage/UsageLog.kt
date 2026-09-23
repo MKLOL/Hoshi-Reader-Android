@@ -18,6 +18,7 @@ import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 
 /**
@@ -28,7 +29,8 @@ import java.util.concurrent.Executors
  * Each local calendar day is one file, `yyyy-MM-dd.ndjson`, with one JSON [UsageEvent] per
  * line. Every write and read runs on one background thread in the order it was requested, so
  * events never interleave or reorder and a read always sees every event recorded before it.
- * Nothing here leaves the device.
+ * Nothing here leaves the device: the folder is excluded from Android backup and transfer.
+ * Use [forDirectory] in the app so every activity shares one writer.
  */
 class UsageLog(
     private val directory: File,
@@ -46,6 +48,9 @@ class UsageLog(
     /** Counts written events; collect it to refresh anything that shows the log. */
     val changes: StateFlow<Long> = writes.asStateFlow()
 
+    /** Totals of days that are over: their files no longer change, so they are read once. */
+    internal val finishedDayCounts: MutableMap<LocalDate, UsageDayCounts> = ConcurrentHashMap()
+
     /** A new event of [type] stamped with the current time and UTC offset. */
     fun newEvent(type: UsageEventType): UsageEvent {
         val at = clock()
@@ -58,10 +63,13 @@ class UsageLog(
             val written = try {
                 val file = fileFor(dateOf(event.at))
                 file.parentFile?.mkdirs()
-                file.appendText(json.encodeToString(UsageEvent.serializer(), event) + "\n")
+                // A line cut short by a crash or a full disk has no newline; start a fresh line
+                // so this event is not glued onto the broken one and lost with it.
+                val prefix = if (file.length() > 0 && !file.endsWithNewline()) "\n" else ""
+                file.appendText(prefix + json.encodeToString(UsageEvent.serializer(), event) + "\n")
                 true
-            } catch (_: IOException) {
-                // A full or read-only disk loses this event; it must never break reading.
+            } catch (_: Exception) {
+                // Whatever goes wrong loses this one event; logging must never break reading.
                 false
             }
             if (written) writes.update { it + 1 }
@@ -69,21 +77,30 @@ class UsageLog(
     }
 
     /** Every event recorded on the local calendar day [date], oldest first. */
+    /** Every event recorded on the local calendar day [date], oldest first; empty if unreadable. */
     suspend fun eventsOn(date: LocalDate): List<UsageEvent> = withContext(io) {
         val file = fileFor(date)
         if (!file.isFile) return@withContext emptyList()
-        file.useLines { lines ->
-            lines.mapNotNull { line -> line.takeIf { it.isNotBlank() }?.let(::decodeOrNull) }
-                .sortedBy { it.at }
-                .toList()
+        try {
+            file.useLines { lines ->
+                lines.mapNotNull { line -> line.takeIf { it.isNotBlank() }?.let(::decodeOrNull) }
+                    .sortedBy { it.at }
+                    .toList()
+            }
+        } catch (_: IOException) {
+            emptyList()
         }
     }
 
     /** The day files on disk, oldest first, for exporting the raw log. */
     suspend fun dayFiles(): List<File> = withContext(io) {
-        directory.listFiles { file -> file.isFile && file.name.endsWith(FILE_SUFFIX) }
-            ?.sortedBy { it.name }
-            .orEmpty()
+        try {
+            directory.listFiles { file -> file.isFile && file.name.endsWith(FILE_SUFFIX) }
+                ?.sortedBy { it.name }
+                .orEmpty()
+        } catch (_: SecurityException) {
+            emptyList()
+        }
     }
 
     /** The local calendar day an epoch-millisecond instant falls on. */
@@ -91,6 +108,12 @@ class UsageLog(
 
     private fun fileFor(date: LocalDate): File =
         File(directory, DateTimeFormatter.ISO_LOCAL_DATE.format(date) + FILE_SUFFIX)
+
+    private fun File.endsWithNewline(): Boolean =
+        java.io.RandomAccessFile(this, "r").use { file ->
+            file.seek(file.length() - 1)
+            file.read() == '\n'.code
+        }
 
     private fun offsetAt(epochMillis: Long): String =
         zone().rules.getOffset(Instant.ofEpochMilli(epochMillis)).id.let { if (it == "Z") "+00:00" else it }
@@ -108,6 +131,15 @@ class UsageLog(
     companion object {
         const val DIRECTORY_NAME: String = "usage-log"
         private const val FILE_SUFFIX = ".ndjson"
+
+        private val shared = ConcurrentHashMap<String, UsageLog>()
+
+        /**
+         * The process-wide log for [directory]. Each activity builds its own app container,
+         * and two logs on one folder would each run a writer thread appending to the same files.
+         */
+        fun forDirectory(directory: File): UsageLog =
+            shared.computeIfAbsent(directory.absolutePath) { UsageLog(directory) }
 
         private val json = Json {
             explicitNulls = false

@@ -417,7 +417,9 @@ internal fun MangaReaderScreen(
             textReadCounter?.add(book.ocrCharactersTurnedPast(previousPageIndex, clamped))
         }
         pageIndex = clamped
-        usageSession?.pageTurned(fromPage = previousPageIndex + 1, toPage = clamped + 1)
+        // "Go to page" and bookmark jumps move without turning pages; tag them so they are
+        // not counted as page turns.
+        usageSession?.pageTurned(fromPage = previousPageIndex + 1, toPage = clamped + 1, jump = !countAsRead)
         recordStatisticsAtCounter(statisticsPageCounter)
         scheduleBookmarkSave(clamped)
     }
@@ -1046,7 +1048,9 @@ internal fun MangaReaderScreen(
                     usageSession?.bubbleTranslated(bubbleText, page = pageIndex + 1)
                     askAi(bubbleText, blockId)
                 },
-                onBubbleRevealed = { bubbleText -> usageSession?.bubbleRevealed(bubbleText, page = pageIndex + 1) },
+                onBubbleRevealed = { bubbleText, blockId ->
+                    usageSession?.bubbleRevealed(bubbleText, page = pageIndex + 1, blockId = blockId)
+                },
                 onBubbleCopied = { bubbleText -> usageSession?.bubbleCopied(bubbleText, page = pageIndex + 1) },
                 onPageReady = { readyPageIndex ->
                     if (pageTransition != null && readyPageIndex == pageIndex) {

@@ -6,6 +6,8 @@
         <exclude domain="sharedpref" path="google-drive-device-code-auth.xml" />
         <exclude domain="sharedpref" path="podcast-access.xml" />
         <exclude domain="sharedpref" path="podcast-positions.xml" />
+        <!-- The local usage log holds looked-up words and bubble text; it stays on this device. -->
+        <exclude domain="file" path="usage-log/" />
     </cloud-backup>
     <device-transfer>
         <exclude domain="file" path="datastore/ai-chat-settings.preferences_pb" />
@@ -13,5 +15,6 @@
         <exclude domain="sharedpref" path="google-drive-device-code-auth.xml" />
         <exclude domain="sharedpref" path="podcast-access.xml" />
         <exclude domain="sharedpref" path="podcast-positions.xml" />
+        <exclude domain="file" path="usage-log/" />
     </device-transfer>
 </data-extraction-rules>

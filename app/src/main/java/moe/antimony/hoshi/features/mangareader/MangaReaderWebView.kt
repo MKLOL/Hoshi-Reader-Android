@@ -65,8 +65,8 @@ internal fun MangaReaderWebView(
     onPageReady: (Int) -> Unit,
     onWebViewReady: (WebView) -> Unit,
     modifier: Modifier = Modifier,
-    /** A hidden bubble was tapped to show its text; receives the bubble's OCR text. */
-    onBubbleRevealed: (String) -> Unit = {},
+    /** A hidden bubble was tapped to show its text: its OCR text and mokuro block id, if known. */
+    onBubbleRevealed: (String, String?) -> Unit = { _, _ -> },
     /** A bubble's Copy button copied its OCR text. */
     onBubbleCopied: (String) -> Unit = {},
 ) {
@@ -142,7 +142,7 @@ internal fun MangaReaderWebView(
                 addJavascriptInterface(
                     MangaTapBridge(
                         onSelectedNothing = { currentOnSelectionCleared.value() },
-                        onBubbleRevealed = { text -> currentOnBubbleRevealed.value(text) },
+                        onBubbleRevealed = { text, blockId -> currentOnBubbleRevealed.value(text, blockId) },
                     ),
                     "HoshiMangaTap",
                 )

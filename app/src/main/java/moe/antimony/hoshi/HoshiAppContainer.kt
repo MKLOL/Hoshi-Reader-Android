@@ -89,7 +89,7 @@ internal class HoshiAppContainer(context: Context) {
     /** This device, as reading statistics record it: the sync installation id plus the device's name. */
     val deviceIdentity: DeviceIdentity = DeviceIdentity(id = installationId, name = deviceDisplayName(appContext))
     /** The local, per-day usage log the readers write and the Statistics screen reads. */
-    val usageLog: moe.antimony.hoshi.features.usage.UsageLog = moe.antimony.hoshi.features.usage.UsageLog(
+    val usageLog: moe.antimony.hoshi.features.usage.UsageLog = moe.antimony.hoshi.features.usage.UsageLog.forDirectory(
         java.io.File(appContext.filesDir, moe.antimony.hoshi.features.usage.UsageLog.DIRECTORY_NAME),
     )
     val bookRepository: BookRepository = BookRepository(

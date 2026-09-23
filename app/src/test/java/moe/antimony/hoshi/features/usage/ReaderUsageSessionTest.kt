@@ -96,6 +96,30 @@ class ReaderUsageSessionTest {
     }
 
     @Test
+    fun aBubbleRevealedAgainInTheSameSessionIsOneBubble() {
+        val session = session()
+        session.bubbleRevealed("今日は", page = 1, blockId = "p0b1")
+        session.bubbleRevealed("今日は", page = 1, blockId = "p0b1")
+        session.bubbleRevealed("明日", page = 1, blockId = "p0b2")
+        session.bubbleRevealed("?", page = 1, blockId = null)
+        session.bubbleRevealed("?", page = 1, blockId = null)
+
+        assertEquals(4, events().count { it.type == UsageEventType.BubbleRevealed })
+    }
+
+    @Test
+    fun jumpsAreTaggedSoTheyAreNotCountedAsTurns() {
+        val session = session()
+        session.pageTurned(1, 2)
+        session.pageTurned(2, 150, jump = true)
+
+        val (turn, jump) = events()
+        assertNull(turn.source)
+        assertEquals(ReaderUsageSession.PAGE_JUMP, jump.source)
+        assertEquals(1, summarizeUsageDay(events(), day, ZoneOffset.UTC).pageTurns)
+    }
+
+    @Test
     fun pageTurnsBubbleActionsAndScreenshotsAreEachTheirOwnEvent() {
         val session = session()
         session.pageTurned(1, 2)

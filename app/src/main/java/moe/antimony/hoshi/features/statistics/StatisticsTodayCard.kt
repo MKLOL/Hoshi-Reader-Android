@@ -16,7 +16,10 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -61,7 +64,7 @@ internal fun TodayCard(
     zone: ZoneId = ZoneId.systemDefault(),
 ) {
     val colorScheme = MaterialTheme.colorScheme
-    val timeFormat = DateTimeFormatter.ofLocalizedTime(FormatStyle.SHORT)
+    val timeFormat = rememberClockFormatter()
     fun clock(millis: Long): String = Instant.ofEpochMilli(millis).atZone(zone).toLocalTime().format(timeFormat)
     GroupCard {
         Column(modifier = Modifier.padding(16.dp)) {
@@ -72,13 +75,13 @@ internal fun TodayCard(
             )
             val first = usage?.firstActivityMillis
             val last = usage?.lastActivityMillis
+            val dateText = today.format(DateTimeFormatter.ofLocalizedDate(FormatStyle.FULL))
             Text(
-                text = today.format(DateTimeFormatter.ofLocalizedDate(FormatStyle.FULL)) +
-                    if (first != null && last != null) {
-                        " · " + stringResource(R.string.statistics_today_active_range_format, clock(first), clock(last))
-                    } else {
-                        ""
-                    },
+                text = if (first != null && last != null) {
+                    stringResource(R.string.statistics_today_date_active_format, dateText, clock(first), clock(last))
+                } else {
+                    dateText
+                },
                 style = MaterialTheme.typography.bodyMedium,
                 color = colorScheme.onSurfaceVariant,
             )
@@ -112,11 +115,17 @@ internal fun TodayCard(
             if (usage != null && !usage.isEmpty) {
                 Spacer(Modifier.height(16.dp))
                 TodayCountTiles(usage)
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    text = stringResource(R.string.statistics_today_device_note),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = colorScheme.onSurfaceVariant,
+                )
                 if (usage.spans.isNotEmpty()) {
                     Spacer(Modifier.height(18.dp))
                     TodaySectionTitle(stringResource(R.string.statistics_today_timeline))
                     Spacer(Modifier.height(8.dp))
-                    TodayTimeline(usage.spans, zone)
+                    TodayTimeline(usage.spans, zone, timeFormat)
                     Spacer(Modifier.height(8.dp))
                     usage.spans.takeLast(TODAY_LISTED_SPANS).asReversed().forEach { span ->
                         TodaySpanRow(span, clock(span.startMillis), clock(span.endMillis))
@@ -140,19 +149,25 @@ private fun TodaySectionTitle(text: String) {
 
 @Composable
 private fun TodayCountTiles(usage: UsageDaySummary) {
-    val tiles = listOf(
+    val readingTiles = listOf(
         R.string.statistics_today_words to usage.wordLookups,
         R.string.statistics_today_pages to usage.pageTurns,
         R.string.statistics_today_sessions to usage.sessions,
+    )
+    // Bubbles and translations are manga-only; a day of books alone leaves them out.
+    val mangaTiles = listOf(
         R.string.statistics_today_bubbles_revealed to usage.bubblesRevealed,
         R.string.statistics_today_bubble_translations to usage.bubbleTranslations,
         R.string.statistics_today_screenshots to usage.screenshotTranslations,
     )
+    val tiles = readingTiles + if (mangaTiles.any { it.second > 0 }) mangaTiles else emptyList()
+    // Two columns once the text is scaled up, so labels are not split mid-word.
+    val columns = if (LocalDensity.current.fontScale > 1.3f) 2 else 3
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        tiles.chunked(3).forEach { row ->
+        tiles.chunked(columns).forEach { row ->
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 row.forEach { (labelRes, value) ->
-                    Column(modifier = Modifier.weight(1f)) {
+                    Column(modifier = Modifier.weight(1f).semantics(mergeDescendants = true) {}) {
                         Text(
                             text = formatStatisticsCount(value),
                             style = MaterialTheme.typography.titleLarge,
@@ -163,9 +178,11 @@ private fun TodayCountTiles(usage: UsageDaySummary) {
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
                         )
                     }
                 }
+                repeat(columns - row.size) { Spacer(Modifier.weight(1f)) }
             }
         }
     }
@@ -176,10 +193,12 @@ private fun TodayCountTiles(usage: UsageDaySummary) {
  * so a short session is still visible instead of a sliver of a 24-hour bar.
  */
 @Composable
-private fun TodayTimeline(spans: List<UsageReadingSpan>, zone: ZoneId) {
+private fun TodayTimeline(spans: List<UsageReadingSpan>, zone: ZoneId, timeFormat: DateTimeFormatter) {
     val colorScheme = MaterialTheme.colorScheme
-    val fill = if (LocalHoshiEInkMode.current) colorScheme.onBackground else colorScheme.primary
-    val track = colorScheme.surfaceVariant
+    val eInk = LocalHoshiEInkMode.current
+    val fill = if (eInk) colorScheme.onBackground else colorScheme.primary
+    // E-ink's surface variant is white, which would make the strip itself invisible.
+    val track = if (eInk) colorScheme.onBackground.copy(alpha = 0.08f) else colorScheme.surfaceVariant
     fun hourOf(millis: Long): Double =
         Instant.ofEpochMilli(millis).atZone(zone).toLocalTime().toSecondOfDay() / 3600.0
     var startHour = (floor(hourOf(spans.minOf { it.startMillis })) - 1).coerceAtLeast(0.0)
@@ -188,15 +207,23 @@ private fun TodayTimeline(spans: List<UsageReadingSpan>, zone: ZoneId) {
         endHour = (startHour + 4.0).coerceAtMost(24.0)
         startHour = (endHour - 4.0).coerceAtLeast(0.0)
     }
+    // An even number of hours, so the middle label falls on a whole hour too.
+    if ((endHour - startHour).toInt() % 2 == 1) {
+        if (endHour < 24.0) endHour += 1.0 else startHour -= 1.0
+    }
     val window = endHour - startHour
-    val timeFormat = DateTimeFormatter.ofLocalizedTime(FormatStyle.SHORT)
     fun hourLabel(hour: Double): String =
         if (hour >= 24.0) LocalTime.MIDNIGHT.format(timeFormat) else LocalTime.of(hour.toInt(), 0).format(timeFormat)
+    val timelineDescription = stringResource(
+        R.string.statistics_today_timeline_description_format,
+        hourLabel(startHour),
+        hourLabel(endHour),
+    )
     Canvas(
         modifier = Modifier
             .fillMaxWidth()
             .height(20.dp)
-            .semantics { contentDescription = "${hourLabel(startHour)}–${hourLabel(endHour)}" },
+            .semantics { contentDescription = timelineDescription },
     ) {
         val radius = CornerRadius(size.height / 2f)
         drawRoundRect(color = track, cornerRadius = radius)
@@ -270,5 +297,17 @@ private fun TodayWords(words: List<UsageWordCount>) {
                 )
             }
         }
+    }
+}
+
+/** Clock times in the device's 12- or 24-hour style (the system setting, not just the locale). */
+@Composable
+private fun rememberClockFormatter(): DateTimeFormatter {
+    val context = LocalContext.current
+    val is24Hour = android.text.format.DateFormat.is24HourFormat(context)
+    return remember(is24Hour) {
+        DateTimeFormatter.ofPattern(
+            android.text.format.DateFormat.getBestDateTimePattern(java.util.Locale.getDefault(), if (is24Hour) "Hm" else "hma"),
+        )
     }
 }

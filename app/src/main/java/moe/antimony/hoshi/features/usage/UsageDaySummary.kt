@@ -99,7 +99,7 @@ fun summarizeUsageDay(
         date = date,
         spans = spans.sortedBy { it.startMillis },
         sessions = ordered.count { it.type == UsageEventType.ReaderOpened },
-        pageTurns = ordered.count { it.type == UsageEventType.PageTurned },
+        pageTurns = ordered.count { it.type == UsageEventType.PageTurned && it.source != ReaderUsageSession.PAGE_JUMP },
         wordLookups = lookups.size,
         mangaPageLookups = lookups.count {
             it.contentType == UsageContentType.Manga.serialName && it.source == UsageLookupSource.Page.serialName

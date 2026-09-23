@@ -258,7 +258,9 @@
     <string name="statistics_streak_goal_minutes_format">%1$d 分钟</string>
     <string name="statistics_heatmap_title">最近 16 周</string>
     <string name="statistics_today_title">今天</string>
-    <string name="statistics_today_active_range_format">活跃时段 %1$s–%2$s</string>
+    <string name="statistics_today_date_active_format">%1$s · 活跃时段 %2$s–%3$s</string>
+    <string name="statistics_today_timeline_description_format">阅读时间线：%1$s 至 %2$s</string>
+    <string name="statistics_today_device_note">查词、气泡和时间线仅统计此设备。</string>
     <string name="statistics_today_reading_time">阅读时间</string>
     <string name="statistics_today_characters_format">已读 %1$s 字</string>
     <string name="statistics_today_words">查词</string>
@@ -280,12 +282,12 @@
     <string name="statistics_trend_reading_time">阅读时间</string>
     <string name="statistics_trend_characters">阅读字数</string>
     <string name="statistics_trend_lookups">查词次数</string>
-    <string name="statistics_trend_lookups_since_format">自 %1$s 起记录</string>
+    <string name="statistics_trend_lookups_since_format">自 %1$s 起在此设备上记录</string>
     <string name="statistics_tab_overview">概览</string>
     <string name="statistics_trend_lookups_per_bubble">每个气泡的查词数</string>
     <string name="statistics_trend_translations">按下翻译的次数</string>
     <string name="statistics_trend_translations_per_bubble">每个气泡按下翻译的次数</string>
-    <string name="statistics_trend_per_bubble_since_format">按显示的漫画气泡计算，自 %1$s 起记录</string>
+    <string name="statistics_trend_per_bubble_since_format">按显示的漫画气泡计算，自 %1$s 起在此设备上记录</string>
     <string name="statistics_trend_legend_daily">每日</string>
     <string name="statistics_trend_legend_average">3 日平均</string>
     <string name="statistics_trend_readout_format">%1$s · %2$s · 3 日平均 %3$s</string>

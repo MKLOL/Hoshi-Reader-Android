@@ -38,4 +38,31 @@ class UsageStatisticsTest {
         assertEquals(UsageDayCounts(bubblesRevealed = 2, bubbleTranslations = 1), statistics.days[today])
         assertEquals(1, statistics.today.bubbleTranslations)
     }
+
+    @Test
+    fun theDaysBeforeTheRangeAreLoadedSoItsFirstAverageIsReal() = runBlocking {
+        record(today.minusDays(4), UsageEventType.BubbleRevealed)
+        record(today.minusDays(3), UsageEventType.BubbleRevealed)
+        record(today, UsageEventType.BubbleRevealed)
+
+        // Two days shown with a three-day average reaches back to today - 3, not today - 4.
+        val statistics = loadUsageStatistics(log, today, historyDays = 2, zone = ZoneOffset.UTC, averageWindow = 3)
+
+        assertEquals(setOf(today.minusDays(3), today), statistics.days.keys)
+    }
+
+    @Test
+    fun finishedDaysAreReadOnceAndTodayIsAlwaysReread() = runBlocking {
+        val yesterday = today.minusDays(1)
+        record(yesterday, UsageEventType.BubbleRevealed)
+        record(today, UsageEventType.BubbleRevealed)
+        loadUsageStatistics(log, today, historyDays = 7, zone = ZoneOffset.UTC)
+        record(yesterday, UsageEventType.BubbleRevealed)
+        record(today, UsageEventType.BubbleRevealed)
+
+        val statistics = loadUsageStatistics(log, today, historyDays = 7, zone = ZoneOffset.UTC)
+
+        assertEquals(1, statistics.days[yesterday]?.bubblesRevealed)
+        assertEquals(2, statistics.days[today]?.bubblesRevealed)
+    }
 }

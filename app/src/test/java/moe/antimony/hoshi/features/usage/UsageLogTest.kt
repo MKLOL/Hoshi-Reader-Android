@@ -64,6 +64,24 @@ class UsageLogTest {
     }
 
     @Test
+    fun anEventAfterALineCutShortStartsOnItsOwnLine() = runBlocking {
+        File(folder.root, "2026-09-23.ndjson").writeText("{\"at\":1,\"type\":\"reader-op")
+        val log = log()
+        log.append(log.newEvent(UsageEventType.ReaderClosed))
+
+        val events = log.eventsOn(LocalDate.parse("2026-09-23"))
+
+        assertEquals(listOf(UsageEventType.ReaderClosed), events.map { it.type })
+    }
+
+    @Test
+    fun theAppSharesOneLogPerFolder() {
+        val folderA = File(folder.root, "a")
+        assertTrue(UsageLog.forDirectory(folderA) === UsageLog.forDirectory(File(folderA.path)))
+        assertFalse(UsageLog.forDirectory(folderA) === UsageLog.forDirectory(File(folder.root, "b")))
+    }
+
+    @Test
     fun aDayWithNoFileHasNoEvents() = runBlocking {
         assertEquals(emptyList<UsageEvent>(), log(File(folder.root, "missing")).eventsOn(LocalDate.parse("2026-01-01")))
     }

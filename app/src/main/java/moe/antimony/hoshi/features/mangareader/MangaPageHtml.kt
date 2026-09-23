@@ -390,10 +390,9 @@ internal object MangaPageHtml {
         /* With Copy switched off the ChatGPT button stands alone, so it takes roughly the
            row's former footprint: a bigger target that is easier to hit on a phone. */
         .ocr-actions.solo .ocr-action-btn {
-          width: 2.6em;
-          height: 2.6em;
-          min-width: 34px;
-          min-height: 34px;
+          /* A comfortable tap target on any bubble, without covering the art on big text. */
+          width: clamp(44px, 2.6em, 56px);
+          height: clamp(44px, 2.6em, 56px);
           padding: 0.45em;
           border-radius: 8px;
         }
@@ -781,7 +780,8 @@ internal object MangaPageHtml {
                   window.hoshiManga.updateActionPlacement(box);
                   if (window.HoshiMangaTap && window.HoshiMangaTap.bubbleRevealed) {
                     var revealedText = box.querySelector('p');
-                    window.HoshiMangaTap.bubbleRevealed(revealedText ? (revealedText.textContent || '') : '');
+                    var revealedBlock = (box.dataset && box.dataset.hoshiBlock) || '';
+                    window.HoshiMangaTap.bubbleRevealed(revealedText ? (revealedText.textContent || '') : '', revealedBlock);
                   }
                 }
                 // Default two-tap mode: first tap on an unrevealed bubble just reveals

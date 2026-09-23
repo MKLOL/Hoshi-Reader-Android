@@ -754,6 +754,21 @@ fun ReaderWebView(
         }
         return false
     }
+    /**
+     * A page turn that ran off the chapter's edge into the next or previous chapter: a page
+     * turn like any other for the usage log, which displayPagedTurnProgress never sees.
+     */
+    fun logChapterPageTurn(moved: Boolean): Boolean {
+        if (moved) {
+            usageSession?.epubPageTurned(
+                chapter = stateHolder.readerPosition.displayedPosition.index + 1,
+                character = currentDisplayedCharacter(),
+            )
+        }
+        return moved
+    }
+    fun turnToNextChapter(): Boolean = logChapterPageTurn(goToNextChapter())
+    fun turnToPreviousChapter(): Boolean = logChapterPageTurn(goToPreviousChapter())
     fun saveDisplayedProgress(progress: Double) {
         stateHolder.enterFocusModeForReaderInteraction()
         val savedPosition = stateHolder.recordDisplayedProgress(progress)
@@ -787,8 +802,8 @@ fun ReaderWebView(
         if (!stateHolder.beginReaderNavigationInput()) return false
         closeLookupPopupsAndSelection()
         val onLimit = when (direction) {
-            ReaderNavigationDirection.Forward -> ::goToNextChapter
-            ReaderNavigationDirection.Backward -> ::goToPreviousChapter
+            ReaderNavigationDirection.Forward -> ::turnToNextChapter
+            ReaderNavigationDirection.Backward -> ::turnToPreviousChapter
         }
         currentWebView.navigatePage(direction, onLimit, ::displayPagedTurnProgress, ::saveDisplayedProgress)
         return true
@@ -1475,10 +1490,10 @@ fun ReaderWebView(
                         onRestoreStarted = stateHolder::markWebViewRestoring,
                         onRestoreCompleted = stateHolder::markWebViewRestored,
                         onNextChapter = {
-                            goToNextChapter()
+                            turnToNextChapter()
                         },
                         onPreviousChapter = {
-                            goToPreviousChapter()
+                            turnToPreviousChapter()
                         },
                         onSaveBookmark = { progress ->
                             saveDisplayedProgress(progress)

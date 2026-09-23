@@ -7,6 +7,8 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -39,7 +41,9 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextMeasurer
 import androidx.compose.ui.text.drawText
@@ -66,27 +70,35 @@ import kotlin.math.roundToInt
  * bubble, translate presses and translate presses per bubble come from the usage log. One
  * measure per chart: they never share an axis.
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 internal fun TrendsSection(
     daily: List<DailyReading>?,
     usage: UsageStatistics?,
     today: LocalDate,
+    range: TrendRange,
+    onRangeChange: (TrendRange) -> Unit,
 ) {
-    var range by rememberSaveable { mutableIntStateOf(TrendRange.Month.ordinal) }
-    val days = TrendRange.entries[range].days
+    val days = range.days
     Column {
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        // Wraps instead of overflowing at large font sizes.
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             TrendRange.entries.forEach { option ->
                 FilterChip(
-                    selected = option.ordinal == range,
-                    onClick = { range = option.ordinal },
+                    selected = option == range,
+                    onClick = { onRangeChange(option) },
                     label = { Text(pluralStringResource(R.plurals.statistics_trends_range_days, option.days, option.days)) },
                 )
             }
         }
         Spacer(Modifier.height(8.dp))
+        if (daily == null) {
+            // Still loading: a message, not a row of all-zero charts that redraw a moment later.
+            GroupCard { StatisticsMessageRow(stringResource(R.string.statistics_overview_loading)) }
+            return@Column
+        }
         val dailyByDate = remember(daily) {
-            daily.orEmpty().mapNotNull { day ->
+            daily.mapNotNull { day ->
                 runCatching { LocalDate.parse(day.dateKey) }.getOrNull()?.let { it to day }
             }.toMap()
         }
@@ -100,7 +112,7 @@ internal fun TrendsSection(
             title = stringResource(R.string.statistics_trend_reading_time),
             points = minutes,
             formatValue = { formatDurationSeconds(it * 60.0) },
-            formatTick = ::formatMinutesTick,
+            formatTick = { formatGoalDuration(it * 60.0) },
         )
         Spacer(Modifier.height(12.dp))
         TrendChartCard(
@@ -134,6 +146,9 @@ private fun UsageTrendCharts(usage: UsageStatistics, today: LocalDate, days: Int
     val translationsPerBubble = remember(usage, days, today) {
         rollingRatioSeries(series { it.bubbleTranslations }, series { it.bubblesRevealed }, today, days, since = since)
     }
+    // Bubbles and translations only exist in manga; a reader of books alone does not get three
+    // charts of zeros.
+    val hasMangaActivity = usage.days.values.any { it.bubblesRevealed > 0 || it.bubbleTranslations > 0 }
     val countValue: (Double) -> String = { formatStatisticsCount(it.roundToInt()) }
     val countTick: (Double) -> String = { formatCompactCount(it) }
     Spacer(Modifier.height(12.dp))
@@ -145,6 +160,7 @@ private fun UsageTrendCharts(usage: UsageStatistics, today: LocalDate, days: Int
         formatAverage = ::formatAverageCount,
         formatTick = countTick,
     )
+    if (!hasMangaActivity) return
     Spacer(Modifier.height(12.dp))
     TrendChartCard(
         title = stringResource(R.string.statistics_trend_lookups_per_bubble),
@@ -201,6 +217,8 @@ private fun TrendChartCard(
                     ),
                     style = MaterialTheme.typography.bodyMedium,
                     color = colorScheme.onSurfaceVariant,
+                    // Announced when a tap selects another day.
+                    modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
                 )
             }
             Spacer(Modifier.height(10.dp))
@@ -257,7 +275,8 @@ private fun RollingAverageChart(
     val colorScheme = MaterialTheme.colorScheme
     val (lineColor, barColor) = trendColors()
     val selectedBarColor = lineColor.copy(alpha = 0.6f)
-    val gridColor = colorScheme.outlineVariant
+    // E-ink's outline colour is pure black, which would make gridlines as loud as the line.
+    val gridColor = if (LocalHoshiEInkMode.current) colorScheme.onBackground.copy(alpha = 0.15f) else colorScheme.outlineVariant
     val surface = colorScheme.surface
     val tickStyle = MaterialTheme.typography.labelSmall.copy(color = colorScheme.onSurfaceVariant)
     val measurer: TextMeasurer = rememberTextMeasurer()
@@ -293,7 +312,9 @@ private fun RollingAverageChart(
         }
 
         val slot = plotWidth / points.size
-        val barWidth = (slot - 2.dp.toPx()).coerceIn(1f, 24.dp.toPx())
+        // A 2dp gap between bars, except at 90 days on a phone, where that would leave bars
+        // under a dp wide: then the bar keeps 60% of its slot.
+        val barWidth = maxOf(slot - 2.dp.toPx(), slot * 0.6f).coerceIn(1f, 24.dp.toPx())
         points.forEachIndexed { index, point ->
             val height = bottom - yOf(point.value)
             if (height <= 0f) return@forEachIndexed
@@ -356,18 +377,6 @@ private fun TrendLegend() {
         }
         Spacer(Modifier.width(6.dp))
         Text(stringResource(R.string.statistics_trend_legend_average), style = labelStyle, color = labelColor)
-    }
-}
-
-/** Minutes as an axis label: 30m, 1h, 1h 30m. */
-internal fun formatMinutesTick(minutes: Double): String {
-    val total = minutes.roundToInt()
-    val hours = total / 60
-    val rest = total % 60
-    return when {
-        hours == 0 -> "${rest}m"
-        rest == 0 -> "${hours}h"
-        else -> "${hours}h ${rest}m"
     }
 }
 

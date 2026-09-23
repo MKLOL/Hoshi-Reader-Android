@@ -15,6 +15,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.LocalFireDepartment
@@ -175,8 +177,12 @@ fun StatisticsScreenContent(
         containerColor = colorScheme.background,
     ) { innerPadding ->
         // The charts live on their own tab so the overview stays a short read. Switching tabs
-        // swaps content in place, with no pager animation to smear on an e-ink screen.
+        // swaps content in place, with no pager animation to smear on an e-ink screen; each
+        // tab's scroll position and the chart range are held here so a switch keeps them.
         var selectedTab by rememberSaveable { mutableIntStateOf(0) }
+        var trendRange by rememberSaveable { mutableIntStateOf(TrendRange.Month.ordinal) }
+        val overviewListState = rememberLazyListState()
+        val trendsListState = rememberLazyListState()
         Column(modifier = Modifier.fillMaxSize().padding(innerPadding)) {
             PrimaryTabRow(selectedTabIndex = selectedTab, containerColor = colorScheme.background) {
                 listOf(R.string.statistics_tab_overview, R.string.statistics_trends_title).forEachIndexed { index, label ->
@@ -190,12 +196,22 @@ fun StatisticsScreenContent(
             if (selectedTab == 1) {
                 LazyColumn(
                     modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp),
+                    state = trendsListState,
                     contentPadding = PaddingValues(top = 12.dp, bottom = 24.dp),
                 ) {
-                    item { TrendsSection(daily = overview?.daily, usage = usage, today = today) }
+                    item {
+                        TrendsSection(
+                            daily = overview?.daily,
+                            usage = usage,
+                            today = today,
+                            range = TrendRange.entries[trendRange],
+                            onRangeChange = { trendRange = it.ordinal },
+                        )
+                    }
                 }
             } else {
                 StatisticsOverviewList(
+                    listState = overviewListState,
                     overview = overview,
                     usage = usage,
                     today = today,
@@ -216,6 +232,7 @@ fun StatisticsScreenContent(
 
 @Composable
 private fun StatisticsOverviewList(
+    listState: LazyListState,
     overview: ReadingStatisticsOverview?,
     usage: UsageStatistics?,
     today: LocalDate,
@@ -234,6 +251,7 @@ private fun StatisticsOverviewList(
         modifier = Modifier
             .fillMaxSize()
             .padding(horizontal = 16.dp),
+        state = listState,
         contentPadding = PaddingValues(top = 12.dp, bottom = 24.dp),
     ) {
         item {

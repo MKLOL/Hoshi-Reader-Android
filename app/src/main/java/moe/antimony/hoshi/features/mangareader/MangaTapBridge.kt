@@ -12,16 +12,17 @@ import android.webkit.JavascriptInterface
  */
 internal class MangaTapBridge(
     private val onSelectedNothing: () -> Unit,
-    private val onBubbleRevealed: (String) -> Unit = {},
+    private val onBubbleRevealed: (String, String?) -> Unit = { _, _ -> },
 ) {
     @JavascriptInterface
     fun selectedNothing() {
         mainHandler.post { onSelectedNothing() }
     }
 
+    /** @param blockId the bubble's mokuro address (`p{page}b{block}`), or empty when unknown. */
     @JavascriptInterface
-    fun bubbleRevealed(text: String) {
-        mainHandler.post { onBubbleRevealed(text) }
+    fun bubbleRevealed(text: String, blockId: String) {
+        mainHandler.post { onBubbleRevealed(text, blockId.ifEmpty { null }) }
     }
 
     private companion object {
