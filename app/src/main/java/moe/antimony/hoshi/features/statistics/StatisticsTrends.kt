@@ -37,23 +37,55 @@ fun rollingAverageSeries(
     days: Int,
     window: Int = TREND_AVERAGE_DAYS,
     since: LocalDate? = null,
-): List<TrendPoint> {
-    require(days > 0 && window > 0)
-    fun valueOn(date: LocalDate): Double? =
-        if (since != null && date < since) null else valuesByDate[date] ?: 0.0
+): List<TrendPoint> = trendDays(endDate, days, window, since).map { (date, windowDays) ->
+    val windowValues = windowDays.map { valuesByDate[it] ?: 0.0 }
+    TrendPoint(
+        date = date,
+        value = valuesByDate[date] ?: 0.0,
+        rollingAverage = if (windowValues.isEmpty()) 0.0 else windowValues.average(),
+    )
+}
 
+/**
+ * A per-day rate such as lookups per bubble: each day's [numerators] over its [denominators]
+ * (0 on a day with no denominator), and a trailing rate over the window.
+ *
+ * The trailing rate divides the window's sums rather than averaging daily rates, so one day
+ * with a single bubble and three lookups cannot swing the line as much as a day with fifty.
+ */
+fun rollingRatioSeries(
+    numerators: Map<LocalDate, Double>,
+    denominators: Map<LocalDate, Double>,
+    endDate: LocalDate,
+    days: Int,
+    window: Int = TREND_AVERAGE_DAYS,
+    since: LocalDate? = null,
+): List<TrendPoint> = trendDays(endDate, days, window, since).map { (date, windowDays) ->
+    fun rate(numerator: Double, denominator: Double) = if (denominator > 0.0) numerator / denominator else 0.0
+    TrendPoint(
+        date = date,
+        value = rate(numerators[date] ?: 0.0, denominators[date] ?: 0.0),
+        rollingAverage = rate(
+            windowDays.sumOf { numerators[it] ?: 0.0 },
+            windowDays.sumOf { denominators[it] ?: 0.0 },
+        ),
+    )
+}
+
+/** Each day of the range with the recorded days of its trailing window (itself included). */
+private fun trendDays(
+    endDate: LocalDate,
+    days: Int,
+    window: Int,
+    since: LocalDate?,
+): List<Pair<LocalDate, List<LocalDate>>> {
+    require(days > 0 && window > 0)
+    fun recorded(date: LocalDate) = since == null || date >= since
     val firstDay = endDate.minusDays(days - 1L).let { if (since != null && it < since) since else it }
     if (firstDay > endDate) return emptyList()
     return generateSequence(firstDay) { it.plusDays(1) }
         .takeWhile { it <= endDate }
-        .map { date ->
-            val windowValues = (0 until window).mapNotNull { back -> valueOn(date.minusDays(back.toLong())) }
-            TrendPoint(
-                date = date,
-                value = valueOn(date) ?: 0.0,
-                rollingAverage = if (windowValues.isEmpty()) 0.0 else windowValues.average(),
-            )
-        }
+        .map { date -> date to (0 until window).map { date.minusDays(it.toLong()) }.filter(::recorded) }
         .toList()
 }
 

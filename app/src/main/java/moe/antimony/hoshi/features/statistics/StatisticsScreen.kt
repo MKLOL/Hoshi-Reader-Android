@@ -30,10 +30,14 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.PrimaryTabRow
+import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -170,53 +174,106 @@ fun StatisticsScreenContent(
         modifier = modifier.fillMaxSize(),
         containerColor = colorScheme.background,
     ) { innerPadding ->
-        LazyColumn(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding)
-                .padding(horizontal = 16.dp),
-            contentPadding = PaddingValues(bottom = 24.dp),
-        ) {
-            item {
-                TodayCard(
-                    today = today,
-                    todaySeconds = overview?.todaySeconds,
-                    todayCharacters = overview?.todayCharacters,
-                    usage = usage?.today,
-                )
-                Spacer(Modifier.height(18.dp))
-            }
-            item { StreakCard(streak, minimumMinutes, onMinimumMinutesChange); Spacer(Modifier.height(18.dp)) }
-            item { TotalsCard(overview); Spacer(Modifier.height(18.dp)) }
-            item { TrendsSection(daily = overview?.daily, usage = usage, today = today); Spacer(Modifier.height(18.dp)) }
-            val devices = overview?.devices.orEmpty()
-            if (devices.isNotEmpty()) {
-                item { DevicesCard(devices, localDeviceId, showBookCount = true); Spacer(Modifier.height(18.dp)) }
-            }
-            item { HeatmapCard(heatmap); Spacer(Modifier.height(18.dp)) }
-            item { WeekdayCard(weekdays); Spacer(Modifier.height(18.dp)) }
-            if (driveSync != null) {
-                item { DriveSyncCard(driveSync, onDriveSyncChange); Spacer(Modifier.height(18.dp)) }
-            }
-            item {
-                Text(
-                    text = stringResource(R.string.statistics_overview_per_book),
-                    color = colorScheme.onSurfaceVariant,
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier.padding(start = 16.dp, bottom = 8.dp),
-                )
-            }
-            // One lazy item per book: a manga library is one book per volume, and every row
-            // decodes a cover, so composing them all at once would hold every bitmap.
-            val books = overview?.books
-            when {
-                books == null -> item { GroupCard { StatisticsMessageRow(stringResource(R.string.statistics_overview_loading)) } }
-                books.isEmpty() -> item { GroupCard { StatisticsMessageRow(stringResource(R.string.statistics_overview_empty)) } }
-                else -> items(books, key = { it.bookId }) { book ->
-                    BookRowCard { BookReadingRow(book, onClick = { onOpenBook(book.bookId) }) }
-                    Spacer(Modifier.height(8.dp))
+        // The charts live on their own tab so the overview stays a short read. Switching tabs
+        // swaps content in place, with no pager animation to smear on an e-ink screen.
+        var selectedTab by rememberSaveable { mutableIntStateOf(0) }
+        Column(modifier = Modifier.fillMaxSize().padding(innerPadding)) {
+            PrimaryTabRow(selectedTabIndex = selectedTab, containerColor = colorScheme.background) {
+                listOf(R.string.statistics_tab_overview, R.string.statistics_trends_title).forEachIndexed { index, label ->
+                    Tab(
+                        selected = selectedTab == index,
+                        onClick = { selectedTab = index },
+                        text = { Text(stringResource(label)) },
+                    )
                 }
+            }
+            if (selectedTab == 1) {
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp),
+                    contentPadding = PaddingValues(top = 12.dp, bottom = 24.dp),
+                ) {
+                    item { TrendsSection(daily = overview?.daily, usage = usage, today = today) }
+                }
+            } else {
+                StatisticsOverviewList(
+                    overview = overview,
+                    usage = usage,
+                    today = today,
+                    streak = streak,
+                    heatmap = heatmap,
+                    weekdays = weekdays,
+                    minimumMinutes = minimumMinutes,
+                    onMinimumMinutesChange = onMinimumMinutesChange,
+                    onOpenBook = onOpenBook,
+                    driveSync = driveSync,
+                    onDriveSyncChange = onDriveSyncChange,
+                    localDeviceId = localDeviceId,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun StatisticsOverviewList(
+    overview: ReadingStatisticsOverview?,
+    usage: UsageStatistics?,
+    today: LocalDate,
+    streak: ReadingStreak?,
+    heatmap: ReadingHeatmap?,
+    weekdays: List<Double>?,
+    minimumMinutes: Int,
+    onMinimumMinutesChange: (Int) -> Unit,
+    onOpenBook: (bookId: String) -> Unit,
+    driveSync: DriveStatisticsSyncOptions?,
+    onDriveSyncChange: (DriveStatisticsSyncOptions) -> Unit,
+    localDeviceId: String?,
+) {
+    val colorScheme = MaterialTheme.colorScheme
+    LazyColumn(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(horizontal = 16.dp),
+        contentPadding = PaddingValues(top = 12.dp, bottom = 24.dp),
+    ) {
+        item {
+            TodayCard(
+                today = today,
+                todaySeconds = overview?.todaySeconds,
+                todayCharacters = overview?.todayCharacters,
+                usage = usage?.today,
+            )
+            Spacer(Modifier.height(18.dp))
+        }
+        item { StreakCard(streak, minimumMinutes, onMinimumMinutesChange); Spacer(Modifier.height(18.dp)) }
+        item { TotalsCard(overview); Spacer(Modifier.height(18.dp)) }
+        val devices = overview?.devices.orEmpty()
+        if (devices.isNotEmpty()) {
+            item { DevicesCard(devices, localDeviceId, showBookCount = true); Spacer(Modifier.height(18.dp)) }
+        }
+        item { HeatmapCard(heatmap); Spacer(Modifier.height(18.dp)) }
+        item { WeekdayCard(weekdays); Spacer(Modifier.height(18.dp)) }
+        if (driveSync != null) {
+            item { DriveSyncCard(driveSync, onDriveSyncChange); Spacer(Modifier.height(18.dp)) }
+        }
+        item {
+            Text(
+                text = stringResource(R.string.statistics_overview_per_book),
+                color = colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.padding(start = 16.dp, bottom = 8.dp),
+            )
+        }
+        // One lazy item per book: a manga library is one book per volume, and every row
+        // decodes a cover, so composing them all at once would hold every bitmap.
+        val books = overview?.books
+        when {
+            books == null -> item { GroupCard { StatisticsMessageRow(stringResource(R.string.statistics_overview_loading)) } }
+            books.isEmpty() -> item { GroupCard { StatisticsMessageRow(stringResource(R.string.statistics_overview_empty)) } }
+            else -> items(books, key = { it.bookId }) { book ->
+                BookRowCard { BookReadingRow(book, onClick = { onOpenBook(book.bookId) }) }
+                Spacer(Modifier.height(8.dp))
             }
         }
     }

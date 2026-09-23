@@ -114,6 +114,24 @@ class UsageDaySummaryTest {
     }
 
     @Test
+    fun onlyPressesOnAMangaPageCountTowardsLookupsPerBubble() {
+        fun lookup(minute: Int, contentType: String, source: String) =
+            event(UsageEventType.WordLookedUp, at(11, minute))
+                .copy(text = "本", term = "本", outcome = "found", contentType = contentType, source = source)
+        val events = listOf(
+            lookup(1, "manga", "page"),
+            lookup(2, "manga", "page"),
+            lookup(3, "manga", "popup"),
+            lookup(4, "epub", "page"),
+        )
+
+        val summary = summarizeUsageDay(events, day, zone)
+
+        assertEquals(4, summary.wordLookups)
+        assertEquals(2, summary.mangaPageLookups)
+    }
+
+    @Test
     fun aDayWithoutEventsIsEmpty() {
         assertTrue(summarizeUsageDay(emptyList(), day, zone).isEmpty)
     }

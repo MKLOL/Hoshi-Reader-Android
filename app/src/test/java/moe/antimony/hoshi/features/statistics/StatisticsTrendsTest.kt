@@ -41,6 +41,26 @@ class StatisticsTrendsTest {
     }
 
     @Test
+    fun aRateSeriesDividesEachDayAndTheWindowBySums() {
+        val lookups = mapOf(end.minusDays(2) to 3.0, end.minusDays(1) to 20.0, end to 6.0)
+        val bubbles = mapOf(end.minusDays(2) to 1.0, end.minusDays(1) to 40.0, end to 12.0)
+
+        val series = rollingRatioSeries(lookups, bubbles, end, days = 3)
+
+        assertEquals(listOf(3.0, 0.5, 0.5), series.map { it.value })
+        // The trailing rate is (3 + 20 + 6) / (1 + 40 + 12), not the mean of 3, 0.5 and 0.5.
+        assertEquals(29.0 / 53.0, series.last().rollingAverage, 1e-9)
+    }
+
+    @Test
+    fun aDayWithoutBubblesHasNoRateAndDoesNotDivideByZero() {
+        val series = rollingRatioSeries(mapOf(end to 2.0), emptyMap(), end, days = 2)
+
+        assertEquals(listOf(0.0, 0.0), series.map { it.value })
+        assertEquals(listOf(0.0, 0.0), series.map { it.rollingAverage })
+    }
+
+    @Test
     fun axisTopsAreRoundNumbers() {
         assertEquals(2.0, niceAxisMax(0.0), 0.0)
         assertEquals(10.0, niceAxisMax(7.0), 0.0)

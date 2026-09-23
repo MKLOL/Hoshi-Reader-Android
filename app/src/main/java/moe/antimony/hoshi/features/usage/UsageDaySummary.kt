@@ -27,6 +27,8 @@ data class UsageDaySummary(
     val pageTurns: Int,
     /** Every word press, including ones the dictionaries found nothing for. */
     val wordLookups: Int,
+    /** Word presses on a manga page (not inside a popup): the ones a revealed bubble leads to. */
+    val mangaPageLookups: Int,
     /** Different words found, counted by dictionary form. */
     val distinctWords: Int,
     /**
@@ -99,6 +101,9 @@ fun summarizeUsageDay(
         sessions = ordered.count { it.type == UsageEventType.ReaderOpened },
         pageTurns = ordered.count { it.type == UsageEventType.PageTurned },
         wordLookups = lookups.size,
+        mangaPageLookups = lookups.count {
+            it.contentType == UsageContentType.Manga.serialName && it.source == UsageLookupSource.Page.serialName
+        },
         distinctWords = words.toSet().size,
         repeatedWords = repeatedWords(words, maxRepeatedWords),
         bubblesRevealed = ordered.count { it.type == UsageEventType.BubbleRevealed },

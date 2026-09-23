@@ -50,6 +50,7 @@ import moe.antimony.hoshi.R
 import moe.antimony.hoshi.features.reader.DailyReading
 import moe.antimony.hoshi.features.reader.formatDurationSeconds
 import moe.antimony.hoshi.features.settings.GroupCard
+import moe.antimony.hoshi.features.usage.UsageDayCounts
 import moe.antimony.hoshi.features.usage.UsageStatistics
 import moe.antimony.hoshi.ui.theme.LocalHoshiEInkMode
 import java.text.NumberFormat
@@ -60,8 +61,10 @@ import kotlin.math.min
 import kotlin.math.roundToInt
 
 /**
- * Reading time, characters read and words looked up per day, each with its trailing 3-day
- * average, under one range selector. One measure per chart: they never share an axis.
+ * The Trends tab: per-day charts under one range selector, each with its trailing 3-day
+ * average. Reading time and characters come from the reading statistics; lookups, lookups per
+ * bubble, translate presses and translate presses per bubble come from the usage log. One
+ * measure per chart: they never share an axis.
  */
 @Composable
 internal fun TrendsSection(
@@ -72,17 +75,7 @@ internal fun TrendsSection(
     var range by rememberSaveable { mutableIntStateOf(TrendRange.Month.ordinal) }
     val days = TrendRange.entries[range].days
     Column {
-        Text(
-            text = stringResource(R.string.statistics_trends_title),
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.SemiBold,
-            modifier = Modifier.padding(start = 16.dp, bottom = 4.dp),
-        )
-        Row(
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            modifier = Modifier.padding(start = 8.dp),
-        ) {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             TrendRange.entries.forEach { option ->
                 FilterChip(
                     selected = option.ordinal == range,
@@ -117,21 +110,66 @@ internal fun TrendsSection(
             formatTick = { formatCompactCount(it) },
         )
         if (usage != null) {
-            Spacer(Modifier.height(12.dp))
-            val since = usage.firstLoggedDate ?: today
-            val lookups = remember(usage, days, today) {
-                rollingAverageSeries(usage.lookupsByDay.mapValues { it.value.toDouble() }, today, days, since = since)
-            }
-            TrendChartCard(
-                title = stringResource(R.string.statistics_trend_lookups),
-                subtitle = stringResource(R.string.statistics_trend_lookups_since_format, formatStatisticsDate(since.toString())),
-                points = lookups,
-                formatValue = { formatStatisticsCount(it.roundToInt()) },
-                formatAverage = { formatAverageCount(it) },
-                formatTick = { formatCompactCount(it) },
-            )
+            UsageTrendCharts(usage, today, days)
         }
     }
+}
+
+/** The charts built from the usage log; they start on the first day it recorded. */
+@Composable
+private fun UsageTrendCharts(usage: UsageStatistics, today: LocalDate, days: Int) {
+    val since = usage.firstLoggedDate ?: today
+    val sinceText = formatStatisticsDate(since.toString())
+    fun series(count: (UsageDayCounts) -> Int): Map<LocalDate, Double> =
+        usage.days.mapValues { (_, counts) -> count(counts).toDouble() }
+    val lookups = remember(usage, days, today) {
+        rollingAverageSeries(series { it.wordLookups }, today, days, since = since)
+    }
+    val lookupsPerBubble = remember(usage, days, today) {
+        rollingRatioSeries(series { it.mangaPageLookups }, series { it.bubblesRevealed }, today, days, since = since)
+    }
+    val translations = remember(usage, days, today) {
+        rollingAverageSeries(series { it.bubbleTranslations }, today, days, since = since)
+    }
+    val translationsPerBubble = remember(usage, days, today) {
+        rollingRatioSeries(series { it.bubbleTranslations }, series { it.bubblesRevealed }, today, days, since = since)
+    }
+    val countValue: (Double) -> String = { formatStatisticsCount(it.roundToInt()) }
+    val countTick: (Double) -> String = { formatCompactCount(it) }
+    Spacer(Modifier.height(12.dp))
+    TrendChartCard(
+        title = stringResource(R.string.statistics_trend_lookups),
+        subtitle = stringResource(R.string.statistics_trend_lookups_since_format, sinceText),
+        points = lookups,
+        formatValue = countValue,
+        formatAverage = ::formatAverageCount,
+        formatTick = countTick,
+    )
+    Spacer(Modifier.height(12.dp))
+    TrendChartCard(
+        title = stringResource(R.string.statistics_trend_lookups_per_bubble),
+        subtitle = stringResource(R.string.statistics_trend_per_bubble_since_format, sinceText),
+        points = lookupsPerBubble,
+        formatValue = ::formatRate,
+        formatTick = ::formatRate,
+    )
+    Spacer(Modifier.height(12.dp))
+    TrendChartCard(
+        title = stringResource(R.string.statistics_trend_translations),
+        subtitle = stringResource(R.string.statistics_trend_lookups_since_format, sinceText),
+        points = translations,
+        formatValue = countValue,
+        formatAverage = ::formatAverageCount,
+        formatTick = countTick,
+    )
+    Spacer(Modifier.height(12.dp))
+    TrendChartCard(
+        title = stringResource(R.string.statistics_trend_translations_per_bubble),
+        subtitle = stringResource(R.string.statistics_trend_per_bubble_since_format, sinceText),
+        points = translationsPerBubble,
+        formatValue = ::formatRate,
+        formatTick = ::formatRate,
+    )
 }
 
 @Composable
@@ -338,6 +376,10 @@ private fun formatCompactCount(value: Double): String =
     android.icu.text.CompactDecimalFormat
         .getInstance(Locale.getDefault(), android.icu.text.CompactDecimalFormat.CompactStyle.SHORT)
         .format(value)
+
+/** A rate per bubble keeps two decimals: 0.25 translations per bubble. */
+private fun formatRate(value: Double): String =
+    NumberFormat.getNumberInstance().apply { maximumFractionDigits = 2 }.format(value)
 
 /** An average of small counts keeps one decimal: 2.3 lookups a day. */
 private fun formatAverageCount(value: Double): String =

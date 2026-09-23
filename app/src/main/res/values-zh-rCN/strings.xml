@@ -274,16 +274,23 @@
     <string name="statistics_today_empty">今天还没有阅读。打开一本书，今天的阅读就会显示在这里。</string>
     <string name="statistics_trends_title">趋势</string>
     <plurals name="statistics_trends_range_days">
+        <item quantity="one">%1$d 天</item>
         <item quantity="other">%1$d 天</item>
     </plurals>
     <string name="statistics_trend_reading_time">阅读时间</string>
     <string name="statistics_trend_characters">阅读字数</string>
     <string name="statistics_trend_lookups">查词次数</string>
     <string name="statistics_trend_lookups_since_format">自 %1$s 起记录</string>
+    <string name="statistics_tab_overview">概览</string>
+    <string name="statistics_trend_lookups_per_bubble">每个气泡的查词数</string>
+    <string name="statistics_trend_translations">按下翻译的次数</string>
+    <string name="statistics_trend_translations_per_bubble">每个气泡按下翻译的次数</string>
+    <string name="statistics_trend_per_bubble_since_format">按显示的漫画气泡计算，自 %1$s 起记录</string>
     <string name="statistics_trend_legend_daily">每日</string>
     <string name="statistics_trend_legend_average">3 日平均</string>
     <string name="statistics_trend_readout_format">%1$s · %2$s · 3 日平均 %3$s</string>
     <plurals name="statistics_trend_chart_description">
+        <item quantity="one">%1$s，最近 %2$d 天。当前 3 日平均为 %3$s。</item>
         <item quantity="other">%1$s，最近 %2$d 天。当前 3 日平均为 %3$s。</item>
     </plurals>
     <string name="statistics_heatmap_less">少</string>
