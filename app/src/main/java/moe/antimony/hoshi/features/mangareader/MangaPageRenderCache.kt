@@ -21,6 +21,8 @@ internal data class MangaPageRenderConfig(
     val singleTapLookup: Boolean = false,
     /** See ReaderSettings.mangaUseNotoSansJp — when true, emits an explicit font-family. */
     val useNotoSansJpFont: Boolean = false,
+    /** See ReaderSettings.mangaShowCopyButton — off hides Copy and enlarges Translate. */
+    val showCopyButton: Boolean = false,
     val selectionScript: String = ReaderSelectionScripts.source(),
 )
 
@@ -61,6 +63,7 @@ internal class MangaPageRenderCache(
             viewportCssHeight = config.viewportCssHeight,
             singleTapLookup = config.singleTapLookup,
             useNotoSansJpFont = config.useNotoSansJpFont,
+            showCopyButton = config.showCopyButton,
         )
 
         synchronized(lock) {

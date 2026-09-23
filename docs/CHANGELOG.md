@@ -8,6 +8,7 @@ Semantic Versioning.
 ## [Unreleased]
 
 ### Changed
+- **A bigger Translate button on manga bubbles.** A revealed bubble now shows only the ✨ Translate button, drawn larger so it is easier to hit. To get the compact Copy and Translate pair back, turn on Settings → Behavior → Manga: Show Copy Button.
 - **More complete manga translation explanations.** The default bubble prompt now asks for a natural English translation, a word-by-word table with furigana and romaji without skipped words, and concise grammar notes at the end.
 
 ## [v0.11.14] - 2026-09-21

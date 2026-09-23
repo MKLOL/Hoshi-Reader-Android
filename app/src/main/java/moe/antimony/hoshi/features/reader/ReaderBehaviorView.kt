@@ -132,6 +132,15 @@ fun ReaderBehaviorScreen(
                         },
                         description = stringResource(R.string.reader_behavior_manga_use_noto_sans_jp_desc),
                     )
+                    BehaviorDivider()
+                    BehaviorSwitchRow(
+                        label = stringResource(ReaderBehaviorRow.MangaShowCopyButton.labelRes),
+                        checked = settings.mangaShowCopyButton,
+                        onCheckedChange = {
+                            onSettingsChange(settings.copy(mangaShowCopyButton = it))
+                        },
+                        description = stringResource(R.string.reader_behavior_manga_show_copy_button_desc),
+                    )
                     // The auto-updater is opt-in at compile time (see UpdateConfig); when
                     // it is off, the toggle and its dependencies are entirely absent from
                     // the screen — no settings flicker while update-settings load.
@@ -170,6 +179,7 @@ private enum class ReaderBehaviorRow(val labelRes: Int) {
     EInkMode(R.string.reader_appearance_eink_mode),
     MangaSingleTapLookup(R.string.reader_behavior_manga_single_tap_lookup),
     MangaUseNotoSansJp(R.string.reader_behavior_manga_use_noto_sans_jp),
+    MangaShowCopyButton(R.string.reader_behavior_manga_show_copy_button),
     AutomaticallyCheckForUpdates(R.string.reader_behavior_auto_check_updates),
 }
 

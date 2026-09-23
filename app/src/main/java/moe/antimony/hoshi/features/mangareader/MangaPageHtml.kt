@@ -29,8 +29,8 @@ import moe.antimony.hoshi.mokuro.MokuroTextBox
  * *second* tap on that revealed box runs the shared selection bridge to look the tapped word
  * up. The lookup is held back to the second tap so the dictionary popup can't open on top of
  * the box's action buttons. Tapping empty artwork hides every revealed box again. A revealed
- * box also shows small action buttons — ask ChatGPT about the bubble, and copy the whole
- * bubble's OCR text. All of these outcomes are routed through `window.hoshiManga.handleTap`
+ * box also shows action buttons — ask ChatGPT about the bubble and, when the Copy setting is
+ * on, copy the whole bubble's OCR text. All of these outcomes are routed through `window.hoshiManga.handleTap`
  * (see the page script) so a single tap path decides between them. `<p>` is used because
  * the shared selection script ([moe.antimony.hoshi.features.reader.ReaderSelectionScripts])
  * scopes its sentence scan to the nearest `p`, which conveniently bounds a scan to one box.
@@ -83,6 +83,12 @@ internal object MangaPageHtml {
          * platform's system sans-serif (no inline `font-family` rule).
          */
         useNotoSansJpFont: Boolean = false,
+        /**
+         * When `true`, a revealed bubble shows Copy beside the ChatGPT button, both compact.
+         * When `false` (the default, matching ReaderSettings.mangaShowCopyButton), only the
+         * ChatGPT button is shown, drawn larger.
+         */
+        showCopyButton: Boolean = false,
     ): String {
         val imageWidth = page.imageWidth.coerceAtLeast(1)
         val imageHeight = page.imageHeight.coerceAtLeast(1)
@@ -97,8 +103,9 @@ internal object MangaPageHtml {
         )
         val frameWidthCss = formatNumber(imageWidth * fitScale)
         val frameHeightCss = formatNumber(imageHeight * fitScale)
+        val actionButtons = actionButtonsHtml(showCopyButton)
         val boxes = page.textBoxes.joinToString("\n") { box ->
-            textBoxHtml(box, imageWidth, imageHeight, page.index)
+            textBoxHtml(box, imageWidth, imageHeight, actionButtons, page.index)
         }
         return """
             <!DOCTYPE html>
@@ -380,6 +387,16 @@ internal object MangaPageHtml {
           -webkit-user-select: none;
           user-select: none;
         }
+        /* With Copy switched off the ChatGPT button stands alone, so it takes roughly the
+           row's former footprint: a bigger target that is easier to hit on a phone. */
+        .ocr-actions.solo .ocr-action-btn {
+          width: 2.6em;
+          height: 2.6em;
+          min-width: 34px;
+          min-height: 34px;
+          padding: 0.45em;
+          border-radius: 8px;
+        }
         .ocr-action-btn svg {
           width: 100%;
           height: 100%;
@@ -400,6 +417,7 @@ internal object MangaPageHtml {
         box: MokuroTextBox,
         imageWidth: Int,
         imageHeight: Int,
+        actionButtons: String,
         pageIndex: Int? = null,
     ): String {
         val leftPct = percent(box.left, imageWidth)
@@ -436,7 +454,7 @@ internal object MangaPageHtml {
         return """    <div class="ocr-box$verticalClass"$blockAttribute role="button" tabindex="0" """ +
             """aria-pressed="false" style="left: $leftPct%; top: $topPct%; """ +
             """width: $widthPct%; height: $heightPct%; font-size: ${fontCqw}cqw;">""" +
-            """<p>$text</p>$ACTION_BUTTONS_HTML</div>"""
+            """<p>$text</p>$actionButtons</div>"""
     }
 
     /**
@@ -445,23 +463,32 @@ internal object MangaPageHtml {
      * to a native bridge instead of starting a word lookup:
      *
      *  - the ChatGPT button (a sparkles glyph) -> `HoshiMangaAi`;
-     *  - the copy button (the standard two-rectangle glyph) -> `HoshiMangaClipboard`.
+     *  - the copy button (the standard two-rectangle glyph) -> `HoshiMangaClipboard`, only
+     *    when [showCopyButton] is on. Without it the row is marked `solo` and the ChatGPT
+     *    button is drawn larger.
      */
-    private const val ACTION_BUTTONS_HTML: String =
-        """<div class="ocr-actions">""" +
-            """<button class="ocr-action-btn ocr-ai-btn" type="button" """ +
-            """aria-label="Ask ChatGPT about this bubble">""" +
-            """<svg viewBox="0 0 24 24" fill="currentColor">""" +
-            """<path d="M11 2.5l1.8 4.7L17.5 9l-4.7 1.8L11 15.5l-1.8-4.7L4.5 9l4.7-1.8L11 2.5z"></path>""" +
-            """<path d="M18 13l.95 2.05L21 16l-2.05.95L18 19l-.95-2.05L15 16l2.05-.95L18 13z"></path>""" +
-            """</svg></button>""" +
-            """<button class="ocr-action-btn ocr-copy-btn" type="button" """ +
-            """aria-label="Copy bubble text">""" +
-            """<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" """ +
-            """stroke-linecap="round" stroke-linejoin="round">""" +
-            """<rect x="9" y="9" width="11" height="11" rx="2"></rect>""" +
-            """<path d="M5 15V5a2 2 0 0 1 2-2h10"></path></svg></button>""" +
-            """</div>"""
+    private fun actionButtonsHtml(showCopyButton: Boolean): String =
+        if (showCopyButton) {
+            """<div class="ocr-actions">$AI_BUTTON_HTML$COPY_BUTTON_HTML</div>"""
+        } else {
+            """<div class="ocr-actions solo">$AI_BUTTON_HTML</div>"""
+        }
+
+    private const val AI_BUTTON_HTML: String =
+        """<button class="ocr-action-btn ocr-ai-btn" type="button" """ +
+        """aria-label="Ask ChatGPT about this bubble">""" +
+        """<svg viewBox="0 0 24 24" fill="currentColor">""" +
+        """<path d="M11 2.5l1.8 4.7L17.5 9l-4.7 1.8L11 15.5l-1.8-4.7L4.5 9l4.7-1.8L11 2.5z"></path>""" +
+        """<path d="M18 13l.95 2.05L21 16l-2.05.95L18 19l-.95-2.05L15 16l2.05-.95L18 13z"></path>""" +
+        """</svg></button>"""
+
+    private const val COPY_BUTTON_HTML: String =
+        """<button class="ocr-action-btn ocr-copy-btn" type="button" """ +
+        """aria-label="Copy bubble text">""" +
+        """<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" """ +
+        """stroke-linecap="round" stroke-linejoin="round">""" +
+        """<rect x="9" y="9" width="11" height="11" rx="2"></rect>""" +
+        """<path d="M5 15V5a2 2 0 0 1 2-2h10"></path></svg></button>"""
 
     /**
      * The single tap entry point for the manga page, called by [MangaReaderWebView.selectAt].

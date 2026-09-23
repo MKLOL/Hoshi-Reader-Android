@@ -22,6 +22,7 @@ class ReaderBehaviorSasayakiTest {
                 // menu so they live with the other durable reader preferences.
                 R.string.reader_behavior_manga_single_tap_lookup,
                 R.string.reader_behavior_manga_use_noto_sans_jp,
+                R.string.reader_behavior_manga_show_copy_button,
                 R.string.reader_behavior_auto_check_updates,
             ),
             readerBehaviorRows(),

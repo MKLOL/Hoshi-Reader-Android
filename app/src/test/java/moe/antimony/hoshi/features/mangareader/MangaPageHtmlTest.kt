@@ -25,6 +25,7 @@ class MangaPageHtmlTest {
         eInkMode: Boolean = false,
         viewportCssWidth: Int = 400,
         viewportCssHeight: Int = 800,
+        showCopyButton: Boolean = false,
     ) = MangaPageHtml.build(
         page = page,
         backgroundCssColor = "#ffffff",
@@ -33,6 +34,7 @@ class MangaPageHtmlTest {
         eInkMode = eInkMode,
         viewportCssWidth = viewportCssWidth,
         viewportCssHeight = viewportCssHeight,
+        showCopyButton = showCopyButton,
     )
 
     @Test
@@ -206,7 +208,7 @@ class MangaPageHtmlTest {
     @Test
     fun actionButtonsStayHorizontalWithChatGptToTheRightOfCopy() {
         val box = MokuroTextBox(0, 0, 100, 100, 20, vertical = true, lines = listOf("縦"))
-        val html = build(page(listOf(box)))
+        val html = build(page(listOf(box)), showCopyButton = true)
         val aiButtonIndex = html.indexOf("ocr-ai-btn")
         val copyButtonIndex = html.indexOf("ocr-copy-btn")
 
@@ -217,6 +219,26 @@ class MangaPageHtmlTest {
         assertTrue(html.contains("flex-direction: row-reverse;"))
         assertTrue(aiButtonIndex >= 0)
         assertTrue(copyButtonIndex > aiButtonIndex)
+    }
+
+    @Test
+    fun copyIsHiddenByDefaultAndTheLoneTranslateButtonIsDrawnLarger() {
+        val box = MokuroTextBox(0, 0, 100, 100, 20, vertical = false, lines = listOf("字"))
+        val html = build(page(listOf(box)))
+
+        assertTrue(html.contains("""<div class="ocr-actions solo"><button class="ocr-action-btn ocr-ai-btn""""))
+        assertFalse(html.contains("""<button class="ocr-action-btn ocr-copy-btn""""))
+        assertTrue(html.contains(".ocr-actions.solo .ocr-action-btn {"))
+    }
+
+    @Test
+    fun turningCopyOnRestoresBothCompactButtons() {
+        val box = MokuroTextBox(0, 0, 100, 100, 20, vertical = false, lines = listOf("字"))
+        val html = build(page(listOf(box)), showCopyButton = true)
+
+        assertTrue(html.contains("""<div class="ocr-actions"><button class="ocr-action-btn ocr-ai-btn""""))
+        assertTrue(html.contains("""<button class="ocr-action-btn ocr-copy-btn""""))
+        assertFalse(html.contains("""<div class="ocr-actions solo">"""))
     }
 
     @Test
