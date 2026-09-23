@@ -376,7 +376,7 @@ class HttpSyncAppSettingsTest {
     }
 
     private fun newAiSettingsRepo(): AiChatSettingsRepository {
-        return AiChatSettingsRepository(HttpSyncAppSettingsTestSupport.inMemoryPreferencesDataStore())
+        return AiChatSettingsRepository(HttpSyncAppSettingsTestSupport.inMemoryPreferencesDataStore(), "default tutor prompt")
     }
 
 }

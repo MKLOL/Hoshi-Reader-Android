@@ -599,6 +599,7 @@
     <string name="sentence_mode_font_smaller">Smaller text</string>
     <string name="sentence_mode_font_larger">Larger text</string>
     <!-- ChatGPT / AI translation settings (features/ai/AiChatSettingsView) -->
+    <string name="ai_default_bubble_prompt">You are a helpful Japanese reading tutor. For the manga speech bubble below, give a natural English translation, then a short, concise breakdown of any tricky vocabulary or grammar. Please do a translation first, with the words, then do word by word, including both furigana and romanji for the word. Put these word in the table. Make sure you don’t skip words. Then at the end the grammar.</string>
     <string name="ai_settings_translation_model">Translation model</string>
     <string name="ai_settings_model_intro">Pick a model. Cheaper and Chinese providers (DeepSeek, Qwen, Kimi) and Anthropic (Claude) are included alongside OpenAI.</string>
     <string name="ai_settings_model_id">Model id</string>

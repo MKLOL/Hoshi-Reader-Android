@@ -7,6 +7,9 @@ Semantic Versioning.
 
 ## [Unreleased]
 
+### Changed
+- **More complete manga translation explanations.** The default bubble prompt now asks for a natural English translation, a word-by-word table with furigana and romaji without skipped words, and concise grammar notes at the end.
+
 ## [v0.11.14] - 2026-09-21
 
 ### Added

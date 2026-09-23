@@ -597,6 +597,7 @@
     <string name="sentence_mode_font_smaller">缩小文字</string>
     <string name="sentence_mode_font_larger">放大文字</string>
     <!-- ChatGPT / AI translation settings (features/ai/AiChatSettingsView) -->
+    <string name="ai_default_bubble_prompt">你是一位乐于助人的日语阅读导师。请为下面的漫画对话气泡提供自然的英语翻译，然后简明解释有难度的词汇或语法。请先给出完整翻译，再逐词讲解，为每个词提供假名注音和罗马字，并将这些词列在表格中。确保不遗漏任何词。最后讲解语法。</string>
     <string name="ai_settings_translation_model">翻译模型</string>
     <string name="ai_settings_model_intro">选择一个模型。除 OpenAI 外，还包含更便宜的中国厂商（DeepSeek、Qwen、Kimi）以及 Anthropic（Claude）。</string>
     <string name="ai_settings_model_id">模型 ID</string>

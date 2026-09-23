@@ -250,7 +250,7 @@ internal fun freshDevice(
     val filesDir = tempBooksDir(parent, name)
     val repo = BookRepository(filesDir)
     val history = AiChatHistoryStore()
-    val aiRepo = AiChatSettingsRepository(InMemoryPreferencesDataStore())
+    val aiRepo = AiChatSettingsRepository(InMemoryPreferencesDataStore(), "default tutor prompt")
     val locks = HttpSyncBookLocks()
     val codec = HttpSyncPayloadCodec()
     val engine = V3SyncEngine(
@@ -374,7 +374,7 @@ internal class InMemoryPreferencesDataStore : DataStore<Preferences> {
 /** Convenience to make `AiChatSettings.copy(...)` calls less verbose in tests. */
 internal fun aiSettings(
     apiKey: String = "",
-    promptText: String = AiChatSettings.DEFAULT_PROMPT,
+    promptText: String = "default tutor prompt",
     imagePromptText: String = AiChatSettings.DEFAULT_IMAGE_PROMPT,
     model: String = AiChatSettings.DEFAULT_MODEL,
     lastEditedAt: String? = null,

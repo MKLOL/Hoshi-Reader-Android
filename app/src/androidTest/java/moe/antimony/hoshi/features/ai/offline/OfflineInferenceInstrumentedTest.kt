@@ -4,7 +4,7 @@ import android.util.Log
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import kotlinx.coroutines.runBlocking
-import moe.antimony.hoshi.features.ai.AiChatSettings
+import moe.antimony.hoshi.R
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
 import org.junit.Test
@@ -13,7 +13,7 @@ import org.junit.runner.RunWith
 /**
  * End-to-end on-device translation test that exercises the **real production path** a manga
  * bubble tap takes: [OfflineLlmManager.translate] with the app's actual default instruction
- * ([AiChatSettings.DEFAULT_PROMPT], the "reading tutor" prompt — NOT a tidy "translate this")
+ * ([R.string.ai_default_bubble_prompt], the reading tutor prompt)
  * and realistic mokuro bubble text (multi-line, joined with `\n`, manga punctuation, no spaces —
  * see MangaPageHtml `box.lines.joinToString("\n")`).
  *
@@ -52,7 +52,7 @@ class OfflineInferenceInstrumentedTest {
             for (bubble in bubbles) {
                 val result = OfflineLlmManager.translate(
                     appContext = context,
-                    instruction = AiChatSettings.DEFAULT_PROMPT,
+                    instruction = context.getString(R.string.ai_default_bubble_prompt),
                     japaneseText = bubble,
                     // Cap output — the emulated CPU runs a 2B Q8 model at ~0.1 tok/s.
                     maxTokens = 48,

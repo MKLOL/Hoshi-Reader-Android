@@ -29,6 +29,25 @@ import java.time.Instant
 class AiChatSettingsRepositoryTest {
 
     @Test
+    fun freshSettingsUseSuppliedDefaultWithoutStampingAnEdit() = runBlocking {
+        val repo = AiChatSettingsRepository(InMemoryPreferencesDataStore(), "localized tutor prompt")
+
+        assertEquals("localized tutor prompt", repo.settings.first().promptText)
+        assertNull(repo.settings.first().lastEditedAt)
+    }
+
+    @Test
+    fun changingTheDefaultPreservesASavedPrompt() = runBlocking {
+        val store = InMemoryPreferencesDataStore()
+        val original = AiChatSettingsRepository(store, "previous default")
+        original.update { it.copy(promptText = "my own instructions") }
+        val saved = original.settings.first()
+
+        val updated = AiChatSettingsRepository(store, "new default")
+        assertEquals(saved, updated.settings.first())
+    }
+
+    @Test
     fun editingApiKeyOnlyDoesNotBumpLastEditedAt() = runBlocking {
         val repo = newRepo()
         // Keys are now per-provider and written outside the synced `update` path; the default model
@@ -192,7 +211,7 @@ class AiChatSettingsRepositoryTest {
     }
 
     private fun newRepo(): AiChatSettingsRepository =
-        AiChatSettingsRepository(InMemoryPreferencesDataStore())
+        AiChatSettingsRepository(InMemoryPreferencesDataStore(), "default tutor prompt")
 
     /** Minimal in-memory DataStore so the test doesn't need an Android Context. */
     private class InMemoryPreferencesDataStore : DataStore<Preferences> {

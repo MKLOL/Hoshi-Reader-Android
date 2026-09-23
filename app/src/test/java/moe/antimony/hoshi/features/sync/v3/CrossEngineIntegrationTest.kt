@@ -109,7 +109,7 @@ class CrossEngineIntegrationTest {
     }
 
     private fun newAiRepo(): AiChatSettingsRepository =
-        AiChatSettingsRepository(InMemoryPreferencesDataStore())
+        AiChatSettingsRepository(InMemoryPreferencesDataStore(), "default tutor prompt")
 
     private suspend fun importMokuroBook(repo: BookRepository, title: String): File {
         val root = repo.createBookDirectoryForImportedTitle(title)

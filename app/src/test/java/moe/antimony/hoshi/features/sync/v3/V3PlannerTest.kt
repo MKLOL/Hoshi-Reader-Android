@@ -639,7 +639,7 @@ class V3PlannerTest {
 
     @Test
     fun appSettingsLocalNewerEmitsPush() {
-        val local = AiChatSettings(model = "m1", lastEditedAt = "2030-01-01T00:00:00Z")
+        val local = AiChatSettings(promptText = "default tutor prompt", model = "m1", lastEditedAt = "2030-01-01T00:00:00Z")
         val remote = HttpSyncAiChatSettingsBlob(
             model = "m0", promptText = "x", imagePromptText = "y", lastModified = "2020-01-01T00:00:00Z",
         )
@@ -650,7 +650,7 @@ class V3PlannerTest {
 
     @Test
     fun appSettingsRemoteNewerEmitsApply() {
-        val local = AiChatSettings(model = "m0", lastEditedAt = "2020-01-01T00:00:00Z")
+        val local = AiChatSettings(promptText = "default tutor prompt", model = "m0", lastEditedAt = "2020-01-01T00:00:00Z")
         val remote = HttpSyncAiChatSettingsBlob(
             model = "m1", promptText = "x", imagePromptText = "y", lastModified = "2030-01-01T00:00:00Z",
         )
@@ -662,7 +662,7 @@ class V3PlannerTest {
     @Test
     fun appSettingsTieEmitsNoAction() {
         val stamp = "2025-01-01T00:00:00Z"
-        val local = AiChatSettings(model = "m", lastEditedAt = stamp)
+        val local = AiChatSettings(promptText = "default tutor prompt", model = "m", lastEditedAt = stamp)
         val remote = HttpSyncAiChatSettingsBlob(
             model = "m", promptText = "x", imagePromptText = "y", lastModified = stamp,
         )
@@ -680,7 +680,7 @@ class V3PlannerTest {
     @Test
     fun appSettingsFreshInstallWithRemoteEmitsApply() {
         // Mimic the repository's fresh-install emission: default object, no timestamp.
-        val freshLocal = AiChatSettings(lastEditedAt = null)
+        val freshLocal = AiChatSettings(promptText = "default tutor prompt", lastEditedAt = null)
         val remote = HttpSyncAiChatSettingsBlob(
             model = "remote-model",
             promptText = "remote prompt",
@@ -702,7 +702,7 @@ class V3PlannerTest {
      */
     @Test
     fun appSettingsLocalStampedAndNewerStillWinsAfterBug7Fix() {
-        val local = AiChatSettings(model = "local-model", lastEditedAt = "2040-01-01T00:00:00Z")
+        val local = AiChatSettings(promptText = "default tutor prompt", model = "local-model", lastEditedAt = "2040-01-01T00:00:00Z")
         val remote = HttpSyncAiChatSettingsBlob(
             model = "remote-model",
             promptText = "x",
@@ -767,7 +767,7 @@ class V3PlannerTest {
 
     @Test
     fun malformedRemoteAiSettingsSkipsPushAndEmitsError() {
-        val localAi = AiChatSettings(model = "m", lastEditedAt = "2040-01-01T00:00:00Z")
+        val localAi = AiChatSettings(promptText = "default tutor prompt", model = "m", lastEditedAt = "2040-01-01T00:00:00Z")
         val local = snapshot(aiSettings = localAi)
         // Remote AI settings malformed: V3RemoteState leaves aiSettings null AND
         // sets aiSettingsMalformed = true on the snapshot.

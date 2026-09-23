@@ -9,6 +9,7 @@ import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import moe.antimony.hoshi.R
 import java.time.Instant
 
 /**
@@ -28,7 +29,7 @@ import java.time.Instant
  */
 data class AiChatSettings(
     val apiKey: String = "",
-    val promptText: String = DEFAULT_PROMPT,
+    val promptText: String,
     val imagePromptText: String = DEFAULT_IMAGE_PROMPT,
     val model: String = DEFAULT_MODEL,
     /** RFC 3339 UTC timestamp of the most recent user-driven edit, or `null` if never edited. */
@@ -38,10 +39,6 @@ data class AiChatSettings(
 
     companion object {
         const val DEFAULT_MODEL: String = "gpt-5.5"
-        const val DEFAULT_PROMPT: String =
-            "You are a helpful Japanese reading tutor. For the manga speech bubble below, " +
-                "give a natural English translation, then a short, concise breakdown of any " +
-                "tricky vocabulary or grammar."
         const val DEFAULT_IMAGE_PROMPT: String =
             "Transcribe any Japanese text visible in this image crop and translate it into " +
                 "natural English. If useful, include a short vocabulary or grammar note. If no " +
@@ -52,10 +49,11 @@ data class AiChatSettings(
 private val Context.aiChatSettingsDataStore by preferencesDataStore(name = "ai-chat-settings")
 
 fun Context.aiChatSettingsRepository(): AiChatSettingsRepository =
-    AiChatSettingsRepository(aiChatSettingsDataStore)
+    AiChatSettingsRepository(aiChatSettingsDataStore, getString(R.string.ai_default_bubble_prompt))
 
 class AiChatSettingsRepository(
     private val dataStore: DataStore<Preferences>,
+    private val defaultPrompt: String,
 ) {
     val settings: Flow<AiChatSettings> = dataStore.data.map { it.toAiChatSettings() }
 
@@ -188,7 +186,7 @@ class AiChatSettingsRepository(
         val provider = ChatModelCatalog.providerForModelId(model)
         return AiChatSettings(
             apiKey = this[stringPreferencesKey(provider.prefsKey)] ?: "",
-            promptText = this[KEY_PROMPT] ?: AiChatSettings.DEFAULT_PROMPT,
+            promptText = this[KEY_PROMPT] ?: defaultPrompt,
             imagePromptText = this[KEY_IMAGE_PROMPT] ?: AiChatSettings.DEFAULT_IMAGE_PROMPT,
             model = model,
             lastEditedAt = this[KEY_LAST_EDITED_AT],

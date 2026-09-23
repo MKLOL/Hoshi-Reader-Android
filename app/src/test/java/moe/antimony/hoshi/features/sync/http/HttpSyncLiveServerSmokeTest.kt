@@ -299,6 +299,7 @@ class HttpSyncLiveServerSmokeTest {
             val repo = moe.antimony.hoshi.epub.BookRepository(filesDir)
             val aiRepo = moe.antimony.hoshi.features.ai.AiChatSettingsRepository(
                 HttpSyncAppSettingsTestSupport.inMemoryPreferencesDataStore(),
+                defaultPrompt = "default tutor prompt",
             )
             val reconciler = HttpSyncReconciler(
                 bookRepository = repo,
