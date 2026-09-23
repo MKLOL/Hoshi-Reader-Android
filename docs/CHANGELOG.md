@@ -7,6 +7,9 @@ Semantic Versioning.
 
 ## [Unreleased]
 
+### Added
+- **A detailed reading log.** Every reader session now records, with timestamps, when reading time started and stopped, each page turn, every word you looked up (and its dictionary form), revealed, translated and copied manga bubbles, and screenshot translations, so a day can be replayed as a timeline. The log stays on the device.
+
 ### Changed
 - **A bigger Translate button on manga bubbles.** A revealed bubble now shows only the ✨ Translate button, drawn larger so it is easier to hit. To get the compact Copy and Translate pair back, turn on Settings → Behavior → Manga: Show Copy Button.
 - **More complete manga translation explanations.** The default bubble prompt now asks for a natural English translation, a word-by-word table with furigana and romaji without skipped words, and concise grammar notes at the end.

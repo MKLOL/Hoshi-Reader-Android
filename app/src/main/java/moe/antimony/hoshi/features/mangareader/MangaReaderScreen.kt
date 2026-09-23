@@ -100,6 +100,10 @@ import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import moe.antimony.hoshi.LocalHoshiAppContainer
+import moe.antimony.hoshi.features.usage.ReaderUsageSession
+import moe.antimony.hoshi.features.usage.UsageContentType
+import moe.antimony.hoshi.features.usage.UsageLookupSource
+import moe.antimony.hoshi.features.usage.logLookup
 import moe.antimony.hoshi.R
 import moe.antimony.hoshi.epub.BookRepository
 import moe.antimony.hoshi.epub.ReadingStatistics
@@ -233,6 +237,7 @@ internal fun MangaReaderScreen(
     // exit — rememberCoroutineScope is cancelled on dispose, which would drop the save.
     val persistenceScope = LocalHoshiAppContainer.current.appScope
     val statisticsDevice = LocalHoshiAppContainer.current.deviceIdentity
+    val usageLog = LocalHoshiAppContainer.current.usageLog
     var bookmarkSaveJob by remember(book) { mutableStateOf<Job?>(null) }
     // The page index awaiting the debounced bookmark write, or null when nothing is pending.
     val pendingBookmarkPage = remember(book) { mutableStateOf<Int?>(null) }
@@ -246,6 +251,9 @@ internal fun MangaReaderScreen(
 
     var persistedStatistics by remember(bookRoot) { mutableStateOf<List<ReadingStatistics>?>(null) }
     var persistedTextStatistics by remember(bookRoot) { mutableStateOf<List<MangaTextStatistic>?>(null) }
+    // The book's metadata id, the key the Statistics screens use; loaded with the statistics
+    // so the usage session below exists before the tracker can start its first span.
+    var usageBookId by remember(bookRoot) { mutableStateOf<String?>(null) }
     // Parse the offline translation blob off the main thread. `serveOfflinePretranslation` is
     // called synchronously from the bubble-tap handler, and a multi-MB blob parsed there would
     // freeze the reader on the first tap of a book.
@@ -261,9 +269,16 @@ internal fun MangaReaderScreen(
         // Start from the previous instance's final save when this reader replaced it within
         // that write (see BookRepository.trackStatisticsSave).
         repository.awaitPendingStatisticsSaves(bookRoot)
+        usageBookId = repository.loadMetadata(bookRoot)?.id ?: bookRoot.name
         persistedStatistics = repository.loadStatistics(bookRoot)
         persistedTextStatistics = repository.loadMangaTextStatistics(bookRoot)
     }
+    // This opening's usage log (see ReaderUsageSession): reading spans, page turns, lookups,
+    // bubble and screenshot translations, all tied to one session id.
+    val usageSession = remember(bookRoot, usageBookId) {
+        usageBookId?.let { id -> ReaderUsageSession(usageLog, id, book.title, UsageContentType.Manga) }
+    }
+    val currentUsageSession = rememberUpdatedState(usageSession)
     val statisticsTracker = remember(bookRoot, book.title, persistedStatistics) {
         persistedStatistics?.let { statistics ->
             ReaderStatisticsTracker(
@@ -271,6 +286,7 @@ internal fun MangaReaderScreen(
                 initialStatistics = statistics,
                 enabled = true,
                 device = statisticsDevice,
+                onTrackingChanged = { reading -> currentUsageSession.value?.readingChanged(reading, pageIndex + 1) },
             )
         }
     }
@@ -401,6 +417,7 @@ internal fun MangaReaderScreen(
             textReadCounter?.add(book.ocrCharactersTurnedPast(previousPageIndex, clamped))
         }
         pageIndex = clamped
+        usageSession?.pageTurned(fromPage = previousPageIndex + 1, toPage = clamped + 1)
         recordStatisticsAtCounter(statisticsPageCounter)
         scheduleBookmarkSave(clamped)
     }
@@ -763,6 +780,7 @@ internal fun MangaReaderScreen(
             val lookup = withContext(Dispatchers.IO) {
                 lookupPopupFor(selection)
             }
+            usageSession?.logLookup(selection, lookup?.first, UsageLookupSource.Page, page = pageIndex + 1)
             if (!isActive || request != lookupSelectionRequest || sourceWebView !== webView) return@launch
             if (lookup != null) {
                 val (popup, highlightCount) = lookup
@@ -800,6 +818,11 @@ internal fun MangaReaderScreen(
     DisposableEffect(onReaderKeyEventHandlerChange) {
         onReaderKeyEventHandlerChange { event -> currentKeyHandler.value(event) }
         onDispose { onReaderKeyEventHandlerChange(null) }
+    }
+    val currentUsagePage = rememberUpdatedState(pageIndex + 1)
+    DisposableEffect(usageSession) {
+        usageSession?.opened(page = pageIndex + 1)
+        onDispose { usageSession?.closed(page = currentUsagePage.value) }
     }
     LaunchedEffect(statisticsTracker) {
         // Statistics are always on: every opened manga starts a tracking session.
@@ -1019,7 +1042,12 @@ internal fun MangaReaderScreen(
                     lookupSelectionRequest += 1
                     lookupPopups = emptyList()
                 },
-                onAskAi = { bubbleText, blockId -> askAi(bubbleText, blockId) },
+                onAskAi = { bubbleText, blockId ->
+                    usageSession?.bubbleTranslated(bubbleText, page = pageIndex + 1)
+                    askAi(bubbleText, blockId)
+                },
+                onBubbleRevealed = { bubbleText -> usageSession?.bubbleRevealed(bubbleText, page = pageIndex + 1) },
+                onBubbleCopied = { bubbleText -> usageSession?.bubbleCopied(bubbleText, page = pageIndex + 1) },
                 onPageReady = { readyPageIndex ->
                     if (pageTransition != null && readyPageIndex == pageIndex) {
                         readyTransition = pageTransition
@@ -1062,7 +1090,11 @@ internal fun MangaReaderScreen(
             LookupPopupAndroidStack(
                 popups = lookupPopups,
                 onPopupsChange = { lookupPopups = it },
-                lookupChildPopup = ::lookupPopupFor,
+                lookupChildPopup = { selection ->
+                    lookupPopupFor(selection).also { lookup ->
+                        usageSession?.logLookup(selection, lookup?.first, UsageLookupSource.Popup, page = pageIndex + 1)
+                    }
+                },
                 onRootPopupDismissed = {
                     // Clear the in-page selection highlight, then return false so the stack view
                     // still removes the dismissed popup from the list (the manga reader has no
@@ -1176,6 +1208,7 @@ internal fun MangaReaderScreen(
                     onCancel = { screenshotCropMode = false },
                     onConfirm = { rect ->
                         screenshotCropMode = false
+                        usageSession?.screenshotTranslated(page = pageIndex + 1)
                         translateScreenshotCrop(rect)
                     },
                     modifier = Modifier.fillMaxSize(),

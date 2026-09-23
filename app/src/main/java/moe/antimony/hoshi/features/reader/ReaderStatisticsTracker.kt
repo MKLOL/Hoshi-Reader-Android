@@ -38,6 +38,11 @@ class ReaderStatisticsTracker(
     private val clock: ReaderStatisticsClock = SystemReaderStatisticsClock,
     /** The device whose per-day entry this tracker adds to; other devices' entries are left as they are. */
     private val device: DeviceIdentity? = null,
+    /**
+     * Told each time counting starts (`true`) or stops (`false`), only on a real change. The
+     * usage log opens and closes its reading spans here so they cover exactly the counted time.
+     */
+    private val onTrackingChanged: (Boolean) -> Unit = {},
 ) {
     private var statistics = initialStatistics.deduplicateReadingStatistics()
     private var lastTimestampMillis: Long = clock.currentTimeMillis()
@@ -66,8 +71,10 @@ class ReaderStatisticsTracker(
 
     fun start(currentCharacter: Int) {
         if (!enabled) return
+        val wasTracking = currentState.isTracking
         currentState = currentState.copy(isTracking = true)
         resetBaseline(currentCharacter)
+        if (!wasTracking) onTrackingChanged(true)
     }
 
     fun startForPageTurnIfNeeded(currentCharacter: Int) {
@@ -84,6 +91,7 @@ class ReaderStatisticsTracker(
         if (!currentState.isTracking) return false
         update(currentCharacter)
         currentState = currentState.copy(isTracking = false)
+        onTrackingChanged(false)
         return true
     }
 

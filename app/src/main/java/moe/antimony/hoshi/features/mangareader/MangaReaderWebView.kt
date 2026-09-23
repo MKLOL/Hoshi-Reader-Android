@@ -65,11 +65,17 @@ internal fun MangaReaderWebView(
     onPageReady: (Int) -> Unit,
     onWebViewReady: (WebView) -> Unit,
     modifier: Modifier = Modifier,
+    /** A hidden bubble was tapped to show its text; receives the bubble's OCR text. */
+    onBubbleRevealed: (String) -> Unit = {},
+    /** A bubble's Copy button copied its OCR text. */
+    onBubbleCopied: (String) -> Unit = {},
 ) {
     val currentOnNavigate = rememberUpdatedState(onNavigate)
     val currentOnTextSelected = rememberUpdatedState(onTextSelected)
     val currentOnSelectionCleared = rememberUpdatedState(onSelectionCleared)
     val currentOnAskAi = rememberUpdatedState(onAskAi)
+    val currentOnBubbleRevealed = rememberUpdatedState(onBubbleRevealed)
+    val currentOnBubbleCopied = rememberUpdatedState(onBubbleCopied)
     val currentOnPageReady = rememberUpdatedState(onPageReady)
 
     val resourceBridge = remember(book, bookRoot) { MangaWebResourceBridge(bookRoot, book) }
@@ -124,7 +130,7 @@ internal fun MangaReaderWebView(
                 )
                 addJavascriptInterface(
                     // Lets a revealed bubble's copy button copy the whole bubble's OCR text.
-                    MangaClipboardBridge(context),
+                    MangaClipboardBridge(context) { text -> currentOnBubbleCopied.value(text) },
                     "HoshiMangaClipboard",
                 )
                 addJavascriptInterface(
@@ -134,7 +140,10 @@ internal fun MangaReaderWebView(
                     "HoshiMangaAi",
                 )
                 addJavascriptInterface(
-                    MangaTapBridge { currentOnSelectionCleared.value() },
+                    MangaTapBridge(
+                        onSelectedNothing = { currentOnSelectionCleared.value() },
+                        onBubbleRevealed = { text -> currentOnBubbleRevealed.value(text) },
+                    ),
                     "HoshiMangaTap",
                 )
                 webViewClient = MangaWebViewClient(resourceBridge) { readyPageIndex ->

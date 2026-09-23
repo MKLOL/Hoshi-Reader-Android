@@ -37,6 +37,26 @@ class ReaderStatisticsTrackerTest {
     }
 
     @Test
+    fun trackingChangesAreReportedOnlyWhenCountingStartsOrStops() {
+        val changes = mutableListOf<Boolean>()
+        val tracker = ReaderStatisticsTracker(
+            title = "Book",
+            initialStatistics = emptyList(),
+            enabled = true,
+            clock = FakeStatisticsClock(millis = 1_778_623_200_000, date = LocalDate.parse("2026-05-13")),
+            onTrackingChanged = { changes += it },
+        )
+
+        tracker.start(currentCharacter = 0)
+        tracker.start(currentCharacter = 5)
+        tracker.pause(currentCharacter = 10)
+        tracker.stop(currentCharacter = 10)
+        tracker.startForPageTurnIfNeeded(currentCharacter = 12)
+
+        assertEquals(listOf(true, false, true), changes)
+    }
+
+    @Test
     fun backwardProgressClampsAtNegativeSessionCharacters() {
         val clock = FakeStatisticsClock()
         val tracker = ReaderStatisticsTracker(title = "Book", initialStatistics = emptyList(), enabled = true, clock = clock)

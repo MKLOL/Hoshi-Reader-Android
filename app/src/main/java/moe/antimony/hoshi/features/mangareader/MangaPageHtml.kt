@@ -779,6 +779,10 @@ internal object MangaPageHtml {
                   box.classList.add('revealed');
                   box.setAttribute('aria-pressed', 'true');
                   window.hoshiManga.updateActionPlacement(box);
+                  if (window.HoshiMangaTap && window.HoshiMangaTap.bubbleRevealed) {
+                    var revealedText = box.querySelector('p');
+                    window.HoshiMangaTap.bubbleRevealed(revealedText ? (revealedText.textContent || '') : '');
+                  }
                 }
                 // Default two-tap mode: first tap on an unrevealed bubble just reveals
                 // (so the action buttons surface without the dictionary popup covering

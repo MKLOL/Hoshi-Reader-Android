@@ -16,7 +16,11 @@ import moe.antimony.hoshi.R
  *
  * Constructed with the application context so it never outlives or leaks the reader Activity.
  */
-internal class MangaClipboardBridge(context: Context) {
+internal class MangaClipboardBridge(
+    context: Context,
+    /** Told on the main thread after a bubble's text was copied. */
+    private val onCopied: (String) -> Unit = {},
+) {
     private val appContext = context.applicationContext
 
     @JavascriptInterface
@@ -36,6 +40,7 @@ internal class MangaClipboardBridge(context: Context) {
                 appContext.getString(R.string.manga_clipboard_bubble_copied),
                 Toast.LENGTH_SHORT,
             ).show()
+            onCopied(trimmed)
         }
     }
 

@@ -1,5 +1,9 @@
 package moe.antimony.hoshi.features.reader
 
+import moe.antimony.hoshi.features.usage.ReaderUsageSession
+import moe.antimony.hoshi.features.usage.UsageContentType
+import moe.antimony.hoshi.features.usage.UsageLookupSource
+import moe.antimony.hoshi.features.usage.logLookup
 import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
@@ -416,16 +420,31 @@ fun ReaderWebView(
     var persistedStatistics by remember(bookRoot) {
         mutableStateOf<List<ReadingStatistics>?>(if (bookRoot == null) emptyList() else null)
     }
+    // The book's metadata id for the usage log, loaded with the statistics so the usage
+    // session exists before the tracker can start its first reading span.
+    var usageBookId by remember(bookRoot) { mutableStateOf<String?>(null) }
+    var usageBookResolved by remember(bookRoot) { mutableStateOf(bookRoot == null) }
     LaunchedEffect(bookRoot, bookRepository) {
         persistedStatistics = if (bookRoot != null) {
             // Start from the previous instance's final save when this reader replaced it within
             // that write (see BookRepository.trackStatisticsSave).
             bookRepository.awaitPendingStatisticsSaves(bookRoot)
+            usageBookId = bookRepository.loadMetadata(bookRoot)?.id ?: bookRoot.name
+            usageBookResolved = true
             bookRepository.loadStatistics(bookRoot)
         } else {
             emptyList()
         }
     }
+    // This opening's usage log: reading spans, page turns and lookups under one session id.
+    val usageSession = remember(bookRoot, usageBookResolved, usageBookId) {
+        if (usageBookResolved) {
+            ReaderUsageSession(appContainer.usageLog, usageBookId, book.title, UsageContentType.Epub)
+        } else {
+            null
+        }
+    }
+    val currentUsageSession = rememberUpdatedState(usageSession)
     val statisticsTracker = remember(bookRoot, book.title, persistedStatistics) {
         persistedStatistics?.let { statistics ->
             ReaderStatisticsTracker(
@@ -433,8 +452,13 @@ fun ReaderWebView(
                 initialStatistics = statistics,
                 enabled = true,
                 device = appContainer.deviceIdentity,
+                onTrackingChanged = { reading -> currentUsageSession.value?.readingChanged(reading) },
             )
         }
+    }
+    DisposableEffect(usageSession) {
+        usageSession?.opened(page = null)
+        onDispose { usageSession?.closed(page = null) }
     }
     var statisticsState by remember(statisticsTracker) { mutableStateOf(statisticsTracker?.state) }
     var resumeStatisticsTrackingOnStart by remember(statisticsTracker) { mutableStateOf(false) }
@@ -634,6 +658,7 @@ fun ReaderWebView(
     fun lookupChildPopup(selection: ReaderSelectionData): Pair<LookupPopupItem, Int>? =
         createLookupPopupItem(selection, childPopupOptions(), dictionaryStyles, dictionaryRepository::lookup)
             ?.let { (popup, highlightCount) -> popup.copy(sasayakiCue = sasayakiCueForSelection(selection)) to highlightCount }
+            .also { lookup -> usageSession?.logLookup(selection, lookup?.first, UsageLookupSource.Popup) }
 
     fun closeReader() {
         cancelPendingLookups()
@@ -741,6 +766,10 @@ fun ReaderWebView(
         stateHolder.recordDisplayedProgress(progress)
         stateHolder.clearForwardHistoryAfterManualMovement()
         recordStatisticsAtDisplayedPosition()
+        usageSession?.epubPageTurned(
+            chapter = stateHolder.readerPosition.displayedPosition.index + 1,
+            character = currentDisplayedCharacter(),
+        )
     }
     fun displayContinuousScrollProgress(progress: Double, restoreEpoch: Int) {
         stateHolder.recordContinuousScrollDisplayProgress(progress, restoreEpoch) ?: return
@@ -819,6 +848,7 @@ fun ReaderWebView(
             is ReaderLookupPopupBridgeMessage.TextSelected -> {
                 if (popupIndex(message.popupId) < 0) return
                 launchPopupLookup(message.selection, childPopupOptions()) { lookup ->
+                    usageSession?.logLookup(message.selection, lookup?.first, UsageLookupSource.Popup)
                     // The parent may have been closed while the query ran.
                     val index = popupIndex(message.popupId).takeIf { it >= 0 } ?: return@launchPopupLookup
                     if (lookup == null) {
@@ -1027,7 +1057,10 @@ fun ReaderWebView(
         stateHolder.enterFocusModeForReaderInteraction()
         rootSelectionHighlight = null
         clearLookupPopupsForPendingLookup()
-        launchPopupLookup(selection, rootPopupOptions()) { lookup -> applyRootLookup(selection, selectionRects, lookup) }
+        launchPopupLookup(selection, rootPopupOptions()) { lookup ->
+            usageSession?.logLookup(selection, lookup?.first, UsageLookupSource.Page)
+            applyRootLookup(selection, selectionRects, lookup)
+        }
     }
     fun handleReaderTapOutside() {
         // A lookup whose popup has not opened yet counts as visible: the tap dismisses it
