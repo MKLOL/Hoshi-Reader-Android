@@ -22,9 +22,11 @@ data class UsageDaySummary(
     /** Reader openings that started this day. */
     val sessions: Int,
     val pageTurns: Int,
+    /** Every word press, including ones the dictionaries found nothing for. */
     val wordLookups: Int,
+    /** Different words found, counted by dictionary form. */
     val distinctWords: Int,
-    /** Distinct looked-up words, most recent first. */
+    /** Distinct found words in dictionary form, most recent first. */
     val recentWords: List<String>,
     val bubblesRevealed: Int,
     val bubbleTranslations: Int,
@@ -82,7 +84,9 @@ fun summarizeUsageDay(
     }
 
     val lookups = ordered.filter { it.type == UsageEventType.WordLookedUp }
-    val words = lookups.mapNotNull { it.text?.takeIf(String::isNotBlank) }
+    // A press that matched nothing logged the text it scanned, which is not a word.
+    val words = lookups.filter { it.outcome != "not-found" }
+        .mapNotNull { (it.term ?: it.text)?.takeIf(String::isNotBlank) }
     return UsageDaySummary(
         date = date,
         spans = spans.sortedBy { it.startMillis },

@@ -62,9 +62,10 @@ class UsageDaySummaryTest {
     fun countsAndRecentWordsDescribeTheDay() {
         val events = listOf(
             event(UsageEventType.ReaderOpened, at(9)),
-            event(UsageEventType.WordLookedUp, at(9, 1)).copy(text = "学校"),
-            event(UsageEventType.WordLookedUp, at(9, 2)).copy(text = "本"),
-            event(UsageEventType.WordLookedUp, at(9, 3)).copy(text = "学校"),
+            event(UsageEventType.WordLookedUp, at(9, 1)).copy(text = "学校", term = "学校", outcome = "found"),
+            event(UsageEventType.WordLookedUp, at(9, 2)).copy(text = "食べ", term = "食べる", outcome = "found"),
+            event(UsageEventType.WordLookedUp, at(9, 3)).copy(text = "学校", term = "学校", outcome = "found"),
+            event(UsageEventType.WordLookedUp, at(9, 3)).copy(text = "を食べる", outcome = "not-found"),
             event(UsageEventType.PageTurned, at(9, 4)),
             event(UsageEventType.PageTurned, at(9, 5)),
             event(UsageEventType.BubbleRevealed, at(9, 6)),
@@ -79,9 +80,9 @@ class UsageDaySummaryTest {
         val summary = summarizeUsageDay(events, day, zone)
 
         assertEquals(1, summary.sessions)
-        assertEquals(3, summary.wordLookups)
+        assertEquals(4, summary.wordLookups)
         assertEquals(2, summary.distinctWords)
-        assertEquals(listOf("学校", "本"), summary.recentWords)
+        assertEquals(listOf("学校", "食べる"), summary.recentWords)
         assertEquals(2, summary.pageTurns)
         assertEquals(1, summary.bubblesRevealed)
         assertEquals(1, summary.bubbleTranslations)

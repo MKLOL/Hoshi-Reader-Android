@@ -65,6 +65,8 @@ import moe.antimony.hoshi.features.settings.GroupDivider
 import moe.antimony.hoshi.features.settings.SettingsDetailScaffold
 import moe.antimony.hoshi.features.settings.collectAsLoadedSettings
 import moe.antimony.hoshi.features.sync.StatisticsSyncMode
+import moe.antimony.hoshi.features.usage.UsageStatistics
+import moe.antimony.hoshi.features.usage.loadUsageStatistics
 import moe.antimony.hoshi.ui.theme.LocalHoshiEInkMode
 import java.time.Duration
 import java.time.LocalDate
@@ -88,14 +90,19 @@ fun StatisticsScreen(
     val appContainer = LocalHoshiAppContainer.current
     val scope = rememberCoroutineScope()
     val statisticsVersion by appContainer.bookRepository.statisticsChanges.collectAsStateWithLifecycle()
+    val usageVersion by appContainer.usageLog.changes.collectAsStateWithLifecycle()
     val readerSettings by appContainer.readerSettingsRepository.settings.collectAsStateWithLifecycle(initialValue = ReaderSettings())
     val syncSettings = appContainer.syncSettingsRepository.settings.collectAsLoadedSettings()
     var overview by remember { mutableStateOf<ReadingStatisticsOverview?>(null) }
+    var usage by remember { mutableStateOf<UsageStatistics?>(null) }
     var today by remember { mutableStateOf(SystemReaderStatisticsClock.currentDate()) }
     val resumeCount = rememberResumeCount()
     LaunchedEffect(statisticsVersion, resumeCount, today) {
         today = SystemReaderStatisticsClock.currentDate()
         overview = loadReadingStatisticsOverview(appContainer.bookRepository, today.toString())
+    }
+    LaunchedEffect(usageVersion, resumeCount, today) {
+        usage = loadUsageStatistics(appContainer.usageLog, today, historyDays = TrendRange.Quarter.days)
     }
     // A screen left open across midnight moves "today" (and the streak) to the new day.
     LaunchedEffect(today) {
@@ -105,6 +112,7 @@ fun StatisticsScreen(
     }
     StatisticsScreenContent(
         overview = overview,
+        usage = usage,
         today = today,
         minimumMinutes = readerSettings.statisticsStreakMinimumMinutes,
         onMinimumMinutesChange = { minutes ->
@@ -147,6 +155,8 @@ fun StatisticsScreenContent(
     onDriveSyncChange: (DriveStatisticsSyncOptions) -> Unit = {},
     /** Marks this device's row in the "By device" card. */
     localDeviceId: String? = null,
+    /** Today's timeline and the lookup trend, from the usage log. */
+    usage: UsageStatistics? = null,
 ) {
     val colorScheme = MaterialTheme.colorScheme
     val streak = remember(overview, minimumMinutes, today) {
@@ -167,8 +177,18 @@ fun StatisticsScreenContent(
                 .padding(horizontal = 16.dp),
             contentPadding = PaddingValues(bottom = 24.dp),
         ) {
+            item {
+                TodayCard(
+                    today = today,
+                    todaySeconds = overview?.todaySeconds,
+                    todayCharacters = overview?.todayCharacters,
+                    usage = usage?.today,
+                )
+                Spacer(Modifier.height(18.dp))
+            }
             item { StreakCard(streak, minimumMinutes, onMinimumMinutesChange); Spacer(Modifier.height(18.dp)) }
             item { TotalsCard(overview); Spacer(Modifier.height(18.dp)) }
+            item { TrendsSection(daily = overview?.daily, usage = usage, today = today); Spacer(Modifier.height(18.dp)) }
             val devices = overview?.devices.orEmpty()
             if (devices.isNotEmpty()) {
                 item { DevicesCard(devices, localDeviceId, showBookCount = true); Spacer(Modifier.height(18.dp)) }

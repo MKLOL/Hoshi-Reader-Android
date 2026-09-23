@@ -257,6 +257,34 @@
     <string name="statistics_streak_goal">每日目标</string>
     <string name="statistics_streak_goal_minutes_format">%1$d 分钟</string>
     <string name="statistics_heatmap_title">最近 16 周</string>
+    <string name="statistics_today_title">今天</string>
+    <string name="statistics_today_active_range_format">活跃时段 %1$s–%2$s</string>
+    <string name="statistics_today_reading_time">阅读时间</string>
+    <string name="statistics_today_characters_format">已读 %1$s 字</string>
+    <string name="statistics_today_words">查词</string>
+    <string name="statistics_today_pages">翻页</string>
+    <string name="statistics_today_bubbles_revealed">显示的气泡</string>
+    <string name="statistics_today_bubble_translations">气泡翻译</string>
+    <string name="statistics_today_screenshots">截图翻译</string>
+    <string name="statistics_today_sessions">阅读次数</string>
+    <string name="statistics_today_timeline">时间线</string>
+    <string name="statistics_today_span_format">%1$s–%2$s · %3$s</string>
+    <string name="statistics_today_recent_words">今天查过的词</string>
+    <string name="statistics_today_empty">今天还没有阅读。打开一本书，今天的阅读就会显示在这里。</string>
+    <string name="statistics_trends_title">趋势</string>
+    <plurals name="statistics_trends_range_days">
+        <item quantity="other">%1$d 天</item>
+    </plurals>
+    <string name="statistics_trend_reading_time">阅读时间</string>
+    <string name="statistics_trend_characters">阅读字数</string>
+    <string name="statistics_trend_lookups">查词次数</string>
+    <string name="statistics_trend_lookups_since_format">自 %1$s 起记录</string>
+    <string name="statistics_trend_legend_daily">每日</string>
+    <string name="statistics_trend_legend_average">3 日平均</string>
+    <string name="statistics_trend_readout_format">%1$s · %2$s · 3 日平均 %3$s</string>
+    <plurals name="statistics_trend_chart_description">
+        <item quantity="other">%1$s，最近 %2$d 天。当前 3 日平均为 %3$s。</item>
+    </plurals>
     <string name="statistics_heatmap_less">少</string>
     <string name="statistics_heatmap_more">多</string>
     <string name="statistics_weekday_title">按星期统计</string>

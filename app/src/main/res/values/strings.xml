@@ -259,6 +259,36 @@
     <string name="statistics_streak_goal">Daily goal</string>
     <string name="statistics_streak_goal_minutes_format">%1$d min</string>
     <string name="statistics_heatmap_title">Last 16 weeks</string>
+    <string name="statistics_today_title">Today</string>
+    <string name="statistics_today_active_range_format">Active %1$s–%2$s</string>
+    <string name="statistics_today_reading_time">Reading time</string>
+    <string name="statistics_today_characters_format">%1$s characters read</string>
+    <string name="statistics_today_words">Words looked up</string>
+    <string name="statistics_today_pages">Pages turned</string>
+    <string name="statistics_today_bubbles_revealed">Bubbles revealed</string>
+    <string name="statistics_today_bubble_translations">Bubble translations</string>
+    <string name="statistics_today_screenshots">Screenshot translations</string>
+    <string name="statistics_today_sessions">Reading sessions</string>
+    <string name="statistics_today_timeline">Timeline</string>
+    <string name="statistics_today_span_format">%1$s–%2$s · %3$s</string>
+    <string name="statistics_today_recent_words">Looked up today</string>
+    <string name="statistics_today_empty">Nothing read yet today. Open a book and today\'s reading shows up here.</string>
+    <string name="statistics_trends_title">Trends</string>
+    <plurals name="statistics_trends_range_days">
+        <item quantity="one">%1$d day</item>
+        <item quantity="other">%1$d days</item>
+    </plurals>
+    <string name="statistics_trend_reading_time">Reading time</string>
+    <string name="statistics_trend_characters">Characters read</string>
+    <string name="statistics_trend_lookups">Words looked up</string>
+    <string name="statistics_trend_lookups_since_format">Recorded since %1$s</string>
+    <string name="statistics_trend_legend_daily">Daily</string>
+    <string name="statistics_trend_legend_average">3-day average</string>
+    <string name="statistics_trend_readout_format">%1$s · %2$s · 3-day average %3$s</string>
+    <plurals name="statistics_trend_chart_description">
+        <item quantity="one">%1$s, last %2$d day. 3-day average now %3$s.</item>
+        <item quantity="other">%1$s, last %2$d days. 3-day average now %3$s.</item>
+    </plurals>
     <string name="statistics_heatmap_less">Less</string>
     <string name="statistics_heatmap_more">More</string>
     <string name="statistics_weekday_title">Time by weekday</string>

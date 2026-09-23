@@ -8,6 +8,8 @@ Semantic Versioning.
 ## [Unreleased]
 
 ### Added
+- **A Today section at the top of Statistics.** See today's reading time and characters, how many words you looked up, pages turned, reading sessions, bubbles revealed, bubble and screenshot translations, a timeline of when you read and for how long in which book, and the words you looked up today.
+- **Trend charts with a 3-day average.** Statistics now charts reading time, characters read and words looked up per day over the last 14, 30 or 90 days, each with a line for the 3-day rolling average. Tap a day to see its value and average.
 - **A detailed reading log.** Every reader session now records, with timestamps, when reading time started and stopped, each page turn, every word you looked up (and its dictionary form), revealed, translated and copied manga bubbles, and screenshot translations, so a day can be replayed as a timeline. The log stays on the device.
 
 ### Changed
