@@ -269,7 +269,8 @@
     <string name="statistics_today_sessions">阅读次数</string>
     <string name="statistics_today_timeline">时间线</string>
     <string name="statistics_today_span_format">%1$s–%2$s · %3$s</string>
-    <string name="statistics_today_recent_words">今天查过的词</string>
+    <string name="statistics_today_repeated_words">多次查询的词</string>
+    <string name="statistics_today_word_count_format">%1$s ×%2$d</string>
     <string name="statistics_today_empty">今天还没有阅读。打开一本书，今天的阅读就会显示在这里。</string>
     <string name="statistics_trends_title">趋势</string>
     <plurals name="statistics_trends_range_days">

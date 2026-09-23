@@ -82,12 +82,35 @@ class UsageDaySummaryTest {
         assertEquals(1, summary.sessions)
         assertEquals(4, summary.wordLookups)
         assertEquals(2, summary.distinctWords)
-        assertEquals(listOf("学校", "食べる"), summary.recentWords)
+        // Only 学校 was found twice; 食べる once, and the miss is not a word.
+        assertEquals(listOf(UsageWordCount("学校", 2)), summary.repeatedWords)
         assertEquals(2, summary.pageTurns)
         assertEquals(1, summary.bubblesRevealed)
         assertEquals(1, summary.bubbleTranslations)
         assertEquals(1, summary.bubblesCopied)
         assertEquals(2, summary.screenshotTranslations)
+    }
+
+    @Test
+    fun repeatedWordsAreTheMostLookedUpFirstThenTheLatestAndCappedAtFive() {
+        fun lookup(minute: Int, term: String) =
+            event(UsageEventType.WordLookedUp, at(10, minute)).copy(text = term, term = term, outcome = "found")
+        val terms = listOf("本", "読む", "本", "学校", "読む", "今日", "読む", "学校", "行く", "今日", "好き", "行く", "明日", "好き", "楽しい")
+        val events = terms.mapIndexed { minute, term -> lookup(minute, term) } +
+            lookup(40, "明日") + lookup(41, "一度だけ")
+
+        val repeated = summarizeUsageDay(events, day, zone).repeatedWords
+
+        assertEquals(
+            listOf(
+                UsageWordCount("読む", 3),
+                UsageWordCount("明日", 2),
+                UsageWordCount("好き", 2),
+                UsageWordCount("行く", 2),
+                UsageWordCount("今日", 2),
+            ),
+            repeated,
+        )
     }
 
     @Test

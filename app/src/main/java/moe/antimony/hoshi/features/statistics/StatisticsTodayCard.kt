@@ -32,6 +32,7 @@ import moe.antimony.hoshi.features.reader.formatDurationSeconds
 import moe.antimony.hoshi.features.settings.GroupCard
 import moe.antimony.hoshi.features.usage.UsageDaySummary
 import moe.antimony.hoshi.features.usage.UsageReadingSpan
+import moe.antimony.hoshi.features.usage.UsageWordCount
 import moe.antimony.hoshi.ui.theme.LocalHoshiEInkMode
 import java.time.Instant
 import java.time.LocalDate
@@ -48,7 +49,8 @@ private const val TODAY_LISTED_SPANS = 5
 /**
  * The top of the Statistics screen: what happened today. Reading time and characters come
  * from the same statistics as the streak; everything else (lookups, page turns, bubble and
- * screenshot translations, the timeline) comes from the usage log.
+ * screenshot translations, the timeline) comes from the usage log. Its word list is only the
+ * words looked up more than once, so it stays short however much was read.
  */
 @Composable
 internal fun TodayCard(
@@ -120,11 +122,11 @@ internal fun TodayCard(
                         TodaySpanRow(span, clock(span.startMillis), clock(span.endMillis))
                     }
                 }
-                if (usage.recentWords.isNotEmpty()) {
+                if (usage.repeatedWords.isNotEmpty()) {
                     Spacer(Modifier.height(14.dp))
-                    TodaySectionTitle(stringResource(R.string.statistics_today_recent_words))
+                    TodaySectionTitle(stringResource(R.string.statistics_today_repeated_words))
                     Spacer(Modifier.height(8.dp))
-                    TodayWords(usage.recentWords)
+                    TodayWords(usage.repeatedWords)
                 }
             }
         }
@@ -248,21 +250,21 @@ private fun TodaySpanRow(span: UsageReadingSpan, start: String, end: String) {
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun TodayWords(words: List<String>) {
+private fun TodayWords(words: List<UsageWordCount>) {
     val eInk = LocalHoshiEInkMode.current
     val colorScheme = MaterialTheme.colorScheme
     FlowRow(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        words.forEach { word ->
+        words.forEach { (word, count) ->
             Surface(
                 shape = RoundedCornerShape(50),
                 color = if (eInk) Color.Transparent else colorScheme.surfaceVariant,
                 border = if (eInk) BorderStroke(1.dp, colorScheme.onBackground) else null,
             ) {
                 Text(
-                    text = word,
+                    text = stringResource(R.string.statistics_today_word_count_format, word, count),
                     style = MaterialTheme.typography.bodyLarge,
                     modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
                 )

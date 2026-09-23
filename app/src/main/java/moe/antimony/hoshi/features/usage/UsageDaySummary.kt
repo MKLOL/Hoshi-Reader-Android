@@ -14,6 +14,9 @@ data class UsageReadingSpan(
     val durationMillis: Long get() = (endMillis - startMillis).coerceAtLeast(0L)
 }
 
+/** A word in dictionary form and how many times it was looked up. */
+data class UsageWordCount(val word: String, val count: Int)
+
 /** What the usage log says about one local calendar day. */
 data class UsageDaySummary(
     val date: LocalDate,
@@ -26,8 +29,11 @@ data class UsageDaySummary(
     val wordLookups: Int,
     /** Different words found, counted by dictionary form. */
     val distinctWords: Int,
-    /** Distinct found words in dictionary form, most recent first. */
-    val recentWords: List<String>,
+    /**
+     * Found words looked up at least twice, in dictionary form: the ones that did not stick.
+     * Most looked-up first, ties broken by the latest lookup.
+     */
+    val repeatedWords: List<UsageWordCount>,
     val bubblesRevealed: Int,
     val bubbleTranslations: Int,
     val bubblesCopied: Int,
@@ -52,7 +58,7 @@ fun summarizeUsageDay(
     events: List<UsageEvent>,
     date: LocalDate,
     zone: ZoneId,
-    maxRecentWords: Int = 12,
+    maxRepeatedWords: Int = 5,
 ): UsageDaySummary {
     val dayStart = date.atStartOfDay(zone).toInstant().toEpochMilli()
     val dayEnd = date.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli()
@@ -94,7 +100,7 @@ fun summarizeUsageDay(
         pageTurns = ordered.count { it.type == UsageEventType.PageTurned },
         wordLookups = lookups.size,
         distinctWords = words.toSet().size,
-        recentWords = words.asReversed().distinct().take(maxRecentWords),
+        repeatedWords = repeatedWords(words, maxRepeatedWords),
         bubblesRevealed = ordered.count { it.type == UsageEventType.BubbleRevealed },
         bubbleTranslations = ordered.count { it.type == UsageEventType.BubbleTranslated },
         bubblesCopied = ordered.count { it.type == UsageEventType.BubbleCopied },
@@ -102,4 +108,15 @@ fun summarizeUsageDay(
         firstActivityMillis = listOfNotNull(ordered.firstOrNull()?.at, spans.minOfOrNull { it.startMillis }).minOrNull(),
         lastActivityMillis = ordered.lastOrNull()?.at,
     )
+}
+
+/** Words seen at least twice, most frequent first, then the most recently looked up. */
+private fun repeatedWords(wordsInOrder: List<String>, limit: Int): List<UsageWordCount> {
+    val counts = wordsInOrder.groupingBy { it }.eachCount()
+    val lastIndex = wordsInOrder.withIndex().associate { (index, word) -> word to index }
+    return counts.filterValues { it >= 2 }
+        .keys
+        .sortedWith(compareByDescending<String> { counts.getValue(it) }.thenByDescending { lastIndex.getValue(it) })
+        .take(limit)
+        .map { UsageWordCount(it, counts.getValue(it)) }
 }
