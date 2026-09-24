@@ -38,6 +38,18 @@ internal data class PodcastShow(
     @SerialName("feed_stale") val feedStale: Boolean = false,
 )
 
+/** How far the server has got with the one lesson it is generating. */
+@Serializable
+internal data class PodcastGeneration(
+    val episode: String = "",
+    val stage: String = "",
+    val done: Int = 0,
+    val total: Int = 0,
+    val percent: Int = 0,
+    /** Seconds since the worker last reported; null when the server did not say. */
+    @SerialName("age_seconds") val ageSeconds: Int? = null,
+)
+
 @Serializable
 internal data class PodcastCatalogue(
     val episodes: List<PodcastEpisode>,
@@ -47,6 +59,8 @@ internal data class PodcastCatalogue(
     val worker: PodcastWorkerStatus? = null,
     /** Null when the server did not say; the app then shows no attempt count. */
     @SerialName("max_failures") val maxFailures: Int? = null,
+    /** Null on a server without progress reporting, or when nothing is being generated. */
+    val generating: PodcastGeneration? = null,
 )
 
 /** Attempts left before the server refuses Prepare, or null when the server did not say. */
@@ -60,6 +74,19 @@ internal fun podcastAttemptsLeft(maxFailures: Int?, failureCount: Int): Int? =
  */
 internal fun podcastDisplayText(text: String?): String? =
     text?.replace(Regex("[\\p{Z}\\p{Cc}\\p{Cf}]+"), " ")?.trim()?.take(300)?.takeIf { it.isNotEmpty() }
+
+/**
+ * Progress worth drawing for this episode, or null to fall back to an indeterminate wait.
+ * A record for another episode, a dead worker or a nonsensical count is never drawn: an
+ * invented bar is worse than an honest spinner.
+ */
+internal fun podcastProgressFor(
+    generating: PodcastGeneration?,
+    episodeId: String,
+    worker: PodcastWorkerStatus?,
+): PodcastGeneration? = generating
+    ?.takeIf { it.episode == episodeId && it.total >= 1 && worker?.alive != false }
+    ?.let { it.copy(percent = it.percent.coerceIn(0, 100), done = it.done.coerceIn(0, it.total)) }
 
 /** The worker banner appears when the worker is down or recorded start-up problems. */
 internal fun podcastWorkerNeedsAttention(status: PodcastWorkerStatus?): Boolean =

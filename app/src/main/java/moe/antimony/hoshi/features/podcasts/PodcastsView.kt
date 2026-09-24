@@ -16,6 +16,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -252,7 +253,7 @@ internal fun PodcastsView(modifier: Modifier = Modifier) {
                         episode.id in state.waiting -> Text(stringResource(R.string.podcasts_download_waiting))
                         episode.status == "ready" -> Button(onClick = { repository.download(episode) }) { Text(stringResource(R.string.podcasts_download)) }
                         episode.status == "queued" || episode.id in state.preparing -> Text(stringResource(R.string.podcasts_queued))
-                        episode.status == "preparing" -> Text(stringResource(R.string.podcasts_preparing))
+                        episode.status == "preparing" -> PreparingRow(podcastProgressFor(state.generating, episode.id, state.worker))
                         // The server refuses further attempts (409); an administrator resets the count.
                         episode.status == "failed" && attemptsLeft == 0 -> Unit
                         else -> Button(onClick = { model.prepare(episode) }) { Text(stringResource(R.string.podcasts_prepare)) }
@@ -279,4 +280,38 @@ private fun downloadReason(code: String): String = when {
 private fun formatShowList(names: List<String>): String {
     val locale = LocalConfiguration.current.locales[0]
     return android.icu.text.ListFormatter.getInstance(locale).format(names)
+}
+
+/**
+ * What the server is doing to this episode right now. A quarter of an hour of silence reads
+ * as a hang, so the bar is determinate whenever the server says where it is, and honestly
+ * indeterminate when it does not.
+ */
+@Composable
+private fun PreparingRow(progress: PodcastGeneration?) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.fillMaxWidth()) {
+        if (progress == null) {
+            Text(stringResource(R.string.podcasts_preparing), style = MaterialTheme.typography.bodySmall)
+            LinearProgressIndicator(Modifier.fillMaxWidth())
+            return@Column
+        }
+        val stage = when (progress.stage) {
+            "download" -> R.string.podcasts_stage_download
+            "transcription" -> R.string.podcasts_stage_transcription
+            "segmentation" -> R.string.podcasts_stage_segmentation
+            "translation" -> R.string.podcasts_stage_translation
+            "vocabulary" -> R.string.podcasts_stage_vocabulary
+            "speech" -> R.string.podcasts_stage_speech
+            "render" -> R.string.podcasts_stage_render
+            else -> R.string.podcasts_preparing
+        }
+        Text(
+            // The count only means something where there is more than one thing to count.
+            if (progress.total > 1) stringResource(R.string.podcasts_stage_counted, stringResource(stage), progress.done, progress.total)
+            else stringResource(stage),
+            style = MaterialTheme.typography.bodySmall,
+        )
+        LinearProgressIndicator({ progress.percent / 100f }, Modifier.fillMaxWidth())
+        Text(stringResource(R.string.podcasts_stage_percent, progress.percent), style = MaterialTheme.typography.labelSmall)
+    }
 }

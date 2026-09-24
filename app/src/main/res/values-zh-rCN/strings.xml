@@ -790,6 +790,15 @@
     <string name="podcasts_prepare">准备课程</string>
     <string name="podcasts_queued">已排队 — 服务器将继续准备课程。</string>
     <string name="podcasts_preparing">正在准备课程… 可离开此页面。</string>
+    <string name="podcasts_stage_download">正在获取录音</string>
+    <string name="podcasts_stage_transcription">正在转写日语</string>
+    <string name="podcasts_stage_segmentation">正在划分句子</string>
+    <string name="podcasts_stage_translation">正在翻译</string>
+    <string name="podcasts_stage_vocabulary">正在挑选词汇</string>
+    <string name="podcasts_stage_speech">正在录制语音</string>
+    <string name="podcasts_stage_render">正在合成课程</string>
+    <string name="podcasts_stage_counted">%1$s · 第 %2$d / %3$d 个</string>
+    <string name="podcasts_stage_percent">%1$d%%</string>
     <string name="podcasts_download">下载</string>
     <string name="podcasts_downloads">播客下载</string>
     <string name="podcasts_downloading">正在下载播客课程…</string>

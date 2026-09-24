@@ -792,6 +792,15 @@
     <string name="podcasts_prepare">Prepare</string>
     <string name="podcasts_queued">Queued — preparation continues on the server.</string>
     <string name="podcasts_preparing">Preparing lesson… You can leave this screen.</string>
+    <string name="podcasts_stage_download">Fetching the recording</string>
+    <string name="podcasts_stage_transcription">Transcribing the Japanese</string>
+    <string name="podcasts_stage_segmentation">Finding sentence boundaries</string>
+    <string name="podcasts_stage_translation">Translating</string>
+    <string name="podcasts_stage_vocabulary">Choosing vocabulary</string>
+    <string name="podcasts_stage_speech">Recording the voices</string>
+    <string name="podcasts_stage_render">Assembling the lesson</string>
+    <string name="podcasts_stage_counted">%1$s · %2$d of %3$d</string>
+    <string name="podcasts_stage_percent">%1$d%%</string>
     <string name="podcasts_download">Download</string>
     <string name="podcasts_downloads">Podcast downloads</string>
     <string name="podcasts_downloading">Downloading podcast lesson…</string>

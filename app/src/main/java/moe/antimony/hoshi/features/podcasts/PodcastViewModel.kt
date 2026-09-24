@@ -26,6 +26,7 @@ internal data class PodcastUiState(
     val feedStale: Boolean = false,
     val worker: PodcastWorkerStatus? = null,
     val maxFailures: Int? = null,
+    val generating: PodcastGeneration? = null,
     val downloaded: Set<String> = emptySet(),
     val downloads: Map<String, Int> = emptyMap(),
     /** Enqueued but not running: waiting for the network or a retry back-off. */
@@ -99,7 +100,7 @@ internal class PodcastViewModel(val repository: PodcastRepository) : ViewModel()
             _state.update {
                 it.withShows(podcastVisibleShows(catalogue.shows)).copy(
                     episodes = episodes, downloaded = downloaded, loading = false,
-                    errorRes = null, errorDetail = null,
+                    errorRes = null, errorDetail = null, generating = catalogue.generating,
                     feedStale = catalogue.feedStale, worker = catalogue.worker, maxFailures = catalogue.maxFailures)
             }
         } catch (cancelled: CancellationException) { throw cancelled

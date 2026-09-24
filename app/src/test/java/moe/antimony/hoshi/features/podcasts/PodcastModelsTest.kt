@@ -175,4 +175,37 @@ class PodcastModelsTest {
         assertEquals(2, older.filtered.size)
         assertEquals("teppei-z", state.withShows(state.shows).showId)
     }
+
+    @Test fun progressIsDrawnOnlyWhenItHonestlyDescribesThisEpisode() {
+        val alive = PodcastWorkerStatus(alive = true)
+        val progress = PodcastGeneration(episode = "a".repeat(64), stage = "speech", done = 3, total = 10, percent = 48)
+        assertEquals(progress, podcastProgressFor(progress, "a".repeat(64), alive))
+        // A record for a different episode, a dead worker, or no record at all: show a plain
+        // wait rather than a bar that means nothing.
+        assertNull(podcastProgressFor(progress, "b".repeat(64), alive))
+        assertNull(podcastProgressFor(progress, "a".repeat(64), PodcastWorkerStatus(alive = false)))
+        assertNull(podcastProgressFor(null, "a".repeat(64), alive))
+        assertNull(podcastProgressFor(progress.copy(total = 0), "a".repeat(64), alive))
+        // An older server sends no worker block; that alone is not a reason to hide progress.
+        assertEquals(progress, podcastProgressFor(progress, "a".repeat(64), null))
+    }
+
+    @Test fun nonsensicalProgressValuesAreClampedRatherThanDrawnAsIs() {
+        val alive = PodcastWorkerStatus(alive = true)
+        val wild = PodcastGeneration(episode = "c".repeat(64), stage = "speech", done = 99, total = 10, percent = 400)
+        val shown = podcastProgressFor(wild, "c".repeat(64), alive)!!
+        assertEquals(100, shown.percent)
+        assertEquals(10, shown.done)
+    }
+
+    @Test fun aServerWithoutProgressReportingDecodesToNoProgress() {
+        val json = Json { ignoreUnknownKeys = true }
+        val older = json.decodeFromString<PodcastCatalogue>("""{"episodes":[]}""")
+        assertNull(older.generating)
+        val newer = json.decodeFromString<PodcastCatalogue>("""{"episodes":[],
+            "generating":{"episode":"${"d".repeat(64)}","stage":"render","done":0,"total":1,
+            "percent":90,"age_seconds":4}}""")
+        assertEquals("render", newer.generating?.stage)
+        assertEquals(4, newer.generating?.ageSeconds)
+    }
 }

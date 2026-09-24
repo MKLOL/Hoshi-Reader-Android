@@ -13,7 +13,10 @@ that sends no shows, or only one, lists every episode together and hides the sho
 before. An episode whose feed states no length says so until preparing the lesson establishes
 it, and until then it appears under "All lengths" only — when a length filter is what emptied
 the list, the screen says how many episodes it is hiding and offers "All lengths" back.
-Prepare queues a shared server lesson; progress continues even if Android closes.
+Prepare queues a shared server lesson; progress continues even if Android closes. While it
+runs, the row shows the server's current step and a progress bar. A server that reports no
+progress, or one whose lesson worker is not alive, falls back to a plain wait rather than an
+invented bar.
 When ready, Download saves it in app-private storage. Play uses Media3, including seek,
 15-second skips, playback speed, background audio and lock-screen controls. Completed
 or failed playback can be restarted with Play. Playback position is saved periodically.

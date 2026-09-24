@@ -7,6 +7,9 @@ Semantic Versioning.
 
 ## [Unreleased]
 
+### Added
+- **Podcast lessons show what the server is doing.** Preparing a lesson takes a while, and the screen now says which step it is on — transcribing, translating, choosing vocabulary, recording the voices — with a progress bar, instead of one unchanging line. Needs an updated server; against an older one it looks as it did before.
+
 ## [v0.11.16] - 2026-09-24
 
 ### Added
