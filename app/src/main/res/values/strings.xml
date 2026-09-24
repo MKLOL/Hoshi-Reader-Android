@@ -818,7 +818,7 @@
     <string name="podcasts_queue_full">The preparation queue is full. Try again later.</string>
     <string name="podcasts_cached_feed">Showing saved episode listings; the feed could not be refreshed.</string>
     <string name="podcasts_cached_feed_shows">Showing saved episode listings; %1$s could not be refreshed.</string>
-    <string name="podcasts_generation_failed">Preparation failed. Tap Prepare to try again.</string>
+    <string name="podcasts_generation_failed">Preparation failed.</string>
     <string name="podcasts_playback_error_detail">Could not play this lesson (%1$s). Tap Play to retry.</string>
     <string name="podcasts_error_detail">Details: %1$s</string>
     <string name="podcasts_worker_down">The server’s lesson worker is not running, so Prepare will fail until it is started.</string>
@@ -832,6 +832,7 @@
     <string name="podcasts_generation_failed_detail">Preparation failed: %1$s</string>
     <string name="podcasts_attempts_left">%1$d of %2$d attempts left. Tap Prepare to try again.</string>
     <string name="podcasts_attempts_exhausted">No attempts left. Ask the server administrator to reset this episode.</string>
+    <string name="podcasts_admin_attention">Needs administrator attention. Reset this episode in Book Sync after resolving the problem.</string>
     <string name="podcasts_download_failed_detail">Download failed (%1$s). Tap Download to retry.</string>
     <string name="podcasts_reason_unknown">unknown reason</string>
     <string name="podcasts_reason_file_missing">file missing</string>

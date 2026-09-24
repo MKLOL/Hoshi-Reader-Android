@@ -20,6 +20,7 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import moe.antimony.hoshi.features.sync.http.HttpSyncSettings
 import moe.antimony.hoshi.features.sync.http.HttpSyncSettingsRepository
 
@@ -100,9 +101,12 @@ internal class PodcastRepository(
         if (credentials.isConfigured) workManager.cancelAllWorkByTag(PodcastKeys.accountTag(podcastAccount(credentials)))
     }
 
-    fun download(episode: PodcastEpisode) {
-        if (!access.value || !validPodcastId(episode.id)) return
-        val account = podcastAccount(credentials)
+    suspend fun download(episode: PodcastEpisode): Unit = withContext(Dispatchers.IO) {
+        val settings = credentials
+        val account = this@PodcastRepository.account.value ?: return@withContext
+        if (!access.value || account != podcastAccount(settings) || !validPodcastId(episode.id)) return@withContext
+        files.rememberDownload(account, episode)
+        if (settings != credentials || account != this@PodcastRepository.account.value) return@withContext
         val request = OneTimeWorkRequestBuilder<PodcastDownloadWorker>()
             .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).setRequiresStorageNotLow(true).build())
             .setInputData(workDataOf(PodcastKeys.INPUT_ACCOUNT to account, PodcastKeys.INPUT_EPISODE to episode.id))

@@ -209,6 +209,7 @@ internal fun PodcastsView(modifier: Modifier = Modifier) {
                         style = MaterialTheme.typography.bodySmall,
                     )
                     val attemptsLeft = podcastAttemptsLeft(state.maxFailures, episode.failureCount)
+                    val needsAdministrator = podcastNeedsAdministrator(episode, state.maxFailures)
                     if (episode.status == "failed") {
                         val reason = podcastDisplayText(episode.errorMessage) ?: episode.errorCode?.takeIf { it.isNotBlank() }
                         Text(
@@ -218,9 +219,11 @@ internal fun PodcastsView(modifier: Modifier = Modifier) {
                         )
                         // Only a server that reports its limit gets an attempt count.
                         val maxFailures = state.maxFailures
-                        if (attemptsLeft != null && maxFailures != null) {
+                        if (needsAdministrator) {
+                            Text(stringResource(R.string.podcasts_admin_attention), style = MaterialTheme.typography.bodySmall)
+                        } else if (attemptsLeft != null && maxFailures != null) {
                             Text(
-                                if (attemptsLeft > 0) stringResource(R.string.podcasts_attempts_left, attemptsLeft, maxFailures) else stringResource(R.string.podcasts_attempts_exhausted),
+                                stringResource(R.string.podcasts_attempts_left, attemptsLeft, maxFailures),
                                 style = MaterialTheme.typography.bodySmall,
                             )
                         }
@@ -251,11 +254,11 @@ internal fun PodcastsView(modifier: Modifier = Modifier) {
                         }) { Text(stringResource(R.string.podcasts_play)) }
                         episode.id in state.downloads -> Text(stringResource(R.string.podcasts_download_progress, state.downloads.getValue(episode.id)))
                         episode.id in state.waiting -> Text(stringResource(R.string.podcasts_download_waiting))
-                        episode.status == "ready" -> Button(onClick = { repository.download(episode) }) { Text(stringResource(R.string.podcasts_download)) }
+                        episode.status == "ready" -> Button(onClick = { model.download(episode) }) { Text(stringResource(R.string.podcasts_download)) }
                         episode.status == "queued" || episode.id in state.preparing -> Text(stringResource(R.string.podcasts_queued))
                         episode.status == "preparing" -> PreparingRow(podcastProgressFor(state.generating, episode.id, state.worker))
                         // The server refuses further attempts (409); an administrator resets the count.
-                        episode.status == "failed" && attemptsLeft == 0 -> Unit
+                        needsAdministrator -> Unit
                         else -> Button(onClick = { model.prepare(episode) }) { Text(stringResource(R.string.podcasts_prepare)) }
                     }
                 }

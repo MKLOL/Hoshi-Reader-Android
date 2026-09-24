@@ -1,6 +1,6 @@
 # Hoshi Android Agent TODO
 
-Last updated: 2026-09-23
+Last updated: 2026-09-24
 
 ## Maintenance Rules
 
@@ -14,7 +14,8 @@ Last updated: 2026-09-23
 
 ### Podcasts
 
-- Implemented and emulator-verified; see `docs/PODCASTS.md`. Shows (NHK News and four Teppei shows) come from the server's catalogue: episodes carry `show`, the catalogue carries `shows`, and a server without either still lists every episode. An unknown duration (0) means the feed states none until the lesson is prepared; `hiddenByLength` keeps a length filter from emptying such a show silently. Production worker activation remains a deployment step in game-collection `docs/podcasts.md`. Regression entries: `PodcastApiTest`, `PodcastModelsTest`, `PodcastScreenSessionTest`, `AppRouteTest`, `MainShellUiTest`.
+- Implemented; see `docs/PODCASTS.md`. Shows come from the server; downloaded lessons retain their metadata and show names when a show is archived. Catalogue access is serialized, and stale/background/cached progress falls back to a plain wait. Non-retryable failures direct the administrator to Book Sync. Unknown durations remain under "All lengths", with an explanation when a length filter empties a show. Production worker activation remains a deployment step in game-collection `docs/podcasts.md`. Regression entries: `PodcastApiTest`, `PodcastModelsTest`, `PodcastFilesTest`, `PodcastUiStateTest`, `PodcastScreenSessionTest`, `AppRouteTest`, `MainShellUiTest`.
+- Verified on a disposable Android 16 emulator: download a lesson, archive its show, reopen offline and play the retained audio; stale progress falls back to waiting, and administrator-only failures hide Prepare. Existing device data was untouched.
 - Known limits: no per-episode delete or storage cap (files go only when another account validates); playback speed not persisted; `pendingPodcasts` is consumed only once access is confirmed.
 
 ### Architecture And Hardening

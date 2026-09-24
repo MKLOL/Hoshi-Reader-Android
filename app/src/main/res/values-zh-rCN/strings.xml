@@ -816,7 +816,7 @@
     <string name="podcasts_queue_full">课程准备队列已满。请稍后重试。</string>
     <string name="podcasts_cached_feed">无法刷新订阅源，正在显示已保存的节目列表。</string>
     <string name="podcasts_cached_feed_shows">无法刷新 %1$s，正在显示已保存的节目列表。</string>
-    <string name="podcasts_generation_failed">准备失败。点击“准备”重试。</string>
+    <string name="podcasts_generation_failed">准备失败。</string>
     <string name="podcasts_playback_error_detail">无法播放此课程（%1$s）。点击“播放”重试。</string>
     <string name="podcasts_error_detail">详情：%1$s</string>
     <string name="podcasts_worker_down">服务器的课程生成程序未运行，启动前“准备”都会失败。</string>
@@ -830,6 +830,7 @@
     <string name="podcasts_generation_failed_detail">准备失败：%1$s</string>
     <string name="podcasts_attempts_left">还剩 %1$d/%2$d 次尝试。点击“准备”重试。</string>
     <string name="podcasts_attempts_exhausted">没有剩余尝试次数。请让服务器管理员重置此集。</string>
+    <string name="podcasts_admin_attention">需要管理员处理。解决问题后，请在 Book Sync 中重置此集。</string>
     <string name="podcasts_download_failed_detail">下载失败（%1$s）。点击“下载”重试。</string>
     <string name="podcasts_reason_unknown">原因未知</string>
     <string name="podcasts_reason_file_missing">文件丢失</string>

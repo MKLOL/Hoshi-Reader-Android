@@ -1,5 +1,6 @@
 package moe.antimony.hoshi.features.podcasts
 
+import android.os.SystemClock
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.work.WorkInfo
@@ -11,6 +12,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.Mutex
 import moe.antimony.hoshi.R
 
 internal data class PodcastUiState(
@@ -27,6 +29,8 @@ internal data class PodcastUiState(
     val worker: PodcastWorkerStatus? = null,
     val maxFailures: Int? = null,
     val generating: PodcastGeneration? = null,
+    /** Monotonic receipt time; never restored from disk. */
+    val generationReceivedAtMs: Long? = null,
     val downloaded: Set<String> = emptySet(),
     val downloads: Map<String, Int> = emptyMap(),
     /** Enqueued but not running: waiting for the network or a retry back-off. */
@@ -52,12 +56,61 @@ internal data class PodcastUiState(
 internal fun PodcastUiState.withShows(shows: List<PodcastShow>): PodcastUiState =
     copy(shows = shows, showId = showId?.takeIf { id -> shows.any { it.id == id } })
 
+internal fun PodcastUiState.withoutLivePodcastStatus(): PodcastUiState =
+    copy(generating = null, generationReceivedAtMs = null, worker = null)
+
+/** Disk snapshots keep episode metadata but cannot claim a worker is live. */
+internal fun PodcastUiState.withCatalogue(
+    catalogue: PodcastCatalogue,
+    downloaded: Set<String>,
+    receivedAtMs: Long? = null,
+    downloadedBeforeScan: Set<String>? = null,
+): PodcastUiState {
+    val completedSinceScan = downloadedBeforeScan?.let { this.downloaded - it }.orEmpty()
+    val merged = catalogue.withSavedDownloads(PodcastCatalogue(episodes, shows), completedSinceScan)
+    return withShows(podcastVisibleShows(merged.shows)).copy(
+        episodes = merged.episodes,
+        downloaded = downloadedBeforeScan?.let { reconcilePodcastDownloads(downloaded, it) } ?: downloaded,
+        loading = false, errorRes = null, errorDetail = null,
+        generating = catalogue.generating.takeIf { receivedAtMs != null },
+        generationReceivedAtMs = receivedAtMs.takeIf { catalogue.generating != null },
+        feedStale = catalogue.feedStale, worker = catalogue.worker.takeIf { receivedAtMs != null },
+        maxFailures = catalogue.maxFailures,
+    ).let { if (receivedAtMs != null) it.expirePodcastProgress(receivedAtMs) else it }
+}
+
+/** Keep observations published while IO was suspended, without keeping old missing files. */
+private fun PodcastUiState.reconcilePodcastDownloads(scanned: Set<String>, beforeScan: Set<String>): Set<String> =
+    (scanned - (beforeScan - downloaded)) + (downloaded - beforeScan)
+
+internal fun PodcastUiState.withDownloadObservation(
+    local: PodcastCatalogue,
+    scanned: Set<String>,
+    beforeScan: Set<String>,
+): PodcastUiState {
+    val downloaded = reconcilePodcastDownloads(scanned, beforeScan)
+    val merged = PodcastCatalogue(episodes, shows).withSavedDownloads(local, downloaded)
+    return withShows(podcastVisibleShows(merged.shows)).copy(episodes = merged.episodes, downloaded = downloaded)
+}
+
+internal fun PodcastUiState.expirePodcastProgress(nowMs: Long): PodcastUiState {
+    val progress = generating ?: return this
+    val received = generationReceivedAtMs
+    return if (received == null || podcastProgressFor(progress, progress.episode, worker, (nowMs - received).coerceAtLeast(0) / 1000) == null) {
+        copy(generating = null, generationReceivedAtMs = null)
+    } else this
+}
+
 internal class PodcastViewModel(val repository: PodcastRepository) : ViewModel() {
     private val _state = MutableStateFlow(PodcastUiState())
     val state = _state.asStateFlow()
     private val visible = MutableStateFlow(false)
+    private val refreshMutex = Mutex()
     private var sessionAccount: String? = null
-    fun setVisible(value: Boolean) { visible.value = value }
+    fun setVisible(value: Boolean) {
+        visible.value = value
+        if (!value) _state.update { it.withoutLivePodcastStatus() }
+    }
 
     init {
         viewModelScope.launch {
@@ -69,12 +122,19 @@ internal class PodcastViewModel(val repository: PodcastRepository) : ViewModel()
                     _state.value = PodcastUiState(length = _state.value.length, preparing = _state.value.preparing)
                     sessionAccount = account
                 }
+                _state.update { it.withoutLivePodcastStatus() }
                 if (account != null) {
                     withContext(Dispatchers.IO) { repository.files.loadCatalogue(account) }?.let { cached ->
                         val downloaded = withContext(Dispatchers.IO) { cached.episodes.filter { validPodcastId(it.id) && repository.files.audio(account, it.id).isFile }.map { it.id }.toSet() }
-                        _state.update { it.withShows(podcastVisibleShows(cached.shows)).copy(episodes = cached.episodes.filter { item -> validPodcastId(item.id) }, downloaded = downloaded, worker = cached.worker, maxFailures = cached.maxFailures) }
+                        _state.update { it.withCatalogue(cached, downloaded) }
                     }
                     launch { observeDownloads() }
+                    launch {
+                        while (true) {
+                            delay(1_000)
+                            _state.update { it.expirePodcastProgress(SystemClock.elapsedRealtime()) }
+                        }
+                    }
                     while (true) { refresh(); delay(10_000) }
                 }
             }
@@ -86,29 +146,42 @@ internal class PodcastViewModel(val repository: PodcastRepository) : ViewModel()
     fun retry() { viewModelScope.launch { refresh() } }
 
     private suspend fun refresh() {
+        // Coalesce taps with polling: an older response must not overtake a newer snapshot.
+        if (!refreshMutex.tryLock()) return
+        try { refreshCatalogue() } finally { refreshMutex.unlock() }
+    }
+
+    private suspend fun refreshCatalogue() {
         val settings = repository.credentials
-        if (!repository.access.value) return
+        if (!repository.access.value || !visible.value) return
         _state.update { it.copy(loading = it.episodes.isEmpty()) }
         try {
             val catalogue = repository.api.catalogue(settings)
-            val episodes = catalogue.episodes.filter { validPodcastId(it.id) }
-            val downloaded = withContext(Dispatchers.IO) {
-                repository.files.saveCatalogue(podcastAccount(settings), catalogue.copy(episodes = episodes))
-                episodes.filter { repository.files.audio(podcastAccount(settings), it.id).isFile }.map { it.id }.toSet()
+            val downloadedBeforeScan = _state.value.downloaded
+            val (merged, downloaded) = withContext(Dispatchers.IO) {
+                val saved = repository.files.saveCatalogue(podcastAccount(settings), catalogue)
+                saved to saved.episodes.filter { repository.files.audio(podcastAccount(settings), it.id).isFile }.map { it.id }.toSet()
             }
-            if (settings != repository.credentials || !repository.access.value) return
-            _state.update {
-                it.withShows(podcastVisibleShows(catalogue.shows)).copy(
-                    episodes = episodes, downloaded = downloaded, loading = false,
-                    errorRes = null, errorDetail = null, generating = catalogue.generating,
-                    feedStale = catalogue.feedStale, worker = catalogue.worker, maxFailures = catalogue.maxFailures)
-            }
+            if (settings != repository.credentials || !repository.access.value || !visible.value) return
+            _state.update { it.withCatalogue(merged, downloaded, SystemClock.elapsedRealtime(), downloadedBeforeScan) }
         } catch (cancelled: CancellationException) { throw cancelled
-        } catch (error: Exception) { handle(error, settings) }
+        } catch (error: Exception) {
+            if (settings == repository.credentials) _state.update { it.withoutLivePodcastStatus() }
+            handle(error, settings)
+        }
+    }
+
+    fun download(episode: PodcastEpisode) {
+        val settings = repository.credentials
+        viewModelScope.launch {
+            try { repository.download(episode)
+            } catch (cancelled: CancellationException) { throw cancelled
+            } catch (error: Exception) { handle(error, settings) }
+        }
     }
 
     fun prepare(episode: PodcastEpisode) {
-        if (episode.id in _state.value.preparing) return
+        if (episode.id in _state.value.preparing || podcastNeedsAdministrator(episode, _state.value.maxFailures)) return
         val settings = repository.credentials
         _state.update { it.copy(preparing = it.preparing + episode.id) }
         viewModelScope.launch {
@@ -154,12 +227,18 @@ internal class PodcastViewModel(val repository: PodcastRepository) : ViewModel()
                     else -> active[id] = info.progress.getInt(PodcastKeys.PROGRESS_PERCENT, 0)
                 }
             }
-            val downloaded = withContext(Dispatchers.IO) {
-                (_state.value.downloaded + completed).filter { repository.files.audio(account, it).isFile }.toSet()
+            val downloadedBeforeScan = _state.value.downloaded
+            val (local, downloaded) = withContext(Dispatchers.IO) {
+                val cached = repository.files.loadCatalogue(account) ?: PodcastCatalogue(emptyList())
+                cached to (downloadedBeforeScan + completed + cached.episodes.map { it.id })
+                    .filter { validPodcastId(it) && repository.files.audio(account, it).isFile }.toSet()
             }
             _state.update {
-                it.copy(downloaded = downloaded, downloads = active, waiting = waiting - active.keys,
-                    downloadFailures = failed.filterKeys { id -> id !in active && id !in waiting && id !in downloaded })
+                // A transfer can finish after the server archived its show. Restore its local
+                // row immediately, including when the next catalogue poll cannot get online.
+                val updated = it.withDownloadObservation(local, downloaded, downloadedBeforeScan)
+                updated.copy(downloads = active, waiting = waiting - active.keys,
+                    downloadFailures = failed.filterKeys { id -> id !in active && id !in waiting && id !in updated.downloaded })
             }
         }
     }

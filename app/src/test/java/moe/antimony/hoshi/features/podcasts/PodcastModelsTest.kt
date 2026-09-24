@@ -198,6 +198,29 @@ class PodcastModelsTest {
         assertEquals(10, shown.done)
     }
 
+    @Test fun oldProgressIsNotPresentedAsTheWorkersCurrentStep() {
+        val progress = PodcastGeneration("a".repeat(64), "speech", 3, 10, 48, ageSeconds = 90)
+        assertNull(podcastProgressFor(progress, progress.episode, PodcastWorkerStatus(alive = true)))
+    }
+
+    @Test fun deterministicFailuresNeedAnAdministratorEvenWhenAttemptsRemain() {
+        val json = Json { ignoreUnknownKeys = true }
+        val payload = """{"id":"${"e".repeat(64)}","title":"Lesson","published_at":"p","status":"failed","failure_count":1,"retryable":false}"""
+        val episode = json.decodeFromString<PodcastEpisode>(payload)
+        assertFalse(episode.retryable)
+        assertTrue(podcastNeedsAdministrator(episode, maxFailures = 3))
+        assertTrue(podcastNeedsAdministrator(episode, maxFailures = null))
+        assertFalse(podcastNeedsAdministrator(episode.copy(status = "ready"), maxFailures = 3))
+    }
+
+    @Test fun olderServersAllowRetriesUntilTheirReportedAttemptLimitIsReached() {
+        val episode = Json.decodeFromString<PodcastEpisode>("""{"id":"${"e".repeat(64)}","title":"Lesson","published_at":"p","status":"failed"}""")
+        assertTrue(episode.retryable)
+        assertFalse(podcastNeedsAdministrator(episode, maxFailures = null))
+        assertFalse(podcastNeedsAdministrator(episode.copy(failureCount = 2), maxFailures = 3))
+        assertTrue(podcastNeedsAdministrator(episode.copy(failureCount = 3), maxFailures = 3))
+    }
+
     @Test fun aServerWithoutProgressReportingDecodesToNoProgress() {
         val json = Json { ignoreUnknownKeys = true }
         val older = json.decodeFromString<PodcastCatalogue>("""{"episodes":[]}""")

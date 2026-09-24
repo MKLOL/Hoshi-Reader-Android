@@ -20,6 +20,8 @@ data class PodcastEpisode(
     @SerialName("failure_count") val failureCount: Int = 0,
     /** The show this episode belongs to; empty when the server predates shows. */
     val show: String = "",
+    /** False when the server needs an administrator to resolve and reset this failure. */
+    val retryable: Boolean = true,
 )
 
 /** The server's lesson worker as seen by the web tier: heartbeat liveness and start-up problems. */
@@ -67,6 +69,9 @@ internal data class PodcastCatalogue(
 internal fun podcastAttemptsLeft(maxFailures: Int?, failureCount: Int): Int? =
     maxFailures?.let { (it - failureCount).coerceAtLeast(0) }
 
+internal fun podcastNeedsAdministrator(episode: PodcastEpisode, maxFailures: Int?): Boolean =
+    episode.status == "failed" && (!episode.retryable || podcastAttemptsLeft(maxFailures, episode.failureCount) == 0)
+
 /**
  * Server-supplied text as one bounded line, or null when there is nothing to show. Unicode
  * separators, control and format characters (ideographic space, zero-width joiners, bidi
@@ -84,8 +89,10 @@ internal fun podcastProgressFor(
     generating: PodcastGeneration?,
     episodeId: String,
     worker: PodcastWorkerStatus?,
+    secondsSinceReceived: Long = 0,
 ): PodcastGeneration? = generating
     ?.takeIf { it.episode == episodeId && it.total >= 1 && worker?.alive != false }
+    ?.takeIf { (it.ageSeconds ?: 0) >= 0 && (it.ageSeconds ?: 0).toLong() + secondsSinceReceived.coerceAtLeast(0) < 90 }
     ?.let { it.copy(percent = it.percent.coerceIn(0, 100), done = it.done.coerceIn(0, it.total)) }
 
 /** The worker banner appears when the worker is down or recorded start-up problems. */
