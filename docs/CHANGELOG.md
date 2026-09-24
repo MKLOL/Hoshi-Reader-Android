@@ -7,6 +7,8 @@ Semantic Versioning.
 
 ## [Unreleased]
 
+## [v0.11.16] - 2026-09-24
+
 ### Added
 - **More podcasts than NHK.** The Podcasts tab now also lists four Nihongo con Teppei shows — for Beginners, the original archives, Z, and 波 — with a row of chips to pick one show or see them all. Each episode says which show it is from, and an episode whose feed gives no length shows its real length once the lesson is prepared. (Needs an updated server.)
 
