@@ -780,12 +780,15 @@
     <string name="http_sync_failed_format">Sync failed: %1$s</string>
     <string name="http_sync_unknown_error">Unable to complete sync.</string>
     <string name="main_tab_podcasts">Podcasts</string>
-    <string name="podcasts_intro">NHK news, with English translations, vocabulary and Japanese replay. Filter by original length.</string>
+    <string name="podcasts_intro">Japanese podcasts, with English translations, vocabulary and Japanese replay. Filter by original length.</string>
+    <string name="podcasts_intro_shows">Japanese podcasts, with English translations, vocabulary and Japanese replay. Filter by show and original length.</string>
+    <string name="podcasts_show_all">All shows</string>
     <string name="podcasts_length_all">All lengths</string>
     <string name="podcasts_length_short">Up to 10 min</string>
     <string name="podcasts_length_medium">10–20 min</string>
     <string name="podcasts_length_long">Over 20 min</string>
     <string name="podcasts_original_duration">Original: %1$d:%2$02d</string>
+    <string name="podcasts_original_duration_unknown">Original length unknown until prepared</string>
     <string name="podcasts_prepare">Prepare</string>
     <string name="podcasts_queued">Queued — preparation continues on the server.</string>
     <string name="podcasts_preparing">Preparing lesson… You can leave this screen.</string>
@@ -796,11 +799,16 @@
     <string name="podcasts_download_waiting">Waiting for a connection…</string>
     <string name="podcasts_play">Play</string>
     <string name="podcasts_retry">Retry</string>
-    <string name="podcasts_empty">No episodes in this length range.</string>
+    <string name="podcasts_empty">No episodes match these filters.</string>
+    <plurals name="podcasts_hidden_by_length">
+        <item quantity="one">%1$d episode has no length until it is prepared, so this filter hides it.</item>
+        <item quantity="other">%1$d episodes have no length until they are prepared, so this filter hides them.</item>
+    </plurals>
     <string name="podcasts_error">Could not load podcasts. Check your connection and retry.</string>
     <string name="podcasts_unavailable">The podcast service is temporarily unavailable. Try again later.</string>
     <string name="podcasts_queue_full">The preparation queue is full. Try again later.</string>
-    <string name="podcasts_cached_feed">Showing saved episode listings; NHK could not be refreshed.</string>
+    <string name="podcasts_cached_feed">Showing saved episode listings; the feed could not be refreshed.</string>
+    <string name="podcasts_cached_feed_shows">Showing saved episode listings; %1$s could not be refreshed.</string>
     <string name="podcasts_generation_failed">Preparation failed. Tap Prepare to try again.</string>
     <string name="podcasts_playback_error_detail">Could not play this lesson (%1$s). Tap Play to retry.</string>
     <string name="podcasts_error_detail">Details: %1$s</string>

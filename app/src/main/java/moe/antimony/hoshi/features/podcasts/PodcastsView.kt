@@ -19,6 +19,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -27,6 +28,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
@@ -87,7 +89,27 @@ internal fun PodcastsView(modifier: Modifier = Modifier) {
         item(key = "podcasts-header") {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(stringResource(R.string.main_tab_podcasts), style = MaterialTheme.typography.headlineMedium, modifier = Modifier.padding(top = 16.dp))
-                Text(stringResource(R.string.podcasts_intro), style = MaterialTheme.typography.bodySmall)
+                Text(
+                    stringResource(if (state.shows.size > 1) R.string.podcasts_intro_shows else R.string.podcasts_intro),
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                // Only worth choosing between when the server offers more than one show.
+                if (state.shows.size > 1) {
+                    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FilterChip(
+                            selected = state.showId == null,
+                            onClick = { model.filterShow(null) },
+                            label = { Text(stringResource(R.string.podcasts_show_all), maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                        )
+                        state.shows.forEach { show ->
+                            FilterChip(
+                                selected = state.showId == show.id,
+                                onClick = { model.filterShow(show.id) },
+                                label = { Text(show.name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                            )
+                        }
+                    }
+                }
                 Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     PodcastLength.entries.forEach { length ->
                         val label = when (length) {
@@ -115,7 +137,15 @@ internal fun PodcastsView(modifier: Modifier = Modifier) {
                     )
                 }
                 playerError?.let { Text(stringResource(R.string.podcasts_playback_error_detail, it), color = MaterialTheme.colorScheme.error) }
-                if (state.feedStale) Text(stringResource(R.string.podcasts_cached_feed), style = MaterialTheme.typography.bodySmall)
+                // Name the shows whose listing is stale; with one show the server names none.
+                if (state.feedStale) {
+                    val stale = state.shows.filter { it.feedStale }
+                    Text(
+                        if (stale.isEmpty()) stringResource(R.string.podcasts_cached_feed)
+                        else stringResource(R.string.podcasts_cached_feed_shows, formatShowList(stale.map { it.name })),
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
                 // The server's worker prepares every lesson; when it is down or misconfigured, say so
                 // with its own words before the user wonders why Prepare fails.
                 state.worker?.takeIf(::podcastWorkerNeedsAttention)?.let { worker ->
@@ -147,14 +177,36 @@ internal fun PodcastsView(modifier: Modifier = Modifier) {
                     }
                 }
                 if (state.loading) CircularProgressIndicator()
-                if (!state.loading && state.filtered.isEmpty() && state.errorRes == null) Text(stringResource(R.string.podcasts_empty))
+                if (!state.loading && state.filtered.isEmpty() && state.errorRes == null) {
+                    val hidden = state.hiddenByLength
+                    if (hidden > 0) {
+                        Text(pluralStringResource(R.plurals.podcasts_hidden_by_length, hidden, hidden))
+                        TextButton(onClick = { model.filter(PodcastLength.All) }) {
+                            Text(stringResource(R.string.podcasts_length_all))
+                        }
+                    } else {
+                        Text(stringResource(R.string.podcasts_empty))
+                    }
+                }
             }
         }
         items(state.filtered, key = { it.id }) { episode ->
             Card(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text(episode.title, style = MaterialTheme.typography.titleMedium)
-                    Text(stringResource(R.string.podcasts_original_duration, episode.durationSeconds / 60, episode.durationSeconds % 60), style = MaterialTheme.typography.bodySmall)
+                    // The show only needs naming while episodes from several of them are listed.
+                    if (state.showId == null && state.shows.size > 1) {
+                        state.shows.firstOrNull { it.id == episode.show }?.let {
+                            Text(it.name, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
+                    }
+                    Text(
+                        // A feed that lists no duration leaves it unknown until the lesson is prepared.
+                        if (episode.durationSeconds > 0) stringResource(R.string.podcasts_original_duration, episode.durationSeconds / 60, episode.durationSeconds % 60)
+                        else stringResource(R.string.podcasts_original_duration_unknown),
+                        style = MaterialTheme.typography.bodySmall,
+                    )
                     val attemptsLeft = podcastAttemptsLeft(state.maxFailures, episode.failureCount)
                     if (episode.status == "failed") {
                         val reason = podcastDisplayText(episode.errorMessage) ?: episode.errorCode?.takeIf { it.isNotBlank() }
@@ -217,4 +269,14 @@ private fun downloadReason(code: String): String = when {
     code.startsWith("http:") -> stringResource(R.string.podcasts_reason_http, code.removePrefix("http:").toIntOrNull() ?: 0)
     code.startsWith("exception:") -> code.removePrefix("exception:")
     else -> podcastDownloadReasonRes(code)?.let { stringResource(it) } ?: stringResource(R.string.podcasts_reason_unknown)
+}
+
+/**
+ * Join show names the way the reader's language does: Chinese needs its enumeration comma,
+ * English an "and". Kotlin's default ", " is right in neither.
+ */
+@Composable
+private fun formatShowList(names: List<String>): String {
+    val locale = LocalConfiguration.current.locales[0]
+    return android.icu.text.ListFormatter.getInstance(locale).format(names)
 }

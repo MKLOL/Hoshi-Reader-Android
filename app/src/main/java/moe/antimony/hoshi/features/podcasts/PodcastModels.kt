@@ -18,6 +18,8 @@ data class PodcastEpisode(
     /** The server's one-sentence reason for the last failed preparation (stage and cause). */
     @SerialName("error_message") val errorMessage: String? = null,
     @SerialName("failure_count") val failureCount: Int = 0,
+    /** The show this episode belongs to; empty when the server predates shows. */
+    val show: String = "",
 )
 
 /** The server's lesson worker as seen by the web tier: heartbeat liveness and start-up problems. */
@@ -28,9 +30,19 @@ internal data class PodcastWorkerStatus(
     val problems: List<String> = emptyList(),
 )
 
+/** One podcast the server prepares lessons from; [feedStale] is that show's own listing. */
+@Serializable
+internal data class PodcastShow(
+    val id: String,
+    val name: String,
+    @SerialName("feed_stale") val feedStale: Boolean = false,
+)
+
 @Serializable
 internal data class PodcastCatalogue(
     val episodes: List<PodcastEpisode>,
+    /** Empty when the server predates shows; the app then lists every episode together. */
+    val shows: List<PodcastShow> = emptyList(),
     @SerialName("feed_stale") val feedStale: Boolean = false,
     val worker: PodcastWorkerStatus? = null,
     /** Null when the server did not say; the app then shows no attempt count. */
@@ -66,6 +78,15 @@ internal fun podcastDownloadReasonRes(code: String): Int? = when (code) {
 
 @Serializable
 internal data class PodcastAccess(val enabled: Boolean = false)
+
+/** A chip has to stay readable, so a show name gets far less room than an error sentence. */
+private const val MAX_SHOW_NAME = 60
+
+/** Shows whose name and id are safe to display, in the server's order. */
+internal fun podcastVisibleShows(shows: List<PodcastShow>): List<PodcastShow> =
+    shows.filter { it.id.isNotBlank() }.mapNotNull { show ->
+        podcastDisplayText(show.name)?.take(MAX_SHOW_NAME)?.let { show.copy(name = it) }
+    }
 
 enum class PodcastLength(val minSeconds: Int, val maxSeconds: Int) {
     All(1, Int.MAX_VALUE), Short(1, 600), Medium(601, 1200), Long(1201, Int.MAX_VALUE);

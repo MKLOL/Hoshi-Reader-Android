@@ -93,4 +93,86 @@ class PodcastModelsTest {
         assertTrue(PodcastLength.Short.includes(decoded.episodes.single()))
         assertFalse(PodcastLength.Long.includes(decoded.episodes.single()))
     }
+
+    @Test fun showsDecodeAndAServerWithoutThemListsEveryEpisodeTogether() {
+        val json = Json { ignoreUnknownKeys = true }
+        val decoded = json.decodeFromString<PodcastCatalogue>("""{
+            "episodes":[{"id":"${"a".repeat(64)}","title":"t","published_at":"p","duration_seconds":0,
+            "status":"available","show":"teppei-z"}],
+            "shows":[{"id":"nhk-news","name":"NHK News"},{"id":"teppei-z","name":"Nihongo con Teppei Z","feed_stale":true}]
+        }""")
+        assertEquals("teppei-z", decoded.episodes.single().show)
+        assertEquals(listOf("nhk-news", "teppei-z"), decoded.shows.map { it.id })
+        assertEquals(listOf("NHK News", "Nihongo con Teppei Z"), decoded.shows.map { it.name })
+        assertTrue(decoded.shows.last().feedStale)
+        assertFalse(decoded.shows.first().feedStale)
+        // A server from before shows sends neither field; every episode still lists.
+        val older = json.decodeFromString<PodcastCatalogue>("""{"episodes":[{"id":"${"b".repeat(64)}",
+            "title":"t","published_at":"p","duration_seconds":60,"status":"available"}]}""")
+        assertEquals("", older.episodes.single().show)
+        assertTrue(older.shows.isEmpty())
+    }
+
+    @Test fun onlyNamedShowsAreOfferedAndTheirNamesAreBounded() {
+        val shows = podcastVisibleShows(listOf(
+            PodcastShow("nhk-news", "NHK News"),
+            PodcastShow("", "No id"),
+            PodcastShow("blank", "   "),
+            PodcastShow("long", "x".repeat(400)),
+            PodcastShow("spoofed", "Safe\u202Ekcatta"),
+        ))
+        assertEquals(listOf("nhk-news", "long", "spoofed"), shows.map { it.id })
+        // A chip label, unlike an error sentence, has to stay narrow enough to leave room
+        // for the other chips in the scrolling row.
+        assertEquals(60, shows.first { it.id == "long" }.name.length)
+        // A bidi override in a server-supplied name cannot reorder the chip's text.
+        assertEquals("Safe kcatta", shows.first { it.id == "spoofed" }.name)
+    }
+
+    private fun episode(id: String, show: String, seconds: Int = 300) =
+        PodcastEpisode(id.repeat(64).take(64), "t", "p", seconds, "available", show = show)
+
+    @Test fun showFilterKeepsOnlyThatShowAndTheLengthFilterStillApplies() {
+        val state = PodcastUiState(
+            episodes = listOf(episode("a", "nhk-news", 300), episode("b", "teppei-z", 1500)),
+            shows = listOf(PodcastShow("nhk-news", "NHK"), PodcastShow("teppei-z", "Z")),
+        )
+        assertEquals(2, state.filtered.size)
+        assertEquals(listOf("teppei-z"), state.copy(showId = "teppei-z").filtered.map { it.show })
+        assertEquals(0, state.copy(showId = "teppei-z", length = PodcastLength.Short).filtered.size)
+    }
+
+    @Test fun aShowWhoseFeedStatesNoLengthsReportsWhatTheLengthFilterHides() {
+        val shows = listOf(PodcastShow("nhk-news", "NHK"), PodcastShow("teppei-beginners", "Beginners"))
+        val state = PodcastUiState(
+            episodes = listOf(episode("a", "nhk-news", 300), episode("b", "teppei-beginners", 0),
+                episode("c", "teppei-beginners", 0)),
+            shows = shows, showId = "teppei-beginners",
+        )
+        // Every unprepared episode of that show is unknown-length, so a length filter empties
+        // the list; the screen has to be able to say so instead of looking like there is nothing.
+        assertEquals(2, state.filtered.size)
+        assertEquals(0, state.hiddenByLength)
+        val filtered = state.copy(length = PodcastLength.Short)
+        assertTrue(filtered.filtered.isEmpty())
+        assertEquals(2, filtered.hiddenByLength)
+    }
+
+    @Test fun aChosenShowTheServerNoLongerOffersFallsBackToEveryShow() {
+        val state = PodcastUiState(
+            episodes = listOf(episode("a", "nhk-news"), episode("b", "teppei-z")),
+            shows = listOf(PodcastShow("nhk-news", "NHK"), PodcastShow("teppei-z", "Z")),
+            showId = "teppei-z",
+        )
+        // Otherwise the dangling id filters everything away while the chip that would clear
+        // it is gone from the row.
+        val narrowed = state.withShows(listOf(PodcastShow("nhk-news", "NHK")))
+        assertNull(narrowed.showId)
+        assertEquals(2, narrowed.filtered.size)
+        // A server that predates shows sends none, and must not leave a filter applied either.
+        val older = state.withShows(emptyList())
+        assertNull(older.showId)
+        assertEquals(2, older.filtered.size)
+        assertEquals("teppei-z", state.withShows(state.shows).showId)
+    }
 }

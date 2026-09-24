@@ -14,7 +14,7 @@ Last updated: 2026-09-23
 
 ### Podcasts
 
-- Implemented and emulator-verified; see `docs/PODCASTS.md`. Production worker activation remains a deployment step in game-collection `docs/podcasts.md`. Regression entries: `PodcastApiTest`, `PodcastModelsTest`, `PodcastScreenSessionTest`, `AppRouteTest`, `MainShellUiTest`.
+- Implemented and emulator-verified; see `docs/PODCASTS.md`. Shows (NHK News and four Teppei shows) come from the server's catalogue: episodes carry `show`, the catalogue carries `shows`, and a server without either still lists every episode. An unknown duration (0) means the feed states none until the lesson is prepared; `hiddenByLength` keeps a length filter from emptying such a show silently. Production worker activation remains a deployment step in game-collection `docs/podcasts.md`. Regression entries: `PodcastApiTest`, `PodcastModelsTest`, `PodcastScreenSessionTest`, `AppRouteTest`, `MainShellUiTest`.
 - Known limits: no per-episode delete or storage cap (files go only when another account validates); playback speed not persisted; `pendingPodcasts` is consumed only once access is confirmed.
 
 ### Architecture And Hardening

@@ -15,7 +15,10 @@ import moe.antimony.hoshi.R
 
 internal data class PodcastUiState(
     val episodes: List<PodcastEpisode> = emptyList(),
+    val shows: List<PodcastShow> = emptyList(),
     val length: PodcastLength = PodcastLength.All,
+    /** The show whose episodes are listed, or null for every show. */
+    val showId: String? = null,
     val loading: Boolean = false,
     val errorRes: Int? = null,
     /** The server's error sentence or the failing exception's type, shown under [errorRes]. */
@@ -31,8 +34,22 @@ internal data class PodcastUiState(
     val downloadFailures: Map<String, String> = emptyMap(),
     val preparing: Set<String> = emptySet(),
 ) {
-    val filtered get() = episodes.filter(length::includes)
+    private val inChosenShow get() = episodes.filter { showId == null || it.show == showId }
+    val filtered get() = inChosenShow.filter(length::includes)
+    /**
+     * Episodes of the chosen show that only the length filter is holding back. A feed that
+     * states no durations (the Teppei beginners one states none) would otherwise look empty
+     * for every length but "All lengths", with nothing on screen saying why.
+     */
+    val hiddenByLength get() = if (length == PodcastLength.All) 0 else inChosenShow.count { !length.includes(it) }
 }
+
+/**
+ * Replace the offered shows, dropping a chosen one the new list no longer has. Without this a
+ * dangling id filters every episode away while the chip that would clear it is gone.
+ */
+internal fun PodcastUiState.withShows(shows: List<PodcastShow>): PodcastUiState =
+    copy(shows = shows, showId = showId?.takeIf { id -> shows.any { it.id == id } })
 
 internal class PodcastViewModel(val repository: PodcastRepository) : ViewModel() {
     private val _state = MutableStateFlow(PodcastUiState())
@@ -47,13 +64,14 @@ internal class PodcastViewModel(val repository: PodcastRepository) : ViewModel()
                 // Leaving and returning keeps the list; only another account starts from scratch.
                 // A prepare request in flight (viewModelScope) keeps its marker either way.
                 if (account != null && account != sessionAccount) {
+                    // The show filter is not carried across: ids belong to the server that sent them.
                     _state.value = PodcastUiState(length = _state.value.length, preparing = _state.value.preparing)
                     sessionAccount = account
                 }
                 if (account != null) {
                     withContext(Dispatchers.IO) { repository.files.loadCatalogue(account) }?.let { cached ->
                         val downloaded = withContext(Dispatchers.IO) { cached.episodes.filter { validPodcastId(it.id) && repository.files.audio(account, it.id).isFile }.map { it.id }.toSet() }
-                        _state.update { it.copy(episodes = cached.episodes.filter { item -> validPodcastId(item.id) }, downloaded = downloaded, worker = cached.worker, maxFailures = cached.maxFailures) }
+                        _state.update { it.withShows(podcastVisibleShows(cached.shows)).copy(episodes = cached.episodes.filter { item -> validPodcastId(item.id) }, downloaded = downloaded, worker = cached.worker, maxFailures = cached.maxFailures) }
                     }
                     launch { observeDownloads() }
                     while (true) { refresh(); delay(10_000) }
@@ -63,6 +81,7 @@ internal class PodcastViewModel(val repository: PodcastRepository) : ViewModel()
     }
 
     fun filter(length: PodcastLength) { _state.update { it.copy(length = length) } }
+    fun filterShow(showId: String?) { _state.update { it.copy(showId = showId) } }
     fun retry() { viewModelScope.launch { refresh() } }
 
     private suspend fun refresh() {
@@ -78,7 +97,9 @@ internal class PodcastViewModel(val repository: PodcastRepository) : ViewModel()
             }
             if (settings != repository.credentials || !repository.access.value) return
             _state.update {
-                it.copy(episodes = episodes, downloaded = downloaded, loading = false, errorRes = null, errorDetail = null,
+                it.withShows(podcastVisibleShows(catalogue.shows)).copy(
+                    episodes = episodes, downloaded = downloaded, loading = false,
+                    errorRes = null, errorDetail = null,
                     feedStale = catalogue.feedStale, worker = catalogue.worker, maxFailures = catalogue.maxFailures)
             }
         } catch (cancelled: CancellationException) { throw cancelled

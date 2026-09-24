@@ -7,6 +7,9 @@ Semantic Versioning.
 
 ## [Unreleased]
 
+### Added
+- **More podcasts than NHK.** The Podcasts tab now also lists four Nihongo con Teppei shows — for Beginners, the original archives, Z, and 波 — with a row of chips to pick one show or see them all. Each episode says which show it is from, and an episode whose feed gives no length shows its real length once the lesson is prepared. (Needs an updated server.)
+
 ### Changed
 - **No repeated today numbers in Statistics.** The totals card under the streak now shows only all-time reading time and characters; today's figures live in the Today section at the top.
 

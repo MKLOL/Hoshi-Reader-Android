@@ -778,12 +778,15 @@
     <string name="http_sync_failed_format">同步失败：%1$s</string>
     <string name="http_sync_unknown_error">无法完成同步。</string>
     <string name="main_tab_podcasts">播客</string>
-    <string name="podcasts_intro">NHK 新闻，附英语翻译、词汇讲解和日语重播。按原始时长筛选。</string>
+    <string name="podcasts_intro">日语播客，附英语翻译、词汇讲解和日语重播。按原始时长筛选。</string>
+    <string name="podcasts_intro_shows">日语播客，附英语翻译、词汇讲解和日语重播。按播客和原始时长筛选。</string>
+    <string name="podcasts_show_all">全部播客</string>
     <string name="podcasts_length_all">全部时长</string>
     <string name="podcasts_length_short">10 分钟以内</string>
     <string name="podcasts_length_medium">10–20 分钟</string>
     <string name="podcasts_length_long">20 分钟以上</string>
     <string name="podcasts_original_duration">原始时长：%1$d:%2$02d</string>
+    <string name="podcasts_original_duration_unknown">准备完成前原始时长未知</string>
     <string name="podcasts_prepare">准备课程</string>
     <string name="podcasts_queued">已排队 — 服务器将继续准备课程。</string>
     <string name="podcasts_preparing">正在准备课程… 可离开此页面。</string>
@@ -794,11 +797,16 @@
     <string name="podcasts_download_waiting">等待网络连接…</string>
     <string name="podcasts_play">播放</string>
     <string name="podcasts_retry">重试</string>
-    <string name="podcasts_empty">此时长范围内没有节目。</string>
+    <string name="podcasts_empty">没有符合当前筛选条件的节目。</string>
+    <plurals name="podcasts_hidden_by_length">
+        <item quantity="one">有 %1$d 个节目在准备完成前没有时长，因此被此筛选条件隐藏。</item>
+        <item quantity="other">有 %1$d 个节目在准备完成前没有时长，因此被此筛选条件隐藏。</item>
+    </plurals>
     <string name="podcasts_error">无法加载播客。请检查网络连接后重试。</string>
     <string name="podcasts_unavailable">播客服务暂时不可用。请稍后重试。</string>
     <string name="podcasts_queue_full">课程准备队列已满。请稍后重试。</string>
-    <string name="podcasts_cached_feed">无法刷新 NHK，正在显示已保存的节目列表。</string>
+    <string name="podcasts_cached_feed">无法刷新订阅源，正在显示已保存的节目列表。</string>
+    <string name="podcasts_cached_feed_shows">无法刷新 %1$s，正在显示已保存的节目列表。</string>
     <string name="podcasts_generation_failed">准备失败。点击“准备”重试。</string>
     <string name="podcasts_playback_error_detail">无法播放此课程（%1$s）。点击“播放”重试。</string>
     <string name="podcasts_error_detail">详情：%1$s</string>

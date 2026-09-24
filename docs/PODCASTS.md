@@ -1,4 +1,4 @@
-# NHK listening lessons
+# Listening lessons
 
 Podcasts appears after validating the existing HTTP book-sync token. No separate login
 or OpenAI/Google key is needed in Android. A previously validated, unchanged account
@@ -6,7 +6,13 @@ can use saved listings and downloads offline. A rejected or removed token hides 
 section and stops playback/downloads. Changing server/token isolates its local files.
 Validation is checked on startup and every minute while the app process is alive.
 
-Browse recent NHK news and filter by **original** duration (≤10 min, 10–20 min, >20 min).
+Browse recent episodes of the shows the server offers (NHK News and four Nihongo con Teppei
+shows) and filter by show and by **original** duration (≤10 min, 10–20 min, >20 min). The
+shows come from the server's catalogue, so adding one there needs no app release; a server
+that sends no shows, or only one, lists every episode together and hides the show chips, as
+before. An episode whose feed states no length says so until preparing the lesson establishes
+it, and until then it appears under "All lengths" only — when a length filter is what emptied
+the list, the screen says how many episodes it is hiding and offers "All lengths" back.
 Prepare queues a shared server lesson; progress continues even if Android closes.
 When ready, Download saves it in app-private storage. Play uses Media3, including seek,
 15-second skips, playback speed, background audio and lock-screen controls. Completed
@@ -55,7 +61,7 @@ limits are listed below.
 ### What the screen says when something fails
 
 - A preparation failure shows the server's one-sentence reason (which stage failed and why:
-  a missing dependency, no OpenAI key, the NHK download, an OpenAI auth/rate-limit/outage, or
+  a missing dependency, no OpenAI key, the episode download, an OpenAI auth/rate-limit/outage, or
   ffmpeg) and how many attempts remain before an administrator has to reset the episode; the
   Prepare button disappears once they are used up.
 - When the server's worker is down or recorded start-up problems (for example "ffmpeg is not
