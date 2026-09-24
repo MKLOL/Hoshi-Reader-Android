@@ -241,7 +241,6 @@
     <string name="statistics_overview_loading">Loading statistics…</string>
     <string name="statistics_overview_last_read_format">Last read %1$s</string>
     <string name="statistics_overview_characters_total">Characters read</string>
-    <string name="statistics_overview_characters_today">Characters read today</string>
     <string name="bookshelf_statistics">Reading statistics</string>
     <string name="statistics_streak_start_format">Read %1$s today to start a streak</string>
     <string name="statistics_streak_keep_format">%1$s more today keeps your streak</string>

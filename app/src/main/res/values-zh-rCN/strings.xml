@@ -239,7 +239,6 @@
     <string name="statistics_overview_loading">正在加载统计…</string>
     <string name="statistics_overview_last_read_format">上次阅读 %1$s</string>
     <string name="statistics_overview_characters_total">已读字符</string>
-    <string name="statistics_overview_characters_today">今天已读字符</string>
     <string name="bookshelf_statistics">阅读统计</string>
     <string name="statistics_streak_start_format">今天阅读 %1$s 即可开始连续记录</string>
     <string name="statistics_streak_keep_format">今天再读 %1$s 即可保持连续</string>

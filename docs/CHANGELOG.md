@@ -7,6 +7,9 @@ Semantic Versioning.
 
 ## [Unreleased]
 
+### Changed
+- **No repeated today numbers in Statistics.** The totals card under the streak now shows only all-time reading time and characters; today's figures live in the Today section at the top.
+
 ## [v0.11.15] - 2026-09-23
 
 ### Added

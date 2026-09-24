@@ -82,7 +82,8 @@ import java.time.LocalDateTime
 val STREAK_GOAL_MINUTES: List<Int> = listOf(5, 10, 15, 30)
 
 /**
- * The Statistics screen: streak, totals, a reading heatmap, time by weekday and every book.
+ * The Statistics screen: today, streak, totals, a reading heatmap, time by weekday and every
+ * book, with the rolling-average charts on a separate Trends tab.
  * Reloads on every open and whenever a statistics sidecar changes (see
  * `BookRepository.statisticsChanges`); deliberately no ViewModel, the navigation host would
  * scope one to the Activity and freeze the first load.
@@ -408,16 +409,6 @@ private fun TotalsCard(overview: ReadingStatisticsOverview?) {
         StatisticsValueRow(
             label = stringResource(R.string.statistics_overview_characters_total),
             value = overview?.let { formatStatisticsCount(it.totalCharacters) },
-        )
-        GroupDivider()
-        StatisticsValueRow(
-            label = stringResource(R.string.reader_statistics_today),
-            value = overview?.let { formatDurationSeconds(it.todaySeconds) },
-        )
-        GroupDivider()
-        StatisticsValueRow(
-            label = stringResource(R.string.statistics_overview_characters_today),
-            value = overview?.let { formatStatisticsCount(it.todayCharacters) },
         )
     }
 }
