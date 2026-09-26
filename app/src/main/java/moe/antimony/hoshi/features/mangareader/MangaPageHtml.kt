@@ -390,14 +390,15 @@ internal object MangaPageHtml {
           -webkit-user-select: none;
           user-select: none;
         }
-        /* Keep the solo action slightly larger than either paired action, without taking
-           the whole two-button row's footprint. */
+        /* 1.14 times each paired dimension gives approximately 30% more area. Keep the
+           em size and minimum in the same proportion, including on tiny OCR bubbles. */
         .ocr-actions.solo .ocr-action-btn {
-          /* A comfortable tap target on any bubble, without covering the art on big text. */
-          width: clamp(36px, 2.1em, 44px);
-          height: clamp(36px, 2.1em, 44px);
-          padding: 0.35em;
-          border-radius: 8px;
+          width: 1.938em;
+          height: 1.938em;
+          min-width: 22.8px;
+          min-height: 22.8px;
+          padding: 0.342em;
+          border-radius: 5.7px;
         }
         .ocr-action-btn svg {
           width: 100%;

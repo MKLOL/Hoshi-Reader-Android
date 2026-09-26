@@ -31,7 +31,7 @@ class MangaActionPlacementInstrumentedTest {
             assertTrue("button must be within viewport: $state", state.getDouble("actionLeft") >= -0.1)
             assertTrue("button must be within viewport: $state", state.getDouble("actionRight") <= state.getDouble("viewportWidth") + 0.1)
             assertEquals("placement must not drift: $state", 0.0, state.getDouble("drift"), 0.01)
-            if (!paired) assertTrue("solo action should be smaller: $state", state.getDouble("buttonWidth") in 36.0..44.0)
+            if (!paired) assertEquals("solo area should be 30% larger: $state", 1.3, state.getDouble("areaRatio"), 0.005)
         }
     }
 
@@ -40,7 +40,7 @@ class MangaActionPlacementInstrumentedTest {
             box.style.cssText = 'left:2px;top:0px;width:150px;height:6px;font-size:24px';
             box.classList.add('vertical');
         """, viewportWidth = 1260, viewportHeight = 1680)
-        assertEquals(54.0, state.getDouble("buttonWidth"), 0.1)
+        assertEquals("tablet solo area should be 30% larger: $state", 1.3, state.getDouble("areaRatio"), 0.005)
         assertTrue("scaled action covers text: $state", state.getDouble("actionTop") >= state.getDouble("textBottom") + 2.9)
         assertEquals(0.0, state.getDouble("drift"), 0.01)
     }
@@ -111,12 +111,19 @@ class MangaActionPlacementInstrumentedTest {
                       var text = range.getBoundingClientRect(); var border = box.getBoundingClientRect();
                       window.dispatchEvent(new Event('resize'));
                       var afterPage = document.querySelector('.page').getBoundingClientRect();
+                      var button = box.querySelector('button');
+                      var actualButton = button.getBoundingClientRect();
+                      var wasSolo = actions.classList.contains('solo');
+                      actions.classList.remove('solo');
+                      var pairedButton = button.getBoundingClientRect();
+                      actions.classList.toggle('solo', wasSolo);
                       return JSON.stringify({
                         textBottom: Math.max(text.bottom, border.bottom), textRight: Math.max(text.right, border.right),
                         boxBottom: border.bottom, actionTop: row.top, actionBottom: row.bottom,
                         actionLeft: row.left, actionRight: row.right,
                         originalTop: original.top, originalLeft: original.left,
-                        buttonWidth: box.querySelector('button').getBoundingClientRect().width,
+                        buttonWidth: actualButton.width,
+                        areaRatio: (actualButton.width * actualButton.height) / (pairedButton.width * pairedButton.height),
                         viewportWidth: window.visualViewport.width, viewportHeight: window.visualViewport.height,
                         drift: Math.abs(first.top-row.top) + Math.abs(first.left-row.left),
                         pageResize: Math.abs(page.width-afterPage.width)+Math.abs(page.height-afterPage.height)
