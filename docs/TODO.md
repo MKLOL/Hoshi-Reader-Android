@@ -126,6 +126,7 @@ Last updated: 2026-09-26
 
 ### Release Distribution
 
+- Release verification: preserve the previous APK package/signing certificate, advance versionCode, and publish the updater-compatible `Hoshi-Manga-vX.Y.Z.apk` asset; verify its uploaded SHA-256 before making the release latest.
 - Update transfers reconcile with DownloadManager on startup and while About is visible; queued/paused/progress/failure states, retry/cancel, and the always-available latest-release link are covered by `UpdateDownloadCoordinatorTest`, `UpdateDownloadDestinationTest`, `AboutUpdateStatusTest`, `UpdateDownloadManagerInstrumentedTest`, and `AboutUpdateLinkInstrumentedTest`. `Application.onCreate` blocks only on `UpdateStartup.snapshot()`; the DownloadManager query and APK hashing in `UpdateStartup.reconcile()` stay in the background. Cancel, Retry and Skip never discard a verified download (`UpdateDownloadCoordinatorTest`).
 
 - Before F-Droid distribution, split update behavior by distribution channel so F-Droid builds do not bypass F-Droid update checks.

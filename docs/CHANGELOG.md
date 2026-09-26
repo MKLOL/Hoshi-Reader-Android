@@ -7,6 +7,8 @@ Semantic Versioning.
 
 ## [Unreleased]
 
+## [v0.11.19] - 2026-09-26
+
 ### Added
 - **Control manga text enlargement.** Settings → Behavior → Manga: Enlarge Small Text lets you turn off enlargement of revealed manga text and keep its original OCR size. It defaults on and is independent of translation and dictionary popup sizes.
 
