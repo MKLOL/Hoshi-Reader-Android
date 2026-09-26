@@ -5,6 +5,18 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ProcessTextLookupOverlayLayoutTest {
+    @Test fun tabletPopupStaysCenteredAfterEnlargement() {
+        val selection = ProcessTextLookupOverlayLayout.rootSelectionRect(
+            1260.0, 1680.0, 320.0, 250.0, 24.0, 24.0, uiScale = 1.5,
+        )
+        val frame = LookupPopupLayout(
+            selection, 1260.0, 1680.0, 320.0, 250.0, false,
+            topInset = 24.0, bottomInset = 24.0, uiScale = 1.5,
+        ).calculate()
+        assertEquals(630.0, frame.centerX, 0.0)
+        assertEquals(840.0, frame.centerY, 0.0)
+    }
+
     @Test
     fun rootSelectionRectCentersTheFirstOverlayPopup() {
         val selectionRect = ProcessTextLookupOverlayLayout.rootSelectionRect(

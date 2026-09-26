@@ -62,6 +62,7 @@ internal object LookupPopupHtml {
         ankiSettings: AnkiPopupSettings = AnkiPopupSettings(),
         fontFaceCss: String = "",
         popupScale: Double = 1.0,
+        uiScale: Double = 1.0,
     ): String {
         val entryCount = results.size
         val entries = if (assets == null) {
@@ -81,7 +82,7 @@ internal object LookupPopupHtml {
         val popupTypographyCss = """
             <style>
                 ${fontFaceCss.trim()}
-                html { zoom: ${popupCssNumber(popupScale.coerceIn(0.8, 1.5))}; }
+                html { zoom: ${popupCssNumber(popupScale.coerceIn(0.8, 1.5) * uiScale)}; }
             </style>
         """.trimIndent()
         val customCss = customCssStyle(normalizedSettings.customCSS)
@@ -280,6 +281,7 @@ internal object LookupPopupHtml {
         ankiSettings: AnkiPopupSettings = AnkiPopupSettings(),
         fontFaceCss: String = "",
         popupScale: Double = 1.0,
+        uiScale: Double = 1.0,
     ): String {
         val normalizedSettings = settings.normalized()
         val collapsedDictionaries = dictionaryNamesJson(normalizedSettings.collapsedDictionaries)
@@ -293,7 +295,7 @@ internal object LookupPopupHtml {
         val popupTypographyCss = """
             <style>
                 ${fontFaceCss.trim()}
-                html { zoom: ${popupCssNumber(popupScale.coerceIn(0.8, 1.5))}; }
+                html { zoom: ${popupCssNumber(popupScale.coerceIn(0.8, 1.5) * uiScale)}; }
             </style>
         """.trimIndent()
         val customCss = customCssStyle(normalizedSettings.customCSS)

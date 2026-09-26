@@ -1,5 +1,7 @@
 package moe.antimony.hoshi.features.dictionary
 
+import moe.antimony.hoshi.ui.theme.PlatformReaderUi
+import moe.antimony.hoshi.ui.theme.largeScreenUiScale
 import android.graphics.Color
 import android.graphics.drawable.ColorDrawable
 import android.os.Bundle
@@ -86,7 +88,7 @@ private fun ProcessTextLookupOverlay(
     readerSettings: ReaderSettings,
     appContainer: HoshiAppContainer,
     onClose: () -> Unit,
-) {
+) = PlatformReaderUi {
     var popups by remember(query) { mutableStateOf<List<LookupPopupItem>>(emptyList()) }
     var error by remember(query) { mutableStateOf<Throwable?>(null) }
     val darkMode = MaterialTheme.colorScheme.background.luminanceForPopup() < 0.5f
@@ -156,6 +158,7 @@ private fun ProcessTextLookupOverlay(
                         popupMaxHeight = popup.state.height.toDouble(),
                         topInset = topInset.toDouble(),
                         bottomInset = popup.state.bottomInset,
+                        uiScale = largeScreenUiScale(maxWidth.value.toDouble(), maxHeight.value.toDouble()),
                     ),
                 )
                 popup.copy(
@@ -252,9 +255,12 @@ internal object ProcessTextLookupOverlayLayout {
         popupMaxHeight: Double,
         topInset: Double,
         bottomInset: Double,
+        uiScale: Double = 1.0,
     ): ReaderSelectionRect {
-        val popupWidth = min(screenWidth - ScreenBorderPadding * 2.0, popupMaxWidth)
-        val popupHeight = min(screenHeight - ScreenBorderPadding * 2.0, popupMaxHeight)
+        val popupWidth = min(screenWidth - ScreenBorderPadding * 2.0, popupMaxWidth * uiScale)
+        val heightLimit = screenHeight - ScreenBorderPadding * 2.0 -
+            if (uiScale == 1.0) 0.0 else topInset + bottomInset
+        val popupHeight = min(heightLimit.coerceAtLeast(1.0), popupMaxHeight * uiScale)
         val availableHeight = screenHeight - topInset - bottomInset
         val safeCenterY = topInset + availableHeight / 2.0
         return ReaderSelectionRect(

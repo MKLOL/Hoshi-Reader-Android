@@ -1,5 +1,6 @@
 package moe.antimony.hoshi.features.ai
 
+import moe.antimony.hoshi.ui.theme.currentLargeScreenUiScale
 import android.graphics.Color as AndroidColor
 import android.webkit.WebView
 import androidx.compose.runtime.Composable
@@ -36,9 +37,11 @@ internal fun AiChatHistoryWebView(
     modifier: Modifier = Modifier,
 ) {
     val currentOnTextSelected = rememberUpdatedState(onTextSelected)
+    val uiScale = currentLargeScreenUiScale()
     val selectionScript = remember { ReaderSelectionScripts.source() }
     val html = remember(
         entries,
+        uiScale,
         backgroundColor,
         onSurfaceColor,
         onSurfaceVariantColor,
@@ -55,6 +58,7 @@ internal fun AiChatHistoryWebView(
             codeBackgroundCssColor = surfaceVariantColor.toCssHex(),
             selectionScript = selectionScript,
             maxSelectionLength = HISTORY_MAX_SELECTION_LENGTH,
+            uiScale = uiScale,
         )
     }
     AndroidView(

@@ -1,5 +1,6 @@
 package moe.antimony.hoshi.features.mangareader
 
+import moe.antimony.hoshi.ui.theme.largeScreenUiScale
 import moe.antimony.hoshi.mokuro.MokuroPage
 import moe.antimony.hoshi.mokuro.MokuroTextBox
 
@@ -370,6 +371,7 @@ internal object MangaPageHtml {
           margin-bottom: 0;
         }
         .ocr-action-btn {
+          zoom: ${largeScreenUiScale(viewportCssWidth.toDouble(), viewportCssHeight.toDouble())};
           box-sizing: border-box;
           width: 1.7em;
           height: 1.7em;
@@ -387,13 +389,13 @@ internal object MangaPageHtml {
           -webkit-user-select: none;
           user-select: none;
         }
-        /* With Copy switched off the ChatGPT button stands alone, so it takes roughly the
-           row's former footprint: a bigger target that is easier to hit on a phone. */
+        /* Keep the solo action slightly larger than either paired action, without taking
+           the whole two-button row's footprint. */
         .ocr-actions.solo .ocr-action-btn {
           /* A comfortable tap target on any bubble, without covering the art on big text. */
-          width: clamp(44px, 2.6em, 56px);
-          height: clamp(44px, 2.6em, 56px);
-          padding: 0.45em;
+          width: clamp(36px, 2.1em, 44px);
+          height: clamp(36px, 2.1em, 44px);
+          padding: 0.35em;
           border-radius: 8px;
         }
         .ocr-action-btn svg {
@@ -603,33 +605,50 @@ internal object MangaPageHtml {
                 window.hoshiSelection.clearSelection();
               }
             },
-            // The action row (ChatGPT + copy) normally floats just *above* the bubble's
-            // top-right corner. For a bubble near the top of the *visible* area that row
-            // would be clipped off the top and be impossible to tap, so flip it to sit just
-            // *below* the bubble instead. Measures after reveal (the read forces a reflow)
-            // and toggles `.actions-below`.
-            //
-            // The page itself never scrolls (html/body are overflow:hidden), so a box's
-            // layout rect is fixed; panning a pinch-zoomed page moves the *visual* viewport,
-            // not the layout. What decides whether the row-above is on-screen is therefore the
-            // visual viewport's top edge, not layout y=0. getBoundingClientRect().top and
-            // visualViewport.offsetTop are both in layout CSS px, so they compare directly;
-            // when unzoomed offsetTop is 0 and this reduces to "is the bubble within a row's
-            // height of the top".
+            // Anchor to rendered text as well as the OCR rectangle. In particular, trailing
+            // vertical glyphs can extend below that rectangle. Exclude the actions from the
+            // Range so repeated placement cannot feed the previous button position back in.
             updateActionPlacement: function(box) {
-              if (!box) return;
+              if (!box || !box.classList.contains('revealed')) return;
               var actions = box.querySelector('.ocr-actions');
-              if (!actions) return;
-              var actionsHeight = actions.offsetHeight || 26;
+              var text = box.querySelector('p');
+              if (!actions || !text) return;
+              actions.style.transform = '';
+              box.classList.remove('actions-below');
+              var rect = box.getBoundingClientRect();
+              var range = document.createRange();
+              range.selectNodeContents(text);
+              var painted = range.getBoundingClientRect();
+              var top = Math.min(rect.top, painted.top);
+              var bottom = Math.max(rect.bottom, painted.bottom);
+              var left = Math.min(rect.left, painted.left);
+              var right = Math.max(rect.right, painted.right);
+              var row = actions.getBoundingClientRect();
               var margin = 3;
               var vv = window.visualViewport;
-              var viewTop = vv && typeof vv.offsetTop === 'number' ? vv.offsetTop : 0;
-              var boxTop = box.getBoundingClientRect().top;
-              if (boxTop - actionsHeight - margin < viewTop) {
+              var viewTop = vv ? vv.offsetTop : 0;
+              var viewLeft = vv ? vv.offsetLeft : 0;
+              var viewBottom = viewTop + (vv ? vv.height : window.innerHeight);
+              var viewRight = viewLeft + (vv ? vv.width : window.innerWidth);
+              var targetX = Math.max(viewLeft, Math.min(row.left, viewRight - row.width));
+              var targetY = Math.min(row.top, top - row.height - margin);
+              if (targetY < viewTop) {
+                targetY = bottom + margin;
                 box.classList.add('actions-below');
-              } else {
-                box.classList.remove('actions-below');
+                row = actions.getBoundingClientRect();
+                if (targetY + row.height > viewBottom) {
+                  // A tall/pinch-zoomed bubble may leave room only beside its text.
+                  if (right + margin + row.width <= viewRight) {
+                    targetX = right + margin;
+                    targetY = Math.max(viewTop, Math.min(top, viewBottom - row.height));
+                  } else if (left - margin - row.width >= viewLeft) {
+                    targetX = left - margin - row.width;
+                    targetY = Math.max(viewTop, Math.min(top, viewBottom - row.height));
+                  }
+                }
               }
+              actions.style.transform = 'translate(' + (targetX - row.left) + 'px,' +
+                (targetY - row.top) + 'px)';
             },
             // Two artwork glyphs of the same drawn size must reveal at the same OCR
             // text size — independent of how many characters fit beside them in the
@@ -798,6 +817,22 @@ internal object MangaPageHtml {
               return null;
             }
           };
+          var placementFrame = null;
+          function refreshActions() {
+            if (placementFrame !== null) return;
+            placementFrame = requestAnimationFrame(function() {
+              placementFrame = null;
+              document.querySelectorAll('.ocr-box.revealed').forEach(function(box) {
+                window.hoshiManga.updateActionPlacement(box);
+              });
+            });
+          }
+          window.addEventListener('resize', refreshActions);
+          if (window.visualViewport) {
+            window.visualViewport.addEventListener('resize', refreshActions);
+            window.visualViewport.addEventListener('scroll', refreshActions);
+          }
+          if (document.fonts) document.fonts.ready.then(refreshActions);
         })();
     """.trimIndent()
 

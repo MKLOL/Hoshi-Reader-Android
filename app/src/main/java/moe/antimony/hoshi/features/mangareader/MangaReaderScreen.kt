@@ -1,5 +1,7 @@
 package moe.antimony.hoshi.features.mangareader
 
+import moe.antimony.hoshi.ui.theme.PlatformReaderUi
+import moe.antimony.hoshi.ui.theme.AdaptiveUi
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.BitmapRegionDecoder
@@ -175,7 +177,7 @@ internal fun MangaReaderScreen(
     onBookmarkSaved: () -> Unit,
     onClose: () -> Unit,
     modifier: Modifier = Modifier,
-) {
+) = PlatformReaderUi {
     val systemDark = androidx.compose.foundation.isSystemInDarkTheme()
     val backgroundColor = Color(readerSettings.backgroundColor(systemDark))
     val backgroundCssColor = remember(backgroundColor) { backgroundColor.toCssHex() }
@@ -1110,88 +1112,90 @@ internal fun MangaReaderScreen(
             )
         }
 
-        if (!screenshotCropMode) {
-            MangaReaderCloseButton(
-                darkInterface = readerSettings.usesDarkInterface(systemDark),
-                onClose = onClose,
-                modifier = Modifier
-                    .align(Alignment.TopStart)
-                    .statusBarsPadding()
-                    .padding(start = 4.dp, top = 4.dp)
-                    .zIndex(1f),
-            )
-            // Screenshot translation is the most-used ChatGPT action, so once a key is
-            // configured it gets its own button next to the ⋯ menu instead of being buried
-            // in it. Without a key the feature is unusable, so it stays inside the menu.
-            val startScreenshotCrop = {
-                if (canTakeScreenshot) {
-                    clearSelectionAndPopups()
-                    webView?.clearMangaRevealedBubbles()
-                    screenshotCropMode = true
+        AdaptiveUi {
+            if (!screenshotCropMode) {
+                MangaReaderCloseButton(
+                    darkInterface = readerSettings.usesDarkInterface(systemDark),
+                    onClose = onClose,
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .statusBarsPadding()
+                        .padding(start = 4.dp, top = 4.dp)
+                        .zIndex(1f),
+                )
+                // Screenshot translation is the most-used ChatGPT action, so once a key is
+                // configured it gets its own button next to the ⋯ menu instead of being buried
+                // in it. Without a key the feature is unusable, so it stays inside the menu.
+                val startScreenshotCrop = {
+                    if (canTakeScreenshot) {
+                        clearSelectionAndPopups()
+                        webView?.clearMangaRevealedBubbles()
+                        screenshotCropMode = true
+                    }
                 }
-            }
-            val aiConfigured = aiSettings?.isConfigured == true
-            Row(
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .statusBarsPadding()
-                    .padding(end = 4.dp, top = 4.dp)
-                    .zIndex(1f),
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                if (aiConfigured) {
-                    MangaReaderScreenshotButton(
+                val aiConfigured = aiSettings?.isConfigured == true
+                Row(
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .statusBarsPadding()
+                        .padding(end = 4.dp, top = 4.dp)
+                        .zIndex(1f),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    if (aiConfigured) {
+                        MangaReaderScreenshotButton(
+                            darkInterface = readerSettings.usesDarkInterface(systemDark),
+                            enabled = canTakeScreenshot,
+                            onClick = startScreenshotCrop,
+                        )
+                    }
+                    MangaReaderOverflowMenu(
                         darkInterface = readerSettings.usesDarkInterface(systemDark),
-                        enabled = canTakeScreenshot,
-                        onClick = startScreenshotCrop,
+                        showTakeScreenshot = !aiConfigured,
+                        takeScreenshotEnabled = canTakeScreenshot,
+                        onTakeScreenshot = startScreenshotCrop,
+                        onShowAiHistory = { showAiHistory = true },
+                        onShowStatistics = { showStatistics = true },
+                        onShowGoToPage = { showGoToPageDialog = true },
                     )
                 }
-                MangaReaderOverflowMenu(
+
+                MangaReaderPageTurnButton(
+                    imageVector = Icons.AutoMirrored.Rounded.KeyboardArrowLeft,
+                    contentDescription = stringResource(R.string.manga_reader_next_page),
                     darkInterface = readerSettings.usesDarkInterface(systemDark),
-                    showTakeScreenshot = !aiConfigured,
-                    takeScreenshotEnabled = canTakeScreenshot,
-                    onTakeScreenshot = startScreenshotCrop,
-                    onShowAiHistory = { showAiHistory = true },
-                    onShowStatistics = { showStatistics = true },
-                    onShowGoToPage = { showGoToPageDialog = true },
+                    enabled = pageIndex < pageCount - 1,
+                    onClick = { navigate(ReaderNavigationDirection.Forward) },
+                    modifier = Modifier
+                        .align(Alignment.BottomStart)
+                        .navigationBarsPadding()
+                        .padding(start = 8.dp, bottom = 4.dp)
+                        .zIndex(1f),
+                )
+                MangaReaderPageIndicator(
+                    pageIndex = pageIndex,
+                    pageCount = pageCount,
+                    darkInterface = readerSettings.usesDarkInterface(systemDark),
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .navigationBarsPadding()
+                        .padding(bottom = 22.dp)
+                        .zIndex(1f),
+                )
+                MangaReaderPageTurnButton(
+                    imageVector = Icons.AutoMirrored.Rounded.KeyboardArrowRight,
+                    contentDescription = stringResource(R.string.manga_reader_previous_page),
+                    darkInterface = readerSettings.usesDarkInterface(systemDark),
+                    enabled = pageIndex > 0,
+                    onClick = { navigate(ReaderNavigationDirection.Backward) },
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .navigationBarsPadding()
+                        .padding(end = 8.dp, bottom = 4.dp)
+                        .zIndex(1f),
                 )
             }
-
-            MangaReaderPageTurnButton(
-                imageVector = Icons.AutoMirrored.Rounded.KeyboardArrowLeft,
-                contentDescription = stringResource(R.string.manga_reader_next_page),
-                darkInterface = readerSettings.usesDarkInterface(systemDark),
-                enabled = pageIndex < pageCount - 1,
-                onClick = { navigate(ReaderNavigationDirection.Forward) },
-                modifier = Modifier
-                    .align(Alignment.BottomStart)
-                    .navigationBarsPadding()
-                    .padding(start = 8.dp, bottom = 4.dp)
-                    .zIndex(1f),
-            )
-            MangaReaderPageIndicator(
-                pageIndex = pageIndex,
-                pageCount = pageCount,
-                darkInterface = readerSettings.usesDarkInterface(systemDark),
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .navigationBarsPadding()
-                    .padding(bottom = 22.dp)
-                    .zIndex(1f),
-            )
-            MangaReaderPageTurnButton(
-                imageVector = Icons.AutoMirrored.Rounded.KeyboardArrowRight,
-                contentDescription = stringResource(R.string.manga_reader_previous_page),
-                darkInterface = readerSettings.usesDarkInterface(systemDark),
-                enabled = pageIndex > 0,
-                onClick = { navigate(ReaderNavigationDirection.Backward) },
-                modifier = Modifier
-                    .align(Alignment.BottomEnd)
-                    .navigationBarsPadding()
-                    .padding(end = 8.dp, bottom = 4.dp)
-                    .zIndex(1f),
-            )
         }
 
         if (screenshotCropMode) {
@@ -1220,49 +1224,51 @@ internal fun MangaReaderScreen(
             }
         }
 
-        // ChatGPT overlays. The response popup sits above the page and the lookup popups;
-        // the history screen is full-screen and sits above everything. ChatGPT settings now
-        // live in the main Settings tab (Settings → ChatGPT), not in this reader.
-        val activeAiChat = aiChatState
-        if (activeAiChat != null) {
-            AiChatPopupView(
-                state = activeAiChat,
-                onDismiss = { dismissAiChat() },
-                onRetry = { aiRetryAction?.invoke() },
-                onAskLive = if (aiShowingPretranslation) ({ aiAskLiveAction?.invoke() }) else null,
-                modifier = Modifier.zIndex(3f),
-            )
-        }
-        if (showAiHistory) {
-            AiChatHistoryView(
-                entries = aiHistory,
-                lookupOptions = lookupOptions,
-                onClose = { showAiHistory = false },
-                modifier = Modifier
-                    .fillMaxSize()
-                    .zIndex(4f),
-            )
-        }
-        if (showStatistics) {
-            MangaStatisticsSheet(
-                state = statisticsState,
-                textState = textReadState,
-                pageIndex = pageIndex,
-                pageCount = pageCount,
-                onToggleTracking = ::toggleStatisticsTracking,
-                onDismiss = { showStatistics = false },
-            )
-        }
-        if (showGoToPageDialog) {
-            MangaGoToPageDialog(
-                currentPage = pageIndex + 1,
-                pageCount = pageCount,
-                onDismiss = { showGoToPageDialog = false },
-                onConfirm = { page ->
-                    showGoToPageDialog = false
-                    goToPage(page - 1, countAsRead = false)
-                },
-            )
+        AdaptiveUi {
+            // ChatGPT overlays. The response popup sits above the page and the lookup popups;
+            // the history screen is full-screen and sits above everything. ChatGPT settings now
+            // live in the main Settings tab (Settings → ChatGPT), not in this reader.
+            val activeAiChat = aiChatState
+            if (activeAiChat != null) {
+                AiChatPopupView(
+                    state = activeAiChat,
+                    onDismiss = { dismissAiChat() },
+                    onRetry = { aiRetryAction?.invoke() },
+                    onAskLive = if (aiShowingPretranslation) ({ aiAskLiveAction?.invoke() }) else null,
+                    modifier = Modifier.zIndex(3f),
+                )
+            }
+            if (showAiHistory) {
+                AiChatHistoryView(
+                    entries = aiHistory,
+                    lookupOptions = lookupOptions,
+                    onClose = { showAiHistory = false },
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .zIndex(4f),
+                )
+            }
+            if (showStatistics) {
+                MangaStatisticsSheet(
+                    state = statisticsState,
+                    textState = textReadState,
+                    pageIndex = pageIndex,
+                    pageCount = pageCount,
+                    onToggleTracking = ::toggleStatisticsTracking,
+                    onDismiss = { showStatistics = false },
+                )
+            }
+            if (showGoToPageDialog) {
+                MangaGoToPageDialog(
+                    currentPage = pageIndex + 1,
+                    pageCount = pageCount,
+                    onDismiss = { showGoToPageDialog = false },
+                    onConfirm = { page ->
+                        showGoToPageDialog = false
+                        goToPage(page - 1, countAsRead = false)
+                    },
+                )
+            }
         }
     }
 }

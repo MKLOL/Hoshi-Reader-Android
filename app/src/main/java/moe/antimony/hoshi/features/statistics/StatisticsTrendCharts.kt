@@ -281,7 +281,7 @@ private fun RollingAverageChart(
     val tickStyle = MaterialTheme.typography.labelSmall.copy(color = colorScheme.onSurfaceVariant)
     val measurer: TextMeasurer = rememberTextMeasurer()
     val axisMax = remember(points) { niceAxisMax(points.maxOf { maxOf(it.value, it.rollingAverage) }) }
-    val ticks = remember(axisMax, tickStyle) {
+    val ticks = remember(axisMax, tickStyle, measurer) {
         listOf(axisMax, axisMax / 2).map { measurer.measure(formatTick(it), tickStyle) }
     }
     val density = LocalDensity.current

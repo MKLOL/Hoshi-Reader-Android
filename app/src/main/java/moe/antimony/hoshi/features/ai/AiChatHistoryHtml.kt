@@ -26,6 +26,7 @@ internal object AiChatHistoryHtml {
         codeBackgroundCssColor: String,
         selectionScript: String,
         maxSelectionLength: Int,
+        uiScale: Double = 1.0,
     ): String {
         // Newest entries first — mirrors the previous LazyColumn `entries.asReversed()`
         // ordering so the most recent ChatGPT exchange is at the top of the history.
@@ -37,6 +38,7 @@ internal object AiChatHistoryHtml {
             <meta charset="utf-8">
             <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=5, user-scalable=yes">
             <style>
+            html { zoom: $uiScale; }
             ${css(backgroundCssColor, textCssColor, mutedTextCssColor, dividerCssColor, codeBackgroundCssColor)}
             </style>
             </head>

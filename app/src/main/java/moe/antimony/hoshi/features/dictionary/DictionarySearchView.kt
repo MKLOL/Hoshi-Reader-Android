@@ -1,5 +1,6 @@
 package moe.antimony.hoshi.features.dictionary
 
+import moe.antimony.hoshi.ui.theme.currentLargeScreenUiScale
 import android.annotation.SuppressLint
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -92,6 +93,7 @@ internal fun dictionarySearchPopupOptions(
     dictionarySettings: DictionarySettings,
     darkMode: Boolean,
     audioSettings: AudioSettings,
+    uiScale: Double = 1.0,
 ): LookupPopupOptions = LookupPopupOptions(
     isVertical = false,
     isFullWidth = false,
@@ -104,7 +106,7 @@ internal fun dictionarySearchPopupOptions(
     reducedMotionSwipeThreshold = readerSettings.popupReducedMotionSwipeThreshold,
     popupScale = readerSettings.popupScale,
     popupActionBar = false,
-    topInset = DictionaryPopupTopInset,
+    topInset = DictionaryPopupTopInset * uiScale,
     bottomInset = DictionaryPopupBottomInset,
     dictionarySettings = dictionarySettings,
     darkMode = darkMode,
@@ -151,13 +153,16 @@ fun DictionarySearchView(
         popupDarkMode -> Color(0xFFEBEBF5)
         else -> Color(0x993C3C43)
     }
+    val uiScale = currentLargeScreenUiScale()
     val popupOptions = dictionarySearchPopupOptions(
         readerSettings = readerSettings,
         dictionarySettings = uiState.dictionarySettings,
         darkMode = popupDarkMode,
         audioSettings = uiState.audioSettings,
+        uiScale = uiScale,
     )
     val resultHtml = remember(
+        uiScale,
         uiState.lastQuery,
         uiState.results,
         uiState.dictionaryStyles,
@@ -181,6 +186,7 @@ fun DictionarySearchView(
             ankiSettings = ankiUiState.popupSettings,
             fontFaceCss = fontFaceCss,
             popupScale = readerSettings.popupScale,
+            uiScale = uiScale,
         ).html
     }
     val themedPopups = remember(
@@ -189,8 +195,9 @@ fun DictionarySearchView(
         readerSettings.eInkMode,
         uiState.audioSettings,
         readerSettings.popupScale,
+        uiScale,
     ) {
-        uiState.popups.withLookupPopupVisualOptions(
+        uiState.popups.map { it.copy(state = it.state.copy(topInset = DictionaryPopupTopInset * uiScale)) }.withLookupPopupVisualOptions(
             darkMode = popupDarkMode,
             eInkMode = readerSettings.eInkMode,
             audioSettings = uiState.audioSettings,
@@ -228,6 +235,7 @@ fun DictionarySearchView(
                 fontManager = fontManager,
                 audioSettings = uiState.audioSettings,
                 popupScale = readerSettings.popupScale,
+                uiScale = uiScale,
                 actionButtonTintColor = actionButtonTintColor,
                 localAudioRepository = localAudioRepository,
                 clearSelectionSignal = uiState.resultClearSelectionSignal,
@@ -467,6 +475,7 @@ private fun DictionaryResultWebView(
     fontManager: ReaderFontManager,
     audioSettings: AudioSettings,
     popupScale: Double,
+    uiScale: Double,
     actionButtonTintColor: Color,
     localAudioRepository: LocalAudioRepository,
     clearSelectionSignal: Int,
@@ -536,7 +545,7 @@ private fun DictionaryResultWebView(
             if (appliedPopupScale != popupScale) {
                 appliedPopupScale = popupScale
                 webView.evaluateJavascript(
-                    "document.documentElement.style.zoom = '${popupScale.coerceIn(0.8, 1.5)}'; if (typeof syncButtonFrames === 'function') requestAnimationFrame(syncButtonFrames)",
+                    "document.documentElement.style.zoom = '${popupScale.coerceIn(0.8, 1.5) * uiScale}'; if (typeof syncButtonFrames === 'function') requestAnimationFrame(syncButtonFrames)",
                     null,
                 )
             }

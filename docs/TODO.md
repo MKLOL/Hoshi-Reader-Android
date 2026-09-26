@@ -1,14 +1,11 @@
 # Hoshi Android Agent TODO
 
-Last updated: 2026-09-24
+Last updated: 2026-09-25
 
 ## Maintenance Rules
 
-- Keep this file under 150 lines; record only current state, next actionable work, active blockers, and durable validation requirements.
-- Do not paste long emulator transcripts, adb details, screenshot observations, release notes, or per-commit history here; put user-visible shipped changes in `docs/CHANGELOG.md`.
-- Keep architecture-refactor slice state out of tracked docs; use the local `.codex/skills/hoshi-refactoring-workflow` skill when available.
-- Put detailed reproduction, verification logs, and investigation notes in the relevant issue, PR, commit message, or a focused doc; update the smallest relevant line here in the same commit.
-- Keep `docs/CHANGELOG.md` `[Unreleased]` free of fixup notes for not-yet-released features; fold them into the original feature entry or omit them until they describe a fix to already shipped user-visible behavior.
+- Keep this file under 150 lines; record only current state, next actionable work, active blockers, and durable validation requirements. Update the smallest relevant line in the same commit.
+- Put user-visible shipped changes in `docs/CHANGELOG.md`; keep `[Unreleased]` free of fixup notes for unreleased features by folding them into the original entry. Keep architecture-refactor slice state in the local `.codex/skills/hoshi-refactoring-workflow` skill. Put detailed reproduction/verification evidence, emulator transcripts, adb details, screenshots, and commit history in an issue, PR, commit message, or focused doc, not here.
 
 ## Open Alignment Work
 
@@ -39,6 +36,7 @@ Last updated: 2026-09-24
 
 ### Reader And Lookup
 
+- Large-tablet controls, translation cards, and dictionary popups scale with the current window; windows with a short side up to 840dp retain baseline sizing. Keep `AdaptiveUiTest`, `AdaptiveUiInstrumentedTest`, `AdaptiveLookupPopupInstrumentedTest`, and `MangaActionPlacementInstrumentedTest` for Fold/tablet/split-screen sizing, platform-coordinate lookup anchors, and text-clear action placement. EPUB page typography/pagination and its existing chrome layout remain independent of app UI scaling.
 - Audiobook replacement stages the complete copy before an atomic move; retain `SasayakiAudioRepositoryTest` and `SasayakiAudioRepositoryInstrumentedTest`.
 - EPUB URL paths decode once, contents links resolve from their navigation document, and resource fallbacks stay inside the imported book. Regression entries: `EpubBookParserTest`, `EpubBookModelTest`, `ReaderInternalLinkTest`, and `ReaderWebResourceBridgeTest`.
 - Native dictionary popup teardown invalidates queued JavaScript callbacks before WebView destruction and cancels superseded or dismissed nested lookups. Regression entry: `PopupCallbackDispatcherTest`. Keep these checks when changing popup ownership.

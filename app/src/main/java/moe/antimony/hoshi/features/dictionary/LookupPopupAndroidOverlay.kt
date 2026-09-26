@@ -1,5 +1,6 @@
 package moe.antimony.hoshi.features.dictionary
 
+import moe.antimony.hoshi.ui.theme.largeScreenUiScale
 import android.annotation.SuppressLint
 import android.content.Context
 import android.content.res.ColorStateList
@@ -130,9 +131,16 @@ private class LookupPopupOverlayController(
     private val childHosts = linkedMapOf<String, LookupPopupHostView>()
     private val rootHighlightView = PopupSelectionHighlightView(context)
     private var lastUpdate: OverlayUpdate? = null
+    private val resizeUpdate = Runnable { lastUpdate?.let(::applyUpdate) }
 
     init {
-        view.onOverlaySizeChanged = { lastUpdate?.let(::applyUpdate) }
+        // onSizeChanged runs after children were measured, during AndroidView's layout.
+        // Updating their LayoutParams there can leave the old measured size in place.
+        // Apply the new viewport after that pass so requestLayout remeasures the popups.
+        view.onOverlaySizeChanged = {
+            view.removeCallbacks(resizeUpdate)
+            view.post(resizeUpdate)
+        }
         view.onOutsideStylusTouch = ::dismissFromOverlay
         view.addView(
             rootHighlightView,
@@ -196,6 +204,7 @@ private class LookupPopupOverlayController(
 
     fun release() {
         lastUpdate = null
+        view.removeCallbacks(resizeUpdate)
         view.onOverlaySizeChanged = {}
         view.onOutsideStylusTouch = {}
         // Destroy every remaining popup WebView when the overlay leaves composition so no native
@@ -373,6 +382,7 @@ private class LookupPopupHostView(
     private var contentReady = false
     private var clearSelectionSignal = 0
     private var popupScale = 1.0
+    private var uiScale = 1.0
     private var backCount = 0
     private var forwardCount = 0
     private var currentFrame: PopupFrameDp? = null
@@ -435,6 +445,13 @@ private class LookupPopupHostView(
         onPrepareSasayakiAudio: (SasayakiMatch, String) -> String?,
     ) {
         val state = popup.state
+        val overlayView = parent as? View
+        uiScale = largeScreenUiScale(
+            (overlayView?.width ?: 0) / density.toDouble(),
+            (overlayView?.height ?: 0) / density.toDouble(),
+        )
+        actionBar.setUiScale(uiScale)
+        sasayakiBar.setUiScale(uiScale)
         val html = renderHtml(state, state.results, ankiSettings)
         if (loadedHtml != html) {
             loadedHtml = html
@@ -457,7 +474,7 @@ private class LookupPopupHostView(
         if (popupScale != state.popupScale) {
             popupScale = state.popupScale
             webView.evaluateJavascript(
-                "document.documentElement.style.zoom = '${state.popupScale.coerceIn(0.8, 1.5)}'; if (typeof syncButtonFrames === 'function') requestAnimationFrame(syncButtonFrames)",
+                "document.documentElement.style.zoom = '${state.popupScale.coerceIn(0.8, 1.5) * uiScale}'; if (typeof syncButtonFrames === 'function') requestAnimationFrame(syncButtonFrames)",
                 null,
             )
         }
@@ -468,7 +485,6 @@ private class LookupPopupHostView(
             webView.evaluateJavascript("window.hoshiSelection.clearSelection()", null)
         }
 
-        val overlayView = parent as? View
         val frame = state.popupFrame(overlayView?.width ?: 0, overlayView?.height ?: 0)
         currentFrame = frame
         syncSelectionOffset(frame, state, popup.sasayakiCue)
@@ -746,6 +762,7 @@ private class LookupPopupHostView(
         ankiSettings = ankiSettings,
         fontFaceCss = fontManager.popupFontFaceCss(),
         popupScale = state.popupScale,
+        uiScale = uiScale,
     )
 
     private fun createWebView(context: Context): PopupActionButtonWebView =
@@ -795,6 +812,7 @@ private class LookupPopupHostView(
             screenHeight = screenHeightDp.toDouble(),
             maxWidth = width.toDouble(),
             maxHeight = height.toDouble(),
+            uiScale = uiScale,
             isVertical = isVertical,
             isFullWidth = isFullWidth,
             topInset = topInset,
@@ -822,7 +840,7 @@ private class LookupPopupHostView(
             backCount = backCount,
             forwardCount = forwardCount,
             hasSasayakiCue = sasayakiCue != null,
-        )
+        ) * uiScale
         selectionOffsetHolder.offsetX = frame.leftDp
         selectionOffsetHolder.offsetY = frame.topDp + controlsHeight
         selectionOffsetHolder.highlightOffsetX = 0.0
@@ -839,13 +857,14 @@ internal fun popupSelectionOffsetY(
     backCount: Int,
     forwardCount: Int,
     hasSasayakiCue: Boolean,
+    uiScale: Double = 1.0,
 ): Double =
     frameTopDp + popupSelectionControlsHeight(
         popupActionBar = popupActionBar,
         backCount = backCount,
         forwardCount = forwardCount,
         hasSasayakiCue = hasSasayakiCue,
-    )
+    ) * uiScale
 
 private fun popupSelectionControlsHeight(
     popupActionBar: Boolean,
@@ -883,6 +902,25 @@ private class PopupControlBar(context: Context) : LinearLayout(context) {
         first.setOnClickListener { onFirst() }
         second.setOnClickListener { onSecond() }
         third.setOnClickListener { onThird() }
+    }
+
+    private var uiScale = 1.0
+
+    fun setUiScale(scale: Double) {
+        if (uiScale == scale) return
+        uiScale = scale
+        fun px(dp: Int) = (dp * scale * resources.displayMetrics.density).roundToInt()
+        row.setPadding(px(8), 0, px(8), 0)
+        row.layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, px(ControlHeightDp))
+        divider.layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, px(1))
+        listOf(first, second, third).forEachIndexed { index, button ->
+            button.layoutParams = LinearLayout.LayoutParams(px(ControlSizeDp), px(ControlSizeDp)).apply {
+                if (index > 0) leftMargin = px(12)
+            }
+            button.scaleType = if (scale == 1.0) ImageView.ScaleType.CENTER else ImageView.ScaleType.FIT_CENTER
+            val padding = px(if (scale == 1.0) 6 else 4)
+            button.setPadding(padding, padding, padding, padding)
+        }
     }
 
     fun configure(

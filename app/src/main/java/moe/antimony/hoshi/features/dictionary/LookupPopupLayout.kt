@@ -19,8 +19,16 @@ data class LookupPopupLayout(
     val isFullWidth: Boolean = false,
     val topInset: Double = 0.0,
     val bottomInset: Double = 0.0,
+    val uiScale: Double = 1.0,
 ) {
     fun calculate(): LookupPopupFrame {
+        if (uiScale != 1.0) {
+            return copy(
+                maxWidth = minOf(maxWidth * uiScale, (screenWidth - screenBorderPadding * 2).coerceAtLeast(1.0)),
+                maxHeight = minOf(maxHeight * uiScale, (screenHeight - topInset - bottomInset - screenBorderPadding * 2).coerceAtLeast(1.0)),
+                uiScale = 1.0,
+            ).calculate()
+        }
         val width = width()
         val height = height()
         return LookupPopupFrame(

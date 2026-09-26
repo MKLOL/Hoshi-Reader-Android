@@ -1,5 +1,6 @@
 package moe.antimony.hoshi.features.ai
 
+import moe.antimony.hoshi.ui.theme.AdaptiveUi
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -113,7 +114,7 @@ fun AiChatPopupView(
     /** Non-null when the reply came from the pre-translation cache. */
     onAskLive: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
-) {
+) = AdaptiveUi {
     BoxWithConstraints(
         modifier = modifier
             .fillMaxSize()

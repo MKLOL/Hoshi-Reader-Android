@@ -59,6 +59,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalContext
+import moe.antimony.hoshi.ui.theme.LocalPlatformDensity
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.AnnotatedString
@@ -169,7 +170,7 @@ private fun SentenceReaderContent(
     onClose: () -> Unit,
 ) {
     val appContainer = LocalHoshiAppContainer.current
-    val density = LocalDensity.current
+    val density = LocalPlatformDensity.current ?: LocalDensity.current
     val scope = rememberCoroutineScope()
     val book = state.book
     var position by remember(bookId) { mutableStateOf(state.initialPosition) }
@@ -490,6 +491,7 @@ private fun SentenceText(
     onWordTap: (ReaderSelectionData) -> Unit,
 ) {
     val density = LocalDensity.current
+    val selectionDensity by rememberUpdatedState(LocalPlatformDensity.current ?: density)
     // The pointerInput block below is keyed on the sentence and outlives recompositions, so it
     // must read the newest callbacks (and through them the newest lookup options), not the ones
     // captured when the sentence first appeared.
@@ -521,7 +523,7 @@ private fun SentenceText(
     // Furigana are drawn in the leading above each line, exactly where a browser puts them: the
     // text is untouched (offsets, taps and the highlight keep working), the line grows so a
     // reading fits, and all of the line's extra space is put above the glyphs.
-    val rubyMetrics = remember(furigana.isEmpty(), plainStyle, readingStyle) {
+    val rubyMetrics = remember(furigana.isEmpty(), plainStyle, readingStyle, textMeasurer) {
         if (furigana.isEmpty()) {
             null
         } else {
@@ -531,7 +533,7 @@ private fun SentenceText(
             )
         }
     }
-    val readingLayouts = remember(furigana, readingStyle) {
+    val readingLayouts = remember(furigana, readingStyle, textMeasurer) {
         furigana.map { textMeasurer.measure(it.reading, readingStyle, softWrap = false, maxLines = 1) }
     }
     val lineHeight = with(density) {
@@ -604,7 +606,7 @@ private fun SentenceText(
                     }
                     val box = current.getBoundingBox(offset)
                     val shift = origin - screenOrigin()
-                    val rect = with(density) {
+                    val rect = with(selectionDensity) {
                         ReaderSelectionRect(
                             x = (box.left + shift.x).toDp().value.toDouble(),
                             y = (box.top + shift.y).toDp().value.toDouble(),

@@ -60,7 +60,7 @@
     }
 
     function frameContentTop(payload) {
-        return (payload.actionBarVisible ? ACTION_BAR_HEIGHT : 0) + (payload.sasayakiVisible ? SASAYAKI_BAR_HEIGHT : 0);
+        return ((payload.actionBarVisible ? ACTION_BAR_HEIGHT : 0) + (payload.sasayakiVisible ? SASAYAKI_BAR_HEIGHT : 0)) * (payload.uiScale || 1);
     }
 
     function button(iconName, enabled, action, label, className = '') {
@@ -121,6 +121,9 @@
                 iframe,
             );
         }
+        shell.querySelectorAll('.hoshi-reader-popup-bar').forEach(bar => {
+            bar.style.zoom = String(payload.uiScale || 1);
+        });
     }
 
     function applyShellStyle(shell, payload) {

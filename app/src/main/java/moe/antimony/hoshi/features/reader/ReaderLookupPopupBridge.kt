@@ -30,6 +30,7 @@ import java.io.File
 internal data class ReaderLookupPopupViewport(
     val width: Double,
     val height: Double,
+    val uiScale: Double = 1.0,
 )
 
 @Serializable
@@ -104,6 +105,7 @@ internal data class ReaderLookupPopupFramePayload(
     val clearSelectionSignal: Int,
     val selectionOffsetY: Double,
     val iframeUrl: String,
+    val uiScale: Double = 1.0,
 ) {
     companion object {
         fun fromPopup(
@@ -126,6 +128,7 @@ internal data class ReaderLookupPopupFramePayload(
                 screenHeight = viewport.height,
                 maxWidth = state.width.toDouble(),
                 maxHeight = state.height.toDouble(),
+                uiScale = viewport.uiScale,
                 isVertical = state.isVertical,
                 isFullWidth = state.isFullWidth,
                 topInset = state.topInset,
@@ -165,8 +168,10 @@ internal data class ReaderLookupPopupFramePayload(
                     backCount = backCount,
                     forwardCount = forwardCount,
                     hasSasayakiCue = hasSasayakiCue,
+                    uiScale = viewport.uiScale,
                 ),
                 iframeUrl = iframeUrl,
+                uiScale = viewport.uiScale,
             )
         }
     }

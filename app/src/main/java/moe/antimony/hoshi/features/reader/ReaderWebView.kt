@@ -1,5 +1,7 @@
 package moe.antimony.hoshi.features.reader
 
+import moe.antimony.hoshi.ui.theme.PlatformReaderUi
+import moe.antimony.hoshi.ui.theme.currentLargeScreenUiScale
 import moe.antimony.hoshi.features.usage.ReaderUsageSession
 import moe.antimony.hoshi.features.usage.UsageContentType
 import moe.antimony.hoshi.features.usage.UsageLookupSource
@@ -125,7 +127,7 @@ fun ReaderWebView(
     /** Opens sentence mode for this book; `null` hides the menu entry. */
     onOpenSentenceMode: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
-) {
+) = PlatformReaderUi {
     var webView by remember { mutableStateOf<WebView?>(null) }
     val context = LocalContext.current
     val appContainer = LocalHoshiAppContainer.current
@@ -331,10 +333,12 @@ fun ReaderWebView(
         },
     )
     val ankiUiState by ankiViewModel.uiState.collectAsState()
+    val readerUiScale = currentLargeScreenUiScale()
     val popupAssets = remember(context) { LookupPopupAssets.load(context) }
     val readerPopupBridgeHolder = remember { ReaderLookupPopupBridgeCallbackHolder() }
     val popupDarkMode = effectiveSettings.usesDarkInterface(systemDarkTheme)
     val readerPopupIframeDocument = remember(
+        readerUiScale,
         dictionaryStyles,
         dictionarySettings,
         effectiveSettings.popupSwipeToDismiss,
@@ -364,6 +368,7 @@ fun ReaderWebView(
             ankiSettings = ankiUiState.popupSettings,
             fontFaceCss = fontManager.popupFontFaceCss(),
             popupScale = effectiveSettings.popupScale,
+            uiScale = readerUiScale,
         )
     }
     val currentReaderPopupIframeDocument = rememberUpdatedState(readerPopupIframeDocument)
@@ -1416,6 +1421,7 @@ fun ReaderWebView(
                 val viewportHorizontalPadding = maxWidth * effectiveSettings.continuousViewportHorizontalPaddingRatio.toFloat()
                 val viewportVerticalPadding = maxHeight * effectiveSettings.continuousViewportVerticalPaddingRatio.toFloat()
                 val readerLookupPopupViewport = ReaderLookupPopupViewport(
+                    uiScale = readerUiScale,
                     width = (maxWidth.value - viewportHorizontalPadding.value * 2f).coerceAtLeast(0f).toDouble(),
                     height = (maxHeight.value - viewportVerticalPadding.value * 2f).coerceAtLeast(0f).toDouble(),
                 )

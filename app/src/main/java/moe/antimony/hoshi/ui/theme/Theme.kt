@@ -153,11 +153,13 @@ fun HoshiReaderTheme(
         LocalHoshiEInkMode provides eInkMode,
         LocalHoshiDarkTheme provides darkTheme,
     ) {
-        MaterialTheme(
-            colorScheme = colorScheme,
-            typography = Typography,
-            content = content
-        )
+        AdaptiveUi {
+            MaterialTheme(
+                colorScheme = colorScheme,
+                typography = Typography,
+                content = content,
+            )
+        }
     }
 }
 

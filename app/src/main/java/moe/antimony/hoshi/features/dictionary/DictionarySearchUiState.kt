@@ -95,6 +95,7 @@ internal object DictionarySearchContent {
         ankiSettings: AnkiPopupSettings = AnkiPopupSettings(),
         fontFaceCss: String = "",
         popupScale: Double = 1.0,
+        uiScale: Double = 1.0,
     ): DictionarySearchRenderState {
         if (results.isEmpty()) {
             return DictionarySearchRenderState(
@@ -119,6 +120,7 @@ internal object DictionarySearchContent {
                 ankiSettings = ankiSettings,
                 fontFaceCss = fontFaceCss,
                 popupScale = popupScale,
+                uiScale = uiScale,
             ),
             results = results,
             hasResults = true,
