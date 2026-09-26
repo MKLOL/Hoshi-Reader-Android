@@ -1004,6 +1004,7 @@ internal fun MangaReaderScreen(
                 readerSettings.mangaSingleTapLookup,
                 readerSettings.mangaUseNotoSansJp,
                 readerSettings.mangaShowCopyButton,
+                readerSettings.mangaEnlargeSmallText,
             ) {
                 MangaPageRenderConfig(
                     backgroundCssColor = backgroundCssColor,
@@ -1014,6 +1015,7 @@ internal fun MangaReaderScreen(
                     singleTapLookup = readerSettings.mangaSingleTapLookup,
                     useNotoSansJpFont = readerSettings.mangaUseNotoSansJp,
                     showCopyButton = readerSettings.mangaShowCopyButton,
+                    enlargeSmallText = readerSettings.mangaEnlargeSmallText,
                 )
             }
             LaunchedEffect(book, pageIndex, renderConfig, mangaImageResolver) {

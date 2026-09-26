@@ -843,4 +843,6 @@
     <string name="podcasts_reason_too_large">the file is larger than allowed</string>
     <string name="podcasts_reason_incomplete">the transfer stopped early</string>
     <string name="podcasts_reason_save_failed">the file could not be saved</string>
+    <string name="reader_behavior_manga_enlarge_small_text">Manga: Enlarge Small Text</string>
+    <string name="reader_behavior_manga_enlarge_small_text_desc">Makes small revealed manga text easier to tap. Turn off to keep the original OCR text size. Translation and dictionary popup sizes are separate.</string>
 </resources>

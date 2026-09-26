@@ -2,6 +2,7 @@ package moe.antimony.hoshi.features.dictionary
 
 import moe.antimony.hoshi.ui.theme.PlatformReaderUi
 import moe.antimony.hoshi.ui.theme.largeScreenUiScale
+import moe.antimony.hoshi.ui.theme.currentPopupReadability
 import android.graphics.Color
 import android.graphics.drawable.ColorDrawable
 import android.os.Bundle
@@ -148,6 +149,7 @@ private fun ProcessTextLookupOverlay(
                 onClick = onClose,
             ),
     ) {
+        val readability = currentPopupReadability()
         val displayedPopups = popups.mapIndexed { index, popup ->
             if (index == 0) {
                 val centeredSelection = popup.state.selection.copy(
@@ -158,7 +160,7 @@ private fun ProcessTextLookupOverlay(
                         popupMaxHeight = popup.state.height.toDouble(),
                         topInset = topInset.toDouble(),
                         bottomInset = popup.state.bottomInset,
-                        uiScale = largeScreenUiScale(maxWidth.value.toDouble(), maxHeight.value.toDouble()),
+                        uiScale = largeScreenUiScale(maxWidth.value.toDouble(), maxHeight.value.toDouble()) * readability.frameScale,
                     ),
                 )
                 popup.copy(

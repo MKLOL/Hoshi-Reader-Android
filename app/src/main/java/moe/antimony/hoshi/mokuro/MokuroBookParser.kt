@@ -95,6 +95,7 @@ private fun RawMokuroBlock.toMokuroTextBox(blockIndex: Int = 0): MokuroTextBox? 
         vertical = vertical,
         lines = lines,
         blockIndex = blockIndex,
+        originalFontSize = fontSize.toInt().coerceAtLeast(1),
     )
 }
 

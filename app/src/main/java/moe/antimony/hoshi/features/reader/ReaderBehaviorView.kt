@@ -134,6 +134,13 @@ fun ReaderBehaviorScreen(
                     )
                     BehaviorDivider()
                     BehaviorSwitchRow(
+                        label = stringResource(ReaderBehaviorRow.MangaEnlargeSmallText.labelRes),
+                        checked = settings.mangaEnlargeSmallText,
+                        onCheckedChange = { onSettingsChange(settings.copy(mangaEnlargeSmallText = it)) },
+                        description = stringResource(R.string.reader_behavior_manga_enlarge_small_text_desc),
+                    )
+                    BehaviorDivider()
+                    BehaviorSwitchRow(
                         label = stringResource(ReaderBehaviorRow.MangaShowCopyButton.labelRes),
                         checked = settings.mangaShowCopyButton,
                         onCheckedChange = {
@@ -179,6 +186,7 @@ private enum class ReaderBehaviorRow(val labelRes: Int) {
     EInkMode(R.string.reader_appearance_eink_mode),
     MangaSingleTapLookup(R.string.reader_behavior_manga_single_tap_lookup),
     MangaUseNotoSansJp(R.string.reader_behavior_manga_use_noto_sans_jp),
+    MangaEnlargeSmallText(R.string.reader_behavior_manga_enlarge_small_text),
     MangaShowCopyButton(R.string.reader_behavior_manga_show_copy_button),
     AutomaticallyCheckForUpdates(R.string.reader_behavior_auto_check_updates),
 }

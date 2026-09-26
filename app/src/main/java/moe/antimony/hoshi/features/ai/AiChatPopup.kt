@@ -1,6 +1,8 @@
 package moe.antimony.hoshi.features.ai
 
 import moe.antimony.hoshi.ui.theme.AdaptiveUi
+import moe.antimony.hoshi.ui.theme.PopupTypography
+import moe.antimony.hoshi.ui.theme.currentPopupReadability
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -114,7 +116,8 @@ fun AiChatPopupView(
     /** Non-null when the reply came from the pre-translation cache. */
     onAskLive: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
-) = AdaptiveUi {
+) = AdaptiveUi { PopupTypography {
+    val readability = currentPopupReadability()
     BoxWithConstraints(
         modifier = modifier
             .fillMaxSize()
@@ -143,7 +146,7 @@ fun AiChatPopupView(
             modifier = Modifier
                 .padding(top = topInset, bottom = bottomInset)
                 .padding(AI_CHAT_CARD_MARGIN)
-                .widthIn(max = AI_CHAT_CARD_MAX_WIDTH)
+                .widthIn(max = if (readability.textScale > 1.0) maxOf(AI_CHAT_CARD_MAX_WIDTH, maxWidth * 0.86f) else AI_CHAT_CARD_MAX_WIDTH)
                 .fillMaxWidth()
                 .height(cardHeight)
                 .clickable(
@@ -216,7 +219,7 @@ fun AiChatPopupView(
             }
         }
     }
-}
+} }
 
 @Composable
 private fun LoadingBody(onDevice: Boolean) {

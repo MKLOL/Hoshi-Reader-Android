@@ -51,4 +51,9 @@ data class MokuroTextBox(
      * desktop tool agree on.
      */
     val blockIndex: Int = 0,
-)
+    /** Unmodified OCR glyph height, retained so reveal-size preferences can change immediately. */
+    val originalFontSize: Int = fontSize,
+) {
+    fun revealFontSize(enlargeSmallText: Boolean): Int =
+        (if (enlargeSmallText) fontSize else originalFontSize).coerceAtLeast(1)
+}

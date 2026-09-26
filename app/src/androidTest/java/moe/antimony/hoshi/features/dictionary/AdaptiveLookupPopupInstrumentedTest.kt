@@ -47,7 +47,8 @@ class AdaptiveLookupPopupInstrumentedTest {
         }
         verifyPopup(expectedWidthDp = 320.0, expectedHeightDp = 250.0, expectedZoom = 1.25)
         compose.runOnIdle { tablet = true }
-        verifyPopup(expectedWidthDp = 480.0, expectedHeightDp = 375.0, expectedZoom = 1.875)
+        // Existing 1.5× large-window controls plus 1.4× popup frame and 1.6× reading text.
+        verifyPopup(expectedWidthDp = 672.0, expectedHeightDp = 525.0, expectedZoom = 3.0)
         compose.runOnIdle { tablet = false }
         verifyPopup(expectedWidthDp = 320.0, expectedHeightDp = 250.0, expectedZoom = 1.25)
     }

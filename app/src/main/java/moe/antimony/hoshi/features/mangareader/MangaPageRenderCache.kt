@@ -23,6 +23,7 @@ internal data class MangaPageRenderConfig(
     val useNotoSansJpFont: Boolean = false,
     /** See ReaderSettings.mangaShowCopyButton — off hides Copy and enlarges Translate. */
     val showCopyButton: Boolean = false,
+    val enlargeSmallText: Boolean = true,
     val selectionScript: String = ReaderSelectionScripts.source(),
 )
 
@@ -64,6 +65,7 @@ internal class MangaPageRenderCache(
             singleTapLookup = config.singleTapLookup,
             useNotoSansJpFont = config.useNotoSansJpFont,
             showCopyButton = config.showCopyButton,
+            enlargeSmallText = config.enlargeSmallText,
         )
 
         synchronized(lock) {

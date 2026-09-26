@@ -68,6 +68,7 @@ class ReaderSettingsRepositoryTest {
             assertFalse(settings.volumeKeysSeekSasayaki)
             assertFalse(settings.reverseVolumeKeyDirection)
             assertFalse(settings.keepScreenOnWhileReading)
+            assertTrue(settings.mangaEnlargeSmallText)
         }
     }
 
@@ -170,6 +171,7 @@ class ReaderSettingsRepositoryTest {
                     volumeKeysSeekSasayaki = true,
                     reverseVolumeKeyDirection = true,
                     keepScreenOnWhileReading = true,
+                    mangaEnlargeSmallText = false,
                 )
             }
 
@@ -218,6 +220,7 @@ class ReaderSettingsRepositoryTest {
             assertTrue(saved.volumeKeysSeekSasayaki)
             assertTrue(saved.reverseVolumeKeyDirection)
             assertTrue(saved.keepScreenOnWhileReading)
+            assertFalse(saved.mangaEnlargeSmallText)
         }
     }
 

@@ -841,4 +841,6 @@
     <string name="podcasts_reason_too_large">文件超过允许的大小</string>
     <string name="podcasts_reason_incomplete">传输提前中断</string>
     <string name="podcasts_reason_save_failed">无法保存文件</string>
+    <string name="reader_behavior_manga_enlarge_small_text">漫画：放大小字</string>
+    <string name="reader_behavior_manga_enlarge_small_text_desc">放大漫画中显示的小字，便于点击。关闭后保留原始 OCR 字号。此设置不影响翻译和辞典弹窗的字号。</string>
 </resources>

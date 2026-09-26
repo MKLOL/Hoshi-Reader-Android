@@ -7,6 +7,12 @@ Semantic Versioning.
 
 ## [Unreleased]
 
+### Added
+- **Control manga text enlargement.** Settings → Behavior → Manga: Enlarge Small Text lets you turn off enlargement of revealed manga text and keep its original OCR size. It defaults on and is independent of translation and dictionary popup sizes.
+
+### Fixed
+- **Larger popup fonts on BOOX and other large tablets.** Translation text, word tables, grammar, dictionary headwords, furigana, and definitions are now 60% larger on tablet windows, including BOOX display settings where the previous change left them tiny. Popup panels grow to fit; unfolded Galaxy Fold sizing stays unchanged.
+
 ## [v0.11.18] - 2026-09-26
 
 ### Changed

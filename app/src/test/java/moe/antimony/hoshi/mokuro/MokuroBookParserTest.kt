@@ -81,6 +81,9 @@ class MokuroBookParserTest {
         // mokuroFs = 25 → headroom = (30 - 25) = 5; result = 25 + 5×0.5 = 27.5 → 27.
         // See MokuroBookParser.clampMokuroFontSize.
         assertEquals(27, box.fontSize)
+        assertEquals(25, box.originalFontSize)
+        assertEquals(25, box.revealFontSize(false))
+        assertEquals(27, box.revealFontSize(true))
         assertFalse(box.vertical)
         assertEquals(listOf("ＹＯＴＳＵＢＡ＆！", "ＫＲＹＯＨＩＫＯＡＺＵＭＡ"), box.lines)
     }

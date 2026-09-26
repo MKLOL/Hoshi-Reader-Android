@@ -40,6 +40,33 @@ import java.util.concurrent.TimeUnit
 @RunWith(AndroidJUnit4::class)
 class MangaWrapFallbackInstrumentedTest {
     @Test
+    fun disablingEnlargementRestoresOriginalGlyphSizeAndSkipsWrapBoost() {
+        val page = MokuroPage(0, "test.png", 1000, 1000, listOf(
+            MokuroTextBox(100, 100, 85, 145, 22, false, listOf("なんだそりゃ"), originalFontSize = 15),
+        ))
+        for (enabled in listOf(false, true)) {
+            val html = MangaPageHtml.build(page, "#ffffff", "", false, false, 500, 500,
+                enlargeSmallText = enabled)
+            val result = runInWebView(html) { webView, done ->
+                webView.evaluateJavascript("""
+                    (function() {
+                      var box = document.querySelector('.ocr-box');
+                      var before = parseFloat(getComputedStyle(box).fontSize);
+                      window.hoshiManga.tryWrapFallback(box);
+                      return JSON.stringify({before:before,after:parseFloat(getComputedStyle(box).fontSize),wrapped:box.classList.contains('wrap')});
+                    })();
+                """.trimIndent()) { value -> done(JSONTokener(value).nextValue() as String) }
+            }
+            val state = JSONObject(requireNotNull(result))
+            assertEquals(if (enabled) 11.0 else 7.5, state.getDouble("before"), 0.05)
+            if (!enabled) {
+                assertEquals(7.5, state.getDouble("after"), 0.05)
+                assertFalse(state.getBoolean("wrapped"))
+            }
+        }
+    }
+
+    @Test
     fun fractionalFittingFontTerminatesAndPromotesWrap() {
         val state = runFractionalFontFallback(initialPx = 7.4)
 

@@ -90,6 +90,7 @@ internal object MangaPageHtml {
          * ChatGPT button is shown, drawn larger.
          */
         showCopyButton: Boolean = false,
+        enlargeSmallText: Boolean = true,
     ): String {
         val imageWidth = page.imageWidth.coerceAtLeast(1)
         val imageHeight = page.imageHeight.coerceAtLeast(1)
@@ -106,7 +107,7 @@ internal object MangaPageHtml {
         val frameHeightCss = formatNumber(imageHeight * fitScale)
         val actionButtons = actionButtonsHtml(showCopyButton)
         val boxes = page.textBoxes.joinToString("\n") { box ->
-            textBoxHtml(box, imageWidth, imageHeight, actionButtons, page.index)
+            textBoxHtml(box, imageWidth, imageHeight, actionButtons, page.index, enlargeSmallText)
         }
         return """
             <!DOCTYPE html>
@@ -420,6 +421,7 @@ internal object MangaPageHtml {
         imageHeight: Int,
         actionButtons: String,
         pageIndex: Int? = null,
+        enlargeSmallText: Boolean = true,
     ): String {
         val leftPct = percent(box.left, imageWidth)
         val topPct = percent(box.top, imageHeight)
@@ -427,7 +429,7 @@ internal object MangaPageHtml {
         val heightPct = percent(box.height, imageHeight)
         // Font size is in image pixels; express it relative to image width so it scales
         // with the rendered frame (cqw = 1% of the container's width).
-        val fontCqw = percent(box.fontSize, imageWidth)
+        val fontCqw = percent(box.revealFontSize(enlargeSmallText), imageWidth)
         val verticalClass = if (box.vertical) " vertical" else ""
         // Join with literal `\n` so the existing shared selection scanner
         // (ReaderSelectionScripts.kt) sees mokuro's line boundaries as sentence
@@ -448,7 +450,7 @@ internal object MangaPageHtml {
         // The bubble's mokuro address, used to look up its pre-computed offline translation.
         // Same form on every platform and in the desktop tool: `p{pageIndex}b{blockIndex}`.
         val blockAttribute = if (pageIndex != null) {
-            """ data-hoshi-block="p${pageIndex}b${box.blockIndex}""""
+            """ data-enlarge-text="$enlargeSmallText" data-hoshi-block="p${pageIndex}b${box.blockIndex}""""
         } else {
             ""
         }
@@ -673,7 +675,7 @@ internal object MangaPageHtml {
             // `text-orientation: upright` doesn't soft-wrap usefully (one glyph =
             // one column cell), so wrap mode would give the same or worse size.
             tryWrapFallback: function(box) {
-              if (box.dataset.wrapTried === '1') return;
+              if (box.dataset.enlargeText === 'false' || box.dataset.wrapTried === '1') return;
               box.dataset.wrapTried = '1';
               if (box.classList.contains('vertical')) return;
               var initialPx = parseFloat(window.getComputedStyle(box).fontSize);

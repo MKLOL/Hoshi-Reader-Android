@@ -1,6 +1,7 @@
 package moe.antimony.hoshi.features.dictionary
 
 import moe.antimony.hoshi.ui.theme.currentLargeScreenUiScale
+import moe.antimony.hoshi.ui.theme.currentPopupReadability
 import android.annotation.SuppressLint
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -154,6 +155,7 @@ fun DictionarySearchView(
         else -> Color(0x993C3C43)
     }
     val uiScale = currentLargeScreenUiScale()
+    val contentScale = uiScale * currentPopupReadability().textScale
     val popupOptions = dictionarySearchPopupOptions(
         readerSettings = readerSettings,
         dictionarySettings = uiState.dictionarySettings,
@@ -162,7 +164,7 @@ fun DictionarySearchView(
         uiScale = uiScale,
     )
     val resultHtml = remember(
-        uiScale,
+        contentScale,
         uiState.lastQuery,
         uiState.results,
         uiState.dictionaryStyles,
@@ -186,7 +188,7 @@ fun DictionarySearchView(
             ankiSettings = ankiUiState.popupSettings,
             fontFaceCss = fontFaceCss,
             popupScale = readerSettings.popupScale,
-            uiScale = uiScale,
+            uiScale = contentScale,
         ).html
     }
     val themedPopups = remember(
@@ -235,7 +237,7 @@ fun DictionarySearchView(
                 fontManager = fontManager,
                 audioSettings = uiState.audioSettings,
                 popupScale = readerSettings.popupScale,
-                uiScale = uiScale,
+                uiScale = contentScale,
                 actionButtonTintColor = actionButtonTintColor,
                 localAudioRepository = localAudioRepository,
                 clearSelectionSignal = uiState.resultClearSelectionSignal,

@@ -1,6 +1,8 @@
 package moe.antimony.hoshi.features.dictionary
 
 import moe.antimony.hoshi.ui.theme.largeScreenUiScale
+import moe.antimony.hoshi.ui.theme.PopupReadability
+import moe.antimony.hoshi.ui.theme.popupReadabilityForWindow
 import android.annotation.SuppressLint
 import android.content.Context
 import android.content.res.ColorStateList
@@ -382,6 +384,7 @@ private class LookupPopupHostView(
     private var contentReady = false
     private var clearSelectionSignal = 0
     private var popupScale = 1.0
+    private var readability = PopupReadability()
     private var uiScale = 1.0
     private var backCount = 0
     private var forwardCount = 0
@@ -450,6 +453,7 @@ private class LookupPopupHostView(
             (overlayView?.width ?: 0) / density.toDouble(),
             (overlayView?.height ?: 0) / density.toDouble(),
         )
+        readability = popupReadabilityForWindow(context, overlayView?.width ?: 0, overlayView?.height ?: 0)
         actionBar.setUiScale(uiScale)
         sasayakiBar.setUiScale(uiScale)
         val html = renderHtml(state, state.results, ankiSettings)
@@ -474,7 +478,7 @@ private class LookupPopupHostView(
         if (popupScale != state.popupScale) {
             popupScale = state.popupScale
             webView.evaluateJavascript(
-                "document.documentElement.style.zoom = '${state.popupScale.coerceIn(0.8, 1.5) * uiScale}'; if (typeof syncButtonFrames === 'function') requestAnimationFrame(syncButtonFrames)",
+                "document.documentElement.style.zoom = '${state.popupScale.coerceIn(0.8, 1.5) * uiScale * readability.textScale}'; if (typeof syncButtonFrames === 'function') requestAnimationFrame(syncButtonFrames)",
                 null,
             )
         }
@@ -762,7 +766,7 @@ private class LookupPopupHostView(
         ankiSettings = ankiSettings,
         fontFaceCss = fontManager.popupFontFaceCss(),
         popupScale = state.popupScale,
-        uiScale = uiScale,
+        uiScale = uiScale * readability.textScale,
     )
 
     private fun createWebView(context: Context): PopupActionButtonWebView =
@@ -812,7 +816,7 @@ private class LookupPopupHostView(
             screenHeight = screenHeightDp.toDouble(),
             maxWidth = width.toDouble(),
             maxHeight = height.toDouble(),
-            uiScale = uiScale,
+            uiScale = uiScale * readability.frameScale,
             isVertical = isVertical,
             isFullWidth = isFullWidth,
             topInset = topInset,

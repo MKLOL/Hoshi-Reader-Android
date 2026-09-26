@@ -2,6 +2,7 @@ package moe.antimony.hoshi.features.reader
 
 import moe.antimony.hoshi.ui.theme.PlatformReaderUi
 import moe.antimony.hoshi.ui.theme.currentLargeScreenUiScale
+import moe.antimony.hoshi.ui.theme.currentPopupReadability
 import moe.antimony.hoshi.features.usage.ReaderUsageSession
 import moe.antimony.hoshi.features.usage.UsageContentType
 import moe.antimony.hoshi.features.usage.UsageLookupSource
@@ -334,11 +335,12 @@ fun ReaderWebView(
     )
     val ankiUiState by ankiViewModel.uiState.collectAsState()
     val readerUiScale = currentLargeScreenUiScale()
+    val popupReadability = currentPopupReadability()
     val popupAssets = remember(context) { LookupPopupAssets.load(context) }
     val readerPopupBridgeHolder = remember { ReaderLookupPopupBridgeCallbackHolder() }
     val popupDarkMode = effectiveSettings.usesDarkInterface(systemDarkTheme)
     val readerPopupIframeDocument = remember(
-        readerUiScale,
+        readerUiScale, popupReadability,
         dictionaryStyles,
         dictionarySettings,
         effectiveSettings.popupSwipeToDismiss,
@@ -368,7 +370,7 @@ fun ReaderWebView(
             ankiSettings = ankiUiState.popupSettings,
             fontFaceCss = fontManager.popupFontFaceCss(),
             popupScale = effectiveSettings.popupScale,
-            uiScale = readerUiScale,
+            uiScale = readerUiScale * popupReadability.textScale,
         )
     }
     val currentReaderPopupIframeDocument = rememberUpdatedState(readerPopupIframeDocument)
@@ -1422,6 +1424,7 @@ fun ReaderWebView(
                 val viewportVerticalPadding = maxHeight * effectiveSettings.continuousViewportVerticalPaddingRatio.toFloat()
                 val readerLookupPopupViewport = ReaderLookupPopupViewport(
                     uiScale = readerUiScale,
+                    popupFrameScale = popupReadability.frameScale,
                     width = (maxWidth.value - viewportHorizontalPadding.value * 2f).coerceAtLeast(0f).toDouble(),
                     height = (maxHeight.value - viewportVerticalPadding.value * 2f).coerceAtLeast(0f).toDouble(),
                 )

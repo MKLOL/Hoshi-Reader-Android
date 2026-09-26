@@ -31,6 +31,7 @@ internal data class ReaderLookupPopupViewport(
     val width: Double,
     val height: Double,
     val uiScale: Double = 1.0,
+    val popupFrameScale: Double = 1.0,
 )
 
 @Serializable
@@ -128,7 +129,7 @@ internal data class ReaderLookupPopupFramePayload(
                 screenHeight = viewport.height,
                 maxWidth = state.width.toDouble(),
                 maxHeight = state.height.toDouble(),
-                uiScale = viewport.uiScale,
+                uiScale = viewport.uiScale * viewport.popupFrameScale,
                 isVertical = state.isVertical,
                 isFullWidth = state.isFullWidth,
                 topInset = state.topInset,

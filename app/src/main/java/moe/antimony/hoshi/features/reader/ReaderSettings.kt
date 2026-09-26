@@ -94,6 +94,8 @@ data class ReaderSettings(
      * hidden and the translate button is drawn larger so it is easier to hit.
      */
     val mangaShowCopyButton: Boolean = false,
+    /** Keep the current reveal-size boost by default; off uses the original OCR glyph size. */
+    val mangaEnlargeSmallText: Boolean = true,
 ) {
     val bottomOverlapPx: Int
         get() = if (verticalWriting) fontSize else 0
@@ -299,6 +301,7 @@ class ReaderSettingsStore(context: Context) : ReaderSettingsLegacySource {
         mangaSingleTapLookup = preferences.getBoolean("mangaSingleTapLookup", false),
         mangaUseNotoSansJp = preferences.getBoolean("mangaUseNotoSansJp", false),
         mangaShowCopyButton = preferences.getBoolean("mangaShowCopyButton", false),
+        mangaEnlargeSmallText = preferences.getBoolean("mangaEnlargeSmallText", true),
     )
 
     fun save(settings: ReaderSettings) {
@@ -356,6 +359,7 @@ class ReaderSettingsStore(context: Context) : ReaderSettingsLegacySource {
             .putBoolean("mangaSingleTapLookup", settings.mangaSingleTapLookup)
             .putBoolean("mangaUseNotoSansJp", settings.mangaUseNotoSansJp)
             .putBoolean("mangaShowCopyButton", settings.mangaShowCopyButton)
+            .putBoolean("mangaEnlargeSmallText", settings.mangaEnlargeSmallText)
             .apply()
     }
 }
@@ -453,6 +457,7 @@ class ReaderSettingsRepository(
             mangaSingleTapLookup = this[KEY_MANGA_SINGLE_TAP_LOOKUP] ?: false,
             mangaUseNotoSansJp = this[KEY_MANGA_USE_NOTO_SANS_JP] ?: false,
             mangaShowCopyButton = this[KEY_MANGA_SHOW_COPY_BUTTON] ?: false,
+            mangaEnlargeSmallText = this[KEY_MANGA_ENLARGE_SMALL_TEXT] ?: true,
         )
 
     private fun MutablePreferences.writeReaderSettings(settings: ReaderSettings) {
@@ -510,6 +515,7 @@ class ReaderSettingsRepository(
         this[KEY_MANGA_SINGLE_TAP_LOOKUP] = settings.mangaSingleTapLookup
         this[KEY_MANGA_USE_NOTO_SANS_JP] = settings.mangaUseNotoSansJp
         this[KEY_MANGA_SHOW_COPY_BUTTON] = settings.mangaShowCopyButton
+        this[KEY_MANGA_ENLARGE_SMALL_TEXT] = settings.mangaEnlargeSmallText
     }
 
     companion object {
@@ -572,6 +578,7 @@ class ReaderSettingsRepository(
         private val KEY_MANGA_SINGLE_TAP_LOOKUP = booleanPreferencesKey("mangaSingleTapLookup")
         private val KEY_MANGA_USE_NOTO_SANS_JP = booleanPreferencesKey("mangaUseNotoSansJp")
         private val KEY_MANGA_SHOW_COPY_BUTTON = booleanPreferencesKey("mangaShowCopyButton")
+        private val KEY_MANGA_ENLARGE_SMALL_TEXT = booleanPreferencesKey("mangaEnlargeSmallText")
     }
 }
 
