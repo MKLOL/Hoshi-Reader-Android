@@ -845,4 +845,22 @@
     <string name="podcasts_reason_save_failed">the file could not be saved</string>
     <string name="reader_behavior_manga_enlarge_small_text">Manga: Enlarge Small Text</string>
     <string name="reader_behavior_manga_enlarge_small_text_desc">Makes small revealed manga text easier to tap. Turn off to keep the original OCR text size. Translation and dictionary popup sizes are separate.</string>
+
+    <!-- Live card appearance editor -->
+    <string name="settings_popup_cards">Popup Cards</string>
+    <string name="card_dictionary">Dictionary</string>
+    <string name="card_translation">Translation</string>
+    <string name="card_preview_label">Actual-size preview · scroll to inspect</string>
+    <string name="card_preview_full">Full preview</string>
+    <string name="card_defaults_description">Changes save automatically. Unchanged controls follow this device’s defaults.</string>
+    <string name="card_content_scale">Content scale</string>
+    <string name="card_font_size">Font size</string>
+    <string name="card_dp_format">%1$d dp</string>
+    <string name="card_percent_format">%1$d%%</string>
+    <string name="card_reset">Reset this card to device defaults</string>
+    <string name="card_preview_glossary">book; volume; script\n\n1. book; volume\n\n2. main; head; this; our; current; present\n\n3. origin; basis; foundation</string>
+    <string name="card_preview_translation">I like reading books.\n\n| Word | Reading | Meaning |\n| --- | --- | --- |\n| 本 | ほん | book |\n| を | を | object marker |\n| 読む | よむ | to read |\n| の | の | turns the verb into a noun |\n| が | が | subject marker |\n| 好き | すき | liked; fond of |\n| だ | だ | casual statement |\n\n**Grammar**\n\n読むの means “reading”. 本を読むのが好きだ means “I like reading books.”</string>
+    <string name="card_preview_word" translatable="false">本</string>
+    <string name="card_preview_reading" translatable="false">ほん</string>
+    <string name="card_preview_source" translatable="false">本を読むのが好きだ</string>
 </resources>

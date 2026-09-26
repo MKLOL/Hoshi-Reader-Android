@@ -7,6 +7,7 @@ import moe.antimony.hoshi.features.audio.AudioSettings
 import moe.antimony.hoshi.features.anki.AnkiMiningContext
 import moe.antimony.hoshi.features.reader.ReaderSelectionData
 import java.util.UUID
+import moe.antimony.hoshi.features.reader.PopupCardStyle
 
 internal data class LookupPopupOptions(
     val isVertical: Boolean,
@@ -19,6 +20,7 @@ internal data class LookupPopupOptions(
     val reducedMotionScrollPercent: Int = 100,
     val reducedMotionSwipeThreshold: Int = 40,
     val popupScale: Double = 1.0,
+    val cardStyle: PopupCardStyle = PopupCardStyle(),
     val topInset: Double = 0.0,
     val bottomInset: Double = 0.0,
     val dictionarySettings: DictionarySettings = DictionarySettings(),
@@ -38,6 +40,8 @@ internal data class LookupPopupItem(
 )
 
 internal data class LookupPopupState(
+    /** Preview hosts are smaller than the real window; keep the reading window’s UI scale. */
+    val previewUiScale: Double? = null,
     val selection: ReaderSelectionData,
     val results: List<LookupResult>,
     val dictionaryStyles: Map<String, String> = emptyMap(),
@@ -52,6 +56,7 @@ internal data class LookupPopupState(
     val reducedMotionScrollPercent: Int = 100,
     val reducedMotionSwipeThreshold: Int = 40,
     val popupScale: Double = 1.0,
+    val cardStyle: PopupCardStyle = PopupCardStyle(),
     val topInset: Double = 0.0,
     val bottomInset: Double = 0.0,
     val darkMode: Boolean = false,
@@ -92,6 +97,7 @@ internal fun createLookupPopupItem(
             reducedMotionScrollPercent = options.reducedMotionScrollPercent,
             reducedMotionSwipeThreshold = options.reducedMotionSwipeThreshold,
             popupScale = options.popupScale,
+            cardStyle = options.cardStyle,
             topInset = options.topInset,
             bottomInset = options.bottomInset,
             darkMode = options.darkMode,
@@ -139,6 +145,7 @@ internal fun List<LookupPopupItem>.withLookupPopupVisualOptions(
     eInkMode: Boolean,
     audioSettings: AudioSettings,
     popupScale: Double = 1.0,
+    cardStyle: PopupCardStyle = PopupCardStyle(),
 ): List<LookupPopupItem> =
     map { popup ->
         popup.copy(
@@ -147,6 +154,7 @@ internal fun List<LookupPopupItem>.withLookupPopupVisualOptions(
                 eInkMode = eInkMode,
                 audioSettings = audioSettings,
                 popupScale = popupScale,
+                cardStyle = cardStyle,
             ),
         )
     }

@@ -1,6 +1,7 @@
 package moe.antimony.hoshi.features.dictionary
 
 import moe.antimony.hoshi.ui.theme.currentLargeScreenUiScale
+import moe.antimony.hoshi.features.reader.dictionaryCardStyle
 import moe.antimony.hoshi.ui.theme.currentPopupReadability
 import android.annotation.SuppressLint
 import androidx.compose.foundation.BorderStroke
@@ -106,6 +107,7 @@ internal fun dictionarySearchPopupOptions(
     reducedMotionScrollPercent = readerSettings.popupReducedMotionScrollPercent,
     reducedMotionSwipeThreshold = readerSettings.popupReducedMotionSwipeThreshold,
     popupScale = readerSettings.popupScale,
+    cardStyle = readerSettings.dictionaryCard,
     popupActionBar = false,
     topInset = DictionaryPopupTopInset * uiScale,
     bottomInset = DictionaryPopupBottomInset,
@@ -155,7 +157,8 @@ fun DictionarySearchView(
         else -> Color(0x993C3C43)
     }
     val uiScale = currentLargeScreenUiScale()
-    val contentScale = uiScale * currentPopupReadability().textScale
+    val cardStyle = readerSettings.dictionaryCardStyle(currentPopupReadability())
+    val contentScale = uiScale
     val popupOptions = dictionarySearchPopupOptions(
         readerSettings = readerSettings,
         dictionarySettings = uiState.dictionarySettings,
@@ -164,7 +167,7 @@ fun DictionarySearchView(
         uiScale = uiScale,
     )
     val resultHtml = remember(
-        contentScale,
+        contentScale, cardStyle,
         uiState.lastQuery,
         uiState.results,
         uiState.dictionaryStyles,
@@ -187,7 +190,8 @@ fun DictionarySearchView(
             audioSettings = uiState.audioSettings,
             ankiSettings = ankiUiState.popupSettings,
             fontFaceCss = fontFaceCss,
-            popupScale = readerSettings.popupScale,
+            popupScale = cardStyle.scale,
+            fontScale = cardStyle.fontScale,
             uiScale = contentScale,
         ).html
     }
@@ -197,6 +201,7 @@ fun DictionarySearchView(
         readerSettings.eInkMode,
         uiState.audioSettings,
         readerSettings.popupScale,
+        readerSettings.dictionaryCard,
         uiScale,
     ) {
         uiState.popups.map { it.copy(state = it.state.copy(topInset = DictionaryPopupTopInset * uiScale)) }.withLookupPopupVisualOptions(
@@ -204,6 +209,7 @@ fun DictionarySearchView(
             eInkMode = readerSettings.eInkMode,
             audioSettings = uiState.audioSettings,
             popupScale = readerSettings.popupScale,
+            cardStyle = readerSettings.dictionaryCard,
         )
     }
     val runLookup = {
@@ -236,7 +242,7 @@ fun DictionarySearchView(
                 assets = assets,
                 fontManager = fontManager,
                 audioSettings = uiState.audioSettings,
-                popupScale = readerSettings.popupScale,
+                popupScale = cardStyle.scale,
                 uiScale = contentScale,
                 actionButtonTintColor = actionButtonTintColor,
                 localAudioRepository = localAudioRepository,
@@ -547,7 +553,7 @@ private fun DictionaryResultWebView(
             if (appliedPopupScale != popupScale) {
                 appliedPopupScale = popupScale
                 webView.evaluateJavascript(
-                    "document.documentElement.style.zoom = '${popupScale.coerceIn(0.8, 1.5) * uiScale}'; if (typeof syncButtonFrames === 'function') requestAnimationFrame(syncButtonFrames)",
+                    "document.documentElement.style.zoom = '${popupScale.coerceIn(0.5, 3.0) * uiScale}'; if (typeof syncButtonFrames === 'function') requestAnimationFrame(syncButtonFrames)",
                     null,
                 )
             }

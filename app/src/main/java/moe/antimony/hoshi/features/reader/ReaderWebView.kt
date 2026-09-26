@@ -336,11 +336,12 @@ fun ReaderWebView(
     val ankiUiState by ankiViewModel.uiState.collectAsState()
     val readerUiScale = currentLargeScreenUiScale()
     val popupReadability = currentPopupReadability()
+    val cardStyle = effectiveSettings.dictionaryCardStyle(popupReadability)
     val popupAssets = remember(context) { LookupPopupAssets.load(context) }
     val readerPopupBridgeHolder = remember { ReaderLookupPopupBridgeCallbackHolder() }
     val popupDarkMode = effectiveSettings.usesDarkInterface(systemDarkTheme)
     val readerPopupIframeDocument = remember(
-        readerUiScale, popupReadability,
+        readerUiScale, cardStyle,
         dictionaryStyles,
         dictionarySettings,
         effectiveSettings.popupSwipeToDismiss,
@@ -354,6 +355,7 @@ fun ReaderWebView(
         ankiUiState.popupSettings,
         fontManager,
         effectiveSettings.popupScale,
+        effectiveSettings.dictionaryCard,
     ) {
         LookupPopupHtml.renderIframeDocument(
             assets = null,
@@ -369,8 +371,9 @@ fun ReaderWebView(
             audioSettings = audioSettings,
             ankiSettings = ankiUiState.popupSettings,
             fontFaceCss = fontManager.popupFontFaceCss(),
-            popupScale = effectiveSettings.popupScale,
-            uiScale = readerUiScale * popupReadability.textScale,
+            popupScale = cardStyle.scale,
+            fontScale = cardStyle.fontScale,
+            uiScale = readerUiScale,
         )
     }
     val currentReaderPopupIframeDocument = rememberUpdatedState(readerPopupIframeDocument)
@@ -408,12 +411,14 @@ fun ReaderWebView(
         effectiveSettings.eInkMode,
         audioSettings,
         effectiveSettings.popupScale,
+        effectiveSettings.dictionaryCard,
     ) {
         lookupPopups.withLookupPopupVisualOptions(
             darkMode = popupDarkMode,
             eInkMode = effectiveSettings.eInkMode,
             audioSettings = audioSettings,
             popupScale = effectiveSettings.popupScale,
+            cardStyle = effectiveSettings.dictionaryCard,
         )
     }
     val showReaderMenu = stateHolder.showReaderMenu
@@ -614,6 +619,7 @@ fun ReaderWebView(
         reducedMotionScrollPercent = effectiveSettings.popupReducedMotionScrollPercent,
         reducedMotionSwipeThreshold = effectiveSettings.popupReducedMotionSwipeThreshold,
         popupScale = effectiveSettings.popupScale,
+        cardStyle = effectiveSettings.dictionaryCard,
         popupActionBar = effectiveSettings.popupActionBar,
         dictionarySettings = dictionarySettings,
         darkMode = popupDarkMode,
@@ -1752,6 +1758,7 @@ fun ReaderWebView(
         }
         sentenceTranslationPopup?.let { popup ->
             AiChatPopupView(
+                cardStyle = effectiveSettings.translationCard,
                 state = popup,
                 onDismiss = {
                     sentenceTranslationJob?.cancel()

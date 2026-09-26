@@ -1,6 +1,7 @@
 package moe.antimony.hoshi.features.reader
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.material3.TextButton
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
@@ -33,6 +34,7 @@ fun ReaderBehaviorScreen(
     onSettingsChange: (ReaderSettings) -> Unit,
     onClose: () -> Unit,
     modifier: Modifier = Modifier,
+    onOpenCards: () -> Unit = {},
 ) {
     // The "Automatically Check for Updates" row is only mounted when UpdateConfig.AUTO_UPDATE_ENABLED
     // is on, so the rest of the screen stays free of network-update concerns when the
@@ -57,6 +59,10 @@ fun ReaderBehaviorScreen(
         ) {
             item {
                 BehaviorSettingsCard {
+                    TextButton(onClick = onOpenCards, modifier = Modifier.fillMaxWidth()) {
+                        Text(stringResource(R.string.settings_popup_cards))
+                    }
+                    BehaviorDivider()
                     BehaviorSwitchRow(
                         label = stringResource(ReaderBehaviorRow.DisablePageTurnAnimation.labelRes),
                         checked = settings.disablePageTurnAnimation,

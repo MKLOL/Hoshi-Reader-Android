@@ -762,15 +762,7 @@ internal fun MangaReaderScreen(
         }
     }
 
-    val lookupOptions = LookupPopupOptions(
-        isVertical = false,
-        width = readerSettings.popupWidth,
-        height = readerSettings.popupHeight,
-        dictionarySettings = dictionarySettings,
-        darkMode = readerSettings.usesDarkInterface(systemDark),
-        eInkMode = readerSettings.eInkMode,
-        documentTitle = book.title,
-    )
+    val lookupOptions = mangaLookupPopupOptions(readerSettings, dictionarySettings, systemDark, book.title)
 
     fun lookupPopupFor(selection: ReaderSelectionData): Pair<LookupPopupItem, Int>? =
         createLookupPopupItem(selection = selection, options = lookupOptions)
@@ -1233,6 +1225,7 @@ internal fun MangaReaderScreen(
             val activeAiChat = aiChatState
             if (activeAiChat != null) {
                 AiChatPopupView(
+                    cardStyle = readerSettings.translationCard,
                     state = activeAiChat,
                     onDismiss = { dismissAiChat() },
                     onRetry = { aiRetryAction?.invoke() },
@@ -1819,3 +1812,27 @@ internal fun MangaReaderSystemBarsEffect() {
         }
     }
 }
+
+internal fun mangaLookupPopupOptions(
+    readerSettings: ReaderSettings,
+    dictionarySettings: DictionarySettings,
+    systemDark: Boolean,
+    documentTitle: String,
+): LookupPopupOptions = LookupPopupOptions(
+    isVertical = false,
+    width = readerSettings.popupWidth,
+    height = readerSettings.popupHeight,
+    popupScale = readerSettings.popupScale,
+    cardStyle = readerSettings.dictionaryCard,
+    isFullWidth = readerSettings.popupFullWidth,
+    popupActionBar = readerSettings.popupActionBar,
+    swipeToDismiss = readerSettings.popupSwipeToDismiss,
+    swipeThreshold = readerSettings.popupSwipeThreshold,
+    reducedMotionScrolling = readerSettings.popupReducedMotionScrolling,
+    reducedMotionScrollPercent = readerSettings.popupReducedMotionScrollPercent,
+    reducedMotionSwipeThreshold = readerSettings.popupReducedMotionSwipeThreshold,
+    dictionarySettings = dictionarySettings,
+    darkMode = readerSettings.usesDarkInterface(systemDark),
+    eInkMode = readerSettings.eInkMode,
+    documentTitle = documentTitle,
+)

@@ -22,10 +22,12 @@ data class LookupPopupLayout(
     val uiScale: Double = 1.0,
 ) {
     fun calculate(): LookupPopupFrame {
-        if (uiScale != 1.0) {
+        val boundedWidth = minOf(maxWidth * uiScale, (screenWidth - screenBorderPadding * 2).coerceAtLeast(1.0))
+        val boundedHeight = minOf(maxHeight * uiScale, (screenHeight - topInset - bottomInset - screenBorderPadding * 2).coerceAtLeast(1.0))
+        if (uiScale != 1.0 || boundedWidth != maxWidth || boundedHeight != maxHeight) {
             return copy(
-                maxWidth = minOf(maxWidth * uiScale, (screenWidth - screenBorderPadding * 2).coerceAtLeast(1.0)),
-                maxHeight = minOf(maxHeight * uiScale, (screenHeight - topInset - bottomInset - screenBorderPadding * 2).coerceAtLeast(1.0)),
+                maxWidth = boundedWidth,
+                maxHeight = boundedHeight,
                 uiScale = 1.0,
             ).calculate()
         }

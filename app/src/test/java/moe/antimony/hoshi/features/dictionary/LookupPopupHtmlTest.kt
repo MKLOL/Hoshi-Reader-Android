@@ -75,7 +75,7 @@ class LookupPopupHtmlTest {
         assertTrue(html.contains("""<script src="https://hoshi.local/popup/popup.js"></script>"""))
         assertTrue(html.contains("window.nativePopupButtons = false;"))
         assertTrue(html.contains("window.scanLength = 24;"))
-        assertTrue(html.contains("html { zoom: 1.15; }"))
+        assertTrue(html.contains("html { zoom: 1.15; --hoshi-popup-font-scale: 1.0; }"))
         assertTrue(html.contains("""data-hoshi-color-scheme="dark""""))
         assertTrue(html.contains("""data-hoshi-eink-mode="true""""))
         assertTrue(html.contains("""window.lookupEntries = [];"""))
@@ -123,7 +123,7 @@ class LookupPopupHtmlTest {
 
         assertTrue(html.contains("""font-family: "Klee One";"""))
         assertTrue(html.contains("""src: url("https://hoshi.local/fonts/Klee%20One.ttf");"""))
-        assertTrue(html.contains("html { zoom: 1.25; }"))
+        assertTrue(html.contains("html { zoom: 1.25; --hoshi-popup-font-scale: 1.0; }"))
     }
 
     @Test

@@ -61,6 +61,8 @@ data class ReaderSettings(
     val popupWidth: Int = 320,
     val popupHeight: Int = 250,
     val popupScale: Double = 1.0,
+    val dictionaryCard: PopupCardStyle = PopupCardStyle(),
+    val translationCard: PopupCardStyle = PopupCardStyle(),
     val popupActionBar: Boolean = false,
     val popupFullWidth: Boolean = false,
     val popupSwipeToDismiss: Boolean = true,
@@ -287,6 +289,8 @@ class ReaderSettingsStore(context: Context) : ReaderSettingsLegacySource {
         popupWidth = preferences.getInt("popupWidth", 320),
         popupHeight = preferences.getInt("popupHeight", 250),
         popupScale = preferences.getFloat("popupScale", 1.0f).toDouble().coerceIn(0.8, 1.5),
+        dictionaryCard = PopupCardStyle.decode(preferences.getString("dictionaryCard", null)),
+        translationCard = PopupCardStyle.decode(preferences.getString("translationCard", null)),
         popupActionBar = preferences.getBoolean("popupActionBar", false),
         popupFullWidth = preferences.getBoolean("popupFullWidth", false),
         popupSwipeToDismiss = preferences.getBoolean("popupSwipeToDismiss", true),
@@ -345,6 +349,8 @@ class ReaderSettingsStore(context: Context) : ReaderSettingsLegacySource {
             .putInt("popupWidth", settings.popupWidth)
             .putInt("popupHeight", settings.popupHeight)
             .putFloat("popupScale", settings.popupScale.coerceIn(0.8, 1.5).toFloat())
+            .putString("dictionaryCard", settings.dictionaryCard.encode())
+            .putString("translationCard", settings.translationCard.encode())
             .putBoolean("popupActionBar", settings.popupActionBar)
             .putBoolean("popupFullWidth", settings.popupFullWidth)
             .putBoolean("popupSwipeToDismiss", settings.popupSwipeToDismiss)
@@ -443,6 +449,8 @@ class ReaderSettingsRepository(
             popupWidth = this[KEY_POPUP_WIDTH] ?: 320,
             popupHeight = this[KEY_POPUP_HEIGHT] ?: 250,
             popupScale = (this[KEY_POPUP_SCALE] ?: 1.0f).toDouble().coerceIn(0.8, 1.5),
+            dictionaryCard = PopupCardStyle.decode(this[KEY_DICTIONARY_CARD]),
+            translationCard = PopupCardStyle.decode(this[KEY_TRANSLATION_CARD]),
             popupActionBar = this[KEY_POPUP_ACTION_BAR] ?: false,
             popupFullWidth = this[KEY_POPUP_FULL_WIDTH] ?: false,
             popupSwipeToDismiss = this[KEY_POPUP_SWIPE_TO_DISMISS] ?: true,
@@ -501,6 +509,8 @@ class ReaderSettingsRepository(
         this[KEY_POPUP_WIDTH] = settings.popupWidth
         this[KEY_POPUP_HEIGHT] = settings.popupHeight
         this[KEY_POPUP_SCALE] = settings.popupScale.coerceIn(0.8, 1.5).toFloat()
+        this[KEY_DICTIONARY_CARD] = settings.dictionaryCard.encode()
+        this[KEY_TRANSLATION_CARD] = settings.translationCard.encode()
         this[KEY_POPUP_ACTION_BAR] = settings.popupActionBar
         this[KEY_POPUP_FULL_WIDTH] = settings.popupFullWidth
         this[KEY_POPUP_SWIPE_TO_DISMISS] = settings.popupSwipeToDismiss
@@ -564,6 +574,8 @@ class ReaderSettingsRepository(
         private val KEY_POPUP_WIDTH = intPreferencesKey("popupWidth")
         private val KEY_POPUP_HEIGHT = intPreferencesKey("popupHeight")
         private val KEY_POPUP_SCALE = floatPreferencesKey("popupScale")
+        private val KEY_DICTIONARY_CARD = stringPreferencesKey("dictionaryCard")
+        private val KEY_TRANSLATION_CARD = stringPreferencesKey("translationCard")
         private val KEY_POPUP_ACTION_BAR = booleanPreferencesKey("popupActionBar")
         private val KEY_POPUP_FULL_WIDTH = booleanPreferencesKey("popupFullWidth")
         private val KEY_POPUP_SWIPE_TO_DISMISS = booleanPreferencesKey("popupSwipeToDismiss")

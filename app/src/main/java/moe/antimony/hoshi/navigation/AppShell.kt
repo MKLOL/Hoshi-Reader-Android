@@ -43,6 +43,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import moe.antimony.hoshi.features.news.NewsFeedView
 import moe.antimony.hoshi.features.dictionary.DictionaryView
 import moe.antimony.hoshi.features.reader.ReaderAppearanceScreen
+import moe.antimony.hoshi.features.reader.PopupCardsSettingsScreen
 import moe.antimony.hoshi.features.reader.ReaderBehaviorScreen
 import moe.antimony.hoshi.features.reader.ReaderFontManager
 import moe.antimony.hoshi.features.reader.ReaderSettings
@@ -243,6 +244,7 @@ fun AppShell(
                     )
                     is AppRoute.SettingsDetailRoute -> SettingsDetailDestination(
                         route = route,
+                        onOpenCards = { openSettingsDetail(SettingsDetailSection.PopupCards) },
                         readerSettings = currentReaderSettings,
                         onReaderSettingsChange = currentOnReaderSettingsChange,
                         sasayakiSettings = sasayakiSettings,
@@ -419,6 +421,7 @@ private fun SettingsDetailDestination(
     onClose: () -> Unit,
     onBooksRestored: () -> Unit,
     onSelectedTabChange: (MainTab) -> Unit,
+    onOpenCards: () -> Unit,
 ) {
     when (route.section) {
         SettingsDetailSection.Dictionaries -> DictionaryView(
@@ -442,7 +445,11 @@ private fun SettingsDetailDestination(
             onClose = onClose,
             modifier = Modifier.fillMaxSize(),
         )
+        SettingsDetailSection.PopupCards -> PopupCardsSettingsScreen(
+            settings = readerSettings, onSettingsChange = onReaderSettingsChange, onClose = onClose,
+        )
         SettingsDetailSection.Behavior -> ReaderBehaviorScreen(
+            onOpenCards = onOpenCards,
             settings = readerSettings,
             onSettingsChange = onReaderSettingsChange,
             onClose = onClose,
@@ -480,6 +487,7 @@ private fun SettingsDestination.toSection(): SettingsDetailSection = when (this)
     SettingsDestination.ChatGpt -> SettingsDetailSection.ChatGpt
     SettingsDestination.Appearance -> SettingsDetailSection.Appearance
     SettingsDestination.Behavior -> SettingsDetailSection.Behavior
+    SettingsDestination.PopupCards -> SettingsDetailSection.PopupCards
     SettingsDestination.Statistics -> error("Statistics is its own route (see openStatisticsRoute).")
     SettingsDestination.Advanced -> SettingsDetailSection.Advanced
     SettingsDestination.Diagnostics -> SettingsDetailSection.Diagnostics

@@ -843,4 +843,22 @@
     <string name="podcasts_reason_save_failed">无法保存文件</string>
     <string name="reader_behavior_manga_enlarge_small_text">漫画：放大小字</string>
     <string name="reader_behavior_manga_enlarge_small_text_desc">放大漫画中显示的小字，便于点击。关闭后保留原始 OCR 字号。此设置不影响翻译和辞典弹窗的字号。</string>
+
+    <!-- Live card appearance editor -->
+    <string name="settings_popup_cards">弹出卡片</string>
+    <string name="card_dictionary">辞典</string>
+    <string name="card_translation">翻译</string>
+    <string name="card_preview_label">实际大小预览 · 滚动查看</string>
+    <string name="card_preview_full">完整预览</string>
+    <string name="card_defaults_description">更改会自动保存。未调整的选项使用此设备的默认值。</string>
+    <string name="card_content_scale">内容缩放</string>
+    <string name="card_font_size">字体大小</string>
+    <string name="card_dp_format">%1$d dp</string>
+    <string name="card_percent_format">%1$d%%</string>
+    <string name="card_reset">将此卡片重置为设备默认值</string>
+    <string name="card_preview_glossary">书；册；剧本\n\n1. 书；册\n\n2. 主要；本；现在\n\n3. 根源；基础</string>
+    <string name="card_preview_translation">我喜欢读书。\n\n| 单词 | 读音 | 含义 |\n| --- | --- | --- |\n| 本 | ほん | 书 |\n| を | を | 宾语助词 |\n| 読む | よむ | 阅读 |\n| の | の | 将动词名词化 |\n| が | が | 主语助词 |\n| 好き | すき | 喜欢 |\n| だ | だ | 简体判断 |\n\n**语法**\n\n読むの表示“阅读”。本を読むのが好きだ表示“我喜欢读书”。</string>
+    <string name="card_preview_word" translatable="false">本</string>
+    <string name="card_preview_reading" translatable="false">ほん</string>
+    <string name="card_preview_source" translatable="false">本を読むのが好きだ</string>
 </resources>

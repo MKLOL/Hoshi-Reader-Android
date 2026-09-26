@@ -1,6 +1,8 @@
 package moe.antimony.hoshi.features.dictionary
 
 import moe.antimony.hoshi.ui.theme.largeScreenUiScale
+import moe.antimony.hoshi.features.reader.PopupCardStyle
+import moe.antimony.hoshi.features.reader.resolveDictionary
 import moe.antimony.hoshi.ui.theme.PopupReadability
 import moe.antimony.hoshi.ui.theme.popupReadabilityForWindow
 import android.annotation.SuppressLint
@@ -384,6 +386,9 @@ private class LookupPopupHostView(
     private var contentReady = false
     private var clearSelectionSignal = 0
     private var popupScale = 1.0
+    private var fontScale = 1.0
+    private var documentScale = 1.0
+    private var documentFontScale = 1.0
     private var readability = PopupReadability()
     private var uiScale = 1.0
     private var backCount = 0
@@ -453,10 +458,14 @@ private class LookupPopupHostView(
             (overlayView?.width ?: 0) / density.toDouble(),
             (overlayView?.height ?: 0) / density.toDouble(),
         )
+        state.previewUiScale?.let { uiScale = it }
         readability = popupReadabilityForWindow(context, overlayView?.width ?: 0, overlayView?.height ?: 0)
         actionBar.setUiScale(uiScale)
         sasayakiBar.setUiScale(uiScale)
-        val html = renderHtml(state, state.results, ankiSettings)
+        val style = state.cardStyle.resolveDictionary(readability, state.width, state.height, state.popupScale)
+        // Sizing changes update the existing document so dragging a slider preserves scroll
+        // position and never replaces the WebView or flashes an empty dictionary.
+        val html = renderHtml(state.copy(cardStyle = PopupCardStyle(scale = 1.0, fontScale = 1.0)), state.results, ankiSettings, contentUiScale = 1.0)
         if (loadedHtml != html) {
             loadedHtml = html
             loadedPopupId = null
@@ -465,7 +474,9 @@ private class LookupPopupHostView(
             forwardCount = 0
             webView.clearActionButtons()
             lookupResultsHolder.results = state.results
-            webView.loadDataWithBaseURL("https://hoshi.local/popup/", html, "text/html", "UTF-8", null)
+            documentScale = style.scale * uiScale
+            documentFontScale = style.fontScale
+            webView.loadDataWithBaseURL("https://hoshi.local/popup/", renderHtml(state, state.results, ankiSettings), "text/html", "UTF-8", null)
         }
         if (loadedPopupId != popup.id) {
             loadedPopupId = popup.id
@@ -475,12 +486,10 @@ private class LookupPopupHostView(
             webView.clearActionButtons()
         }
         lookupResultsHolder.results = state.results
-        if (popupScale != state.popupScale) {
-            popupScale = state.popupScale
-            webView.evaluateJavascript(
-                "document.documentElement.style.zoom = '${state.popupScale.coerceIn(0.8, 1.5) * uiScale * readability.textScale}'; if (typeof syncButtonFrames === 'function') requestAnimationFrame(syncButtonFrames)",
-                null,
-            )
+        if (popupScale != style.scale * uiScale || fontScale != style.fontScale) {
+            popupScale = style.scale * uiScale
+            fontScale = style.fontScale
+            applyCardTypography()
         }
         if (clearSelectionSignal != popup.clearSelectionSignal) {
             childLookupJob?.cancel()
@@ -597,7 +606,8 @@ private class LookupPopupHostView(
             onPlayWordAudio = { url, mode ->
                 WordAudioPlayer.get(context).play(url, mode)
             },
-            onMineEntry = { payload, reply ->
+            onMineEntry = mine@{ payload, reply ->
+                if (state.previewUiScale != null) { reply(false); return@mine }
                 val miningContext = runCatching {
                     popup.sasayakiCue?.let { cue ->
                         state.ankiContext.copy(
@@ -612,9 +622,10 @@ private class LookupPopupHostView(
                 }
             },
             onDuplicateCheck = { expression, reply ->
-                ankiViewModel.duplicateCheckAsync(expression, reply)
+                if (state.previewUiScale != null) reply(false) else ankiViewModel.duplicateCheckAsync(expression, reply)
             },
             onContentReady = {
+                if (documentScale != popupScale || documentFontScale != fontScale) applyCardTypography()
                 if (state.results.isNotEmpty()) {
                     contentReady = true
                     val interactive = isPopupActive && isContentVisible
@@ -747,10 +758,20 @@ private class LookupPopupHostView(
         if (!rootDismissHandled) onPopupsChange(dismissPopupAt(allPopups, index))
     }
 
+    private fun applyCardTypography() {
+        // Keep the initial HTML's scale recorded until contentReady: an update sent while
+        // loading may have reached the old document and must be applied again to the new one.
+        webView.evaluateJavascript(
+            "document.documentElement.style.zoom = '$popupScale'; document.documentElement.style.setProperty('--hoshi-popup-font-scale', '$fontScale'); if (typeof syncButtonFrames === 'function') requestAnimationFrame(syncButtonFrames)",
+            null,
+        )
+    }
+
     private fun renderHtml(
         state: LookupPopupState,
         results: List<LookupResult>,
         ankiSettings: AnkiPopupSettings,
+        contentUiScale: Double = uiScale,
     ): String = LookupPopupHtml.render(
         results = results,
         dictionaryStyles = state.dictionaryStyles,
@@ -765,8 +786,9 @@ private class LookupPopupHostView(
         audioSettings = state.audioSettings,
         ankiSettings = ankiSettings,
         fontFaceCss = fontManager.popupFontFaceCss(),
-        popupScale = state.popupScale,
-        uiScale = uiScale * readability.textScale,
+        popupScale = state.cardStyle.resolveDictionary(readability, state.width, state.height, state.popupScale).scale,
+        fontScale = state.cardStyle.resolveDictionary(readability, state.width, state.height, state.popupScale).fontScale,
+        uiScale = contentUiScale,
     )
 
     private fun createWebView(context: Context): PopupActionButtonWebView =
@@ -810,13 +832,14 @@ private class LookupPopupHostView(
     private fun LookupPopupState.popupFrame(parentWidthPx: Int, parentHeightPx: Int): PopupFrameDp {
         val screenWidthDp = (parentWidthPx.takeIf { it > 0 } ?: width.dpToPx()) / density
         val screenHeightDp = (parentHeightPx.takeIf { it > 0 } ?: height.dpToPx()) / density
+        val style = cardStyle.resolveDictionary(readability, width, height, popupScale)
         val frame = LookupPopupLayout(
             selectionRect = selection.rect,
             screenWidth = screenWidthDp.toDouble(),
             screenHeight = screenHeightDp.toDouble(),
-            maxWidth = width.toDouble(),
-            maxHeight = height.toDouble(),
-            uiScale = uiScale * readability.frameScale,
+            maxWidth = style.width,
+            maxHeight = style.height,
+            uiScale = uiScale,
             isVertical = isVertical,
             isFullWidth = isFullWidth,
             topInset = topInset,

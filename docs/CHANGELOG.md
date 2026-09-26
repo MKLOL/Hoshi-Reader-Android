@@ -7,6 +7,12 @@ Semantic Versioning.
 
 ## [Unreleased]
 
+### Added
+- **Tune dictionary and translation cards with a live preview.** Settings → Popup Cards (also under Behavior) offers separate width, height, content scale, and font-size controls, an actual-size preview, and a full preview. Changes save automatically; Reset restores the device defaults. BOOX keeps its larger defaults, and unfolded Galaxy Fold keeps its approved sizing.
+
+### Fixed
+- **Manga respects popup preferences.** Dictionary content scale, full width, action bar, swipe dismissal, and reduced-motion scrolling now follow the shared card settings.
+
 ## [v0.11.19] - 2026-09-26
 
 ### Added

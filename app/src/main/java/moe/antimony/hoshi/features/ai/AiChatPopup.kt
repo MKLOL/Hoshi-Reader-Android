@@ -1,7 +1,6 @@
 package moe.antimony.hoshi.features.ai
 
 import moe.antimony.hoshi.ui.theme.AdaptiveUi
-import moe.antimony.hoshi.ui.theme.PopupTypography
 import moe.antimony.hoshi.ui.theme.currentPopupReadability
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
@@ -32,6 +31,12 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Density
+import moe.antimony.hoshi.features.reader.PopupCardStyle
+import moe.antimony.hoshi.features.reader.ResolvedPopupCardStyle
+import moe.antimony.hoshi.features.reader.resolveTranslation
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -82,19 +87,6 @@ sealed interface AiChatUiState {
     ) : AiChatUiState
 }
 
-/**
- * Fraction of the screen the card takes, matching iOS `MangaAiPopupView`
- * (`geometry.size.height * 0.78`). A vocabulary breakdown is the whole point of the reply, so
- * the card gets most of the page rather than a 380dp letterbox the user has to scroll.
- */
-private const val AI_CHAT_CARD_HEIGHT_FRACTION = 0.78f
-
-/** iOS `targetHeight` floor for the phone idiom: a short screen still gets a usable card. */
-private val AI_CHAT_CARD_MIN_HEIGHT = 320.dp
-
-/** iOS `maxCardWidth` for the phone idiom. */
-private val AI_CHAT_CARD_MAX_WIDTH = 520.dp
-
 /** iOS `sideMargin` for the phone idiom. */
 private val AI_CHAT_CARD_MARGIN = 16.dp
 
@@ -116,7 +108,8 @@ fun AiChatPopupView(
     /** Non-null when the reply came from the pre-translation cache. */
     onAskLive: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
-) = AdaptiveUi { PopupTypography {
+    cardStyle: PopupCardStyle = PopupCardStyle(),
+) = AdaptiveUi {
     val readability = currentPopupReadability()
     BoxWithConstraints(
         modifier = modifier
@@ -138,15 +131,15 @@ fun AiChatPopupView(
         // the card must not jump when it does.
         val availableHeight =
             (maxHeight - topInset - bottomInset - AI_CHAT_CARD_MARGIN * 2).coerceAtLeast(1.dp)
-        val targetHeight =
-            (maxHeight * AI_CHAT_CARD_HEIGHT_FRACTION).coerceAtLeast(AI_CHAT_CARD_MIN_HEIGHT)
-        val cardHeight = minOf(availableHeight, targetHeight)
-        Surface(
+        val style = cardStyle.resolveTranslation(readability, maxWidth.value.toDouble(), maxHeight.value.toDouble())
+        val cardHeight = minOf(availableHeight, style.height.dp)
+        AiChatCard(
+            state = state, onDismiss = onDismiss, onRetry = onRetry, onAskLive = onAskLive, style = style,
             // Swallow taps on the card so they do not fall through to the dismiss layer.
             modifier = Modifier
                 .padding(top = topInset, bottom = bottomInset)
                 .padding(AI_CHAT_CARD_MARGIN)
-                .widthIn(max = if (readability.textScale > 1.0) maxOf(AI_CHAT_CARD_MAX_WIDTH, maxWidth * 0.86f) else AI_CHAT_CARD_MAX_WIDTH)
+                .widthIn(max = style.width.dp)
                 .fillMaxWidth()
                 .height(cardHeight)
                 .clickable(
@@ -154,10 +147,33 @@ fun AiChatPopupView(
                     indication = null,
                     onClick = {},
                 ),
-            shape = RoundedCornerShape(20.dp),
-            color = MaterialTheme.colorScheme.surface,
-            tonalElevation = 3.dp,
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        )
+    }
+}
+
+/** Shared by the reader and the live settings preview, including typography and scrolling. */
+@Composable
+internal fun AiChatCard(
+    state: AiChatUiState,
+    style: ResolvedPopupCardStyle,
+    onDismiss: () -> Unit,
+    onRetry: () -> Unit,
+    onAskLive: (() -> Unit)? = null,
+    modifier: Modifier = Modifier,
+) {
+    val density = LocalDensity.current
+    Surface(
+        modifier = modifier,
+        shape = RoundedCornerShape(20.dp),
+        color = MaterialTheme.colorScheme.surface,
+        tonalElevation = 3.dp,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+    ) {
+        CompositionLocalProvider(
+            LocalDensity provides if (style.scale == 1.0 && style.fontScale == 1.0) density else Density(
+                density.density * style.scale.toFloat(),
+                density.fontScale * style.fontScale.toFloat(),
+            ),
         ) {
             Column {
                 Row(
@@ -219,7 +235,7 @@ fun AiChatPopupView(
             }
         }
     }
-} }
+}
 
 @Composable
 private fun LoadingBody(onDevice: Boolean) {

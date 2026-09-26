@@ -281,6 +281,7 @@ internal class PopupWebViewBridge(
             "shellReady" -> callbackDispatcher.post(onShellReady)
             "contentReady" -> callbackDispatcher.post {
                 val frames = popupButtonFramesFromMessageJson(message)
+                buttonFrameVisualStateRequestId += 1
                 updateActionButtonFrames(frames)
                 callbackHolder.callbacks.onContentReady()
             }
@@ -288,6 +289,9 @@ internal class PopupWebViewBridge(
             "buttonFrames" -> {
                 val frames = popupButtonFramesFromMessageJson(message)
                 callbackDispatcher.post {
+                    // A delayed visual-state callback must not restore older bounds or a
+                    // disabled Anki button after typography/duplicate state has advanced.
+                    buttonFrameVisualStateRequestId += 1
                     updateActionButtonFrames(frames)
                 }
             }

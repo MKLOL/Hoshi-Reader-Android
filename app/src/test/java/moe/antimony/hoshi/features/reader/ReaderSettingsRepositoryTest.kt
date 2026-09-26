@@ -224,6 +224,22 @@ class ReaderSettingsRepositoryTest {
         }
     }
 
+    @Test
+    fun savesIndependentCardOverridesAndKeepsLegacyValues() = runBlocking {
+        repository().use { repository ->
+            val dictionary = PopupCardStyle(width = 510.0, scale = 1.7, fontScale = 1.2)
+            val translation = PopupCardStyle(height = 750.0, fontScale = 1.9)
+            repository.update { it.copy(popupWidth = 410, popupScale = 1.2, dictionaryCard = dictionary, translationCard = translation) }
+            val saved = repository.settings.first()
+            assertEquals(dictionary, saved.dictionaryCard)
+            assertEquals(translation, saved.translationCard)
+            assertEquals(410, saved.popupWidth)
+            repository.update { it.copy(dictionaryCard = PopupCardStyle()) }
+            assertEquals(PopupCardStyle(), repository.settings.first().dictionaryCard)
+            assertEquals(translation, repository.settings.first().translationCard)
+        }
+    }
+
     private fun repository(
         legacySource: ReaderSettingsLegacySource? = null,
     ): RepositoryHandle {

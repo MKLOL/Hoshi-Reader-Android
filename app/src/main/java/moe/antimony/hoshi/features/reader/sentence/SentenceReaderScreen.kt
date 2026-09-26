@@ -204,6 +204,7 @@ private fun SentenceReaderContent(
         reducedMotionScrollPercent = readerSettings.popupReducedMotionScrollPercent,
         reducedMotionSwipeThreshold = readerSettings.popupReducedMotionSwipeThreshold,
         popupScale = readerSettings.popupScale,
+            cardStyle = readerSettings.dictionaryCard,
         popupActionBar = false,
         topInset = statusBarTop.toDouble(),
         dictionarySettings = dictionarySettings.normalized(),

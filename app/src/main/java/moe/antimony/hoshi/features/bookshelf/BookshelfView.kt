@@ -41,6 +41,7 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.input.rememberTextFieldState
+import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.MenuBook
 import androidx.compose.material.icons.automirrored.rounded.Sort
@@ -1856,6 +1857,7 @@ private fun SettingsGlyph(destination: SettingsDestination, color: Color, modifi
         SettingsDestination.ChatGpt -> Icons.Rounded.SmartToy
         SettingsDestination.Appearance -> Icons.Rounded.Palette
         SettingsDestination.Behavior -> Icons.Rounded.Keyboard
+        SettingsDestination.PopupCards -> Icons.Rounded.Tune
         SettingsDestination.Statistics -> Icons.Rounded.QueryStats
         SettingsDestination.Advanced -> Icons.Rounded.Settings
         SettingsDestination.ReportIssue -> Icons.Rounded.ReportProblem

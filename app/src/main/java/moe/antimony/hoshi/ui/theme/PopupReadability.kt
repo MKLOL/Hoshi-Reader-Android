@@ -3,11 +3,8 @@ package moe.antimony.hoshi.ui.theme
 import android.content.Context
 import android.os.Build
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalWindowInfo
-import androidx.compose.ui.unit.Density
 import kotlin.math.hypot
 
 internal data class PopupReadability(
@@ -57,15 +54,4 @@ internal fun popupReadabilityForWindow(context: Context, widthPx: Int, heightPx:
 internal fun currentPopupReadability(): PopupReadability {
     val window = LocalWindowInfo.current.containerSize
     return popupReadabilityForWindow(LocalContext.current, window.width, window.height)
-}
-
-/** Grow text and line heights, keeping the reader page and existing control density intact. */
-@Composable
-internal fun PopupTypography(content: @Composable () -> Unit) {
-    val scale = currentPopupReadability().textScale.toFloat()
-    val density = LocalDensity.current
-    CompositionLocalProvider(
-        LocalDensity provides if (scale == 1f) density else Density(density.density, density.fontScale * scale),
-        content = content,
-    )
 }

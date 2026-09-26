@@ -2,6 +2,7 @@ package moe.antimony.hoshi.features.dictionary
 
 import moe.antimony.hoshi.ui.theme.PlatformReaderUi
 import moe.antimony.hoshi.ui.theme.largeScreenUiScale
+import moe.antimony.hoshi.features.reader.dictionaryCardStyle
 import moe.antimony.hoshi.ui.theme.currentPopupReadability
 import android.graphics.Color
 import android.graphics.drawable.ColorDrawable
@@ -149,18 +150,18 @@ private fun ProcessTextLookupOverlay(
                 onClick = onClose,
             ),
     ) {
-        val readability = currentPopupReadability()
+        val style = readerSettings.dictionaryCardStyle(currentPopupReadability())
         val displayedPopups = popups.mapIndexed { index, popup ->
             if (index == 0) {
                 val centeredSelection = popup.state.selection.copy(
                     rect = ProcessTextLookupOverlayLayout.rootSelectionRect(
                         screenWidth = maxWidth.value.toDouble(),
                         screenHeight = maxHeight.value.toDouble(),
-                        popupMaxWidth = popup.state.width.toDouble(),
-                        popupMaxHeight = popup.state.height.toDouble(),
+                        popupMaxWidth = style.width,
+                        popupMaxHeight = style.height,
                         topInset = topInset.toDouble(),
                         bottomInset = popup.state.bottomInset,
-                        uiScale = largeScreenUiScale(maxWidth.value.toDouble(), maxHeight.value.toDouble()) * readability.frameScale,
+                        uiScale = largeScreenUiScale(maxWidth.value.toDouble(), maxHeight.value.toDouble()),
                     ),
                 )
                 popup.copy(
@@ -193,6 +194,7 @@ private fun ProcessTextLookupOverlay(
                             reducedMotionScrollPercent = readerSettings.popupReducedMotionScrollPercent,
                             reducedMotionSwipeThreshold = readerSettings.popupReducedMotionSwipeThreshold,
                             popupScale = readerSettings.popupScale,
+                            cardStyle = readerSettings.dictionaryCard,
                             dictionarySettings = displayedPopups.firstOrNull()?.state?.dictionarySettings
                                 ?: DictionarySettings(),
                             topInset = topInset.toDouble(),
@@ -240,6 +242,7 @@ private fun lookupPopupItem(
             reducedMotionScrollPercent = readerSettings.popupReducedMotionScrollPercent,
             reducedMotionSwipeThreshold = readerSettings.popupReducedMotionSwipeThreshold,
             popupScale = readerSettings.popupScale,
+            cardStyle = readerSettings.dictionaryCard,
             topInset = 0.0,
             darkMode = darkMode,
             eInkMode = readerSettings.eInkMode,

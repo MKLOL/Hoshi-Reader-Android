@@ -241,7 +241,7 @@ class LookupPopupTest {
     }
 
     @Test
-    fun verticalLayoutUsesIosClampWhenPopupIsTallerThanAvailableHeight() {
+    fun verticalLayoutCapsHeightToKeepLargeCustomCardsInsideTheWindow() {
         val layout = LookupPopupLayout(
             selectionRect = ReaderSelectionRect(x = 100.0, y = 0.0, width = 20.0, height = 30.0),
             screenWidth = 400.0,
@@ -253,7 +253,8 @@ class LookupPopupTest {
 
         val result = layout.calculate()
 
-        assertEquals(131.0, result.centerY, 0.0)
+        assertEquals(layout.screenHeight - 12.0, result.height, 0.0)
+        assertEquals(layout.screenHeight / 2.0, result.centerY, 0.0)
     }
 
     @Test

@@ -96,6 +96,7 @@ internal object DictionarySearchContent {
         fontFaceCss: String = "",
         popupScale: Double = 1.0,
         uiScale: Double = 1.0,
+        fontScale: Double = 1.0,
     ): DictionarySearchRenderState {
         if (results.isEmpty()) {
             return DictionarySearchRenderState(
@@ -121,6 +122,7 @@ internal object DictionarySearchContent {
                 fontFaceCss = fontFaceCss,
                 popupScale = popupScale,
                 uiScale = uiScale,
+                fontScale = fontScale,
             ),
             results = results,
             hasResults = true,
