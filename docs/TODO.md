@@ -1,6 +1,6 @@
 # Hoshi Android Agent TODO
 
-Last updated: 2026-09-25
+Last updated: 2026-09-26
 
 ## Maintenance Rules
 
@@ -36,7 +36,7 @@ Last updated: 2026-09-25
 
 ### Reader And Lookup
 
-- Large-tablet controls, translation cards, and dictionary popups scale with the current window; windows with a short side up to 840dp retain baseline sizing. Keep `AdaptiveUiTest`, `AdaptiveUiInstrumentedTest`, `AdaptiveLookupPopupInstrumentedTest`, and `MangaActionPlacementInstrumentedTest` for Fold/tablet/split-screen sizing, platform-coordinate lookup anchors, and text-clear action placement. EPUB page typography/pagination and its existing chrome layout remain independent of app UI scaling.
+- Large-tablet controls, translation cards, and dictionary popups scale with the current window; windows with a short side up to 840dp retain baseline sizing. Verified on disposable Fold- and Boox-sized emulator profiles; physical e-ink readability remains a device check. Keep `AdaptiveUiTest`, `AdaptiveUiInstrumentedTest`, `AdaptiveLookupPopupInstrumentedTest`, and `MangaActionPlacementInstrumentedTest` for Fold/tablet/split-screen sizing, platform-coordinate lookup anchors, and text-clear action placement. EPUB page typography/pagination and its existing chrome layout remain independent of app UI scaling.
 - Audiobook replacement stages the complete copy before an atomic move; retain `SasayakiAudioRepositoryTest` and `SasayakiAudioRepositoryInstrumentedTest`.
 - EPUB URL paths decode once, contents links resolve from their navigation document, and resource fallbacks stay inside the imported book. Regression entries: `EpubBookParserTest`, `EpubBookModelTest`, `ReaderInternalLinkTest`, and `ReaderWebResourceBridgeTest`.
 - Native dictionary popup teardown invalidates queued JavaScript callbacks before WebView destruction and cancels superseded or dismissed nested lookups. Regression entry: `PopupCallbackDispatcherTest`. Keep these checks when changing popup ownership.

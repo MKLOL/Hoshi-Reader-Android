@@ -7,6 +7,8 @@ Semantic Versioning.
 
 ## [Unreleased]
 
+## [v0.11.18] - 2026-09-26
+
 ### Changed
 - **More readable UI on large tablets.** App controls, dictionary popups, translation cards, and translation history grow with the window, including their text and buttons. Phones and smaller unfolded foldable windows keep their existing sizing.
 - **A smaller solo Translate button on manga bubbles.** The single button takes less space; the optional Copy and Translate pair keeps its compact layout.
