@@ -257,6 +257,9 @@
     <string name="statistics_streak_today_progress_format">%1$s of %2$s today</string>
     <string name="statistics_streak_goal">Daily goal</string>
     <string name="statistics_streak_goal_minutes_format">%1$d min</string>
+    <string name="statistics_streak_reset">Streak day resets at</string>
+    <string name="statistics_streak_reset_help">Reading before this time counts toward the previous day’s streak. Changing either setting recalculates your streak history. Other statistics use calendar days.</string>
+    <string name="statistics_streak_history_credit">Older reading without an exact time gets streak credit on either possible day.</string>
     <string name="statistics_heatmap_title">Last 16 weeks</string>
     <string name="statistics_today_title">Today</string>
     <string name="statistics_today_date_active_format">%1$s · Active %2$s–%3$s</string>

@@ -28,6 +28,12 @@ data class ReadingStatistics(
     /** The device's name when this day was recorded; the newest entry's name is shown. */
     @EncodeDefault(EncodeDefault.Mode.NEVER)
     val deviceName: String? = null,
+    /** Counted seconds by local ISO date/hour (yyyy-MM-ddTHH:00), for adjustable streak days.
+     * Missing time is legacy history with unknown time of day. Calendar totals stay compatible
+     * with iOS; a tick across midnight can contain an hour from the preceding date.
+     */
+    @EncodeDefault(EncodeDefault.Mode.NEVER)
+    val readingTimeByHour: Map<String, Double> = emptyMap(),
 )
 
 /** Entries recorded before devices were tracked belong to [device], the device that wrote them. */
@@ -54,6 +60,7 @@ fun List<ReadingStatistics>.collapsedByDay(): List<ReadingStatistics> =
                 maxReadingSpeed = entries.maxOf { it.maxReadingSpeed },
                 deviceId = null,
                 deviceName = null,
+                readingTimeByHour = entries.map { it.readingTimeByHour }.sumReadingHours(),
             )
         }
 
@@ -87,7 +94,12 @@ fun List<ReadingStatistics>.deduplicateReadingStatistics(): List<ReadingStatisti
     fold(linkedMapOf<String, ReadingStatistics>()) { grouped, statistic ->
         val key = dayDeviceKey(statistic.dateKey, statistic.deviceId)
         val existing = grouped[key]
-        if (existing == null || statistic.lastStatisticModified > existing.lastStatisticModified) {
+        // Older sync clients strip fields they do not understand. On an otherwise identical
+        // equal-stamp entry, retain the more complete timing evidence instead of erasing it.
+        val richerTiming = existing != null && statistic.lastStatisticModified == existing.lastStatisticModified &&
+            statistic.copy(readingTimeByHour = emptyMap()) == existing.copy(readingTimeByHour = emptyMap()) &&
+            statistic.readingTimeByHour.values.sum() > existing.readingTimeByHour.values.sum()
+        if (existing == null || statistic.lastStatisticModified > existing.lastStatisticModified || richerTiming) {
             grouped[key] = statistic
         }
         grouped

@@ -20,6 +20,27 @@ class ReaderSettingsRepositoryTest {
     val tempFolder = TemporaryFolder()
 
     @Test
+    fun streakSettingsDefaultPersistAndNormalize() = runBlocking {
+        repository().use { repository ->
+            assertEquals(3, repository.settings.first().statisticsDayResetHour)
+            assertEquals(10, repository.settings.first().statisticsStreakMinimumMinutes)
+            repository.update { it.copy(statisticsDayResetHour = 0, statisticsStreakMinimumMinutes = 47) }
+            assertEquals(0, repository.settings.first().statisticsDayResetHour)
+            assertEquals(47, repository.settings.first().statisticsStreakMinimumMinutes)
+            repository.update { it.copy(statisticsDayResetHour = 99) }
+            assertEquals(23, repository.settings.first().statisticsDayResetHour)
+        }
+    }
+
+    @Test
+    fun existingStreakGoalGetsTheNewThreeAmDefault() = runBlocking {
+        repository(FakeLegacyReaderSettingsSource(ReaderSettings(statisticsStreakMinimumMinutes = 30))).use { repository ->
+            assertEquals(30, repository.settings.first().statisticsStreakMinimumMinutes)
+            assertEquals(3, repository.settings.first().statisticsDayResetHour)
+        }
+    }
+
+    @Test
     fun emitsDefaultSettingsWhenThereIsNoLegacyStore() = runBlocking {
         repository().use { repository ->
             val settings = repository.settings.first()

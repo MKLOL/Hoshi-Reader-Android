@@ -24,7 +24,6 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Switch
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.Surface
@@ -63,7 +62,6 @@ import moe.antimony.hoshi.features.bookshelf.BookCoverCard
 import moe.antimony.hoshi.features.reader.BookReadingSummary
 import moe.antimony.hoshi.features.reader.ReaderSettings
 import moe.antimony.hoshi.features.reader.ReadingStatisticsOverview
-import moe.antimony.hoshi.features.reader.SystemReaderStatisticsClock
 import moe.antimony.hoshi.features.reader.formatDurationSeconds
 import moe.antimony.hoshi.features.reader.loadReadingStatisticsOverview
 import moe.antimony.hoshi.features.settings.GroupCard
@@ -76,10 +74,7 @@ import moe.antimony.hoshi.features.usage.loadUsageStatistics
 import moe.antimony.hoshi.ui.theme.LocalHoshiEInkMode
 import java.time.Duration
 import java.time.LocalDate
-import java.time.LocalDateTime
-
-/** Daily goal choices for the streak, in minutes. */
-val STREAK_GOAL_MINUTES: List<Int> = listOf(5, 10, 15, 30)
+import java.time.ZonedDateTime
 
 /**
  * The Statistics screen: today, streak, totals, a reading heatmap, time by weekday and every
@@ -102,26 +97,41 @@ fun StatisticsScreen(
     val syncSettings = appContainer.syncSettingsRepository.settings.collectAsLoadedSettings()
     var overview by remember { mutableStateOf<ReadingStatisticsOverview?>(null) }
     var usage by remember { mutableStateOf<UsageStatistics?>(null) }
-    var today by remember { mutableStateOf(SystemReaderStatisticsClock.currentDate()) }
+    var now by remember { mutableStateOf(ZonedDateTime.now()) }
+    val today = now.toLocalDate()
+    val resetHour = readerSettings.statisticsDayResetHour
+    val streakToday = streakDate(now, resetHour)
     val resumeCount = rememberResumeCount()
-    LaunchedEffect(statisticsVersion, resumeCount, today) {
-        today = SystemReaderStatisticsClock.currentDate()
-        overview = loadReadingStatisticsOverview(appContainer.bookRepository, today.toString())
+    LaunchedEffect(statisticsVersion, usageVersion, resumeCount, today, resetHour) {
+        overview = null
+        overview = loadReadingStatisticsOverview(
+            appContainer.bookRepository, today.toString(), resetHour,
+            appContainer.usageLog, appContainer.deviceIdentity.id,
+        )
     }
     LaunchedEffect(usageVersion, resumeCount, today) {
         usage = loadUsageStatistics(appContainer.usageLog, today, historyDays = TrendRange.Quarter.days)
     }
-    // A screen left open across midnight moves "today" (and the streak) to the new day.
-    LaunchedEffect(today) {
-        val untilMidnight = Duration.between(LocalDateTime.now(), today.plusDays(1).atStartOfDay()).toMillis()
-        delay(untilMidnight.coerceAtLeast(1_000L))
-        today = SystemReaderStatisticsClock.currentDate()
+    // Refresh at the actual wall-clock boundary, and recheck zone/clock changes at least each minute.
+    LaunchedEffect(resumeCount, resetHour) {
+        while (true) {
+            now = ZonedDateTime.now()
+            val midnight = now.toLocalDate().plusDays(1).atStartOfDay(now.zone)
+            val reset = streakDate(now, resetHour).plusDays(1).atTime(resetHour, 0).atZone(now.zone)
+            val next = minOf(midnight.toInstant(), reset.toInstant())
+            delay(Duration.between(now.toInstant(), next).toMillis().coerceIn(1_000L, 60_000L))
+        }
     }
     StatisticsScreenContent(
         overview = overview,
         usage = usage,
         today = today,
         minimumMinutes = readerSettings.statisticsStreakMinimumMinutes,
+        streakToday = streakToday,
+        resetHour = resetHour,
+        onResetHourChange = { hour ->
+            scope.launch { appContainer.readerSettingsRepository.update { it.copy(statisticsDayResetHour = hour) } }
+        },
         onMinimumMinutesChange = { minutes ->
             scope.launch {
                 appContainer.readerSettingsRepository.update { it.copy(statisticsStreakMinimumMinutes = minutes) }
@@ -164,10 +174,13 @@ fun StatisticsScreenContent(
     localDeviceId: String? = null,
     /** Today's timeline and the lookup trend, from the usage log. */
     usage: UsageStatistics? = null,
+    streakToday: LocalDate = today,
+    resetHour: Int = 3,
+    onResetHourChange: (Int) -> Unit = {},
 ) {
     val colorScheme = MaterialTheme.colorScheme
-    val streak = remember(overview, minimumMinutes, today) {
-        overview?.let { computeReadingStreak(it.daily, minimumMinutes * 60.0, today) }
+    val streak = remember(overview, minimumMinutes, streakToday) {
+        overview?.let { computeReadingStreak(it.streakDaily, minimumMinutes * 60.0, streakToday) }
     }
     val heatmap = remember(overview, today) { overview?.let { buildReadingHeatmap(it.daily, today) } }
     val weekdays = remember(overview) { overview?.let { weekdayDistribution(it.daily) } }
@@ -221,6 +234,8 @@ fun StatisticsScreenContent(
                     weekdays = weekdays,
                     minimumMinutes = minimumMinutes,
                     onMinimumMinutesChange = onMinimumMinutesChange,
+                    resetHour = resetHour,
+                    onResetHourChange = onResetHourChange,
                     onOpenBook = onOpenBook,
                     driveSync = driveSync,
                     onDriveSyncChange = onDriveSyncChange,
@@ -242,6 +257,8 @@ private fun StatisticsOverviewList(
     weekdays: List<Double>?,
     minimumMinutes: Int,
     onMinimumMinutesChange: (Int) -> Unit,
+    resetHour: Int,
+    onResetHourChange: (Int) -> Unit,
     onOpenBook: (bookId: String) -> Unit,
     driveSync: DriveStatisticsSyncOptions?,
     onDriveSyncChange: (DriveStatisticsSyncOptions) -> Unit,
@@ -264,7 +281,11 @@ private fun StatisticsOverviewList(
             )
             Spacer(Modifier.height(18.dp))
         }
-        item { StreakCard(streak, minimumMinutes, onMinimumMinutesChange); Spacer(Modifier.height(18.dp)) }
+        item {
+            StreakCard(streak, minimumMinutes, onMinimumMinutesChange, resetHour, onResetHourChange,
+                overview?.hasEstimatedStreakHistory == true)
+            Spacer(Modifier.height(18.dp))
+        }
         item { TotalsCard(overview); Spacer(Modifier.height(18.dp)) }
         val devices = overview?.devices.orEmpty()
         if (devices.isNotEmpty()) {
@@ -299,7 +320,10 @@ private fun StatisticsOverviewList(
 }
 
 @Composable
-private fun StreakCard(streak: ReadingStreak?, minimumMinutes: Int, onMinimumMinutesChange: (Int) -> Unit) {
+private fun StreakCard(
+    streak: ReadingStreak?, minimumMinutes: Int, onMinimumMinutesChange: (Int) -> Unit,
+    resetHour: Int, onResetHourChange: (Int) -> Unit, hasEstimatedHistory: Boolean,
+) {
     val colorScheme = MaterialTheme.colorScheme
     val eInk = LocalHoshiEInkMode.current
     val current = streak?.currentDays ?: 0
@@ -380,19 +404,14 @@ private fun StreakCard(streak: ReadingStreak?, minimumMinutes: Int, onMinimumMin
                 color = colorScheme.onSurfaceVariant,
             )
             Spacer(Modifier.height(12.dp))
-            Text(
-                text = stringResource(R.string.statistics_streak_goal),
-                style = MaterialTheme.typography.labelLarge,
-                color = colorScheme.onSurfaceVariant,
-            )
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                STREAK_GOAL_MINUTES.forEach { minutes ->
-                    FilterChip(
-                        selected = minutes == minimumMinutes,
-                        onClick = { onMinimumMinutesChange(minutes) },
-                        label = { Text(stringResource(R.string.statistics_streak_goal_minutes_format, minutes)) },
-                    )
-                }
+            StreakSettings(minimumMinutes, onMinimumMinutesChange, resetHour, onResetHourChange)
+            if (hasEstimatedHistory) {
+                Text(
+                    stringResource(R.string.statistics_streak_history_credit),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 8.dp),
+                )
             }
         }
     }

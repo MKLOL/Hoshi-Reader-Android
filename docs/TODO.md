@@ -1,6 +1,6 @@
 # Hoshi Android Agent TODO
 
-Last updated: 2026-09-26
+Last updated: 2026-09-29
 
 ## Maintenance Rules
 
@@ -141,6 +141,7 @@ Last updated: 2026-09-26
 - ChatGPT screenshot translation, emulator-verified end to end: the manga overflow menu can open a crop overlay, map the selected zoomed/panned viewport back to source page pixels, send that crop to OpenAI, save it on the history entry, and use a separate customizable/synced image prompt while keeping the API key local-only.
 - Zoom/chrome interactions, emulator-verified: one-finger swipes turn pages only when the page is not zoomed or pannable, two-finger pinch zooms and one-finger panning do not turn pages, zoomed OCR bubble taps hit the visible bubble position, and the floating controls / page chip have subtle independent backgrounds without full-width input bars.
 - Manga statistics are wired to the shared `statistics.json` sidecar while presenting manga-specific page units in the reader overflow Statistics sheet; statistics are always on for EPUB and manga (no enable/autostart settings) and the Statistics screens (`features/statistics`, reached from the Books bar and Settings) aggregate every book's `statistics.json` (`ReadingStatisticsOverviewTest`, `ReadingStatisticsConsistencyTest` guard sheet/screen agreement); manga OCR characters read per day live in `manga_statistics.json` (`MangaTextReadCounterTest`), fed only by forward turns while tracking; both sidecars sync over HTTP as `books/{syncId}/statistics` and `.../manga_statistics` with a per-day merge (`HttpSyncStatisticsSync`, debounced reader pushes via `HttpSyncStatisticsPushScheduler`, `SyncIntegrationTest.statisticsMergePerDayAcrossDevices…`); adjacent manga pages are also preloaded through a small generated-HTML cache and bounded image-file warmup. Usage log, Today card and Trends tab: `features/usage`, `StatisticsTodayCard`, `StatisticsTrendCharts`; the Overview totals card keeps only all-time totals, since today lives on the Today card (`Usage*Test`, `ReaderUsageSessionTest`, `StatisticsTrendsTest`); the log is per device, excluded from Android backup, never synced, and never pruned.
+- Streak settings provide a whole-minute goal slider and hourly day reset (default 03:00); history rebuilds from synced hourly reading and local session logs with optimistic credit for unknown legacy times, without changing calendar totals. Regression entries: `StreakHistoryTest`, `ReadingHoursTest`, `ReaderSettingsRepositoryTest`, `BookRepositoryStatisticsDeviceTest`, `HttpSyncStatisticsDevicesTest`.
 - Boox/Onyx fullscreen reader bars still need real-device validation with a tall manga page after emulator validation: the top status strip should hide while reading, and if a device keeps a system bar visible then page artwork must be inset below it.
 - Not yet done: reader appearance/settings sheet for manga and two-page spreads. Manual validation should cover import of both source layouts, RTL paging boundaries, rapid page turns, tall/zoomed OCR bubble popup placement, short-landscape full-width popups, and ChatGPT history rendering on slow devices.
 

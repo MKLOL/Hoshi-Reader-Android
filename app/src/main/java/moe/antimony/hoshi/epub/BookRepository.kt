@@ -232,6 +232,19 @@ class BookRepository(
                 if (own != null && own.readingTime == ownTime && own.charactersRead == ownCharacters) continue
                 val updated = total.copy(
                     readingTime = ownTime,
+                    // A collapsed export's hours belong to ALL devices. Subtract only when
+                    // every other device's time is located; otherwise keep trustworthy local
+                    // evidence and let the streak reconstruction handle the unknown remainder.
+                    readingTimeByHour = if (total.readingTimeByHour.isNotEmpty() && others.all {
+                        kotlin.math.abs(it.readingTime - it.readingTimeByHour.values.sum()) < 0.001
+                    }) {
+                        val otherHours = others.map { it.readingTimeByHour }.sumReadingHours()
+                        total.readingTimeByHour.mapValues { (hour, seconds) ->
+                            (seconds - (otherHours[hour] ?: 0.0)).coerceAtLeast(0.0)
+                        }.filterValues { it > 0.0 }.takeIf { it.values.sum() <= ownTime + 0.001 }.orEmpty()
+                    } else {
+                        own?.readingTimeByHour?.takeIf { it.values.sum() <= ownTime + 0.001 }.orEmpty()
+                    },
                     charactersRead = ownCharacters,
                     lastReadingSpeed = if (ownTime > 0.0) (ownCharacters / ownTime * 3600.0).toInt() else 0,
                     // Newer than the entry it replaces, so HTTP sync carries it to the other devices.

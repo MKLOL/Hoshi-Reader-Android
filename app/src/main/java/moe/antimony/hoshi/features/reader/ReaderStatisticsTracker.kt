@@ -4,6 +4,8 @@ import moe.antimony.hoshi.epub.DeviceIdentity
 import moe.antimony.hoshi.epub.ReadingStatistics
 import moe.antimony.hoshi.epub.deduplicateReadingStatistics
 import moe.antimony.hoshi.epub.readingTotals
+import moe.antimony.hoshi.epub.readingHoursBetween
+import moe.antimony.hoshi.epub.sumReadingHours
 import java.time.LocalDate
 import java.time.ZoneId
 import kotlin.math.abs
@@ -23,6 +25,7 @@ data class ReaderStatisticsState(
 interface ReaderStatisticsClock {
     fun currentTimeMillis(): Long
     fun currentDate(): LocalDate
+    fun zoneId(): ZoneId = ZoneId.systemDefault()
 }
 
 object SystemReaderStatisticsClock : ReaderStatisticsClock {
@@ -115,10 +118,11 @@ class ReaderStatisticsTracker(
             charDiff
         }
         val modified = clock.currentTimeMillis()
-        todayOnThisDevice = todayOnThisDevice.updated(timeDiff, finalCharDiff, modified)
+        val hours = readingHoursBetween(lastTimestampMillis, now, clock.zoneId())
+        todayOnThisDevice = todayOnThisDevice.updated(timeDiff, finalCharDiff, modified, hours)
         currentState = currentState.copy(
-            session = currentState.session.updated(timeDiff, finalCharDiff, modified),
-            today = currentState.today.updated(timeDiff, finalCharDiff, modified),
+            session = currentState.session.updated(timeDiff, finalCharDiff, modified, hours),
+            today = currentState.today.updated(timeDiff, finalCharDiff, modified, hours),
             allTime = currentState.allTime.updated(timeDiff, finalCharDiff, modified),
         )
         hasUpdated = true
@@ -181,6 +185,7 @@ class ReaderStatisticsTracker(
         return todayOnThisDevice.copy(
             readingTime = readingTime,
             charactersRead = charactersRead,
+            readingTimeByHour = (others.map { it.readingTimeByHour } + todayOnThisDevice.readingTimeByHour).sumReadingHours(),
             lastReadingSpeed = if (readingTime > 0.0) (charactersRead / readingTime * 3600.0).toInt() else 0,
         )
     }
@@ -203,6 +208,7 @@ private fun ReadingStatistics.updated(
     timeDiff: Double,
     characterDiff: Int,
     lastStatisticModified: Long,
+    hours: Map<String, Double> = emptyMap(),
 ): ReadingStatistics {
     val nextReadingTime = readingTime + timeDiff
     val nextCharactersRead = (charactersRead + characterDiff).coerceAtLeast(0)
@@ -213,6 +219,7 @@ private fun ReadingStatistics.updated(
     }
     return copy(
         readingTime = nextReadingTime,
+        readingTimeByHour = listOf(readingTimeByHour, hours).sumReadingHours(),
         charactersRead = nextCharactersRead,
         lastReadingSpeed = nextReadingSpeed,
         maxReadingSpeed = maxOf(maxReadingSpeed, nextReadingSpeed),

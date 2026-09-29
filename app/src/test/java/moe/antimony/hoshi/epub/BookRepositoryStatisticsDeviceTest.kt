@@ -37,6 +37,22 @@ class BookRepositoryStatisticsDeviceTest {
     private fun repository(device: DeviceIdentity?) = BookRepository(temp.root, deviceIdentity = device)
 
     @Test
+    fun importedDayTotalsSubtractOtherDevicesHoursAndKeepLegacyLocalEvidence() = runBlocking {
+        val repository = repository(phone)
+        val root = repository.createBookDirectory("hours")
+        val other = day("2026-09-29", 600.0, 10, 1, tablet).copy(readingTimeByHour = mapOf("2026-09-29T10:00" to 600.0))
+        repository.saveStatistics(root, listOf(other))
+        val total = day("2026-09-29", 1800.0, 30, 2).copy(readingTimeByHour = mapOf("2026-09-29T01:00" to 600.0, "2026-09-29T10:00" to 1200.0))
+        repository.applyDayTotals(root, listOf(total), false)
+        val own = repository.loadStatistics(root).single { it.deviceId == phone.id }
+        assertEquals(1200.0, own.readingTime, 0.0)
+        assertEquals(mapOf("2026-09-29T01:00" to 600.0, "2026-09-29T10:00" to 600.0), own.readingTimeByHour)
+        // A legacy client adds characters but cannot report any hours. Existing evidence survives.
+        repository.applyDayTotals(root, listOf(total.copy(charactersRead = 40, readingTimeByHour = emptyMap())), false)
+        assertEquals(own.readingTimeByHour, repository.loadStatistics(root).single { it.deviceId == phone.id }.readingTimeByHour)
+    }
+
+    @Test
     fun aFileFromBeforeDevicesWereTrackedIsAttributedToThisDeviceAndRewrittenOnce() = runBlocking {
         val root = repository(null).createBookDirectory("book")
         root.resolve("statistics.json").writeText(

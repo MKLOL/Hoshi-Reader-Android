@@ -48,6 +48,27 @@ class HttpSyncStatisticsDevicesTest {
     }
 
     @Test
+    fun oldClientsCannotEraseExactHoursOnAnUnchangedEntry() = runBlocking {
+        for (richLocal in listOf(true, false)) {
+            val repository = BookRepository(temp.newFolder(), deviceIdentity = phone)
+            val root = book(repository)
+            val transport = FakeKvTransport()
+            val rich = day("2026-09-29", 600.0, 10, 5, phone).copy(readingTimeByHour = mapOf("2026-09-29T01:00" to 600.0))
+            val legacy = rich.copy(readingTimeByHour = emptyMap())
+            repository.saveStatistics(root, listOf(if (richLocal) rich else legacy))
+            transport.put(statisticsKey(syncId), "application/json", json.encodeToString(
+                HttpSyncStatisticsBlob.serializer(), HttpSyncStatisticsBlob(syncId = syncId, entries = listOf(if (richLocal) legacy else rich)),
+            ).toByteArray())
+            val remote = transport.kv.getValue(statisticsKey(syncId))
+            HttpSyncStatisticsSync(repository).sync(transport, root, syncId, StatisticsSyncKind.Reading,
+                StatisticsRemoteListing.Listed(remote.body.size, remote.lastModified))
+            assertEquals(rich, repository.loadStatistics(root).single())
+            val synced = json.decodeFromString(HttpSyncStatisticsBlob.serializer(), transport.kv.getValue(statisticsKey(syncId)).body.decodeToString())
+            assertEquals(rich, synced.entries.single())
+        }
+    }
+
+    @Test
     fun bothDevicesEntriesForOneDaySurviveTheExchangeInBothDirections() = runBlocking {
         val phoneRepository = BookRepository(temp.newFolder(), deviceIdentity = phone)
         val tabletRepository = BookRepository(temp.newFolder(), deviceIdentity = tablet)

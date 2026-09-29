@@ -255,6 +255,9 @@
     <string name="statistics_streak_today_progress_format">今天 %1$s / %2$s</string>
     <string name="statistics_streak_goal">每日目标</string>
     <string name="statistics_streak_goal_minutes_format">%1$d 分钟</string>
+    <string name="statistics_streak_reset">连续阅读日重置时间</string>
+    <string name="statistics_streak_reset_help">此时间之前的阅读计入前一天的连续阅读。更改任一设置都会重新计算连续阅读记录。其他统计仍按自然日计算。</string>
+    <string name="statistics_streak_history_credit">缺少准确时间的旧阅读记录，会为两个可能的日期都保留连续阅读计数。</string>
     <string name="statistics_heatmap_title">最近 16 周</string>
     <string name="statistics_today_title">今天</string>
     <string name="statistics_today_date_active_format">%1$s · 活跃时段 %2$s–%3$s</string>
