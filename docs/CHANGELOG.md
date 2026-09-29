@@ -7,6 +7,8 @@ Semantic Versioning.
 
 ## [Unreleased]
 
+## [v0.11.21] - 2026-09-29
+
 ### Added
 - **Choose your streak goal and when the day ends.** Statistics now has a slider for a daily reading goal from 1 to 120 minutes and a choice of reset hour, defaulting to 3 a.m. Reading after midnight can count toward the previous day, so late-night study keeps your streak going.
 
