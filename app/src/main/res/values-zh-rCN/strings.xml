@@ -781,6 +781,12 @@
     <string name="http_sync_token_hint">使用同步服务器提供的访问令牌。</string>
     <string name="http_sync_now">立即同步</string>
     <string name="http_sync_running">正在同步…</string>
+    <string name="http_sync_transfer_volume">%1$.1f MB / %2$.1f MB</string>
+    <string name="http_sync_transfer_volume_unknown">%1$.1f MB</string>
+    <string name="http_sync_transfer_measuring">正在计算速度和剩余时间…</string>
+    <string name="http_sync_transfer_eta_unknown">%1$.2f MB/s · 无法估算剩余时间</string>
+    <string name="http_sync_transfer_eta_minutes">%1$.2f MB/s · 此文件预计剩余 %2$d:%3$02d</string>
+    <string name="http_sync_transfer_eta_hours">%1$.2f MB/s · 此文件预计剩余 %2$d:%3$02d:%4$02d</string>
     <string name="http_sync_starting">开始同步</string>
     <string name="http_sync_checking_changes">正在检查同步更改</string>
     <string name="http_sync_reading_history">正在同步阅读历史</string>

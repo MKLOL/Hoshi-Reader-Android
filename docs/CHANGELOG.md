@@ -9,6 +9,7 @@ Semantic Versioning.
 
 ### Added
 - **Spot pre-translated books and manga.** A small translation badge appears on covers, including collapsed shelf previews, when offline translations are available.
+- **HTTP sync speed and ETA.** Book uploads and downloads show MB/s and estimated time remaining for the current file in sync progress and its notification.
 
 ### Changed
 - **Faster EPUB opening.** Bookshelf navigation leaves parsing to the reader, which reuses valid cached chapter information and preserves existing cover files.

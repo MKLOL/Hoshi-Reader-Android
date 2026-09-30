@@ -284,6 +284,7 @@ data class V3Progress(
     val detail: String? = null,
     val completed: Int? = null,
     val total: Int? = null,
+    val transfer: moe.antimony.hoshi.features.sync.http.HttpSyncTransferProgress? = null,
 )
 
 enum class V3Phase {

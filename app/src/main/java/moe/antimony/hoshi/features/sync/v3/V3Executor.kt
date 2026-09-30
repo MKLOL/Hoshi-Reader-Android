@@ -1,9 +1,7 @@
 package moe.antimony.hoshi.features.sync.v3
 
-import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
+import moe.antimony.hoshi.features.sync.http.withHttpSyncTransferProgress
 import moe.antimony.hoshi.epub.BookMetadata
 import moe.antimony.hoshi.epub.BookRepository
 import moe.antimony.hoshi.epub.BookShelf
@@ -369,15 +367,13 @@ class V3Executor(
                     is V3Action.PushPayload -> {
                         val targetRoot = resolveRoot(action.root, action.syncId, rootBySyncId)
                             ?: continue
-                        val uploaded = withByteProgress(
+                        val uploaded = withHttpSyncTransferProgress(
                             onProgress = onProgress,
-                            makeProgress = { transferred, total ->
-                                byteProgress(
+                            makeProgress = { transfer ->
+                                V3Progress(
                                     phase = V3Phase.PushingLocalState,
-                                    message = "Uploading",
-                                    title = action.title,
-                                    transferred = transferred,
-                                    total = total,
+                                    message = "Uploading ${action.title}",
+                                    transfer = transfer,
                                 )
                             },
                         ) { onByteProgress ->
@@ -465,15 +461,13 @@ class V3Executor(
         val stagingRoot = createSyncImportStagingDirectory(bookRepository.booksDirectory)
         var publishedRoot: File? = null
         return try {
-            val manifest = withByteProgress(
+            val manifest = withHttpSyncTransferProgress(
                 onProgress = onProgress,
-                makeProgress = { transferred, total ->
-                    byteProgress(
+                makeProgress = { transfer ->
+                    V3Progress(
                         phase = V3Phase.ImportingPayloads,
-                        message = "Downloading",
-                        title = syncId,
-                        transferred = transferred,
-                        total = total,
+                        message = "Downloading $syncId",
+                        transfer = transfer,
                     )
                 },
             ) { onByteProgress ->
@@ -566,15 +560,13 @@ class V3Executor(
         ) return false
         val stagingRoot = createSyncImportStagingDirectory(bookRepository.booksDirectory)
         try {
-            val manifest = withByteProgress(
+            val manifest = withHttpSyncTransferProgress(
                 onProgress = onProgress,
-                makeProgress = { transferred, total ->
-                    byteProgress(
+                makeProgress = { transfer ->
+                    V3Progress(
                         phase = V3Phase.ImportingPayloads,
-                        message = "Updating",
-                        title = action.syncId,
-                        transferred = transferred,
-                        total = total,
+                        message = "Updating ${action.syncId}",
+                        transfer = transfer,
                     )
                 },
             ) { onByteProgress ->
@@ -662,66 +654,6 @@ class V3Executor(
         }
         return false
     }
-
-    /**
-     * Runs [block] while bridging its non-suspend byte-progress callback to the suspend
-     * [onProgress] channel. A conflated [Channel] decouples the two: the payload upload /
-     * download loop only ever does a non-blocking `trySend`, and a collector coroutine
-     * drains the latest value and emits a [V3Progress] with byte-level `completed`/`total`.
-     * Mirrors the v2 reconciler's bridge so v3 shows the same per-file progress bar.
-     */
-    private suspend fun <T> withByteProgress(
-        onProgress: suspend (V3Progress) -> Unit,
-        makeProgress: (bytesTransferred: Long, totalBytes: Long) -> V3Progress,
-        block: suspend (onByteProgress: (Long, Long) -> Unit) -> T,
-    ): T = coroutineScope {
-        val channel = Channel<Pair<Long, Long>>(Channel.CONFLATED)
-        val collector = launch {
-            for ((transferred, total) in channel) {
-                onProgress(makeProgress(transferred, total))
-            }
-        }
-        try {
-            block { transferred, total -> channel.trySend(transferred to total) }
-        } finally {
-            channel.close()
-            collector.join()
-        }
-    }
-
-    /**
-     * Bytes-to-[V3Progress] mapper for the payload upload / download paths. Uses byte counts
-     * as `completed`/`total` so the progress bar tracks the file transfer; a non-positive
-     * `total` (chunked transfer, unknown length) leaves them null. Byte counts are coerced
-     * into `Int` defensively — a 100 MB payload fits, but a hypothetical >2 GB one would not.
-     */
-    private fun byteProgress(
-        phase: V3Phase,
-        message: String,
-        title: String,
-        transferred: Long,
-        total: Long,
-    ): V3Progress {
-        val haveTotal = total > 0L
-        return V3Progress(
-            phase = phase,
-            message = "$message $title",
-            detail = if (haveTotal) {
-                "${megabytes(transferred)} MB / ${megabytes(total)} MB"
-            } else {
-                "${megabytes(transferred)} MB"
-            },
-            completed = if (haveTotal) {
-                transferred.coerceAtMost(total).coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
-            } else {
-                null
-            },
-            total = if (haveTotal) total.coerceAtMost(Int.MAX_VALUE.toLong()).toInt() else null,
-        )
-    }
-
-    private fun megabytes(bytes: Long): String =
-        "%.1f".format(bytes.coerceAtLeast(0L) / (1024.0 * 1024.0))
 
     private fun phaseFor(action: V3Action): V3Phase = when (action) {
         is V3Action.PushTombstone -> V3Phase.PushingTombstones

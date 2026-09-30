@@ -105,7 +105,15 @@ class RealServerKvClientTest {
         val file = temp.newFile("payload.zip").apply { writeBytes(bytes) }
         server.clearRequests()
 
-        val response = client.putFile("books/big/payload.zip", "application/zip", file)
+        val progress = mutableListOf<Pair<Long, Long>>()
+        val response = client.putFile("books/big/payload.zip", "application/zip", file) { done, total ->
+            progress.add(done to total)
+        }
+
+        assertEquals(0L to file.length(), progress.first())
+        assertEquals(file.length() to file.length(), progress.last())
+        assertTrue("Multipart progress must measure the whole file without resetting at each part",
+            progress.zipWithNext().all { (a, b) -> a.first <= b.first && a.second == b.second })
 
         assertEquals(bytes.size, response.size)
         assertEquals(sha256(bytes), response.etag)
@@ -127,7 +135,12 @@ class RealServerKvClientTest {
         val client = server.client(multipartThresholdBytes = 4096, multipartPartSizeBytes = 4096)
         val file = temp.newFile("small.zip").apply { writeBytes(ByteArray(4096) { it.toByte() }) }
         server.clearRequests()
-        client.putFile("books/small/payload.zip", "application/zip", file)
+        val progress = mutableListOf<Pair<Long, Long>>()
+        client.putFile("books/small/payload.zip", "application/zip", file) { done, total ->
+            progress.add(done to total)
+        }
+        assertEquals(0L to file.length(), progress.first())
+        assertEquals(file.length() to file.length(), progress.last())
         val paths = server.requests().map { "${it.method} ${it.path}" }
         assertEquals(listOf("PUT /v1/kv/books/small/payload.zip"), paths)
     }

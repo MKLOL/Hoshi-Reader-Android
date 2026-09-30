@@ -81,6 +81,10 @@ class HttpSyncSleepTransferTest {
                     compose.runOnIdle { container.httpSyncManualSync.start() }
                 }
                 withTimeout(30_000) { while (delivered.get() < 64 * 1024) delay(50) }
+                withTimeout(10_000) {
+                    while (((container.httpSyncManualSync.status.value as? SyncStatus.Running)
+                            ?.progress?.transfer?.bytesPerSecond ?: 0.0) <= 0.0) delay(50)
+                }
                 if (!useWorker && Build.VERSION.SDK_INT >= 34) {
                     val job = application.getSystemService(JobScheduler::class.java)
                         .getPendingJob(HttpSyncBackgroundSync.JOB_ID)

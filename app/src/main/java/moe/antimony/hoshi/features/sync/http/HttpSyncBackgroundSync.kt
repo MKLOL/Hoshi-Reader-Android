@@ -39,6 +39,7 @@ import kotlinx.coroutines.isActive
 import moe.antimony.hoshi.HoshiApplication
 import moe.antimony.hoshi.MainActivity
 import moe.antimony.hoshi.R
+import moe.antimony.hoshi.ui.resolve
 
 /** Screen-off transfers are owned by Android; the readers' small automatic syncs stay lightweight. */
 internal object HttpSyncBackgroundSync {
@@ -83,15 +84,16 @@ internal object HttpSyncBackgroundSync {
         val sync = (context.applicationContext as HoshiApplication).appContainer.httpSyncManualSync
         val observer = launch {
             sync.status.map { status ->
-                (status as? SyncStatus.Running)?.progress?.fraction?.let { (it * 100).toInt() }
-            }.distinctUntilChanged().collectLatest { percent ->
-                notify(notification(context, percent))
+                val progress = (status as? SyncStatus.Running)?.progress
+                progress?.fraction?.let { (it * 100).toInt() } to progress?.transfer?.speedText()
+            }.distinctUntilChanged().collectLatest { (percent, speed) ->
+                notify(notification(context, percent, speed?.resolve(context)))
             }
         }
         try { sync.execute() } finally { observer.cancel() }
     }
 
-    fun notification(context: Context, percent: Int? = null): Notification {
+    fun notification(context: Context, percent: Int? = null, transferText: String? = null): Notification {
         val manager = context.getSystemService(NotificationManager::class.java)
         manager.createNotificationChannel(NotificationChannel(
             CHANNEL, context.getString(R.string.http_sync_title), NotificationManager.IMPORTANCE_LOW,
@@ -99,6 +101,7 @@ internal object HttpSyncBackgroundSync {
         return NotificationCompat.Builder(context, CHANNEL)
             .setSmallIcon(android.R.drawable.stat_sys_download)
             .setContentTitle(context.getString(R.string.http_sync_running))
+            .setContentText(transferText)
             .setContentIntent(PendingIntent.getActivity(context, 0,
                 Intent(context, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT))
             .setOnlyAlertOnce(true)

@@ -184,6 +184,7 @@ class HttpSyncEngineDispatcherTest {
                         detail = "computing plan",
                         completed = 1,
                         total = 4,
+                        transfer = HttpSyncTransferProgress(500_000, 1_000_000, 250_000.0, 2),
                     ),
                 )
                 v3Result
@@ -197,5 +198,7 @@ class HttpSyncEngineDispatcherTest {
         assertEquals("computing plan", p.detail)
         assertEquals(1, p.completed)
         assertEquals(4, p.total)
+        assertEquals(HttpSyncTransferProgress(500_000, 1_000_000, 250_000.0, 2), p.transfer)
+        assertEquals(0.5f, p.fraction!!, 0f)
     }
 }

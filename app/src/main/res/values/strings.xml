@@ -783,6 +783,12 @@
     <string name="http_sync_token_hint">Use the access token provided by your sync server.</string>
     <string name="http_sync_now">Sync now</string>
     <string name="http_sync_running">Syncing…</string>
+    <string name="http_sync_transfer_volume">%1$.1f MB / %2$.1f MB</string>
+    <string name="http_sync_transfer_volume_unknown">%1$.1f MB</string>
+    <string name="http_sync_transfer_measuring">Calculating speed and ETA…</string>
+    <string name="http_sync_transfer_eta_unknown">%1$.2f MB/s · ETA unavailable</string>
+    <string name="http_sync_transfer_eta_minutes">%1$.2f MB/s · ETA %2$d:%3$02d for this file</string>
+    <string name="http_sync_transfer_eta_hours">%1$.2f MB/s · ETA %2$d:%3$02d:%4$02d for this file</string>
     <string name="http_sync_starting">Starting sync</string>
     <string name="http_sync_checking_changes">Checking for sync changes</string>
     <string name="http_sync_reading_history">Syncing reading history</string>

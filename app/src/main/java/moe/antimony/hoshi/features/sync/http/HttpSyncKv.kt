@@ -295,6 +295,7 @@ class HttpSyncKvClient(
             val buffer = ByteArray(DEFAULT_STREAM_BUFFER_SIZE)
             connection.runCancellable {
                 var transferred = 0L
+                onByteProgress?.invoke(0, totalBytes)
                 file.inputStream().buffered(DEFAULT_STREAM_BUFFER_SIZE).use { input ->
                     connection.outputStream.buffered(DEFAULT_STREAM_BUFFER_SIZE).use { output ->
                         while (true) {
@@ -390,6 +391,7 @@ class HttpSyncKvClient(
         // Bytes already accounted for by completed parts — the per-part counter is
         // offset by this so the callback reports whole-file progress, not per-part.
         var transferredFileBytes = 0L
+        onByteProgress?.invoke(0, totalFileBytes)
         file.inputStream().buffered(DEFAULT_STREAM_BUFFER_SIZE).use { input ->
             while (remainingFileBytes > 0L) {
                 currentCoroutineContext().ensureActive()

@@ -36,6 +36,7 @@ import kotlinx.coroutines.launch
 import moe.antimony.hoshi.LocalHoshiAppContainer
 import moe.antimony.hoshi.R
 import moe.antimony.hoshi.features.settings.SettingsDetailScaffold
+import moe.antimony.hoshi.ui.asString
 
 /**
  * Settings screen for the Android-only HTTP sync — base URL, bearer token, and a manual
@@ -214,6 +215,12 @@ private fun SyncProgressView(progress: HttpSyncProgress) {
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+        }
+        progress.transfer?.let { transfer ->
+            Text(transfer.volumeText().asString(), style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(transfer.speedText().asString(), style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }

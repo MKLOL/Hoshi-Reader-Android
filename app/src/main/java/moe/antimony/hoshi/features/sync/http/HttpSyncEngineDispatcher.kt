@@ -90,6 +90,7 @@ internal fun V3Progress.toHttpSyncProgress(): HttpSyncProgress = HttpSyncProgres
     detail = detail,
     completed = completed,
     total = total,
+    transfer = transfer,
 )
 
 /**
