@@ -56,7 +56,9 @@ object HttpSyncEngineDispatcher {
         v2 = { s, p -> reconciler.syncOnce(s, transport, p) },
         v3 = { s, p -> v3Engine.syncOnce(s, transport, p) },
         onProgress = onProgress,
-    )
+    ).also { result ->
+        if (result.errors.isEmpty()) HttpSyncDownloadSpool.pruneAfterSync(reconciler.booksDirectory)
+    }
 
     /**
      * Lambda-keyed overload used by tests so we don't have to subclass the

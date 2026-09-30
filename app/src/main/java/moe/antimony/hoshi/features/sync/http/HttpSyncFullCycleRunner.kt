@@ -30,8 +30,15 @@ class HttpSyncFullCycleRunner(private val scope: CoroutineScope) {
     ): HttpSyncResult = coroutineScope {
         while (true) {
             var ownsFlight = false
+            var unwinding: Flight? = null
             val selected = synchronized(lock) {
-                flight?.takeIf { !it.result.isCompleted } ?: run {
+                val current = flight?.takeIf { !it.result.isCompleted }
+                // A stopped pass may still be unwinding; joining it would inherit its cancellation.
+                if (current != null && current.result.isCancelled) {
+                    unwinding = current
+                    return@synchronized null
+                }
+                current ?: run {
                     ownsFlight = true
                     val progress = MutableStateFlow<HttpSyncProgress?>(null)
                     val result = scope.async(start = CoroutineStart.LAZY) { block { progress.value = it } }
@@ -42,6 +49,10 @@ class HttpSyncFullCycleRunner(private val scope: CoroutineScope) {
                         }
                     }
                 }
+            }
+            if (selected == null) {
+                unwinding?.result?.join()
+                continue
             }
             val observer = launch(start = CoroutineStart.UNDISPATCHED) {
                 selected.progress.filterNotNull().collect { onProgress(it) }

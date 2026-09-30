@@ -2,8 +2,10 @@ package moe.antimony.hoshi.features.bookshelf
 
 import android.net.Uri
 import androidx.lifecycle.ViewModel
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -45,6 +47,7 @@ internal class BookshelfViewModel(
     private val _uiState = MutableStateFlow(BookshelfUiState())
     val uiState: StateFlow<BookshelfUiState> = _uiState
     private var openBookInFlight = false
+    private var badgeRefresh: Job? = null
 
     fun reloadBookEntries() {
         reloadBookEntries(_uiState.value.sortOption)
@@ -450,12 +453,14 @@ internal class BookshelfViewModel(
             firstResult
         }
         _uiState.update {
-            val validSelectedIds = it.selectedBookIds.intersect(result.entries.mapTo(mutableSetOf()) { entry -> entry.metadata.id })
+            val bookIds = result.entries.mapTo(mutableSetOf()) { entry -> entry.metadata.id }
+            val validSelectedIds = it.selectedBookIds.intersect(bookIds)
             it.copy(
                 bookEntries = result.entries,
                 bookProgressById = result.progressById,
                 coverSourcesById = result.coverSourcesById,
-                pretranslatedBookIds = result.pretranslatedBookIds,
+                // Keep badges for books still here until the refresh below settles them.
+                pretranslatedBookIds = it.pretranslatedBookIds.intersect(bookIds),
                 shelves = result.shelves,
                 sections = bookshelfSections(
                     entries = result.entries,
@@ -471,10 +476,26 @@ internal class BookshelfViewModel(
                 errorMessage = null,
             )
         }
+        refreshTranslationBadges(result.entries)
     }
 
     private suspend fun loadBookEntries(sortOption: BookSortOption): BookshelfLoadResult =
         repository.loadBooks(sortOption)
+
+    /** Translation sidecars can be tens of megabytes each, so the shelf appears first. */
+    private fun refreshTranslationBadges(entries: List<BookEntry>) {
+        badgeRefresh?.cancel()
+        badgeRefresh = workScope.launch {
+            val ids = try {
+                repository.loadPretranslatedBookIds(entries)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                return@launch
+            }
+            _uiState.update { if (it.bookEntries === entries) it.copy(pretranslatedBookIds = ids) else it }
+        }
+    }
 
     private fun runLoading(
         errorPrefix: UiText,

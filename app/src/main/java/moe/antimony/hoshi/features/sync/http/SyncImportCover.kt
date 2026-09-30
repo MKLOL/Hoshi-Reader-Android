@@ -94,7 +94,7 @@ internal fun createSyncImportStagingDirectory(booksDirectory: File): File {
     Files.createDirectories(booksDirectory.toPath())
     val stagingParent = booksDirectory.parentFile ?: booksDirectory
     Files.createDirectories(stagingParent.toPath())
-    return Files.createTempDirectory(stagingParent.toPath(), ".http-sync-import-").toFile()
+    return Files.createTempDirectory(stagingParent.toPath(), HttpSyncDownloadSpool.IMPORT_STAGING_PREFIX).toFile()
 }
 
 /** Atomically publishes a validated staging directory to a new, collision-free book folder. */

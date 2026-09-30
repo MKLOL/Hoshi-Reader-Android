@@ -47,19 +47,39 @@ internal fun HttpSyncBookshelfButton(enabled: Boolean) {
         }
     }
     if (showStatus) {
-        AlertDialog(
-            onDismissRequest = { showStatus = false },
-            title = { Text(stringResource(R.string.http_sync_title)) },
-            text = {
-                Column(Modifier.verticalScroll(rememberScrollState())) {
-                    HttpSyncStatusLine(status)
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = { showStatus = false }) {
-                    Text(stringResource(R.string.action_done))
-                }
+        HttpSyncStatusDialog(
+            status = status,
+            onDismiss = { showStatus = false },
+            onStop = {
+                sync.cancel()
+                // A stopped sync has nothing left to report, so the dialog would only be blank.
+                showStatus = false
             },
         )
     }
+}
+
+@Composable
+internal fun HttpSyncStatusDialog(
+    status: SyncStatus,
+    onDismiss: () -> Unit,
+    onStop: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.http_sync_title)) },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                HttpSyncStatusLine(status)
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.action_done))
+            }
+        },
+        dismissButton = if (status is SyncStatus.Running) {
+            { TextButton(onClick = onStop) { Text(stringResource(R.string.http_sync_stop)) } }
+        } else null,
+    )
 }

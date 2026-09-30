@@ -19,6 +19,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -73,6 +74,7 @@ fun HttpSyncSettingsView(
                     manualSync.start()
                 }
             },
+            onStop = manualSync::cancel,
         )
     }
 }
@@ -83,6 +85,7 @@ internal fun HttpSyncSettingsContent(
     status: SyncStatus,
     onCredentialsChange: (String, String) -> Unit,
     onSync: (String, String) -> Unit,
+    onStop: () -> Unit,
     innerPadding: PaddingValues = PaddingValues(),
 ) {
     // Editing belongs to the UI. Feeding asynchronous DataStore echoes back into a text
@@ -138,6 +141,11 @@ internal fun HttpSyncSettingsContent(
             running = status is SyncStatus.Running,
             onClick = { onSync(baseUrl, token) },
         )
+        if (status is SyncStatus.Running) {
+            OutlinedButton(onClick = onStop, modifier = Modifier.fillMaxWidth()) {
+                Text(stringResource(R.string.http_sync_stop))
+            }
+        }
         HttpSyncStatusLine(status)
     }
 }

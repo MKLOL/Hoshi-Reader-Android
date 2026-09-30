@@ -12,6 +12,8 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.os.Build
 import androidx.annotation.RequiresApi
 import androidx.core.app.NotificationCompat
@@ -41,15 +43,48 @@ import moe.antimony.hoshi.MainActivity
 import moe.antimony.hoshi.R
 import moe.antimony.hoshi.ui.resolve
 
+/** The device's default network, as Android's transfer constraints see it. */
+internal enum class HttpSyncNetwork { None, Unvalidated, Validated }
+
+/**
+ * Anything short of validated internet may still reach a self-hosted server, so only a missing
+ * network is reported as offline.
+ */
+internal fun httpSyncNetwork(connected: Boolean, internet: Boolean, validated: Boolean): HttpSyncNetwork = when {
+    !connected -> HttpSyncNetwork.None
+    internet && validated -> HttpSyncNetwork.Validated
+    else -> HttpSyncNetwork.Unvalidated
+}
+
+/**
+ * Android starts transfer jobs and workers only on a validated internet connection. A tap with
+ * no network fails at once instead of waiting forever, and a network Android has not validated
+ * (a LAN-only server, a captive portal) runs the pass in the app, where the server can still be
+ * reached or fail with its own error.
+ */
+internal fun httpSyncStartRoute(network: HttpSyncNetwork): HttpSyncStartRoute = when (network) {
+    HttpSyncNetwork.None -> throw HttpSyncException(R.string.http_sync_no_network)
+    HttpSyncNetwork.Unvalidated -> HttpSyncStartRoute.InProcess
+    HttpSyncNetwork.Validated -> HttpSyncStartRoute.AndroidTransfer
+}
+
 /** Screen-off transfers are owned by Android; the readers' small automatic syncs stay lightweight. */
 internal object HttpSyncBackgroundSync {
     const val JOB_ID = 0x4853
     const val NOTIFICATION_ID = 0x4854
+    const val WORK_NAME = "http-manual-sync"
     private const val CHANNEL = "http-sync"
 
-    suspend fun schedule(context: Context) {
+    /** [useWorker] exists so the API 28–33 path can be exercised on newer test devices. */
+    suspend fun schedule(
+        context: Context,
+        useWorker: Boolean = Build.VERSION.SDK_INT < 34,
+        network: () -> HttpSyncNetwork = { currentNetwork(context) },
+    ): HttpSyncStartRoute {
+        val route = httpSyncStartRoute(network())
+        if (route != HttpSyncStartRoute.AndroidTransfer) return route
         try {
-            if (Build.VERSION.SDK_INT >= 34) {
+            if (!useWorker && Build.VERSION.SDK_INT >= 34) {
                 val job = JobInfo.Builder(JOB_ID, ComponentName(context, HttpSyncTransferJob::class.java))
                     .setUserInitiated(true)
                     .setRequiredNetworkType(JobInfo.NETWORK_TYPE_ANY)
@@ -59,7 +94,7 @@ internal object HttpSyncBackgroundSync {
                 }
             } else {
                 WorkManager.getInstance(context).enqueueUniqueWork(
-                    "http-manual-sync", ExistingWorkPolicy.APPEND_OR_REPLACE,
+                    WORK_NAME, ExistingWorkPolicy.APPEND_OR_REPLACE,
                     OneTimeWorkRequestBuilder<HttpSyncTransferWorker>()
                         .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
                         .build(),
@@ -70,6 +105,23 @@ internal object HttpSyncBackgroundSync {
         } catch (_: Exception) {
             throw HttpSyncException(R.string.http_sync_background_start_failed)
         }
+        return route
+    }
+
+    /** Withdraws a scheduled or running transfer; Android then stops it without a retry. */
+    fun unschedule(context: Context) {
+        if (Build.VERSION.SDK_INT >= 34) context.getSystemService(JobScheduler::class.java).cancel(JOB_ID)
+        WorkManager.getInstance(context).cancelUniqueWork(WORK_NAME)
+    }
+
+    private fun currentNetwork(context: Context): HttpSyncNetwork {
+        val manager = context.getSystemService(ConnectivityManager::class.java) ?: return HttpSyncNetwork.Validated
+        val capabilities = manager.activeNetwork?.let(manager::getNetworkCapabilities)
+        return httpSyncNetwork(
+            connected = capabilities != null,
+            internet = capabilities?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true,
+            validated = capabilities?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) == true,
+        )
     }
 
     fun failedToStart(context: Context) {

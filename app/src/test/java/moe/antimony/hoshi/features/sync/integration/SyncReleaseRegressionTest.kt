@@ -361,4 +361,32 @@ class SyncReleaseRegressionTest(private val phoneEngine: SyncEngine, private val
             }
         }
     }
+
+    @Test
+    fun aCleanSyncRemovesDownloadsNoSyncCameBackForAndKeepsRecentOnes() = runBlocking {
+        val phone = device("phone", phoneEngine)
+        val filesDir = phone.repo.booksDirectory.parentFile!!
+        val now = System.currentTimeMillis()
+        fun leftover(path: String, ageDays: Long): File = filesDir.resolve(path).apply {
+            mkdirs()
+            resolve("archive.zip").writeBytes(ByteArray(8))
+            val stamp = now - java.util.concurrent.TimeUnit.DAYS.toMillis(ageDays)
+            walkTopDown().forEach { it.setLastModified(stamp) }
+        }
+        val abandoned = leftover(".http-sync-downloads/deleted-elsewhere", ageDays = 8)
+        val recent = leftover(".http-sync-downloads/still-resuming", ageDays = 2)
+        val stranded = leftover(".http-sync-import-killed", ageDays = 2)
+
+        // A first sync bootstraps through the engine.
+        assertClean(phone.sync())
+        assertFalse(abandoned.exists())
+        assertFalse(stranded.exists())
+        assertTrue(recent.exists())
+
+        // An already up-to-date library skips the engine, and still clears what nothing will resume.
+        val replaced = leftover(".http-sync-downloads/old-account", ageDays = 9)
+        assertClean(phone.sync())
+        assertFalse(replaced.exists())
+        assertTrue(recent.exists())
+    }
 }

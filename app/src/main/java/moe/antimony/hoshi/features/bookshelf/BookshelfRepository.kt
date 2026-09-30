@@ -43,6 +43,9 @@ import java.util.UUID
 
 internal interface BookshelfRepository {
     suspend fun loadBooks(sortOption: BookSortOption): BookshelfLoadResult
+
+    /** Local ids of [entries] whose translation sidecars the readers can use. */
+    suspend fun loadPretranslatedBookIds(entries: List<BookEntry>): Set<String>
     suspend fun openBook(entry: BookEntry): String
     suspend fun importBook(uri: Uri): String
     suspend fun importMokuroFolder(treeUri: Uri): String
@@ -104,6 +107,9 @@ internal class AndroidBookshelfRepository(
             settings = settingsRepository.settings.first(),
         )
     }
+
+    override suspend fun loadPretranslatedBookIds(entries: List<BookEntry>): Set<String> =
+        BookTranslationAvailability.load(entries)
 
     override suspend fun openBook(entry: BookEntry): String = withContext(ioDispatcher) {
         openBookshelfBook(bookRepository, entry, ::writeMokuroSidecars)
@@ -452,7 +458,6 @@ internal suspend fun loadBookshelfResult(
         entries = entries,
         progressById = loadBookProgressById(entries, bookRepository),
         coverSourcesById = loadBookCoverSourcesById(entries, bookRepository),
-        pretranslatedBookIds = BookTranslationAvailability.load(entries),
         shelves = bookRepository.loadShelves(),
         settings = settings,
     )

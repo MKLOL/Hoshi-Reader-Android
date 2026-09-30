@@ -66,6 +66,9 @@ class HttpSyncReconciler(
     },
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
 ) {
+    /** Where this engine installs books; sync download spools live beside it. */
+    internal val booksDirectory: File get() = bookRepository.booksDirectory
+
     private val statisticsSync = HttpSyncStatisticsSync(bookRepository, bookLocks)
     private val json = Json {
         ignoreUnknownKeys = true

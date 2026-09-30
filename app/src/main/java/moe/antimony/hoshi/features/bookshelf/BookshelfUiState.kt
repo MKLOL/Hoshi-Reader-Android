@@ -43,5 +43,4 @@ data class BookshelfLoadResult(
     val coverSourcesById: Map<String, BookCoverSource>,
     val shelves: List<BookShelf>,
     val settings: BookshelfSettings,
-    val pretranslatedBookIds: Set<String> = emptySet(),
 )

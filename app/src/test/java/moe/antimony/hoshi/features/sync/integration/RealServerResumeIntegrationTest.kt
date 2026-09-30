@@ -140,4 +140,28 @@ class RealServerResumeIntegrationTest {
         HttpSyncPayloadCodec().downloadAndUnpack(server.client(), syncId, target)
         assertTrue(target.resolve("mokuro.json").isFile)
     }
+
+    @Test(timeout = 15_000) fun aWeekOldPartialStillResumesWhenItsBookIsRetried() = runBlocking {
+        val origin = publish()
+        val parent = temp.newFolder()
+        val firstStage = parent.resolve("old-stage").apply { mkdir() }
+        server.clearRequests()
+        server.downloadFault(zipKey, count = 3, disconnectAfter = 16 * 1024)
+        assertTrue(runCatching {
+            HttpSyncPayloadCodec().downloadAndUnpack(server.client(), syncId, firstStage)
+        }.isFailure)
+        val partial = cachedArchives(parent).single()
+        val saved = partial.length()
+        // The user comes back after more than a week.
+        val weekAgo = System.currentTimeMillis() - java.util.concurrent.TimeUnit.DAYS.toMillis(8)
+        parent.resolve(".http-sync-downloads").walkTopDown().forEach { it.setLastModified(weekAgo) }
+        firstStage.deleteRecursively()
+        val nextStage = parent.resolve("new-stage").apply { mkdir() }
+
+        val manifest = HttpSyncPayloadCodec().downloadAndUnpack(server.client(), syncId, nextStage)
+
+        assertArrayEquals(origin.resolve("images/0001.jpg").readBytes(), nextStage.resolve("images/0001.jpg").readBytes())
+        assertEquals("bytes=$saved-", requests().last().range)
+        assertEquals(manifest.sizeBytes, requests().sumOf { it.responseBytes.toLong() })
+    }
 }

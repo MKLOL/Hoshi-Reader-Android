@@ -219,4 +219,69 @@ class StorageCleanupRepositoryTest {
         assertTrue(booksBackup.exists())
         assertTrue(dictionaryBackup.exists())
     }
+
+    @Test
+    fun interruptedSyncDownloadsAreListedButATransferStillWritingIsNot() {
+        val filesDir = temporaryFolder.newFolder("sync-files")
+        val cacheDir = temporaryFolder.newFolder("sync-cache")
+        val now = System.currentTimeMillis()
+        val hourAgo = now - java.util.concurrent.TimeUnit.HOURS.toMillis(1)
+        val partial = filesDir.resolve(".http-sync-downloads/account-key/archive.zip").also { file ->
+            file.parentFile!!.mkdirs()
+            file.writeBytes(ByteArray(10))
+            file.setLastModified(hourAgo)
+            file.parentFile!!.setLastModified(hourAgo)
+        }.parentFile!!
+        val staging = filesDir.resolve(".http-sync-import-123/mokuro.json").also { file ->
+            file.parentFile!!.mkdirs()
+            file.writeBytes(ByteArray(5))
+            file.setLastModified(hourAgo)
+            file.parentFile!!.setLastModified(hourAgo)
+        }.parentFile!!
+        val writing = filesDir.resolve(".http-sync-downloads/other-key/archive.zip").also { file ->
+            file.parentFile!!.mkdirs()
+            file.writeBytes(ByteArray(7))
+            file.parentFile!!.setLastModified(hourAgo)
+        }.parentFile!!
+        val repository = StorageCleanupRepository(filesDir, cacheDir, now = { now })
+
+        val report = repository.scan()
+        val category = report.categories.single()
+        assertEquals(StorageCleanupCategoryId.SyncDownloadResidue, category.id)
+        // Unpacking folders wait while any archive is written, since one may belong to it.
+        assertEquals(setOf(partial), category.targets.toSet())
+        assertEquals(10L, category.sizeBytes)
+
+        assertFalse(repository.clean(report).hasCleanableItems)
+        assertFalse(partial.exists())
+        assertTrue(staging.exists())
+        assertTrue(writing.resolve("archive.zip").exists())
+    }
+
+    @Test
+    fun anEmptyUnpackingFolderIsKeptWhileAnyArchiveIsStillDownloading() {
+        val filesDir = temporaryFolder.newFolder("downloading-files")
+        val cacheDir = temporaryFolder.newFolder("downloading-cache")
+        val now = System.currentTimeMillis()
+        val hourAgo = now - java.util.concurrent.TimeUnit.HOURS.toMillis(1)
+        // The reader created this folder before a long download started and fills it afterwards.
+        val waiting = filesDir.resolve(".http-sync-import-456").apply {
+            mkdirs()
+            setLastModified(hourAgo)
+        }
+        val archive = filesDir.resolve(".http-sync-downloads/account-key/archive.zip").also { file ->
+            file.parentFile!!.mkdirs()
+            file.writeBytes(ByteArray(3))
+            file.parentFile!!.setLastModified(hourAgo)
+        }
+        val repository = StorageCleanupRepository(filesDir, cacheDir, now = { now })
+
+        assertFalse(repository.scan().hasCleanableItems)
+
+        archive.setLastModified(hourAgo)
+        assertEquals(
+            setOf(waiting, archive.parentFile!!),
+            repository.scan().categories.single().targets.toSet(),
+        )
+    }
 }

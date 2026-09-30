@@ -1,13 +1,16 @@
 package moe.antimony.hoshi.features.sync.http
 
+import android.app.ActivityManager
 import android.app.job.JobScheduler
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.os.Build
 import android.os.PowerManager
 import androidx.compose.material3.Text
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.platform.app.InstrumentationRegistry
-import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.NetworkType
 import androidx.work.WorkInfo
 import androidx.work.WorkManager
 import kotlinx.coroutines.delay
@@ -15,6 +18,7 @@ import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import moe.antimony.hoshi.HoshiApplication
 import moe.antimony.hoshi.features.sync.v3.BehaviorAction
 import moe.antimony.hoshi.features.sync.v3.StubKvBehavior
@@ -33,7 +37,16 @@ import java.util.concurrent.TimeUnit
 import java.util.UUID
 import kotlin.random.Random
 
-/** Run only on the release gate's newly owned emulator: changes screen power during a real transfer. */
+/**
+ * Run only on the release gate's newly owned emulator: turns the screen off and forces deep Doze
+ * during a real transfer.
+ *
+ * Android ranks an instrumented app process like a foreground service, so this cannot show that an
+ * ordinary in-app coroutine would be frozen with the screen off. It shows that a tapped sync is
+ * handed to Android's transfer owner by the production scheduling code on both paths — the
+ * user-initiated job (API 34+) and the foreground worker (API 28–33, forced here on newer devices)
+ * — and that the transfer keeps going and finishes through screen-off and forced deep Doze.
+ */
 class HttpSyncSleepTransferTest {
     @get:Rule val compose = createComposeRule()
     @get:Rule val temporary = TemporaryFolder()
@@ -69,14 +82,15 @@ class HttpSyncSleepTransferTest {
             })
             try {
                 shell("input keyevent 224")
+                awaitValidatedNetwork(application)
                 compose.setContent { Text("Transfer test") }
                 container.httpSyncSettingsRepository.update {
                     it.copy(baseUrl = server.baseUrl, bearerToken = server.token, lastSyncedAt = null)
                 }
                 if (useWorker) {
-                    val work = OneTimeWorkRequestBuilder<HttpSyncTransferWorker>().build()
-                    workId = work.id
-                    workManager.enqueue(work).result.get(10, TimeUnit.SECONDS)
+                    // The API 28–33 scheduling code, including its unique-work policy and constraint.
+                    assertEquals(HttpSyncStartRoute.AndroidTransfer,
+                        HttpSyncBackgroundSync.schedule(application, useWorker = true))
                 } else {
                     compose.runOnIdle { container.httpSyncManualSync.start() }
                 }
@@ -85,7 +99,18 @@ class HttpSyncSleepTransferTest {
                     while (((container.httpSyncManualSync.status.value as? SyncStatus.Running)
                             ?.progress?.transfer?.bytesPerSecond ?: 0.0) <= 0.0) delay(50)
                 }
-                if (!useWorker && Build.VERSION.SDK_INT >= 34) {
+                if (useWorker) {
+                    val work = workManager.getWorkInfosForUniqueWork(HttpSyncBackgroundSync.WORK_NAME)
+                        .get(10, TimeUnit.SECONDS).single { !it.state.isFinished }
+                    workId = work.id
+                    assertEquals(WorkInfo.State.RUNNING, work.state)
+                    assertEquals(NetworkType.CONNECTED, work.constraints.requiredNetworkType)
+                    @Suppress("DEPRECATION")
+                    val foreground = application.getSystemService(ActivityManager::class.java)
+                        .getRunningServices(Int.MAX_VALUE)
+                        .filter { it.service.className == "androidx.work.impl.foreground.SystemForegroundService" }
+                    assertTrue("The worker is not a foreground service: $foreground", foreground.any { it.foreground })
+                } else if (Build.VERSION.SDK_INT >= 34) {
                     val job = application.getSystemService(JobScheduler::class.java)
                         .getPendingJob(HttpSyncBackgroundSync.JOB_ID)
                     assertNotNull("Manual sync has no Android job", job)
@@ -93,6 +118,12 @@ class HttpSyncSleepTransferTest {
                 }
                 shell("input keyevent 223")
                 withTimeout(5_000) { while (power.isInteractive) delay(50) }
+                shell("dumpsys battery unplug")
+                shell("dumpsys deviceidle enable deep")
+                shell("dumpsys deviceidle force-idle deep")
+                assertEquals("Device did not enter deep Doze", "IDLE", shell("dumpsys deviceidle get deep").trim())
+                assertNotNull("PowerManager never reported Doze",
+                    withTimeoutOrNull(10_000) { while (!power.isDeviceIdleMode) delay(50) })
                 val before = delivered.get()
                 withTimeout(20_000) { while (delivered.get() <= before + 128 * 1024) delay(50) }
                 assertFalse("Screen unexpectedly woke during transfer", power.isInteractive)
@@ -112,8 +143,12 @@ class HttpSyncSleepTransferTest {
                 val book = container.bookRepository.loadBookEntries().single { it.metadata.title == title }
                 assertArrayEquals(bytes, book.root.resolve("pages/p1.png").readBytes())
             } finally {
+                shell("dumpsys deviceidle unforce")
+                shell("dumpsys battery reset")
                 shell("input keyevent 224")
-                workId?.let { workManager.cancelWorkById(it).result.get(10, TimeUnit.SECONDS) }
+                if (useWorker) {
+                    workManager.cancelUniqueWork(HttpSyncBackgroundSync.WORK_NAME).result.get(10, TimeUnit.SECONDS)
+                }
                 if (!useWorker && Build.VERSION.SDK_INT >= 34) {
                     application.getSystemService(JobScheduler::class.java).cancel(HttpSyncBackgroundSync.JOB_ID)
                 }
@@ -130,9 +165,18 @@ class HttpSyncSleepTransferTest {
         }
     }
 
-    private fun shell(command: String) {
+    /** Android hands transfers to its job/worker only on validated internet, which a new emulator reaches late. */
+    private suspend fun awaitValidatedNetwork(context: android.content.Context) {
+        val connectivity = context.getSystemService(ConnectivityManager::class.java)
+        val validated = withTimeoutOrNull(120_000) {
+            while (connectivity.activeNetwork?.let(connectivity::getNetworkCapabilities)
+                    ?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) != true) delay(250)
+        }
+        assertNotNull("The test emulator never reached validated internet; Android transfers cannot start", validated)
+    }
+
+    private fun shell(command: String): String =
         android.os.ParcelFileDescriptor.AutoCloseInputStream(
             InstrumentationRegistry.getInstrumentation().uiAutomation.executeShellCommand(command),
-        ).use { it.readBytes() }
-    }
+        ).use { it.readBytes().decodeToString() }
 }

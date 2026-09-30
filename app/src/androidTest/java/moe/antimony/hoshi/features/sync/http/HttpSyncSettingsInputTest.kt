@@ -2,6 +2,7 @@ package moe.antimony.hoshi.features.sync.http
 
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -30,6 +31,7 @@ class HttpSyncSettingsInputTest {
                     status = SyncStatus.Idle,
                     onCredentialsChange = { url, token -> edits += url to token },
                     onSync = { url, token -> submitted = url to token },
+                    onStop = {},
                 )
             }
         }
@@ -45,5 +47,51 @@ class HttpSyncSettingsInputTest {
         }
         compose.onNodeWithText("Bearer token").performTextReplacement("")
         compose.onNodeWithText("Sync now").assertIsNotEnabled()
+    }
+
+    @Test
+    fun aRunningSyncCanBeStoppedAndAnIdleOneOffersNoStop() {
+        val status = mutableStateOf<SyncStatus>(SyncStatus.Running())
+        var stops = 0
+        compose.setContent {
+            MaterialTheme {
+                HttpSyncSettingsContent(
+                    settings = HttpSyncSettings(baseUrl = "https://sync.test", bearerToken = "token"),
+                    status = status.value,
+                    onCredentialsChange = { _, _ -> },
+                    onSync = { _, _ -> },
+                    onStop = { stops++ },
+                )
+            }
+        }
+        compose.onNodeWithText("Stop sync").performClick()
+        compose.runOnIdle {
+            assertEquals(1, stops)
+            status.value = SyncStatus.Failed(null, moe.antimony.hoshi.R.string.http_sync_no_network)
+        }
+        compose.onNodeWithText("Stop sync").assertDoesNotExist()
+        compose.onNodeWithText("No network", substring = true).assertExists()
+        compose.onNodeWithText("Sync now").assertIsEnabled()
+    }
+
+    @Test
+    fun theBooksSyncDialogOffersStopOnlyWhileASyncRuns() {
+        val status = mutableStateOf<SyncStatus>(SyncStatus.Running())
+        var stops = 0
+        var dismissals = 0
+        compose.setContent {
+            MaterialTheme {
+                HttpSyncStatusDialog(status = status.value, onDismiss = { dismissals++ }, onStop = { stops++ })
+            }
+        }
+        compose.onNodeWithText("Stop sync").performClick()
+        compose.runOnIdle {
+            assertEquals(1, stops)
+            assertEquals(0, dismissals)
+            status.value = SyncStatus.Idle
+        }
+        compose.onNodeWithText("Stop sync").assertDoesNotExist()
+        compose.onNodeWithText("Done").performClick()
+        compose.runOnIdle { assertEquals(1, dismissals) }
     }
 }

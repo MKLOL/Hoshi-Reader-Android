@@ -7,6 +7,11 @@ Semantic Versioning.
 
 ## [Unreleased]
 
+### Fixed
+- **Sync no longer waits forever without a connection.** Tapping Sync while offline reports that there is no network right away. Self-hosted servers on networks without internet access sync again, and a running sync can be stopped from HTTP Sync settings or the Books sync dialog.
+- **Reclaim space from abandoned sync downloads.** A successful sync removes partly downloaded books that no sync has resumed for a week, and Storage Cleanup lists interrupted sync downloads.
+- **Faster Books screen with many translated books.** The shelf appears without waiting for translation badges, and reloads no longer re-read unchanged translation files.
+
 ## [v0.12.0] - 2026-09-30
 
 ### Added

@@ -139,6 +139,8 @@ class HttpSyncBatchState(
     private val installationId: String? = null,
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
 ) {
+    internal val booksDirectory: java.io.File get() = bookRepository.booksDirectory
+
     private val revisionStore = HttpSyncRevisionStore(json)
     private val syncMutex = Mutex()
     private val metadataIndex = HttpSyncMetadataIndex(bookRepository.booksDirectory)
@@ -659,6 +661,8 @@ class HttpSyncFastSync(
         val client = HttpSyncWriteTrackingTransport(transportFactory(settings))
         val maps = state.syncMaps(client, onProgress)
         if (!maps.needsBootstrap && !maps.booksChanged && !maps.otherChanged) {
+            // Nothing left to download, so any remaining partial archive has no retry coming.
+            HttpSyncDownloadSpool.pruneAfterSync(state.booksDirectory)
             return emptyResult(
                 uploadedBookmarks = maps.uploadedBookmarks,
                 downloadedBookmarks = maps.downloadedBookmarks,

@@ -8,7 +8,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -500,7 +499,6 @@ class HttpSyncPayloadCodec(
     }
 
     private companion object {
-        val downloadLocks = Array(32) { Mutex() }
         val SHA256_VALUE = Regex("^sha256:[0-9a-f]{64}$")
     }
 
@@ -536,8 +534,10 @@ class HttpSyncPayloadCodec(
         val identity = MessageDigest.getInstance("SHA-256")
             .digest("${transport.cacheIdentity}\n${keys.zip}".toByteArray())
             .joinToString("") { "%02x".format(it) }
-        downloadLocks[(identity.hashCode() and Int.MAX_VALUE) % downloadLocks.size].withLock {
-            val downloadDir = spoolDir.resolve(".http-sync-downloads").resolve(identity).apply { mkdirs() }
+        HttpSyncDownloadSpool.lockFor(identity).withLock {
+            val downloadDir = spoolDir.resolve(HttpSyncDownloadSpool.DIRECTORY).resolve(identity).apply { mkdirs() }
+            // Abandonment counts from the latest attempt, not from when the first byte arrived.
+            downloadDir.setLastModified(System.currentTimeMillis())
             val name = "${manifest.sha256.removePrefix("sha256:")}-${manifest.sizeBytes}.zip"
             val zipFile = downloadDir.resolve(name)
             downloadDir.listFiles()?.filter { it.name != name && it.name != "$name.resume" }?.forEach { it.delete() }

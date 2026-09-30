@@ -2,7 +2,10 @@ package moe.antimony.hoshi.features.storage
 
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import moe.antimony.hoshi.features.sync.http.HttpSyncDownloadSpool
+import moe.antimony.hoshi.features.sync.http.lastActivityMillis
 import java.io.File
+import java.util.concurrent.TimeUnit
 
 enum class StorageCleanupCategoryId {
     AnkiMediaCache,
@@ -11,6 +14,7 @@ enum class StorageCleanupCategoryId {
     DictionaryImportResidue,
     LocalAudioImportResidue,
     OrphanSasayakiAudio,
+    SyncDownloadResidue,
 }
 
 data class StorageCleanupReport(
@@ -34,6 +38,7 @@ class StorageCleanupRepository(
     private val filesDir: File,
     private val cacheDir: File,
     private val json: Json = Json { ignoreUnknownKeys = true },
+    private val now: () -> Long = System::currentTimeMillis,
 ) {
     fun scan(): StorageCleanupReport {
         val categories = listOfNotNull(
@@ -72,6 +77,12 @@ class StorageCleanupRepository(
                 title = "Unlinked Sasayaki audio",
                 description = "Copied audiobook files no longer referenced by any book playback metadata.",
                 targets = orphanSasayakiAudioFiles(),
+            ),
+            category(
+                id = StorageCleanupCategoryId.SyncDownloadResidue,
+                title = "Interrupted sync downloads",
+                description = "Partly downloaded books and unpacking folders that HTTP sync left behind.",
+                targets = syncDownloadResidues(),
             ),
         )
         return StorageCleanupReport(categories)
@@ -156,6 +167,20 @@ class StorageCleanupRepository(
         return typeDirectory.resolve(targetName).exists()
     }
 
+    /**
+     * A folder written in the last few minutes may belong to a transfer that is still running. A
+     * book's unpacking folder stays empty while its archive downloads, so none is offered while
+     * any download is being written.
+     */
+    private fun syncDownloadResidues(): List<File> {
+        fun idle(file: File) = now() - file.lastActivityMillis() >= ACTIVE_SYNC_TRANSFER_MILLIS
+        val downloads = filesDir.resolve(HttpSyncDownloadSpool.DIRECTORY).listFiles().orEmpty().toList()
+        val staging = filesDir.listFiles { file -> file.name.startsWith(HttpSyncDownloadSpool.IMPORT_STAGING_PREFIX) }
+            .orEmpty().toList()
+        val downloading = downloads.any { !idle(it) }
+        return downloads.filter(::idle) + if (downloading) emptyList() else staging.filter(::idle)
+    }
+
     private fun orphanSasayakiAudioFiles(): List<File> {
         val booksRoot = filesDir.resolve("Books")
         return booksRoot.listFiles()
@@ -215,3 +240,5 @@ class StorageCleanupRepository(
     )
 
 }
+
+private val ACTIVE_SYNC_TRANSFER_MILLIS = TimeUnit.MINUTES.toMillis(10)

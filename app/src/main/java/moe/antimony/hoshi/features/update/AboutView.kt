@@ -728,4 +728,5 @@ private val StorageCleanupCategoryId.titleRes: Int
         StorageCleanupCategoryId.DictionaryImportResidue -> R.string.about_storage_category_dictionary_import_residue
         StorageCleanupCategoryId.LocalAudioImportResidue -> R.string.about_storage_category_local_audio_import_residue
         StorageCleanupCategoryId.OrphanSasayakiAudio -> R.string.about_storage_category_orphan_sasayaki_audio
+        StorageCleanupCategoryId.SyncDownloadResidue -> R.string.about_storage_category_sync_download_residue
     }

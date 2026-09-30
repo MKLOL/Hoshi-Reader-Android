@@ -40,6 +40,64 @@ class BookshelfViewModelTest {
     }
 
     @Test
+    fun theShelfAppearsBeforeTranslationSidecarsFinishLoading() {
+        val gate = CompletableDeferred<Unit>()
+        val entries = listOf(bookEntry("book-a"), bookEntry("book-b"))
+        val repository = FakeBookshelfRepository(
+            entries = entries,
+            pretranslatedBookIds = setOf("book-a"),
+            pretranslationGate = gate,
+        )
+        val viewModel = BookshelfViewModel(repository, testScope())
+
+        viewModel.reloadBookEntries()
+        assertTrue(viewModel.uiState.value.hasLoadedBooks)
+        assertEquals(entries, viewModel.uiState.value.bookEntries)
+        assertTrue(viewModel.uiState.value.pretranslatedBookIds.isEmpty())
+
+        gate.complete(Unit)
+        assertEquals(setOf("book-a"), viewModel.uiState.value.pretranslatedBookIds)
+    }
+
+    @Test
+    fun badgesFromAnOlderShelfNeverReplaceANewerOne() {
+        val slow = CompletableDeferred<Unit>()
+        val repository = FakeBookshelfRepository(
+            entries = listOf(bookEntry("book-a"), bookEntry("book-b")),
+            pretranslatedBookIds = setOf("book-a", "book-b"),
+            pretranslationGate = slow,
+        )
+        val viewModel = BookshelfViewModel(repository, testScope())
+        viewModel.reloadBookEntries()
+
+        // book-b is deleted before the first badge scan finishes.
+        repository.entries = listOf(bookEntry("book-a"))
+        repository.pretranslatedBookIds = setOf("book-a")
+        repository.pretranslationGate = null
+        viewModel.reloadBookEntries()
+        assertEquals(setOf("book-a"), viewModel.uiState.value.pretranslatedBookIds)
+
+        slow.complete(Unit)
+        assertEquals(setOf("book-a"), viewModel.uiState.value.pretranslatedBookIds)
+        assertEquals(listOf("book-a"), viewModel.uiState.value.bookEntries.map { it.metadata.id })
+    }
+
+    @Test
+    fun aBookThatStaysOnTheShelfKeepsItsBadgeWhileTheShelfReloads() {
+        val repository = FakeBookshelfRepository(
+            entries = listOf(bookEntry("book-a")),
+            pretranslatedBookIds = setOf("book-a"),
+        )
+        val viewModel = BookshelfViewModel(repository, testScope())
+        viewModel.reloadBookEntries()
+        assertEquals(setOf("book-a"), viewModel.uiState.value.pretranslatedBookIds)
+
+        repository.pretranslationGate = CompletableDeferred()
+        viewModel.reloadBookEntries()
+        assertEquals(setOf("book-a"), viewModel.uiState.value.pretranslatedBookIds)
+    }
+
+    @Test
     fun initialStateWaitsForFirstShelfLoadBeforeShowingEmptyBooks() {
         val viewModel = BookshelfViewModel(FakeBookshelfRepository(), testScope())
 
@@ -594,6 +652,7 @@ class BookshelfViewModelTest {
         var coverSourcesById: Map<String, BookCoverSource> = emptyMap(),
         var settings: BookshelfSettings = BookshelfSettings(),
         var pretranslatedBookIds: Set<String> = emptySet(),
+        var pretranslationGate: CompletableDeferred<Unit>? = null,
     ) : BookshelfRepository {
         val loadRequests = mutableListOf<BookSortOption>()
         val deletedEntries = mutableListOf<BookEntry>()
@@ -607,7 +666,14 @@ class BookshelfViewModelTest {
 
         override suspend fun loadBooks(sortOption: BookSortOption): BookshelfLoadResult {
             loadRequests += sortOption
-            return BookshelfLoadResult(entries, progressById, coverSourcesById, shelves, settings, pretranslatedBookIds)
+            return BookshelfLoadResult(entries, progressById, coverSourcesById, shelves, settings)
+        }
+
+        override suspend fun loadPretranslatedBookIds(entries: List<BookEntry>): Set<String> {
+            // Answer from the files as they were when the scan started, as the real scan does.
+            val ids = pretranslatedBookIds
+            pretranslationGate?.await()
+            return ids
         }
 
         override suspend fun openBook(entry: BookEntry): String = openBookId

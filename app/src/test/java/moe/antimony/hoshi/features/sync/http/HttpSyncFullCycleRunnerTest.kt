@@ -8,7 +8,12 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.yield
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class HttpSyncFullCycleRunnerTest {
@@ -172,4 +177,41 @@ class HttpSyncFullCycleRunnerTest {
         }
     }
 
+
+    @Test(timeout = 5_000)
+    fun aNewRequestWhileAStoppedPassUnwindsRunsItsOwnPassAfterwards() = runBlocking {
+        val runner = HttpSyncFullCycleRunner(this)
+        val entered = CompletableDeferred<Unit>()
+        val unwinding = CompletableDeferred<Unit>()
+        val finishUnwinding = CompletableDeferred<Unit>()
+        val stopped = async {
+            runCatching {
+                runner.run { _ ->
+                    entered.complete(Unit)
+                    try {
+                        awaitCancellation()
+                    } finally {
+                        withContext(NonCancellable) {
+                            unwinding.complete(Unit)
+                            finishUnwinding.await()
+                        }
+                    }
+                }
+            }
+        }
+        entered.await()
+        // The user pressed Stop, then Sync again before the old pass finished closing files.
+        runner.cancelActive()
+        unwinding.await()
+        var passes = 0
+        val retry = async { runner.run { _ -> passes++; result() } }
+        yield()
+        assertEquals("A new pass must not overlap the stopped one", 0, passes)
+
+        finishUnwinding.complete(Unit)
+
+        assertEquals(result(), retry.await())
+        assertEquals(1, passes)
+        assertTrue(stopped.await().exceptionOrNull() is kotlinx.coroutines.CancellationException)
+    }
 }

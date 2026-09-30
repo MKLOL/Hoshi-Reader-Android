@@ -58,13 +58,15 @@ class BookTranslationAvailabilityTest {
         val localId = "00000000-0000-4000-8000-000000000001"
         val metadata = BookMetadata(localId, "Book", null, "book", 0.0, "remote-book")
         repository.saveMetadata(root, metadata)
-        suspend fun reload() = loadBookshelfResult(repository, BookSortOption.Recent, BookshelfSettings())
+        suspend fun reload() = BookTranslationAvailability.load(
+            loadBookshelfResult(repository, BookSortOption.Recent, BookshelfSettings()).entries,
+        )
 
-        assertTrue(reload().pretranslatedBookIds.isEmpty())
+        assertTrue(reload().isEmpty())
         val translations = writeEpub(BookEntry(root, metadata), epubBlob("remote-book"))
-        assertEquals(setOf(localId), reload().pretranslatedBookIds)
+        assertEquals(setOf(localId), reload())
         assertTrue(translations.delete())
-        assertTrue(reload().pretranslatedBookIds.isEmpty())
+        assertTrue(reload().isEmpty())
     }
 
     @Test
@@ -199,6 +201,41 @@ class BookTranslationAvailabilityTest {
             assertFalse(BookTranslationAvailability.hasTranslations(replaced))
             assertTrue(BookTranslationAvailability.hasTranslations(entry))
         }
+    }
+
+    @Test
+    fun aLibraryLargerThanAnyFixedCacheIsParsedOnceAcrossReloads() = runBlocking {
+        val library = (0 until 300).map { index ->
+            book("large-$index", manga = index % 2 == 0).also { entry ->
+                if (index % 2 == 0) writeManga(entry, mangaBlob(entry.metadata.syncId!!))
+                else writeEpub(entry, epubBlob(entry.metadata.syncId!!))
+            }
+        }
+        val expected = library.mapTo(mutableSetOf()) { it.metadata.id }
+        assertEquals(expected, BookTranslationAvailability.load(library))
+
+        val reads = BookTranslationAvailability.sidecarReads.get()
+        repeat(3) { assertEquals(expected, BookTranslationAvailability.load(library)) }
+        assertEquals(reads, BookTranslationAvailability.sidecarReads.get())
+
+        // A changed sidecar is still re-read on the next reload.
+        val changed = library.last()
+        val file = sidecar(changed, manga = false)
+        file.writeText("{}")
+        Files.setLastModifiedTime(file.toPath(), FileTime.fromMillis(file.lastModified() + 10_000))
+        assertEquals(expected - changed.metadata.id, BookTranslationAvailability.load(library))
+        assertEquals(reads + 1, BookTranslationAvailability.sidecarReads.get())
+    }
+
+    @Test
+    fun deletedBooksLeaveTheCache() = runBlocking {
+        val library = (0 until 3).map { index ->
+            book("trim-$index").also { writeEpub(it, epubBlob(it.metadata.syncId!!)) }
+        }
+        BookTranslationAvailability.load(library)
+        val kept = library.first()
+        assertEquals(setOf(kept.metadata.id), BookTranslationAvailability.load(listOf(kept)))
+        assertEquals(1, BookTranslationAvailability.cachedBookCount())
     }
 
     @Test

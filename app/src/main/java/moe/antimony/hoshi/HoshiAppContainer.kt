@@ -162,6 +162,7 @@ internal class HoshiAppContainer(context: Context) {
     val httpSyncManualSync = moe.antimony.hoshi.features.sync.http.HttpSyncManualSync(
         appScope,
         schedule = { moe.antimony.hoshi.features.sync.http.HttpSyncBackgroundSync.schedule(appContext) },
+        unschedule = { moe.antimony.hoshi.features.sync.http.HttpSyncBackgroundSync.unschedule(appContext) },
         onCancelled = { httpSyncFullCycleRunner.cancelActive() },
     ) { onProgress ->
         val settings = httpSyncSettingsRepository.settings.first()

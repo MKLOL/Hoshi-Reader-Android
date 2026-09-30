@@ -557,6 +557,7 @@
     <string name="about_storage_category_dictionary_import_residue">中断的辞典导入</string>
     <string name="about_storage_category_local_audio_import_residue">中断的本地音频导入</string>
     <string name="about_storage_category_orphan_sasayaki_audio">未链接的有声书音频</string>
+    <string name="about_storage_category_sync_download_residue">中断的同步下载</string>
     <string name="about_clean_up">清理</string>
     <plurals name="about_item_count">
         <item quantity="one">%1$d 项</item>
@@ -886,4 +887,6 @@
     <string name="bookshelf_pretranslated">已有预翻译</string>
     <string name="http_sync_background_start_failed">无法启动后台同步。请打开 Hoshi 后重试。</string>
     <string name="http_sync_download_failed">服务器无法提供此下载。请检查同步设置后重试。</string>
+    <string name="http_sync_no_network">没有网络连接。请在恢复联网后重试。</string>
+    <string name="http_sync_stop">停止同步</string>
 </resources>
