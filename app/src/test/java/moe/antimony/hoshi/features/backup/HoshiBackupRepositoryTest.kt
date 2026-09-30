@@ -1,6 +1,8 @@
 package moe.antimony.hoshi.features.backup
 
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -14,12 +16,57 @@ import java.io.ByteArrayOutputStream
 import java.nio.file.Files
 import java.time.Instant
 import java.time.ZoneId
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import java.util.zip.ZipEntry
 import java.util.zip.CRC32
 import java.util.zip.ZipInputStream
 import java.util.zip.ZipOutputStream
 
 class HoshiBackupRepositoryTest {
+    @Test
+    fun cancellationWhileArchiveReadFinishesKeepsOriginalCollectionAndRemovesStaging() = runBlocking {
+        for (folder in listOf("Books", "Dictionaries")) {
+            val filesDir = Files.createTempDirectory("hoshi-cancelled-restore").toFile()
+            val current = filesDir.resolve("$folder/keep.txt").apply {
+                parentFile!!.mkdirs()
+                writeText("original collection")
+            }
+            val archive = zipBytes("replacement.txt" to "new collection".toByteArray())
+            val readEntered = CountDownLatch(1)
+            val finishRead = CountDownLatch(1)
+            val input = object : ByteArrayInputStream(archive) {
+                override fun read(bytes: ByteArray, offset: Int, length: Int): Int {
+                    val count = super.read(bytes, offset, length)
+                    if (count > 0 && available() == 0) {
+                        readEntered.countDown()
+                        check(finishRead.await(5, TimeUnit.SECONDS)) { "Test did not release archive read" }
+                    }
+                    return count
+                }
+            }
+            val repository = HoshiBackupRepository(filesDir)
+            val restore = launch(Dispatchers.IO) {
+                if (folder == "Books") repository.restoreBooks(input) else repository.restoreDictionaries(input)
+            }
+            try {
+                assertTrue("Restore must reach the final archive chunk", readEntered.await(5, TimeUnit.SECONDS))
+                restore.cancel()
+            } finally {
+                finishRead.countDown()
+                restore.join()
+            }
+            try {
+                assertTrue(restore.isCancelled)
+                assertEquals("original collection", current.readText())
+                assertFalse(filesDir.resolve("$folder/replacement.txt").exists())
+                assertEquals(listOf(folder), filesDir.listFiles().orEmpty().map { it.name })
+            } finally {
+                filesDir.deleteRecursively()
+            }
+        }
+    }
+
     @Test
     fun exportBooksWritesIosCompatibleArchiveContentsWithoutTopLevelBooksDirectory() = runBlocking {
         val filesDir = Files.createTempDirectory("hoshi-books-backup-export").toFile()

@@ -4,6 +4,8 @@ import android.content.ContentResolver
 import android.net.Uri
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.InputStream
@@ -103,7 +105,7 @@ class HoshiBackupRepository(
             tempRoot.deleteRecursively()
             check(tempRoot.mkdirs()) { "Unable to create restore directory." }
             try {
-                archiveFile.outputStream().use { output -> input.copyTo(output) }
+                archiveFile.outputStream().use { output -> input.copyRestoreDataTo(output) }
                 unzipInto(archiveFile, tempRoot)
                 replaceDestinationWithRestoredFolder(target, tempRoot, destination)
             } catch (error: Throwable) {
@@ -115,16 +117,21 @@ class HoshiBackupRepository(
         }
     }
 
-    private fun replaceDestinationWithRestoredFolder(
+    private suspend fun replaceDestinationWithRestoredFolder(
         target: BackupTarget,
         restoredFolder: File,
         destination: File,
     ) {
+        val coroutineContext = currentCoroutineContext()
+        coroutineContext.ensureActive()
         val replacementBackup = destination.takeIf(File::exists)?.let { existing ->
             filesDir.resolve(".${target.folderName.lowercase()}-restore-backup-${UUID.randomUUID()}")
                 .also { backup -> moveReplacing(existing, backup) }
         }
         try {
+            // Cancellation after moving the original aside must take the same rollback
+            // path as a failed replacement, before we discard the only original copy.
+            coroutineContext.ensureActive()
             moveReplacing(restoredFolder, destination)
             replacementBackup?.deleteRecursively()
         } catch (error: Throwable) {
@@ -150,11 +157,13 @@ class HoshiBackupRepository(
         }.getOrThrow()
     }
 
-    private fun unzipInto(archiveFile: File, destinationRoot: File) {
+    private suspend fun unzipInto(archiveFile: File, destinationRoot: File) {
         val destinationCanonical = destinationRoot.canonicalFile
+        val coroutineContext = currentCoroutineContext()
         ZipFile(archiveFile).use { zip ->
             val entries = zip.entries()
             while (entries.hasMoreElements()) {
+                coroutineContext.ensureActive()
                 val entry = entries.nextElement()
                 val target = destinationCanonical.resolve(entry.name).canonicalFile
                 require(target.path == destinationCanonical.path || target.path.startsWith(destinationCanonical.path + File.separator)) {
@@ -166,13 +175,28 @@ class HoshiBackupRepository(
                     target.parentFile?.mkdirs()
                     val checksum = CRC32()
                     val copied = CheckedInputStream(zip.getInputStream(entry), checksum).use { input ->
-                        target.outputStream().use { output -> input.copyTo(output) }
+                        target.outputStream().use { output -> input.copyRestoreDataTo(output) }
                     }
                     // ZipFile reads the central directory but does not verify entry checksums.
                     // Reject a damaged backup before replacing the existing library.
                     if (copied != entry.size || checksum.value != entry.crc) throw CorruptBackupException()
                 }
             }
+        }
+    }
+
+    private suspend fun InputStream.copyRestoreDataTo(output: OutputStream): Long {
+        val coroutineContext = currentCoroutineContext()
+        val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+        var copied = 0L
+        while (true) {
+            coroutineContext.ensureActive()
+            val count = read(buffer)
+            // A content provider can finish a blocking read after its caller was cancelled.
+            coroutineContext.ensureActive()
+            if (count < 0) return copied
+            output.write(buffer, 0, count)
+            copied += count
         }
     }
 

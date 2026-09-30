@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Cut a Sui Manga Reader release.
 
-Bumps the version, builds the debug-signed release APK, commits, tags, pushes,
+Verifies the release gate, bumps the version, builds the debug-signed release APK, commits, tags, pushes,
 and publishes a GitHub Release with the APK attached — every step that was
 otherwise done by hand.
 
@@ -19,7 +19,6 @@ from __future__ import annotations
 import datetime
 import os
 import re
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -55,10 +54,24 @@ def run(cmd: list[str], env: dict | None = None) -> None:
     subprocess.run(cmd, cwd=REPO, env=env, check=True)
 
 
-def out(cmd: list[str]) -> str:
-    return subprocess.run(
+def out(cmd: list[str], *, strip: bool = True) -> str:
+    output = subprocess.run(
         cmd, cwd=REPO, check=True, capture_output=True, text=True
-    ).stdout.strip()
+    ).stdout
+    return output.strip() if strip else output
+
+
+def require_release_source(expected_head: str, expected_files: dict[str, bytes] | None = None) -> None:
+    """A long verification/build must not silently release untested workspace edits."""
+    expected_files = expected_files or {}
+    if out(["git", "rev-parse", "HEAD"]) != expected_head:
+        die("HEAD changed during release verification; restart from the intended commit")
+    status = out(["git", "status", "--porcelain=v1", "-z", "--untracked-files=all"], strip=False)
+    changed = {entry[3:] for entry in status.split("\0") if entry}
+    if changed - expected_files.keys():
+        die("source changed during release verification/build; commit it and rerun verification")
+    if any((REPO / path).read_bytes() != content for path, content in expected_files.items()):
+        die("release version files changed unexpectedly during the build")
 
 
 def sdk_dir() -> Path:
@@ -184,6 +197,7 @@ def main() -> None:
     if out(["git", "status", "--porcelain"]):
         die("working tree is not clean — commit or stash your changes first")
     branch = out(["git", "rev-parse", "--abbrev-ref", "HEAD"])
+    source_head = out(["git", "rev-parse", "HEAD"])
     if branch == "HEAD":
         die("detached HEAD — check out a branch first")
     try:
@@ -201,15 +215,20 @@ def main() -> None:
         die(f"tag {tag} already exists")
     print(f"    {cur_name} ({cur_code})  ->  {new_name} ({new_code})   branch: {branch}")
 
+    step("Running mandatory release verification before changing version files")
+    env = {k: v for k, v in os.environ.items() if k not in KEYSTORE_ENV}
+    env["ANDROID_NDK_HOME"] = ndk
+    run([sys.executable, "tools/verify_release.py"], env=env)
+    require_release_source(source_head)
+
     step(f"Bumping version and changelog to {new_name}")
     write_version(new_name, new_code)
     notes = update_changelog(new_name)
+    version_files = {str(path.relative_to(REPO)): path.read_bytes() for path in (BUILD_GRADLE, CHANGELOG)}
     if not notes:
         print("    note: the [Unreleased] changelog section was empty")
 
     step("Building the debug-signed release APK")
-    env = {k: v for k, v in os.environ.items() if k not in KEYSTORE_ENV}
-    env["ANDROID_NDK_HOME"] = ndk
     try:
         run(["./gradlew", ":app:assembleRelease", "--console=plain"], env=env)
     except subprocess.CalledProcessError:
@@ -221,31 +240,10 @@ def main() -> None:
     if not RELEASE_APK.exists():
         die(f"the build finished but {RELEASE_APK} is missing")
 
-    step("Checking the APK is signed like the previous release")
-    new_cert = apk_cert(RELEASE_APK)
-    with tempfile.TemporaryDirectory() as tmp:
-        try:
-            subprocess.run(
-                ["gh", "release", "download", "--repo", repo,
-                 "--pattern", "*.apk", "--dir", tmp],
-                check=True, capture_output=True, text=True,
-            )
-        except subprocess.CalledProcessError:
-            print("    note: no previous release APK to compare against — skipping")
-        else:
-            prev = next(Path(tmp).glob("*.apk"), None)
-            prev_cert = apk_cert(prev) if prev else None
-            if prev_cert and new_cert and prev_cert != new_cert:
-                die(
-                    "the release APK is signed with a different key than the last "
-                    "release:\n"
-                    f"    previous: {prev_cert}\n"
-                    f"    this run: {new_cert}\n"
-                    "  Installing it would not update existing installs in place. "
-                    "Undo the bump with\n"
-                    "    git checkout app/build.gradle.kts docs/CHANGELOG.md"
-                )
-            print(f"    ok — signing cert {new_cert}")
+    step("Verifying upgrade compatibility before committing or pushing")
+    from tools.release_artifacts import verify_candidate
+    verify_candidate(RELEASE_APK, repo, tag)
+    require_release_source(source_head, version_files)
 
     step(f"Committing and tagging {tag}")
     run(["git", "add", "app/build.gradle.kts", "docs/CHANGELOG.md"])
@@ -257,24 +255,11 @@ def main() -> None:
     run(["git", "push", "origin", tag])
 
     step("Publishing the GitHub Release")
-    notes_file = Path(tempfile.gettempdir()) / f"hoshi-notes-{tag}.md"
-    notes_file.write_text((notes or f"Release {new_name}") + "\n")
-    # The uploaded asset's FILENAME must be `Hoshi-Manga-<tag>.apk` — that's the
-    # `name` the in-app updater matches in `GitHubReleaseUpdateRepository`
-    # (`expectedManga`). gh's `<file>#<label>` syntax only sets the display *label*,
-    # leaving the asset name as the file's basename (`app-release.apk`), which the
-    # updater ignores — so upload a copy that is literally named correctly.
-    named_apk = Path(tempfile.gettempdir()) / f"Hoshi-Manga-{tag}.apk"
-    shutil.copyfile(RELEASE_APK, named_apk)
-    assets = [str(named_apk)]
-    if (REPO / "LICENSE").exists():
-        assets.append("LICENSE")
-    try:
-        run(["gh", "release", "create", tag, "--repo", repo, "--title", tag,
-             "--notes-file", str(notes_file), *assets])
-    finally:
-        notes_file.unlink(missing_ok=True)
-        named_apk.unlink(missing_ok=True)
+    with tempfile.TemporaryDirectory(prefix="hoshi-release-notes-") as directory:
+        notes_file = Path(directory) / "notes.md"
+        notes_file.write_text((notes or f"Release {new_name}") + "\n")
+        run([sys.executable, "tools/release_artifacts.py", "--apk", str(RELEASE_APK),
+             "--repo", repo, "--tag", tag, "--notes", str(notes_file)])
 
     print(f"\n✓ Released {tag}  ->  https://github.com/{repo}/releases/tag/{tag}")
 

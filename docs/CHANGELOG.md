@@ -18,6 +18,8 @@ Semantic Versioning.
 - **Reliable HTTP Sync settings input.** Fast typing no longer loses characters, Sync uses the visible connection details, and changing accounts resets the previous connection’s progress cursor.
 - **More reliable Anki exports.** Invalid server responses no longer appear successful; equivalent Unicode text matches existing cards, and different audio or images no longer overwrite media with the same filename.
 - **Broader import and ッツ sync compatibility.** Filenames containing `#` or `?` import correctly, and large signed ッツ progress IDs survive synchronization.
+- **Safer storage cleanup.** Cleanup rechecks its preview so newly selected audio and needed recovery backups are retained; unreadable playback settings no longer make audiobooks eligible for deletion.
+- **Cancel backup restoration safely.** A canceled restore stops before replacing the existing library and removes its incomplete staging files.
 
 ## [v0.11.22] - 2026-09-30
 

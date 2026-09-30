@@ -32,4 +32,11 @@ says nothing about the production deployment, which is only covered by the live 
   (the Android-published corpus) and runs the `HoshiReaderTests` XCTest bundle, which drives the
   production `HttpSyncManager` against it in the simulator.
 
-Keep the two copies of `sync_test_server.py` identical.
+Keep wire-contract changes aligned with the iOS simulator copy. Android's fault-hook
+validation and request deadlines are also pinned by the Python contract tests.
+
+Android releases additionally require `python3 tools/verify_release.py`; see
+[`docs/SYNC_RELEASE_TESTING.md`](../../docs/SYNC_RELEASE_TESTING.md). Its installed-device
+regressions assert restored totals/streaks/trends, failed-history retry, concurrent reading,
+restart convergence, and request budgets against this server. Missing Python fails these
+tests; it never turns them into skipped coverage.

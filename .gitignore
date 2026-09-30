@@ -23,5 +23,6 @@ local.properties
 # keeps the cert matching every previously-released fork APK.
 /signing/
 tools/**/__pycache__/
+/__pycache__/
 /.hoshi-news/
 app/src/androidTest/assets/

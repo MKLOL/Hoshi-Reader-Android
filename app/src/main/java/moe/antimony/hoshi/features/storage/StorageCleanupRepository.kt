@@ -78,8 +78,12 @@ class StorageCleanupRepository(
     }
 
     fun clean(report: StorageCleanupReport): StorageCleanupReport {
+        // The preview may outlive a playback selection or a restore/import rollback.
+        // Only remove items the user saw that are still eligible for cleanup now.
+        val currentTargets = scan().categories.flatMap { it.targets }.toSet()
         report.categories
             .flatMap { it.targets }
+            .filter { it in currentTargets }
             .forEach { target ->
                 if (target.isDirectory) {
                     target.deleteRecursively()
@@ -160,19 +164,25 @@ class StorageCleanupRepository(
                 val audioRoot = bookRoot.resolve("Sasayaki")
                 val files = audioRoot.listFiles()?.filter(File::isFile).orEmpty()
                 if (files.isEmpty()) return@flatMap emptyList()
-                val referenced = referencedSasayakiAudioFile(bookRoot, audioRoot)
+                val playbackFile = bookRoot.resolve("sasayaki_playback.json")
+                val playback = if (playbackFile.exists()) {
+                    runCatching {
+                        json.decodeFromString<SasayakiPlaybackAudioReference>(playbackFile.readText())
+                    }.getOrElse {
+                        // Unreadable metadata does not prove that the audiobook is unlinked.
+                        return@flatMap emptyList()
+                    }
+                } else {
+                    null
+                }
+                val referenced = referencedSasayakiAudioFile(playback?.audioFileName, audioRoot)
                 files.filter { file -> referenced == null || file.canonicalFile != referenced }
             }
             .orEmpty()
     }
 
-    private fun referencedSasayakiAudioFile(bookRoot: File, audioRoot: File): File? {
-        val playbackFile = bookRoot.resolve("sasayaki_playback.json")
-        if (!playbackFile.isFile) return null
-        val playback = runCatching {
-            json.decodeFromString<SasayakiPlaybackAudioReference>(playbackFile.readText())
-        }.getOrNull() ?: return null
-        val fileName = playback.audioFileName?.takeIf { it.isNotBlank() } ?: return null
+    private fun referencedSasayakiAudioFile(audioFileName: String?, audioRoot: File): File? {
+        val fileName = audioFileName?.takeIf { it.isNotBlank() } ?: return null
         val audioRootCanonical = audioRoot.canonicalFile
         val candidate = audioRootCanonical.resolve(fileName).canonicalFile
         if (candidate.path != audioRootCanonical.path && !candidate.path.startsWith(audioRootCanonical.path + File.separator)) {

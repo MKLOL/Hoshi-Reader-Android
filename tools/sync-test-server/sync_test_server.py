@@ -353,6 +353,11 @@ class Handler(BaseHTTPRequestHandler):
         try:
             length = int(length_header)
         except ValueError:
+            self.close_connection = True
+            self._error(HTTPStatus.BAD_REQUEST, "invalid Content-Length")
+            return None
+        if length < 0:
+            self.close_connection = True
             self._error(HTTPStatus.BAD_REQUEST, "invalid Content-Length")
             return None
         if length > self.max_body:
@@ -360,6 +365,10 @@ class Handler(BaseHTTPRequestHandler):
             return None
         body = self.rfile.read(length)
         self._consumed = len(body)
+        if len(body) != length:
+            self.close_connection = True
+            self._error(HTTPStatus.BAD_REQUEST, "incomplete request body")
+            return None
         return body
 
     def _read_json(self) -> dict | None:
@@ -454,14 +463,23 @@ class Handler(BaseHTTPRequestHandler):
                 return
             prefix = request.get("pathPrefix")
             status = request.get("status")
-            if not isinstance(prefix, str) or not prefix.startswith("/v1/") or not isinstance(status, int):
-                return self._error(HTTPStatus.BAD_REQUEST, "fail_next needs a /v1/ pathPrefix and an int status")
+            count = request.get("count", 1)
+            method = request.get("method")
+            body = request.get("body")
+            if (
+                not isinstance(prefix, str) or not prefix.startswith("/v1/")
+                or type(status) is not int or not 200 <= status <= 599
+                or type(count) is not int or count < 1
+                or method not in (None, "GET", "HEAD", "PUT", "POST", "DELETE")
+                or (body is not None and not isinstance(body, str))
+            ):
+                return self._error(HTTPStatus.BAD_REQUEST, "invalid fail_next configuration")
             self.store.add_fault({
-                "method": request.get("method"),
+                "method": method,
                 "pathPrefix": prefix,
                 "status": status,
-                "count": int(request.get("count") or 1),
-                "body": request.get("body"),
+                "count": count,
+                "body": body,
             })
             return self._send_json(HTTPStatus.OK, {"ok": True})
         if path == "/_test/load":
@@ -562,7 +580,7 @@ class Handler(BaseHTTPRequestHandler):
         if request is None:
             return
         parts = request.get("parts")
-        if not isinstance(parts, list) or not parts or not all(isinstance(p, int) and p >= 1 for p in parts):
+        if not isinstance(parts, list) or not parts or not all(type(p) is int and p >= 1 for p in parts):
             return self._error(HTTPStatus.BAD_REQUEST, "parts must be a non-empty list of 1-based part numbers")
         error, meta = self.store.complete_upload(upload_id, parts)
         if error == "unknown upload":

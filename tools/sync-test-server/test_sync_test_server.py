@@ -11,8 +11,10 @@ import base64
 import hashlib
 import json
 import os
+import queue
 import subprocess
 import sys
+import threading
 import unittest
 import urllib.error
 import urllib.request
@@ -31,15 +33,26 @@ class ServerProcess:
             text=True,
         )
         assert self.process.stdout is not None
-        line = self.process.stdout.readline()
+        ready: queue.Queue[str] = queue.Queue()
+        threading.Thread(target=lambda: ready.put(self.process.stdout.readline()), daemon=True).start()
+        try:
+            line = ready.get(timeout=10)
+        except queue.Empty:
+            self.stop()
+            raise RuntimeError("server did not report readiness within 10 seconds") from None
         if not line.startswith("SYNC_TEST_SERVER_READY port="):
-            raise RuntimeError(f"server did not start: {line!r} {self.process.stderr.read()}")
+            self.stop()
+            raise RuntimeError(f"server did not start: {line!r}")
         self.port = int(line.strip().split("=", 1)[1])
         self.base = f"http://127.0.0.1:{self.port}"
 
     def stop(self) -> None:
         self.process.terminate()
-        self.process.wait(timeout=10)
+        try:
+            self.process.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            self.process.kill()
+            self.process.wait(timeout=5)
         for stream in (self.process.stdout, self.process.stderr):
             if stream:
                 stream.close()
@@ -53,10 +66,11 @@ def call(base: str, method: str, path: str, body: bytes | None = None, content_t
     if content_type:
         request.add_header("Content-Type", content_type)
     try:
-        with urllib.request.urlopen(request) as response:
+        with urllib.request.urlopen(request, timeout=5) as response:
             return response.status, dict(response.headers), response.read()
     except urllib.error.HTTPError as error:
-        return error.code, dict(error.headers), error.read()
+        with error:
+            return error.code, dict(error.headers), error.read()
 
 
 def call_json(base: str, method: str, path: str, payload: dict | None = None, token: str | None = TOKEN):
@@ -217,6 +231,41 @@ class SyncTestServerContract(unittest.TestCase):
         status, _ = call_json(self.base, "POST", "/v1/kv-multipart/unknown/complete", {"parts": [1]})
         self.assertEqual(404, status)
 
+    def test_multipart_retry_replaces_parts_and_commits_in_requested_order(self):
+        key = "/v1/kv/books/a/payload.zip"
+        call(self.base, "PUT", key, b"old payload", "application/zip")
+        _, started = call_json(self.base, "POST", "/v1/kv-multipart/start",
+                               {"key": "books/a/payload.zip", "contentType": "application/zip"})
+        upload = "/v1/kv-multipart/" + started["uploadId"]
+        for number, body in ((1, b"stale part"), (2, b"second"), (1, b"first")):
+            self.assertEqual(200, call(self.base, "PUT", f"{upload}/{number}", body)[0])
+        self.assertEqual(b"old payload", call(self.base, "GET", key)[2])
+        status, _ = call_json(self.base, "POST", "/_test/fail_next",
+                              {"method": "POST", "pathPrefix": upload + "/complete", "status": 503})
+        self.assertEqual(200, status)
+        self.assertEqual(503, call_json(self.base, "POST", upload + "/complete", {"parts": [2, 1]})[0])
+        self.assertEqual(b"old payload", call(self.base, "GET", key)[2], "failed completion cannot publish parts")
+
+        status, completed = call_json(self.base, "POST", upload + "/complete", {"parts": [2, 1]})
+        self.assertEqual(200, status)
+        self.assertEqual(b"secondfirst", call(self.base, "GET", key)[2])
+        self.assertEqual("sha256:" + hashlib.sha256(b"secondfirst").hexdigest(), completed["etag"])
+        self.assertEqual(404, call_json(self.base, "POST", upload + "/complete", {"parts": [2, 1]})[0])
+
+    def test_invalid_multipart_completion_preserves_upload_and_existing_payload(self):
+        key = "/v1/kv/books/a/payload.zip"
+        call(self.base, "PUT", key, b"old", "application/zip")
+        _, started = call_json(self.base, "POST", "/v1/kv-multipart/start",
+                               {"key": "books/a/payload.zip"})
+        upload = "/v1/kv-multipart/" + started["uploadId"]
+        self.assertEqual(200, call(self.base, "PUT", upload + "/1", b"new")[0])
+        for parts in ([], [True], [1.0], ["1"], [0], [-1], [1, 2]):
+            self.assertEqual(400, call_json(self.base, "POST", upload + "/complete", {"parts": parts})[0], parts)
+            self.assertEqual(b"old", call(self.base, "GET", key)[2])
+        self.assertEqual(204, call(self.base, "DELETE", upload)[0])
+        self.assertEqual(404, call(self.base, "PUT", upload + "/1", b"late retry")[0])
+        self.assertEqual(b"old", call(self.base, "GET", key)[2])
+
     # -- test hooks ----------------------------------------------------------------------------
 
     def test_dump_load_reset_and_request_log(self):
@@ -316,6 +365,49 @@ class SyncTestServerContract(unittest.TestCase):
         self.assertEqual([503, 503, 200], statuses)
         status, _ = call_json(self.base, "POST", "/_test/fail_next", {"pathPrefix": "/_test/dump", "status": 500})
         self.assertEqual(400, status, "faults only apply to API routes")
+
+    def test_invalid_fault_configuration_is_rejected_without_arming_any_fault(self):
+        for field, value in (
+            ("status", True), ("status", 199), ("status", 600), ("status", "503"),
+            ("count", 0), ("count", -1), ("count", True), ("count", "two"),
+            ("method", "PATCH"), ("method", []), ("body", {}), ("pathPrefix", "/_test/reset"),
+        ):
+            config = {"pathPrefix": "/v1/kv", "status": 503, field: value}
+            status, error = call_json(self.base, "POST", "/_test/fail_next", config)
+            self.assertEqual(400, status, config)
+            self.assertIn("error", error)
+        self.assertEqual(200, call_json(self.base, "GET", "/v1/kv")[0])
+
+    def test_failed_writes_and_deletes_have_no_side_effect_and_reset_clears_faults(self):
+        path = "/v1/kv/books/a/bookmark"
+        _, _, initial = call(self.base, "PUT", path, b"saved", "text/plain")
+        for method, body in (("PUT", b"uncommitted"), ("DELETE", None)):
+            call_json(self.base, "POST", "/_test/fail_next",
+                      {"pathPrefix": path, "method": method, "status": 503})
+            self.assertEqual(503, call(self.base, method, path, body)[0])
+            status, headers, data = call(self.base, "GET", path)
+            self.assertEqual(200, status)
+            self.assertEqual(b"saved", data)
+            self.assertEqual(json.loads(initial)["etag"], headers["ETag"])
+        call_json(self.base, "POST", "/_test/fail_next", {"pathPrefix": "/v1/kv", "status": 500, "count": 3})
+        self.assertEqual(200, call_json(self.base, "POST", "/_test/reset")[0])
+        self.assertEqual([], call_json(self.base, "GET", "/v1/kv")[1]["keys"])
+
+    def test_invalid_content_length_is_rejected_without_waiting_for_an_unbounded_body(self):
+        import http.client
+        for length in ("-1", "invalid"):
+            conn = http.client.HTTPConnection("127.0.0.1", self.server.port, timeout=2)
+            try:
+                conn.request("PUT", "/v1/kv/books/a/bookmark", headers={
+                    "Authorization": f"Bearer {TOKEN}", "Content-Length": length,
+                })
+                response = conn.getresponse()
+                self.assertEqual(400, response.status)
+                self.assertEqual("close", response.getheader("Connection"))
+                response.read()
+            finally:
+                conn.close()
+        self.assertEqual(404, call(self.base, "GET", "/v1/kv/books/a/bookmark")[0])
 
     def test_snapshot_stamps_without_fractions_do_not_break_later_writes(self):
         _, loaded = call_json(self.base, "POST", "/_test/load", {"entries": [

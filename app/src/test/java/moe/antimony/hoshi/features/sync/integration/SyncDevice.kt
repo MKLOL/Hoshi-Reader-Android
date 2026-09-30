@@ -11,12 +11,14 @@ import moe.antimony.hoshi.epub.BookRepository
 import moe.antimony.hoshi.epub.BookShelf
 import moe.antimony.hoshi.epub.Bookmark
 import moe.antimony.hoshi.epub.ContentType
+import moe.antimony.hoshi.epub.DeviceIdentity
 import moe.antimony.hoshi.epub.bookContentType
 import moe.antimony.hoshi.features.ai.AiChatEntry
 import moe.antimony.hoshi.features.ai.AiChatHistoryStore
 import moe.antimony.hoshi.features.sync.http.HttpSyncAutoPush
 import moe.antimony.hoshi.features.sync.http.HttpSyncBatchState
 import moe.antimony.hoshi.features.sync.http.HttpSyncContentType
+import moe.antimony.hoshi.features.sync.http.HttpSyncBookLocks
 import moe.antimony.hoshi.features.sync.http.HttpSyncDeletedBookRecord
 import moe.antimony.hoshi.features.sync.http.HttpSyncDeletedBookStateStore
 import moe.antimony.hoshi.features.sync.http.HttpSyncEngineDispatcher
@@ -68,8 +70,11 @@ class SyncDevice(
     multipartThresholdBytes: Long = 64L * 1024L * 1024L,
     multipartPartSizeBytes: Long = 64L * 1024L * 1024L,
     installationId: String = UUID.randomUUID().toString(),
+    deviceIdentity: DeviceIdentity? = null,
+    decorateTransport: (HttpSyncKvTransport) -> HttpSyncKvTransport = { it },
 ) : AutoCloseable {
-    val repo = BookRepository(filesDir)
+    private val bookLocks = HttpSyncBookLocks()
+    val repo = BookRepository(filesDir, bookLocks = bookLocks, deviceIdentity = deviceIdentity)
     val history = AiChatHistoryStore()
     val codec = HttpSyncPayloadCodec()
     val settings = HttpSyncSettings(server.baseUrl, server.token, useV3Sync = engine == SyncEngine.V3)
@@ -78,30 +83,32 @@ class SyncDevice(
     private val deletedBooks = HttpSyncDeletedBookStateStore(json)
 
     private val transportFactory: (HttpSyncSettings) -> HttpSyncKvTransport = { s ->
-        HttpSyncKvClient(
+        decorateTransport(HttpSyncKvClient(
             baseUrl = s.baseUrl,
             bearerToken = s.bearerToken,
             ioDispatcher = Dispatchers.IO,
             multipartPartSizeBytes = multipartPartSizeBytes,
             multipartThresholdBytes = multipartThresholdBytes,
-        )
+        ))
     }
 
     val reconciler = HttpSyncReconciler(
         bookRepository = repo,
+        bookLocks = bookLocks,
         aiHistoryStore = history,
         transportFactory = transportFactory,
         ioDispatcher = Dispatchers.IO,
     )
     val v3 = V3SyncEngine(
         bookRepository = repo,
+        bookLocks = bookLocks,
         aiHistoryStore = history,
         payloadCodec = codec,
         transportFactory = transportFactory,
         ioDispatcher = Dispatchers.IO,
     )
     /** The reader's fire-and-forget push path (page turns, chat replies). */
-    val pusher = HttpSyncPusher(bookRepository = repo, transportFactory = transportFactory, ioDispatcher = Dispatchers.IO)
+    val pusher = HttpSyncPusher(bookRepository = repo, bookLocks = bookLocks, transportFactory = transportFactory, ioDispatcher = Dispatchers.IO)
     private val pushScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     /** The import/delete/shelf hooks the app fires outside the reader. */
     val autoPush = HttpSyncAutoPush(
@@ -116,6 +123,7 @@ class SyncDevice(
     /** The bookmark-map layer every production sync goes through (five-second exchange + maps). */
     val batchState = HttpSyncBatchState(
         bookRepository = repo,
+        bookLocks = bookLocks,
         installationId = installationId,
     )
     private val fastSync = HttpSyncFastSync(

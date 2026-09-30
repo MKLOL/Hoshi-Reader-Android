@@ -16,17 +16,16 @@ import java.util.UUID
 /**
  * Live-server wire-format smoke test for [HttpSyncKvClient].
  *
- * Disabled by default — the fake-transport tests in `HttpSyncTest` cover the manager logic
- * without a network. This one exercises the real HTTP/JSON/headers handshake against the
- * configured `dragos.games` KV server, and only runs when both `HOSHI_KV_BASE_URL` and
- * `HOSHI_KV_TOKEN` are present in the environment, so it never executes in CI.
+ * Disabled unless HOSHI_ENABLE_LIVE_SYNC_TESTS=1 explicitly opts in. The mandatory
+ * integration package exercises both engines against a local HTTP KV simulator.
+ * These optional tests contact the configured external deployment.
  *
  * Prefer local credentials in gitignored `<repo>/.hoshi-sync-secret.env`, with keys
  * `HOSHI_KV_BASE_URL` and `HOSHI_KV_TOKEN`.
  *
  * Then run:
  *
- *     ./gradlew :app:testDebugUnitTest \
+ *     HOSHI_ENABLE_LIVE_SYNC_TESTS=1 ./gradlew :app:testDebugUnitTest \
  *         --tests moe.antimony.hoshi.features.sync.http.HttpSyncLiveServerSmokeTest
  *
  * The test writes book data under a per-run `__smoke/{uuid}/...` prefix and cleans up after
@@ -50,11 +49,18 @@ class HttpSyncLiveServerSmokeTest {
          * If neither is set, the live tests are skipped via JUnit `Assume`; the rest of the
          * suite uses an in-memory fake transport and never needs credentials.
          */
-        private fun readSecret(name: String): String? {
-            System.getenv(name)?.takeIf { it.isNotBlank() }?.let { return it }
+        internal fun readSecret(
+            name: String,
+            enabled: Boolean = System.getenv("HOSHI_ENABLE_LIVE_SYNC_TESTS") == "1",
+            environment: (String) -> String? = System::getenv,
+            startDirectory: java.io.File = java.io.File(System.getProperty("user.dir") ?: "."),
+        ): String? {
+            // Merely having private credentials on disk must never enable network writes.
+            if (!enabled) return null
+            environment(name)?.takeIf { it.isNotBlank() }?.let { return it }
             // Walk up from the JUnit working dir (typically `<repo>/app/`) to find the
             // repo-root secret file. Stop after a few levels so misuse can't escape.
-            var dir: java.io.File? = java.io.File(System.getProperty("user.dir") ?: ".").canonicalFile
+            var dir: java.io.File? = startDirectory.canonicalFile
             repeat(4) {
                 val candidate = dir?.resolve(".hoshi-sync-secret.env")
                 if (candidate != null && candidate.isFile) {

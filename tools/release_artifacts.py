@@ -1,0 +1,107 @@
+#!/usr/bin/env python3
+"""Verify upgrade compatibility and publish a verified draft without replacing existing assets."""
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+from pathlib import Path
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+
+REPO = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO))
+from release import apk_cert, build_tool
+
+
+def command(args: list[str]) -> str:
+    return subprocess.run(args, cwd=REPO, check=True, capture_output=True, text=True, timeout=300).stdout.strip()
+
+
+def apk_identity(apk: Path) -> tuple[str, int, str, str]:
+    certificate = apk_cert(apk)
+    if not certificate:
+        raise ValueError(f"APK has no verified signing certificate: {apk}")
+    badging = command([build_tool("aapt"), "dump", "badging", str(apk)])
+    metadata = re.search(r"^package: name='([^']+)' versionCode='(\d+)' versionName='([^']+)'", badging, re.MULTILINE)
+    if not metadata:
+        raise ValueError(f"Cannot read APK package and versionCode: {apk}")
+    return metadata[1], int(metadata[2]), metadata[3], certificate
+
+
+def digest(path: Path) -> str:
+    with path.open("rb") as data:
+        return hashlib.file_digest(data, "sha256").hexdigest()
+
+
+def verify_upgrade(apk: Path, repo: str, tag: str, releases: list[dict]) -> None:
+    current_package, current_code, current_name, current_cert = apk_identity(apk)
+    if tag != f"v{current_name}":
+        raise ValueError(f"APK versionName {current_name} does not match release tag {tag}")
+    # A failed API request must fail verification; only a successful empty listing proves
+    # there is no previous stable release. Never mistake auth/network failures for bootstrap.
+    stable = [item for item in releases if not item["isDraft"] and not item["isPrerelease"] and item["tagName"] != tag]
+    if not stable:
+        return
+    previous_tag = max(stable, key=lambda item: item["publishedAt"])["tagName"]
+    asset = f"Hoshi-Manga-{previous_tag}.apk"
+    with tempfile.TemporaryDirectory(prefix="hoshi-previous-apk-") as directory:
+        command(["gh", "release", "download", previous_tag, "--repo", repo,
+                 "--pattern", asset, "--dir", directory])
+        previous = Path(directory) / asset
+        package, code, _, certificate = apk_identity(previous)
+        if package != current_package or certificate != current_cert:
+            raise ValueError("Release APK cannot update the previous release: package or signing certificate changed")
+        if current_code <= code:
+            raise ValueError(f"Release versionCode {current_code} must exceed previous versionCode {code}")
+
+
+def verify_candidate(apk: Path, repo: str, tag: str) -> None:
+    releases = json.loads(command(["gh", "release", "list", "--repo", repo, "--limit", "100",
+                                   "--json", "tagName,isDraft,isPrerelease,publishedAt"]))
+    if any(item["tagName"] == tag for item in releases):
+        raise ValueError(f"Release {tag} already exists; refusing to overwrite its assets")
+    verify_upgrade(apk, repo, tag, releases)
+
+
+def publish(apk: Path, repo: str, tag: str, notes: Path, prerelease: bool = False) -> None:
+    if not re.fullmatch(r"v\d+\.\d+\.\d+", tag):
+        raise ValueError("Release tag must be vMAJOR.MINOR.PATCH")
+    with tempfile.TemporaryDirectory(prefix="hoshi-release-assets-") as directory:
+        named_apk = Path(directory) / f"Hoshi-Manga-{tag}.apk"
+        shutil.copyfile(apk, named_apk)
+        # A concurrent build may replace app-release.apk. Verify and upload this same
+        # private snapshot, never the mutable build output after checking it.
+        verify_candidate(named_apk, repo, tag)
+        create = ["gh", "release", "create", tag, str(named_apk), str(REPO / "LICENSE"),
+                  "--repo", repo, "--verify-tag", "--draft", "--title", f"Sui Manga Reader {tag}",
+                  "--notes-file", str(notes)]
+        if prerelease:
+            create.append("--prerelease")
+        command(create)
+        downloaded = Path(directory) / "downloaded"
+        downloaded.mkdir()
+        command(["gh", "release", "download", tag, "--repo", repo, "--pattern", named_apk.name,
+                 "--dir", str(downloaded)])
+        if digest(named_apk) != digest(downloaded / named_apk.name):
+            raise ValueError("Uploaded APK checksum differs; release remains a draft")
+        command(["gh", "release", "edit", tag, "--repo", repo, "--draft=false",
+                 "--latest=false" if prerelease else "--latest"])
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--apk", required=True, type=Path)
+    parser.add_argument("--repo", required=True)
+    parser.add_argument("--tag", required=True)
+    parser.add_argument("--notes", required=True, type=Path)
+    parser.add_argument("--prerelease", action="store_true")
+    args = parser.parse_args()
+    publish(args.apk, args.repo, args.tag, args.notes, args.prerelease)
+
+
+if __name__ == "__main__":
+    main()

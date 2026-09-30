@@ -76,13 +76,27 @@ jobs:
       - name: Restore Gradle cache
         uses: gradle/actions/setup-gradle@v4
 
-      - name: Check the sync test server contract
+      - name: Check release gate and sync test server contracts
         shell: bash
         run: |
           set -euo pipefail
           python3 --version
+          python3 -m unittest discover -s tools/release_tests -v
           python3 tools/sync-test-server/test_sync_test_server.py
 
       - name: Test, lint, and assemble debug APK
         shell: bash
         run: ./gradlew --no-daemon test lint assembleDebug
+
+      - name: Verify mandatory JVM coverage ran
+        run: python3 -c 'from pathlib import Path; from tools.release_checks import check_junit; print(check_junit(Path("app/build/test-results/testDebugUnitTest")))'
+
+      - name: Preserve verification reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-test-reports
+          path: |
+            app/build/reports/tests/
+            app/build/reports/lint-results-*
+            app/build/test-results/

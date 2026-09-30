@@ -153,4 +153,70 @@ class StorageCleanupRepositoryTest {
         assertFalse(completedBackup.exists())
         assertTrue(onlyBackup.exists())
     }
+
+    @Test
+    fun cleanPreservesAudioLinkedAfterThePreviewAndUnpreviewedOrphans() {
+        val filesDir = temporaryFolder.newFolder("stale-audio-files")
+        val cacheDir = temporaryFolder.newFolder("stale-audio-cache")
+        val book = filesDir.resolve("Books/Book").apply { mkdirs() }
+        val audio = book.resolve("Sasayaki").apply { mkdirs() }
+        val newlyLinked = audio.resolve("selected.m4b").apply { writeText("keep") }
+        val oldOrphan = audio.resolve("old.mp3").apply { writeText("delete") }
+        val playback = book.resolve("sasayaki_playback.json").apply { writeText("{}") }
+        val repository = StorageCleanupRepository(filesDir, cacheDir)
+        val preview = repository.scan()
+
+        playback.writeText("""{"audioFileName":"selected.m4b"}""")
+        val newOrphan = audio.resolve("unpreviewed.mp3").apply { writeText("keep") }
+        repository.clean(preview)
+
+        assertTrue(newlyLinked.exists())
+        assertTrue(newOrphan.exists())
+        assertFalse(oldOrphan.exists())
+    }
+
+    @Test
+    fun malformedPlaybackMetadataCannotMakeCopiedAudioCleanable() {
+        val filesDir = temporaryFolder.newFolder("damaged-playback-files")
+        val cacheDir = temporaryFolder.newFolder("damaged-playback-cache")
+        val book = filesDir.resolve("Books/Book").apply { mkdirs() }
+        val audio = book.resolve("Sasayaki/book.m4b").apply {
+            parentFile!!.mkdirs()
+            writeText("keep")
+        }
+        val playback = book.resolve("sasayaki_playback.json").apply { writeText("{}") }
+        val repository = StorageCleanupRepository(filesDir, cacheDir)
+        val preview = repository.scan()
+
+        playback.writeText("""{"audioFileName":"book.m4b"""")
+        assertFalse(repository.scan().hasCleanableItems)
+        repository.clean(preview)
+        assertTrue(audio.exists())
+    }
+
+    @Test
+    fun cleanPreservesReplacementBackupsThatBecameTheOnlyCopyAfterPreview() {
+        val filesDir = temporaryFolder.newFolder("stale-backup-files")
+        val cacheDir = temporaryFolder.newFolder("stale-backup-cache")
+        val books = filesDir.resolve("Books").apply { mkdirs() }
+        val dictionary = filesDir.resolve("Dictionaries/Term/Existing").apply { mkdirs() }
+        val booksBackup = filesDir.resolve(".books-restore-backup-done/old.txt").apply {
+            parentFile!!.mkdirs()
+            writeText("only remaining library")
+        }
+        val dictionaryBackup = filesDir.resolve("Dictionaries/Term/.Existing-replace-done/index.json").apply {
+            parentFile!!.mkdirs()
+            writeText("only remaining dictionary")
+        }
+        val repository = StorageCleanupRepository(filesDir, cacheDir)
+        val preview = repository.scan()
+        assertEquals(2, preview.totalItemCount)
+
+        assertTrue(books.deleteRecursively())
+        assertTrue(dictionary.deleteRecursively())
+        repository.clean(preview)
+
+        assertTrue(booksBackup.exists())
+        assertTrue(dictionaryBackup.exists())
+    }
 }

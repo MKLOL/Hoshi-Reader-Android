@@ -156,6 +156,8 @@ android {
     sourceSets["main"].java.directories.add(uniffiOutDir.absolutePath)
     sourceSets["debug"].jniLibs.directories.add(rustDebugJniLibsDir.absolutePath)
     sourceSets["release"].jniLibs.directories.add(rustReleaseJniLibsDir.absolutePath)
+    // Share one tracked iOS ZIP64 fixture between JVM and Android tests.
+    sourceSets["androidTest"].assets.srcDir("src/test/resources")
 }
 
 dependencies {
@@ -316,11 +318,16 @@ tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach 
 tasks.withType<org.gradle.api.tasks.testing.Test>().configureEach {
     dependsOn(buildRustHost)
     systemProperty("jna.library.path", rustProjectDir.resolve("target/debug").absolutePath)
+    // Opting into external deployment tests changes coverage; never reuse a result from
+    // a differently configured invocation. The release gate explicitly sets this to 0.
+    val liveSyncOptIn = providers.environmentVariable("HOSHI_ENABLE_LIVE_SYNC_TESTS").orElse("0")
+    inputs.property("liveSyncOptIn", liveSyncOptIn)
+    environment("HOSHI_ENABLE_LIVE_SYNC_TESTS", liveSyncOptIn.get())
     // NewsPublisherInteropTest executes these Python sources and fixtures. A Python-only
     // edit must invalidate the JVM test result just like a Kotlin test-source edit does.
     inputs.files(rootProject.fileTree("tools") {
-        include("news/**/*.py", "news/**/*.json", "news/tutor-prompt.md", "sync-test-server/sync_test_server.py")
-    }).withPropertyName("newsPublisherSources").withPathSensitivity(PathSensitivity.RELATIVE)
+        include("news/**/*.py", "news/**/*.json", "news/tutor-prompt.md", "sync-test-server/*.py")
+    }).withPropertyName("pythonIntegrationSources").withPathSensitivity(PathSensitivity.RELATIVE)
 }
 
 afterEvaluate {

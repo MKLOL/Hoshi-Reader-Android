@@ -32,10 +32,12 @@ jobs:
       - name: Resolve release tag
         id: release_tag
         shell: bash
+        env:
+          INPUT_TAG: ${{ inputs.tag_name }}
         run: |
           set -euo pipefail
           if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
-            input_tag="${{ inputs.tag_name }}"
+            input_tag="${INPUT_TAG}"
           else
             input_tag="${GITHUB_REF_NAME}"
           fi
@@ -102,7 +104,9 @@ jobs:
             "platforms;android-36.1" \
             "build-tools;36.0.0" \
             "cmake;${CMAKE_VERSION}" \
-            "ndk;${NDK_VERSION}"
+            "ndk;${NDK_VERSION}" \
+            "emulator" \
+            "system-images;android-36;google_apis;x86_64"
           ndk_home="${ANDROID_HOME}/ndk/${NDK_VERSION}"
           echo "ANDROID_NDK_HOME=${ndk_home}" >> "${GITHUB_ENV}"
 
@@ -126,6 +130,28 @@ jobs:
 
       - name: Restore Gradle cache
         uses: gradle/actions/setup-gradle@v4
+
+      - name: Enable emulator acceleration
+        shell: bash
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Mandatory release verification
+        shell: bash
+        run: python3 tools/verify_release.py
+
+      - name: Preserve release verification reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-verification
+          path: |
+            build/reports/release-gate/
+            app/build/reports/tests/
+            app/build/reports/lint-results-*
+            app/build/test-results/
 
       - name: Decode release keystore
         shell: bash
@@ -264,16 +290,6 @@ jobs:
             prerelease_flag=(--prerelease)
           fi
 
-          if gh release view "${tag}" >/dev/null 2>&1; then
-            gh release edit "${tag}" --notes-file release_notes.md
-            if [[ ${#prerelease_flag[@]} -gt 0 ]]; then
-              gh release edit "${tag}" "${prerelease_flag[@]}"
-            fi
-          else
-            gh release create "${tag}" \
-              --title "Sui Manga Reader ${tag}" \
-              --notes-file release_notes.md \
-              "${prerelease_flag[@]}"
-          fi
-
-          gh release upload "${tag}" "${apk_asset}" LICENSE --clobber
+          python3 tools/release_artifacts.py \
+            --apk "${apk_asset}" --repo "${GITHUB_REPOSITORY}" --tag "${tag}" \
+            --notes release_notes.md "${prerelease_flag[@]}"

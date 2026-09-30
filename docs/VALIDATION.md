@@ -1,5 +1,7 @@
 # Validation entry points
 
+Before every release, run `python3 tools/verify_release.py`. Both `release.py` and the GitHub release workflow require this command. It runs the simulator contract, all JVM tests, lint/build, and critical Android tests on a fresh disposable emulator. Missing, failed, or unexpectedly skipped required coverage blocks publication. See [Sync release testing](SYNC_RELEASE_TESTING.md) for prerequisites, coverage, reports, and remaining limits.
+
 - HTTP sync: `./gradlew :app:testDebugUnitTest --tests 'moe.antimony.hoshi.features.sync.integration.*'` runs the production engines against the real `tools/sync-test-server` over HTTP (needs `python3`); the iOS repo's `python3 -m unittest Tests.Regression.test_sync_integration` does the same for iOS in the simulator. Both must pass before any sync release. Run the iOS scenarios only with `HOSHI_IOS_SIMULATOR` naming a dedicated disposable simulator; they replace its test library.
 
 On a fresh machine, run `./bootstrap.sh` (macOS/Homebrew) to install the JDK 21, Android

@@ -5,9 +5,11 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
 import moe.antimony.hoshi.features.sync.http.HttpSyncKvClient
 import org.junit.rules.ExternalResource
 import java.io.File
@@ -78,10 +80,15 @@ class SyncTestServer private constructor(
      * [pathPrefix] (and whose method is [method], when given) with [status].
      */
     fun failNext(pathPrefix: String, status: Int, count: Int = 1, method: String? = null) {
-        val methodField = method?.let { ""","method":"$it"""" }.orEmpty()
+        val payload = buildJsonObject {
+            put("pathPrefix", pathPrefix)
+            put("status", status)
+            put("count", count)
+            method?.let { put("method", it) }
+        }
         post(
             "/_test/fail_next",
-            """{"pathPrefix":"$pathPrefix","status":$status,"count":$count$methodField}""".toByteArray(Charsets.UTF_8),
+            payload.toString().toByteArray(Charsets.UTF_8),
             "application/json; charset=utf-8",
         )
     }
@@ -112,15 +119,17 @@ class SyncTestServer private constructor(
 
     private fun request(method: String, path: String, body: ByteArray?, contentType: String?): String {
         val connection = URL(baseUrl + path).openConnection() as HttpURLConnection
+        connection.connectTimeout = 10_000
+        connection.readTimeout = 10_000
         connection.requestMethod = method
         connection.setRequestProperty("Authorization", "Bearer $token")
         contentType?.let { connection.setRequestProperty("Content-Type", it) }
-        if (body != null) {
-            connection.doOutput = true
-            connection.setFixedLengthStreamingMode(body.size)
-            connection.outputStream.use { it.write(body) }
-        }
         try {
+            if (body != null) {
+                connection.doOutput = true
+                connection.setFixedLengthStreamingMode(body.size)
+                connection.outputStream.use { it.write(body) }
+            }
             val code = connection.responseCode
             val stream = if (code in 200..299) connection.inputStream else connection.errorStream
             val text = stream?.bufferedReader()?.use { it.readText() }.orEmpty()

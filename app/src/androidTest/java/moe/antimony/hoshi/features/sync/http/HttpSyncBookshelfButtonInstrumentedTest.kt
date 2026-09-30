@@ -15,12 +15,13 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.runBlocking
 import moe.antimony.hoshi.HoshiAppContainer
 import moe.antimony.hoshi.LocalHoshiAppContainer
+import moe.antimony.hoshi.features.sync.v3.StubKvServer
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 
-/** Use an empty emulator, with a fresh, empty local sync test server on adb-reversed port 18795. */
+/** Self-contained HTTP integration on a disposable emulator, with no external server setup. */
 @RunWith(AndroidJUnit4::class)
 class HttpSyncBookshelfButtonInstrumentedTest {
     @get:Rule val compose = createComposeRule()
@@ -29,10 +30,11 @@ class HttpSyncBookshelfButtonInstrumentedTest {
     fun savedTokenShowsShortcutAndSyncReportsSuccessAndFailure() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val container = HoshiAppContainer(context)
+        val server = StubKvServer().apply { start() }
         try {
             runBlocking {
                 container.httpSyncSettingsRepository.update {
-                    it.copy(baseUrl = "http://127.0.0.1:18795", bearerToken = "")
+                    it.copy(baseUrl = server.baseUrl, bearerToken = "")
                 }
             }
             compose.setContent {
@@ -42,7 +44,7 @@ class HttpSyncBookshelfButtonInstrumentedTest {
             }
             compose.onNodeWithContentDescription("Sync now").assertDoesNotExist()
             runBlocking {
-                container.httpSyncSettingsRepository.update { it.copy(bearerToken = "bookshelf-ui-test") }
+                container.httpSyncSettingsRepository.update { it.copy(bearerToken = server.token) }
             }
             compose.waitUntil(5_000) {
                 compose.onAllNodesWithContentDescription("Sync now").fetchSemanticsNodes().isNotEmpty()
@@ -67,6 +69,7 @@ class HttpSyncBookshelfButtonInstrumentedTest {
             compose.onNodeWithContentDescription("Sync now").assertDoesNotExist()
         } finally {
             container.appScope.cancel()
+            server.close()
         }
     }
 }
