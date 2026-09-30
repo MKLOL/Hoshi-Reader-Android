@@ -15,7 +15,7 @@ class BookBookmarkStorageTest {
     @Test
     fun saveBookmarkWritesIosCompatibleBookmarkJson() = runBlocking {
         val root = Files.createTempDirectory("hoshi-bookmark").toFile()
-        val storage = BookStorage(root)
+        val storage = BookRepository(root)
         val bookRoot = storage.currentBookFile.apply { mkdirs() }
 
         val bookmark = Bookmark(
@@ -37,7 +37,7 @@ class BookBookmarkStorageTest {
     @Test
     fun loadBookmarkReturnsNullWhenBookmarkJsonIsMissing() = runBlocking {
         val root = Files.createTempDirectory("hoshi-bookmark-missing").toFile()
-        val storage = BookStorage(root)
+        val storage = BookRepository(root)
         val bookRoot = storage.currentBookFile.apply { mkdirs() }
 
         assertNull(storage.loadBookmark(bookRoot))
@@ -46,7 +46,7 @@ class BookBookmarkStorageTest {
     @Test
     fun loadBookmarkReadsSavedBookmark() = runBlocking {
         val root = Files.createTempDirectory("hoshi-bookmark-load").toFile()
-        val storage = BookStorage(root)
+        val storage = BookRepository(root)
         val bookRoot = storage.currentBookFile.apply { mkdirs() }
         bookRoot.resolve("bookmark.json").writeText(
             """
@@ -73,7 +73,7 @@ class BookBookmarkStorageTest {
     @Test
     fun bookProgressUsesBookmarkCharacterCountOverBookInfoCharacterCount() = runBlocking {
         val root = Files.createTempDirectory("hoshi-book-progress").toFile()
-        val storage = BookStorage(root)
+        val storage = BookRepository(root)
         val bookRoot = storage.currentBookFile.apply { mkdirs() }
         storage.saveBookmark(
             bookRoot,

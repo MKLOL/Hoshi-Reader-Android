@@ -38,9 +38,8 @@ import moe.antimony.hoshi.features.sync.http.appleSecondsToRfc3339
 import moe.antimony.hoshi.features.sync.http.bookmarkKey
 import moe.antimony.hoshi.features.sync.http.compareRevisioned
 import moe.antimony.hoshi.features.sync.http.rfc3339ToAppleSeconds
+import moe.antimony.hoshi.storage.writeSidecarAtomically
 import java.io.File
-import java.nio.file.Files
-import java.nio.file.StandardCopyOption
 import java.util.UUID
 
 /**
@@ -269,9 +268,7 @@ class V3Executor(
                         // Temp + rename: a truncated write would silently lose every offline
                         // translation for this book.
                         val target = File(targetRoot, PRETRANSLATIONS_FILENAME)
-                        val temp = File(targetRoot, "$PRETRANSLATIONS_FILENAME.tmp")
-                        temp.writeText(body, Charsets.UTF_8)
-                        replaceFile(temp, target)
+                        writeSidecarAtomically(target, body)
                         PretranslationStore.invalidate(targetRoot)
                         appliedPretranslations += 1
                     }
@@ -292,9 +289,7 @@ class V3Executor(
                         ).spineCount
                         EpubTranslationStore.decodeAndValidate(body, action.syncId, spineCount)
                         if (alreadyInstalled) continue
-                        val temp = File(targetRoot, "$EPUB_TRANSLATIONS_FILENAME.tmp")
-                        temp.writeText(body, Charsets.UTF_8)
-                        replaceFile(temp, target)
+                        writeSidecarAtomically(target, body)
                         EpubTranslationStore.invalidate(targetRoot)
                         appliedSentenceTranslations += 1
                     }
@@ -368,7 +363,7 @@ class V3Executor(
                         }
                     }
                     is V3Action.PushChat -> {
-                        pushOps.pushChat(transport, action.root, action.syncId, action.entry, action.key)
+                        pushOps.pushChat(transport, action.entry, action.key)
                         pushedChatEntries += 1
                     }
                     is V3Action.PushPayload -> {
@@ -745,18 +740,5 @@ class V3Executor(
         is V3Action.PushPayload,
         is V3Action.PushMetadata -> V3Phase.PushingLocalState
         is V3Action.PushAiSettings -> V3Phase.SyncingAppSettings
-    }
-
-    private fun replaceFile(source: File, target: File) {
-        try {
-            Files.move(
-                source.toPath(),
-                target.toPath(),
-                StandardCopyOption.ATOMIC_MOVE,
-                StandardCopyOption.REPLACE_EXISTING,
-            )
-        } catch (_: Exception) {
-            Files.move(source.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING)
-        }
     }
 }

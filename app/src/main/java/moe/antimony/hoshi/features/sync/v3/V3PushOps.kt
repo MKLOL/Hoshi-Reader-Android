@@ -4,7 +4,6 @@ import kotlinx.serialization.json.Json
 import moe.antimony.hoshi.epub.BookRepository
 import moe.antimony.hoshi.epub.Bookmark
 import moe.antimony.hoshi.features.ai.AiChatEntry
-import moe.antimony.hoshi.features.ai.AiChatHistoryStore
 import moe.antimony.hoshi.features.ai.AiChatSettings
 import moe.antimony.hoshi.features.ai.AiChatSettingsRepository
 import moe.antimony.hoshi.features.sync.http.HttpSyncAiChatSettingsBlob
@@ -23,6 +22,7 @@ import moe.antimony.hoshi.features.sync.http.SyncComparison
 import moe.antimony.hoshi.features.sync.http.appleSecondsToRfc3339
 import moe.antimony.hoshi.features.sync.http.bookmarkKey
 import moe.antimony.hoshi.features.sync.http.compareRevisioned
+import moe.antimony.hoshi.features.sync.http.compareRfc3339
 import moe.antimony.hoshi.features.sync.http.metadataKey
 import moe.antimony.hoshi.features.sync.http.rfc3339ToAppleSeconds
 import moe.antimony.hoshi.features.sync.http.toBlob
@@ -39,7 +39,6 @@ import java.io.File
  */
 class V3PushOps(
     private val bookRepository: BookRepository,
-    private val aiHistoryStore: AiChatHistoryStore,
     private val aiSettingsRepository: AiChatSettingsRepository?,
     private val payloadCodec: HttpSyncPayloadCodec,
     private val bookLocks: HttpSyncBookLocks,
@@ -70,43 +69,51 @@ class V3PushOps(
     ): PushBookmarkOutcome = bookLocks.withBookLock(bookRoot) {
         val key = bookmarkKey(syncId)
         val booksRoot = bookRepository.booksDirectory
-        val localRev = revisionStore.current(booksRoot, key).localRev
         val remote = transport.get(key)
+        // The plan can wait behind a download or another book's work. Read again after
+        // the network suspension so a newer saved position cannot be sent with an old
+        // position's content or overwritten by the remote position from this GET.
+        val savedBookmark = bookRepository.loadBookmark(bookRoot)
+        val currentBookmark = savedBookmark?.takeIf {
+            compareRfc3339(
+                it.lastModified?.let(::appleSecondsToRfc3339),
+                localBookmark.lastModified?.let(::appleSecondsToRfc3339),
+            ) >= 0
+        } ?: localBookmark
+        val localRev = revisionStore.current(booksRoot, key).localRev
         if (remote != null) {
-            val remoteBlob = runCatching {
-                json.decodeFromString(
-                    HttpSyncBookmarkBlob.serializer(),
-                    remote.body.toString(Charsets.UTF_8),
-                )
-            }.getOrNull()
-            if (remoteBlob != null) {
-                val localStamp = localBookmark.lastModified?.let(::appleSecondsToRfc3339)
-                when (compareRevisioned(
-                    localRev = localRev,
-                    remoteRev = remoteBlob.rev,
-                    localStamp = localStamp,
-                    remoteStamp = remoteBlob.lastModified,
-                )) {
-                    SyncComparison.REMOTE_WINS -> {
-                        // Remote out-revisions us — apply locally instead of pushing.
-                        bookRepository.saveBookmark(
-                            bookRoot,
-                            Bookmark(
-                                chapterIndex = remoteBlob.chapterIndex,
-                                progress = remoteBlob.progress,
-                                characterCount = remoteBlob.characterCount,
-                                lastModified = rfc3339ToAppleSeconds(remoteBlob.lastModified),
-                            ),
-                        )
-                        revisionStore.noteRemote(booksRoot, key, remoteBlob.rev, appliedLocally = true)
-                        return@withBookLock PushBookmarkOutcome.AppliedRemote
-                    }
-                    SyncComparison.TIE -> {
-                        revisionStore.noteRemote(booksRoot, key, remoteBlob.rev, appliedLocally = true)
-                        return@withBookLock PushBookmarkOutcome.NoOp
-                    }
-                    SyncComparison.LOCAL_WINS -> Unit // fall through to PUT
+            // Malformed data is occupied, not absent. Propagate the decode error so
+            // the executor reports it and retains the remote bytes for recovery.
+            val remoteBlob = json.decodeFromString(
+                HttpSyncBookmarkBlob.serializer(),
+                remote.body.toString(Charsets.UTF_8),
+            )
+            val localStamp = currentBookmark.lastModified?.let(::appleSecondsToRfc3339)
+            when (compareRevisioned(
+                localRev = localRev,
+                remoteRev = remoteBlob.rev,
+                localStamp = localStamp,
+                remoteStamp = remoteBlob.lastModified,
+            )) {
+                SyncComparison.REMOTE_WINS -> {
+                    // Remote out-revisions us — apply locally instead of pushing.
+                    bookRepository.saveBookmark(
+                        bookRoot,
+                        Bookmark(
+                            chapterIndex = remoteBlob.chapterIndex,
+                            progress = remoteBlob.progress,
+                            characterCount = remoteBlob.characterCount,
+                            lastModified = rfc3339ToAppleSeconds(remoteBlob.lastModified),
+                        ),
+                    )
+                    revisionStore.noteRemote(booksRoot, key, remoteBlob.rev, appliedLocally = true)
+                    return@withBookLock PushBookmarkOutcome.AppliedRemote
                 }
+                SyncComparison.TIE -> {
+                    revisionStore.noteRemote(booksRoot, key, remoteBlob.rev, appliedLocally = true)
+                    return@withBookLock PushBookmarkOutcome.NoOp
+                }
+                SyncComparison.LOCAL_WINS -> Unit // fall through to PUT
             }
         }
         transport.put(
@@ -114,7 +121,7 @@ class V3PushOps(
             contentType = JSON_CONTENT_TYPE,
             body = json.encodeToString(
                 HttpSyncBookmarkBlob.serializer(),
-                localBookmark.toBlob().copy(rev = localRev),
+                currentBookmark.toBlob().copy(rev = localRev),
             ).toByteArray(),
         )
         revisionStore.noteRemote(booksRoot, key, localRev, appliedLocally = true)
@@ -127,20 +134,15 @@ class V3PushOps(
      */
     suspend fun pushChat(
         transport: HttpSyncKvTransport,
-        bookRoot: File,
-        syncId: String,
         entry: AiChatEntry,
         chatKey: String,
-    ): Boolean {
-        // bookRoot is unused except as a future hook for the reader path; the chat key
-        // already encodes everything the server needs.
+    ) {
         val blob = entry.toBlob()
         transport.put(
             key = chatKey,
             contentType = JSON_CONTENT_TYPE,
             body = json.encodeToString(HttpSyncChatEntryBlob.serializer(), blob).toByteArray(),
         )
-        return true
     }
 
     /**

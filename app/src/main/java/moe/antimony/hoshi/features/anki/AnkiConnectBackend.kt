@@ -18,6 +18,7 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
 
 fun interface AnkiConnectTransport {
@@ -57,7 +58,8 @@ class AnkiConnectBackend(
     private val endpoint = AnkiConnectUrlValidator.requireValidEndpoint(endpoint).toString()
 
     override fun isAvailable(): Boolean =
-        runCatching { request("version") }.isSuccess
+        runCatching { request("version")?.jsonPrimitive?.longOrNull?.let { it >= 6 } == true }
+            .getOrDefault(false)
 
     override fun fetchDecks(): List<AnkiDeck> =
         wrapFetch {
@@ -147,13 +149,13 @@ class AnkiConnectBackend(
                     )
                 }
             }
-            request(
+            val noteId = request(
                 "addNote",
                 buildJsonObject {
                     put("note", noteWithTags)
                 },
             )
-            true
+            noteId?.jsonPrimitive?.longOrNull?.let { it > 0 } == true
         }.getOrDefault(false)
 
     override fun addMediaFromUri(uriString: String, preferredName: String, mimeType: String): String? = null
@@ -161,17 +163,18 @@ class AnkiConnectBackend(
     override fun addMediaFromBytes(bytes: ByteArray, preferredName: String, mimeType: String): String? =
         runCatching {
             val filename = ankiConnectMediaFilename(preferredName)
-            request(
+            val storedFilename = request(
                 "storeMediaFile",
                 buildJsonObject {
                     put("filename", filename)
                     put("data", Base64.getEncoder().encodeToString(bytes))
                 },
-            )
+            )?.jsonPrimitive?.takeIf { it.isString }?.content?.takeIf { it.isNotBlank() }
+                ?: return@runCatching null
             when {
-                mimeType.startsWith("audio/") -> "[sound:$filename]"
-                mimeType.startsWith("image/") -> """<img src="$filename">"""
-                else -> filename
+                mimeType.startsWith("audio/") -> "[sound:$storedFilename]"
+                mimeType.startsWith("image/") -> """<img src="$storedFilename">"""
+                else -> storedFilename
             }
         }.getOrNull()
 
@@ -233,7 +236,7 @@ class AnkiConnectBackend(
     }
 
     private fun requestArray(action: String, params: JsonObject? = null): JsonArray =
-        request(action, params)?.jsonArray ?: JsonArray(emptyList())
+        request(action, params)?.jsonArray ?: throw invalidAnkiConnectResponse()
 
     private fun request(action: String, params: JsonObject? = null): JsonElement? {
         val body = buildJsonObject {
@@ -244,6 +247,7 @@ class AnkiConnectBackend(
             }
         }
         val response = json.parseToJsonElement(transport.post(endpoint, body.toString(), timeoutMillis)).jsonObject
+        if ("result" !in response || "error" !in response) throw invalidAnkiConnectResponse()
         val error = response["error"]
         if (error != null && error !is JsonNull) {
             throw AnkiConnectRequestException(error.jsonPrimitive.content)
@@ -271,6 +275,9 @@ class AnkiConnectBackend(
 
 private class AnkiConnectRequestException(message: String) : RuntimeException(message)
 
+private fun invalidAnkiConnectResponse() =
+    AnkiConnectRequestException(AnkiFetchFailure.ProviderFailure.userMessage)
+
 internal fun ankiConnectStableId(namespace: String, value: String): Long {
     val digest = MessageDigest.getInstance("SHA-256")
         .digest("$namespace:$value".toByteArray(Charsets.UTF_8))
@@ -282,7 +289,7 @@ internal fun ankiConnectStableId(namespace: String, value: String): Long {
 }
 
 private fun JsonArray.strings(): List<String> =
-    map { it.jsonPrimitive.contentOrNull.orEmpty() }
+    map { it.jsonPrimitive.takeIf { value -> value.isString }?.contentOrNull ?: throw invalidAnkiConnectResponse() }
 
 private fun ankiConnectMediaFilename(preferredName: String): String =
     preferredName

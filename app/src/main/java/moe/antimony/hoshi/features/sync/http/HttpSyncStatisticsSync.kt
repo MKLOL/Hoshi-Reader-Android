@@ -11,6 +11,7 @@ import moe.antimony.hoshi.epub.dayDeviceKey
 import moe.antimony.hoshi.epub.deduplicateReadingStatistics
 import moe.antimony.hoshi.mokuro.MangaTextStatistic
 import moe.antimony.hoshi.mokuro.deduplicateMangaTextStatistics
+import moe.antimony.hoshi.storage.writeSidecarAtomically
 import java.io.File
 import java.security.MessageDigest
 
@@ -120,6 +121,8 @@ class HttpSyncStatisticsSync(
         encodeDefaults = true
     }
 
+    private val validationCache = HttpSyncStatisticsValidationCache()
+
     /**
      * Local statistics are outside the book payload/map hash. A missed reader push must
      * still make a manual/background sync run the full exchange even if the server has not
@@ -135,22 +138,27 @@ class HttpSyncStatisticsSync(
         remoteMangaPresent: Boolean = false,
     ): Boolean {
         if (!bookRoot.isDirectory) return false
-        val readingChanged = bookLocks.withKeyLock(statisticsKey(syncId)) {
-            val entries = bookRepository.loadStatistics(bookRoot)
-                .deduplicateReadingStatistics().sortedBy { dayDeviceKey(it.dateKey, it.deviceId) }
-            val previous = loadState(bookRoot).reading
-            if (previous == null) entries.isNotEmpty() || remoteReadingPresent
-            else (remoteReadingPresent && previous.remoteEtag == null) ||
-                previous.localSha256 != sha256(readingBody(syncId, entries))
-        }
-        if (readingChanged || bookContentType(bookRoot) != ContentType.Mokuro) return readingChanged
-        return bookLocks.withKeyLock(mangaStatisticsKey(syncId)) {
-            val entries = bookRepository.loadMangaTextStatistics(bookRoot)
-                .deduplicateMangaTextStatistics().sortedBy { dayDeviceKey(it.dateKey, it.deviceId) }
-            val previous = loadState(bookRoot).mangaText
-            if (previous == null) entries.isNotEmpty() || remoteMangaPresent
-            else (remoteMangaPresent && previous.remoteEtag == null) ||
-                previous.localSha256 != sha256(mangaBody(syncId, entries))
+        val contentType = bookContentType(bookRoot)
+        return validationCache.hasChanges(
+            bookRoot, syncId, contentType, remoteReadingPresent, remoteMangaPresent,
+        ) {
+            val readingChanged = bookLocks.withKeyLock(statisticsKey(syncId)) {
+                val entries = bookRepository.loadStatistics(bookRoot)
+                    .deduplicateReadingStatistics().sortedBy { dayDeviceKey(it.dateKey, it.deviceId) }
+                val previous = loadState(bookRoot).reading
+                if (previous == null) entries.isNotEmpty() || remoteReadingPresent
+                else (remoteReadingPresent && previous.remoteEtag == null) ||
+                    previous.localSha256 != sha256(readingBody(syncId, entries))
+            }
+            if (readingChanged || contentType != ContentType.Mokuro) return@hasChanges readingChanged
+            bookLocks.withKeyLock(mangaStatisticsKey(syncId)) {
+                val entries = bookRepository.loadMangaTextStatistics(bookRoot)
+                    .deduplicateMangaTextStatistics().sortedBy { dayDeviceKey(it.dateKey, it.deviceId) }
+                val previous = loadState(bookRoot).mangaText
+                if (previous == null) entries.isNotEmpty() || remoteMangaPresent
+                else (remoteMangaPresent && previous.remoteEtag == null) ||
+                    previous.localSha256 != sha256(mangaBody(syncId, entries))
+            }
         }
     }
 
@@ -255,10 +263,12 @@ class HttpSyncStatisticsSync(
                 if (remote.remoteEtag == "sha256:$localSha" &&
                     remote.size == localBody.toByteArray(Charsets.UTF_8).size
                 ) {
-                    saveState(bookRoot, writeState(state, StatisticsSyncStateEntry(
-                        localSha256 = localSha, remoteSize = remote.size,
-                        remoteLastModified = remote.lastModified, remoteEtag = remote.remoteEtag,
-                    )))
+                    updateState(bookRoot) { current ->
+                        writeState(current, StatisticsSyncStateEntry(
+                            localSha256 = localSha, remoteSize = remote.size,
+                            remoteLastModified = remote.lastModified, remoteEtag = remote.remoteEtag,
+                        ))
+                    }
                     return StatisticsSyncOutcome.NONE
                 }
             }
@@ -270,7 +280,7 @@ class HttpSyncStatisticsSync(
             StatisticsRemoteListing.Absent -> if (local.isEmpty()) return StatisticsSyncOutcome.NONE
         }
         val fetched = transport.getBounded(key, MAX_STATISTICS_BLOB_BYTES)
-            ?: return uploadWhole(transport, bookRoot, key, local, localBody, localSha, state, writeState)
+            ?: return uploadWhole(transport, bookRoot, key, local, localBody, localSha, writeState)
         val remoteEntries = try {
             merge(decode(fetched.body.toString(Charsets.UTF_8))).sortedBy(entryKey)
         } catch (error: HttpSyncException) {
@@ -284,6 +294,10 @@ class HttpSyncStatisticsSync(
         val merged = merge(candidates).sortedBy(entryKey)
         val downloaded = merged != local
         if (downloaded) {
+            // This file also distinguishes imported legacy rows from this device's own
+            // pre-device history. Establish it before saveLocal notifies statistics readers,
+            // including when the following upload fails or the caller is cancelled.
+            updateState(bookRoot) { it }
             saveLocal(merged)
         }
         val uploaded = merged != remoteEntries
@@ -302,13 +316,12 @@ class HttpSyncStatisticsSync(
             remoteStamp = fetched.lastModified
             remoteEtag = fetched.etag
         }
-        saveState(
-            bookRoot,
-            writeState(state, StatisticsSyncStateEntry(
+        updateState(bookRoot) { current ->
+            writeState(current, StatisticsSyncStateEntry(
                 localSha256 = sha256(mergedBody), remoteSize = remoteSize,
                 remoteLastModified = remoteStamp, remoteEtag = remoteEtag,
-            )),
-        )
+            ))
+        }
         return StatisticsSyncOutcome(downloaded = downloaded, uploaded = uploaded)
     }
 
@@ -319,19 +332,17 @@ class HttpSyncStatisticsSync(
         local: List<T>,
         localBody: String,
         localSha: String,
-        state: StatisticsSyncState,
         writeState: (StatisticsSyncState, StatisticsSyncStateEntry) -> StatisticsSyncState,
     ): StatisticsSyncOutcome {
         if (local.isEmpty()) return StatisticsSyncOutcome.NONE
         val bytes = localBody.toByteArray(Charsets.UTF_8)
         val written = transport.put(key = key, contentType = JSON_CONTENT_TYPE, body = bytes)
-        saveState(
-            bookRoot,
-            writeState(state, StatisticsSyncStateEntry(
+        updateState(bookRoot) { current ->
+            writeState(current, StatisticsSyncStateEntry(
                 localSha256 = localSha, remoteSize = bytes.size,
                 remoteLastModified = written.lastModified, remoteEtag = written.etag,
-            )),
-        )
+            ))
+        }
         return StatisticsSyncOutcome(downloaded = false, uploaded = true)
     }
 
@@ -342,16 +353,17 @@ class HttpSyncStatisticsSync(
             .getOrDefault(StatisticsSyncState())
     }
 
-    private fun saveState(bookRoot: File, state: StatisticsSyncState) {
-        if (!bookRoot.isDirectory) return
+    /** Reading and manga exchanges use different network locks but share this sidecar. */
+    private suspend fun updateState(
+        bookRoot: File,
+        update: (StatisticsSyncState) -> StatisticsSyncState,
+    ) = bookLocks.withKeyLock("statistics-state:${bookRoot.canonicalPath}") {
+        if (!bookRoot.isDirectory) return@withKeyLock
+        val previous = loadState(bookRoot)
+        val updated = update(previous)
         val target = File(bookRoot, STATISTICS_SYNC_STATE_FILENAME)
-        val temp = File(bookRoot, "$STATISTICS_SYNC_STATE_FILENAME.${System.nanoTime()}.tmp")
-        temp.writeText(json.encodeToString(StatisticsSyncState.serializer(), state))
-        if (!temp.renameTo(target)) {
-            target.delete()
-            if (!temp.renameTo(target)) {
-                temp.delete()
-            }
+        if (updated != previous || !target.isFile) {
+            writeSidecarAtomically(target, json.encodeToString(StatisticsSyncState.serializer(), updated))
         }
     }
 

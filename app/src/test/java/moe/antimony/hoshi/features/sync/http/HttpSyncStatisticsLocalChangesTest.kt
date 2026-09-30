@@ -1,6 +1,8 @@
 package moe.antimony.hoshi.features.sync.http
 
 import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.json.Json
+import moe.antimony.hoshi.epub.DeviceIdentity
 import moe.antimony.hoshi.epub.BookMetadata
 import moe.antimony.hoshi.epub.BookRepository
 import moe.antimony.hoshi.epub.ReadingStatistics
@@ -13,6 +15,8 @@ import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import java.io.File
 import java.io.IOException
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 
 class HttpSyncStatisticsLocalChangesTest {
     @get:Rule val temp = TemporaryFolder()
@@ -127,6 +131,78 @@ class HttpSyncStatisticsLocalChangesTest {
         assertFalse(sync.hasLocalChanges(root, syncId))
         repository.saveMangaTextStatistics(root, listOf(MangaTextStatistic("2026-09-29", 600, 2)))
         assertTrue(sync.hasLocalChanges(root, syncId))
+    }
+
+    @Test fun sameSizeSameTimestampAtomicReplacementStillDetectsNewReadingHistory() = runBlocking {
+        val repository = BookRepository(temp.newFolder())
+        val root = book(repository)
+        val sync = HttpSyncStatisticsSync(repository)
+        repository.saveStatistics(root, listOf(day))
+        sync.sync(FakeKvTransport(), root, syncId, StatisticsSyncKind.Reading, StatisticsRemoteListing.Absent)
+        assertFalse(sync.hasLocalChanges(root, syncId))
+        val file = root.resolve("statistics.json")
+        val before = file.readText()
+        val after = before.replace("600.0", "900.0")
+        assertTrue(before != after)
+        val replacement = root.resolve("replacement.tmp").apply { writeText(after) }
+        Files.setLastModifiedTime(replacement.toPath(), Files.getLastModifiedTime(file.toPath()))
+        Files.move(replacement.toPath(), file.toPath(), StandardCopyOption.REPLACE_EXISTING)
+
+        assertTrue(sync.hasLocalChanges(root, syncId))
+        assertEquals(900.0, repository.loadStatistics(root).single().readingTime, 0.0)
+    }
+
+    @Test fun corruptExchangeStateAndStatisticsBypassPreviousUnchangedValidationAndRecover() = runBlocking {
+        val repository = BookRepository(temp.newFolder())
+        val root = book(repository)
+        val sync = HttpSyncStatisticsSync(repository)
+        val server = FakeKvTransport()
+        repository.saveStatistics(root, listOf(day))
+        sync.sync(server, root, syncId, StatisticsSyncKind.Reading, StatisticsRemoteListing.Absent)
+        for (filename in listOf(STATISTICS_SYNC_STATE_FILENAME, "statistics.json")) {
+            assertFalse(sync.hasLocalChanges(root, syncId, remoteReadingPresent = true))
+            root.resolve(filename).writeText("{ truncated JSON")
+            assertTrue(filename, sync.hasLocalChanges(root, syncId, remoteReadingPresent = true))
+            val remote = server.kv.getValue(statisticsKey(syncId))
+            sync.sync(server, root, syncId, StatisticsSyncKind.Reading,
+                StatisticsRemoteListing.Listed(remote.body.size, remote.lastModified))
+            assertEquals(listOf(day), repository.loadStatistics(root))
+            assertFalse(filename, sync.hasLocalChanges(root, syncId, remoteReadingPresent = true))
+        }
+    }
+
+    @Test fun changedRemotePresenceAndBookTypeCannotReuseAnEmptyBookValidation() = runBlocking {
+        val repository = BookRepository(temp.newFolder())
+        val root = book(repository)
+        val sync = HttpSyncStatisticsSync(repository)
+        assertFalse(sync.hasLocalChanges(root, syncId))
+        assertTrue(sync.hasLocalChanges(root, syncId, remoteReadingPresent = true))
+        assertFalse(sync.hasLocalChanges(root, syncId))
+        repository.saveMangaTextStatistics(root, listOf(MangaTextStatistic("2026-09-29", 500, 1)))
+        assertFalse(sync.hasLocalChanges(root, syncId))
+        root.resolve("mokuro.json").writeText("{}")
+        assertTrue(sync.hasLocalChanges(root, syncId))
+    }
+
+    @Test fun legacyHistoryIsRevalidatedWhenItsExchangeMarkerDisappears() = runBlocking {
+        val repository = BookRepository(temp.newFolder(), deviceIdentity = DeviceIdentity("tablet", "Tablet"))
+        val root = book(repository)
+        val server = FakeKvTransport()
+        val legacyDay = day.copy(deviceId = null)
+        server.put(statisticsKey(syncId), "application/json", Json.encodeToString(
+            HttpSyncStatisticsBlob.serializer(), HttpSyncStatisticsBlob(syncId = syncId, entries = listOf(legacyDay)),
+        ).toByteArray())
+        val sync = HttpSyncStatisticsSync(repository)
+        val remote = server.kv.getValue(statisticsKey(syncId))
+        sync.sync(server, root, syncId, StatisticsSyncKind.Reading,
+            StatisticsRemoteListing.Listed(remote.body.size, remote.lastModified))
+        assertFalse(sync.hasLocalChanges(root, syncId))
+        assertEquals(null, repository.loadStatistics(root).single().deviceId)
+        assertTrue(root.resolve(STATISTICS_SYNC_STATE_FILENAME).delete())
+
+        assertTrue(sync.hasLocalChanges(root, syncId))
+        assertEquals("tablet", repository.loadStatistics(root).single().deviceId)
+        assertEquals(day.readingTime, repository.loadStatistics(root).single().readingTime, 0.0)
     }
 
     @Test fun unusedMangaSidecarsAndDeletedBooksDoNotTriggerAnExchange() = runBlocking {

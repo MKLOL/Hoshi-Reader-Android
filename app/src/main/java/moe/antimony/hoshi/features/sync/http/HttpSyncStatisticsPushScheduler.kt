@@ -2,11 +2,11 @@ package moe.antimony.hoshi.features.sync.http
 
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.io.File
-import kotlin.coroutines.coroutineContext
 
 /**
  * Debounces statistics pushes from the readers: a session writes `statistics.json` on every
@@ -44,37 +44,46 @@ class HttpSyncStatisticsPushScheduler(
 
     private fun schedule(bookRoot: File, title: String, persistedSyncId: String?, delay: Long) {
         val id = bookRoot.absolutePath
-        synchronized(lock) {
+        val scheduled = synchronized(lock) {
             pending.remove(id)?.cancel()
-            pending[id] = scope.launch {
+            scope.launch(start = CoroutineStart.LAZY) {
                 if (delay > 0) delay(delay)
-                try {
-                    pushNow(bookRoot, title, persistedSyncId)
-                } finally {
-                    val self = coroutineContext[Job]
+                pushNow(bookRoot, title, persistedSyncId)
+            }.also { job ->
+                pending[id] = job
+                // Completion also runs if cancellation prevents the coroutine from starting
+                // or interrupts its debounce. Register before start: a zero-delay push may
+                // finish inline on Main.immediate or Unconfined.
+                job.invokeOnCompletion {
                     synchronized(lock) {
-                        if (pending[id] === self) pending.remove(id)
+                        if (pending[id] === job) pending.remove(id)
                     }
                 }
             }
         }
+        scheduled.start()
     }
 
     private suspend fun pushNow(bookRoot: File, title: String, persistedSyncId: String?) {
-        if (clock() < suppressUntilMs) return
+        if (synchronized(lock) { clock() < suppressUntilMs }) return
         try {
             val settings = currentSettings() ?: return
             if (!settings.isConfigured) return
             push(bookRoot, title, settings, persistedSyncId)
-            consecutiveFailures = 0
+            synchronized(lock) {
+                consecutiveFailures = 0
+                suppressUntilMs = 0L
+            }
         } catch (cancelled: CancellationException) {
             // Superseded by a newer change for the same book: not a failure.
             throw cancelled
         } catch (error: Exception) {
-            consecutiveFailures += 1
-            if (consecutiveFailures >= FAILURE_THRESHOLD) {
-                suppressUntilMs = clock() + BACKOFF_MS
-                consecutiveFailures = 0
+            synchronized(lock) {
+                consecutiveFailures += 1
+                if (consecutiveFailures >= FAILURE_THRESHOLD) {
+                    suppressUntilMs = clock() + BACKOFF_MS
+                    consecutiveFailures = 0
+                }
             }
         }
     }

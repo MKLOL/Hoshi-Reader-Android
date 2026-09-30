@@ -11,6 +11,7 @@ import java.lang.SecurityException
 import java.math.BigInteger
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
+import java.text.Normalizer
 import java.util.Locale
 
 class AndroidAnkiContentApi(
@@ -221,7 +222,8 @@ internal fun ankiDuplicateScopeDeckIds(
     }
 
 internal fun ankiFirstFieldChecksum(data: String): Long {
-    val strippedData = data.stripHtmlMedia()
+    // Match Anki's canonical normalization; NFKC would incorrectly merge distinct fields.
+    val strippedData = Normalizer.normalize(data, Normalizer.Form.NFC).stripHtmlMedia()
     val digest = MessageDigest.getInstance("SHA1")
         .digest(strippedData.toByteArray(StandardCharsets.UTF_8))
     val hex = BigInteger(1, digest).toString(16).padStart(40, '0')

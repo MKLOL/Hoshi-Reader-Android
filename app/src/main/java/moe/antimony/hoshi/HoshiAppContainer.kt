@@ -151,7 +151,7 @@ internal class HoshiAppContainer(context: Context) {
         fullCycleRunner = httpSyncFullCycleRunner,
     )
     // v3 engine ships side-by-side with v2 (HttpSyncReconciler). The "Sync now" UI
-    // dispatches between them based on the HttpSyncSettings.useV3Sync flag (default v2).
+    // dispatches between them based on the HttpSyncSettings.useV3Sync flag (default v3).
     // Both write the same on-disk + remote state, so flipping mid-life is safe. See
     // HttpSyncEngineDispatcher for the call-site branch.
     val v3SyncEngine: V3SyncEngine = V3SyncEngine(
@@ -172,7 +172,7 @@ internal class HoshiAppContainer(context: Context) {
             )
         }
         result.newLastSyncedAt?.let { cursor ->
-            httpSyncSettingsRepository.update { it.copy(lastSyncedAt = cursor) }
+            httpSyncSettingsRepository.recordSyncCursor(settings, cursor)
         }
         if (result.errors.isEmpty()) {
             httpSyncManualSyncSuccessAt.value = System.currentTimeMillis()

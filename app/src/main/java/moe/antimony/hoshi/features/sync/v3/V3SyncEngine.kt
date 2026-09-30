@@ -46,7 +46,6 @@ class V3SyncEngine(
     private val planner = V3Planner()
     private val pushOps = V3PushOps(
         bookRepository = bookRepository,
-        aiHistoryStore = aiHistoryStore,
         aiSettingsRepository = aiSettingsRepository,
         payloadCodec = payloadCodec,
         bookLocks = bookLocks,

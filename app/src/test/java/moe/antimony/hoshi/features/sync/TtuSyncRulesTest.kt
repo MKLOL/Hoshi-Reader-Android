@@ -135,6 +135,20 @@ class TtuSyncRulesTest {
     }
 
     @Test
+    fun progressJsonPreservesSignedTtuDataIdsOutsideIntRange() {
+        for (dataId in listOf(-1_959_131_391_809_764L, 1_959_131_391_809_764L, 0L, Long.MIN_VALUE, Long.MAX_VALUE)) {
+            val input =
+                """{"dataId":$dataId,"exploredCharCount":76793,"progress":1.0,"lastBookmarkModified":1785337187112}"""
+
+            val progress = Json.decodeFromString(TtuProgress.serializer(), input)
+
+            assertEquals(dataId, progress.dataId)
+            assertEquals(input, Json.encodeToString(progress))
+            assertEquals("progress_1_6_1785337187112_1.0.json", TtuSyncRules.progressFileName(progress))
+        }
+    }
+
+    @Test
     fun statisticsMergeAndReplaceMatchIosSemantics() {
         val local = listOf(
             ReadingStatistics(title = "Title", dateKey = "2026-05-12", charactersRead = 100, lastStatisticModified = 100),

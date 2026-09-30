@@ -54,6 +54,14 @@ data class AnkiSettings(
     val ankiConnectForceSync: Boolean = false,
 )
 
+internal fun AnkiSettings.findSelectedDeck(decks: List<AnkiDeck>): AnkiDeck? =
+    decks.firstOrNull { it.id == selectedDeckId }
+        ?: selectedDeckName?.let { name -> decks.firstOrNull { it.name == name } }
+
+internal fun AnkiSettings.findSelectedNoteType(noteTypes: List<AnkiNoteType>): AnkiNoteType? =
+    noteTypes.firstOrNull { it.id == selectedNoteTypeId }
+        ?: selectedNoteTypeName?.let { name -> noteTypes.firstOrNull { it.name == name } }
+
 data class AnkiPopupSettings(
     val isConfigured: Boolean = false,
     val useAnkiConnect: Boolean = false,

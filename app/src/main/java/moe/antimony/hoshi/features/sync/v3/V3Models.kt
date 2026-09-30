@@ -63,8 +63,8 @@ data class V3LocalBook(
     /**
      * Edit-depth revision of the local bookmark / metadata keys, read from
      * `.http_sync_revisions.json` ([moe.antimony.hoshi.features.sync.http.HttpSyncRevisionStore]).
-     * The planner compares these against the remote blobs' `rev` (edit depth first,
-     * timestamps as the tiebreaker — `compareRevisioned`) so a stale device can't clobber
+     * The planner compares event timestamps first and uses `rev` to break exact ties
+     * (`compareRevisioned`) so a stale device can't clobber
      * a deeper remote edit chain. 0 when the key was never revisioned (legacy state).
      */
     val bookmarkLocalRev: Int = 0,
@@ -183,7 +183,7 @@ sealed interface V3Action {
         override val syncId: String,
         val key: String,
     ) : V3Action
-    data class PushBookmark(val root: File, override val syncId: String, val bookmark: Bookmark, val expectedRemote: HttpSyncBookmarkBlob?) : V3Action
+    data class PushBookmark(val root: File, override val syncId: String, val bookmark: Bookmark) : V3Action
     /**
      * [expectedRemote] is the metadata blob the planner saw on the server (null when the
      * key was absent). The executor skips the PUT when the upload's content equals it

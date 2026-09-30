@@ -28,6 +28,7 @@ import moe.antimony.hoshi.importing.ImportFileType
 import moe.antimony.hoshi.importing.importDisplayName
 import moe.antimony.hoshi.importing.validateImportFile
 import moe.antimony.hoshi.mokuro.MokuroImporter
+import moe.antimony.hoshi.storage.writeSidecarAtomically
 import java.io.File
 import java.time.Instant
 import java.util.UUID
@@ -116,10 +117,10 @@ class BookRepository(
 
     suspend fun coverFile(entry: BookEntry): File? = fileDataSource.coverFile(entry)
 
-    override suspend fun metadataCoverPath(bookRoot: File, coverHref: String?): String? =
+    suspend fun metadataCoverPath(bookRoot: File, coverHref: String?): String? =
         fileDataSource.metadataCoverPath(bookRoot, coverHref)
 
-    suspend fun syncedCoverPath(bookRoot: File, coverHref: String?): String? =
+    override suspend fun syncedCoverPath(bookRoot: File, coverHref: String?): String? =
         fileDataSource.syncedCoverPath(bookRoot, coverHref)
 
     suspend fun deleteBook(
@@ -439,7 +440,7 @@ class BookRepository(
 
 interface ReaderRouteBookRepository {
     suspend fun loadBookEntry(bookId: String): BookEntry?
-    suspend fun metadataCoverPath(bookRoot: File, coverHref: String?): String?
+    suspend fun syncedCoverPath(bookRoot: File, coverHref: String?): String?
     suspend fun saveMetadata(bookRoot: File, metadata: BookMetadata)
     suspend fun loadBookmark(bookRoot: File): Bookmark?
     suspend fun saveBookmark(bookRoot: File, bookmark: Bookmark)
@@ -477,10 +478,10 @@ class BookFileDataSource(
         booksDirectory.mkdirs()
         val root = booksDirectory.resolve(folder).canonicalFile
         val booksRoot = booksDirectory.canonicalFile
-        require(root.path == booksRoot.path || root.path.startsWith(booksRoot.path + File.separator)) {
+        require(root.path != booksRoot.path && root.path.startsWith(booksRoot.path + File.separator)) {
             "Unsafe book folder: $folder"
         }
-        root.mkdirs()
+        check(root.isDirectory || root.mkdirs()) { "Unable to create book directory: $folder" }
         root
     }
 
@@ -792,29 +793,7 @@ class BookSidecarDataSource(
         bookRoot.mkdirs()
         val target = bookRoot.resolve(fileName)
         val text = json.encodeToString(serializer, value)
-        // Atomic write: encode into a temp sibling, then rename over the target. A bare
-        // truncating writeText leaves a torn (or empty) sidecar if the process is killed or
-        // storage fills mid-write; loadJson then reads it as absent and silently loses data
-        // (e.g. every shelf placement, or the stable id/syncId). POSIX rename within one
-        // directory is atomic; mirrors iOS Data.write(options: .atomic) in Core/BookStorage.swift.
-        // A unique temp name per write: two writers of the same sidecar (a debounced page-turn
-        // save racing a dispose save) must never rename each other's half-written file.
-        val tmp = File(bookRoot, "$fileName.${java.util.UUID.randomUUID()}.tmp")
-        try {
-            tmp.writeText(text)
-        } catch (error: Throwable) {
-            tmp.delete()
-            throw error
-        }
-        if (!tmp.renameTo(target)) {
-            // Rename can fail on exotic filesystems; fall back to delete + rename, then to a
-            // plain write (no worse than the previous behavior) as the last resort.
-            target.delete()
-            if (!tmp.renameTo(target)) {
-                tmp.delete()
-                target.writeText(text)
-            }
-        }
+        writeSidecarAtomically(target, text)
     }
 }
 

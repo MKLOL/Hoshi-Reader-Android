@@ -107,8 +107,9 @@ class SyncManagerTest {
             listOf(ReadingStatistics(title = "Title", dateKey = "2026-05-12", charactersRead = 220, lastStatisticModified = 200)),
         )
         repository.saveSasayakiPlayback(entry.root, SasayakiPlaybackData(lastPosition = 45.0))
+        val remoteDataId = -1_959_131_391_809_764L
         val drive = FakeDriveSyncDataSource(
-            progress = TtuProgress(9, 80, 0.4, 3_000),
+            progress = TtuProgress(remoteDataId, 80, 0.4, 3_000),
             statistics = listOf(
                 ReadingStatistics(title = "Title", dateKey = "2026-05-12", charactersRead = 100, lastStatisticModified = 100),
             ),
@@ -124,7 +125,7 @@ class SyncManagerTest {
         )
 
         assertEquals(SyncResult.Exported("Title", 100), result)
-        assertEquals(TtuProgress(9, 100, 0.5, 4_321), drive.updatedProgress)
+        assertEquals(TtuProgress(remoteDataId, 100, 0.5, 4_321), drive.updatedProgress)
         assertEquals(220, drive.updatedStatistics.single().charactersRead)
         assertEquals(TtuAudioBook("Title", 45.0, 9_999), drive.updatedAudioBook)
         assertEquals(4_321, TtuSyncRules.appleReferenceSecondsToUnixMillis(repository.loadBookmark(entry.root)!!.lastModified!!))

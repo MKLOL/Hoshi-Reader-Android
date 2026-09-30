@@ -1,6 +1,10 @@
 package moe.antimony.hoshi.features.sync.http
 
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.runBlocking
@@ -119,4 +123,53 @@ class HttpSyncFullCycleRunnerTest {
         assertEquals(1, manual.await().downloadedPayloads)
         assertEquals(1, fullPasses)
     }
+
+    @Test(timeout = 5_000)
+    fun aManualRequestRunsItsOwnFreshPassAfterJoiningAnEarlierFullPass() = runBlocking {
+        val runner = HttpSyncFullCycleRunner(this)
+        val started = CompletableDeferred<Unit>()
+        val joined = CompletableDeferred<Unit>()
+        val finishBackground = CompletableDeferred<Unit>()
+        val events = mutableListOf<String>()
+        val background = async {
+            runner.run { report ->
+                events += "background"
+                report(HttpSyncProgress("Earlier snapshot"))
+                started.complete(Unit)
+                finishBackground.await()
+                result().copy(downloadedStatistics = 1)
+            }
+        }
+        started.await()
+        val manual = async {
+            runner.run(requireOwnPass = true, onProgress = { joined.complete(Unit) }) {
+                events += "fresh manual"
+                result().copy(downloadedStatistics = 2)
+            }
+        }
+        joined.await()
+        assertEquals(listOf("background"), events)
+        finishBackground.complete(Unit)
+        assertEquals(1, background.await().downloadedStatistics)
+        assertEquals(2, manual.await().downloadedStatistics)
+        assertEquals(listOf("background", "fresh manual"), events)
+    }
+
+    @Test(timeout = 5_000)
+    fun aFailedFlightReleasesItsSlotAndTheNextCallRetries() = runBlocking {
+        val owner = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        try {
+            val runner = HttpSyncFullCycleRunner(owner)
+            val failure = IllegalStateException("offline")
+            val observed = runCatching { runner.run { throw failure } }.exceptionOrNull()
+            assertEquals(failure.javaClass, observed?.javaClass)
+            assertEquals(failure.message, observed?.message)
+            var retried = false
+            assertEquals(result(), runner.run { retried = true; result() })
+            assertEquals(true, retried)
+        } finally {
+            owner.cancel()
+        }
+    }
+
 }

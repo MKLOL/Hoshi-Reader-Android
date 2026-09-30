@@ -106,31 +106,7 @@ internal class AndroidBookshelfRepository(
     }
 
     override suspend fun openBook(entry: BookEntry): String = withContext(ioDispatcher) {
-        // Manga book directories have no EpubBookParser-readable content; dispatch on the
-        // content type derived from disk structure so the EPUB parser is never handed one.
-        when (bookContentType(entry.root)) {
-            ContentType.Epub -> {
-                val parsedBook = bookParser.parse(entry.root)
-                saveMetadata(entry.root, parsedBook, bookRepository.loadMetadata(entry.root))
-                saveBookInfo(entry.root, parsedBook)
-            }
-            ContentType.Mokuro -> {
-                val root = entry.root
-                val stale = mokuroSidecarsNeedRewrite(
-                    root = root,
-                    metadata = bookRepository.loadMetadata(root),
-                    bookInfo = bookRepository.loadBookInfo(root),
-                )
-                if (stale) writeMokuroSidecars(root)
-            }
-        }
-        // Touch lastAccess on open (upstream) so recents ordering stays correct.
-        val metadata = bookRepository.loadMetadata(entry.root) ?: entry.metadata
-        bookRepository.saveMetadata(
-            entry.root,
-            metadata.copy(lastAccess = bookRepository.currentAppleReferenceDateSeconds()),
-        )
-        readerBookId(entry.root)
+        openBookshelfBook(bookRepository, entry, ::writeMokuroSidecars)
     }
 
     override suspend fun importBook(uri: Uri): String = withContext(ioDispatcher) {
@@ -439,6 +415,31 @@ internal class AndroidBookshelfRepository(
             Intent.FLAG_GRANT_READ_URI_PERMISSION,
         )
     }
+}
+
+/** Prepare navigation without reading EPUB chapter text before the reader loads it itself. */
+internal suspend fun openBookshelfBook(
+    bookRepository: BookRepository,
+    entry: BookEntry,
+    repairMokuroSidecars: suspend (File) -> Unit,
+): String {
+    val root = entry.root
+    if (bookContentType(root) == ContentType.Mokuro && mokuroSidecarsNeedRewrite(
+            root,
+            bookRepository.loadMetadata(root),
+            bookRepository.loadBookInfo(root),
+        )
+    ) {
+        repairMokuroSidecars(root)
+    }
+    // EPUB parsing and cache repair belong to ReaderRouteStateHolder, after its sync hook.
+    // Touch lastAccess for recents while retaining import/sync identity and renamed titles.
+    val metadata = bookRepository.loadMetadata(root) ?: entry.metadata
+    bookRepository.saveMetadata(
+        root,
+        metadata.copy(lastAccess = bookRepository.currentAppleReferenceDateSeconds()),
+    )
+    return metadata.id
 }
 
 internal suspend fun loadBookshelfResult(

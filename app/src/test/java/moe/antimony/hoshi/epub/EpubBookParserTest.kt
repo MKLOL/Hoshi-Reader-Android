@@ -118,6 +118,50 @@ class EpubBookParserTest {
     }
 
     @Test
+    fun cachedBookInfoSkipsChapterTextParsingWhileResourcesRemainReadable() {
+        val root = tempFolder.newFolder("cached-book")
+        writeExtractedEpub(root)
+        val parser = EpubBookParser()
+        val original = parser.parse(root)
+
+        val cached = parser.parse(root, cachedBookInfo = original.bookInfo)
+
+        assertEquals(original.bookInfo, cached.bookInfo)
+        assertEquals(original.chapters.map { it.href }, cached.chapters.map { it.href })
+        assertEquals(listOf("", ""), cached.chapters.map { it.html })
+        assertArrayEquals(
+            original.chapters.first().html.toByteArray(),
+            cached.readResource(cached.chapters.first().href),
+        )
+        assertEquals(original.characterCountAt(1, 0.5), cached.characterCountAt(1, 0.5))
+    }
+
+    @Test
+    fun staleOrInvalidBookInfoIsRebuiltFromActualChapterText() {
+        val root = tempFolder.newFolder("stale-book-info")
+        writeExtractedEpub(root)
+        val parser = EpubBookParser()
+        val original = parser.parse(root)
+        val firstHref = original.chapters.first().href
+        val firstInfo = original.bookInfo.chapterInfo.getValue(firstHref)
+        val staleInfos = listOf(
+            original.bookInfo.copy(characterCount = -1),
+            original.bookInfo.copy(characterCount = original.bookInfo.characterCount + 1),
+            original.bookInfo.copy(chapterInfo = original.bookInfo.chapterInfo - firstHref),
+            original.bookInfo.copy(chapterInfo = original.bookInfo.chapterInfo +
+                (firstHref to firstInfo.copy(spineIndex = 1))),
+            original.bookInfo.copy(chapterInfo = original.bookInfo.chapterInfo +
+                (firstHref to firstInfo.copy(currentTotal = 1))),
+        )
+
+        for (staleInfo in staleInfos) {
+            val recovered = parser.parse(root, cachedBookInfo = staleInfo)
+            assertEquals(original.bookInfo, recovered.bookInfo)
+            assertEquals(original.chapters, recovered.chapters)
+        }
+    }
+
+    @Test
     fun opensPercentEncodedChapterCoverAndStylesheetFilenames() {
         val root = tempFolder.newFolder("encoded-paths")
         writeExtractedEpub(root)

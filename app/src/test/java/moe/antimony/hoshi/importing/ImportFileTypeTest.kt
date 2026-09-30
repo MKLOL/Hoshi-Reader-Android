@@ -44,6 +44,24 @@ class ImportFileTypeTest {
     }
 
     @Test
+    fun acceptsUriDelimitersAsLiteralCharactersInFileNames() {
+        assertTrue(ImportFileType.Epub.matchesDisplayName("Book #01.epub"))
+        assertTrue(ImportFileType.Epub.matchesDisplayName("Who?.EPUB"))
+        assertTrue(ImportFileType.Mokuro.matchesDisplayName("Volume #1?.cbz"))
+        assertTrue(ImportFileType.SasayakiSubtitle.matchesDisplayName("Chapter #1?.srt"))
+        assertTrue(ImportFileType.DictionaryArchive.matchesDisplayName("Dictionary #2?.zip"))
+        assertTrue(ImportFileType.ReaderFont.matchesDisplayName("Font #1?.ttf"))
+    }
+
+    @Test
+    fun usesTheActualFileExtensionAfterUriDelimiters() {
+        assertFalse(ImportFileType.Epub.matchesDisplayName("book.epub#preview.txt"))
+        assertFalse(ImportFileType.Epub.matchesDisplayName("book.epub?backup.zip"))
+        assertFalse(ImportFileType.Epub.matchesDisplayName("book.epub#"))
+        assertFalse(ImportFileType.Epub.matchesDisplayName("book.epub?"))
+    }
+
+    @Test
     fun mokuroAcceptsZipAndCbzBundlesButNotEpubs() {
         assertEquals(listOf("zip", "cbz"), ImportFileType.Mokuro.extensions)
         assertTrue(ImportFileType.Mokuro.matchesDisplayName("Yotsubato v01.zip"))

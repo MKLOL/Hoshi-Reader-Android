@@ -1,5 +1,6 @@
 package moe.antimony.hoshi.features.sync.http
 
+import moe.antimony.hoshi.storage.writeSidecarAtomically
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.MapSerializer
 import kotlinx.serialization.builtins.serializer

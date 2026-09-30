@@ -248,7 +248,6 @@ class V3Planner {
                                 root = l.root,
                                 syncId = syncId,
                                 bookmark = localBookmark,
-                                expectedRemote = r.bookmark,
                             )
                         }
                         SyncComparison.TIE -> Unit // tie or both null
@@ -258,7 +257,6 @@ class V3Planner {
                         root = l.root,
                         syncId = syncId,
                         bookmark = l.bookmark,
-                        expectedRemote = null,
                     )
                 }
 

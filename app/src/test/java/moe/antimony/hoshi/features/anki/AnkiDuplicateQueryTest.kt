@@ -7,6 +7,23 @@ import org.junit.Test
 
 class AnkiDuplicateQueryTest {
     @Test
+    fun checksumMatchesAnkiNfcForCompatibilityKanji() {
+        assertEquals(2620585645L, ankiFirstFieldChecksum("あり\uFA68い"))
+        assertEquals(2620585645L, ankiFirstFieldChecksum("<b>あり\uFA68い</b>"))
+    }
+
+    @Test
+    fun checksumMatchesAnkiNfcForDecomposedDakuten() {
+        assertEquals(ankiFirstFieldChecksum("が"), ankiFirstFieldChecksum("か\u3099"))
+    }
+
+    @Test
+    fun checksumDoesNotFoldCompatibilityOnlyDifferences() {
+        assertFalse(ankiFirstFieldChecksum("Ａ") == ankiFirstFieldChecksum("A"))
+        assertFalse(ankiFirstFieldChecksum("ｶﾞ") == ankiFirstFieldChecksum("ガ"))
+    }
+
+    @Test
     fun checksumStripsHtmlMediaAndUsesAnkiFirstFieldShaPrefix() {
         assertEquals(ankiFirstFieldChecksum("食べる"), ankiFirstFieldChecksum("<b>食べる</b>"))
         assertEquals(ankiFirstFieldChecksum(" image.png "), ankiFirstFieldChecksum("""<img src="image.png">"""))

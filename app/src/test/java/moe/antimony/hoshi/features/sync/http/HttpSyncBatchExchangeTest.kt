@@ -45,6 +45,53 @@ class HttpSyncBatchExchangeTest {
     }
 
     @Test
+    fun unchangedPollsDoNotRewriteDurableStateOrOutbox() = runBlocking {
+        val repository = BookRepository(temporaryFolder.newFolder())
+        val state = HttpSyncBatchState(repository)
+        val transport = CountingMapTransport()
+        val root = createBook(repository, "Book", "book")
+        root.resolve(PAYLOAD_SHA_CACHE_FILENAME).writeText("sha256:" + "a".repeat(64))
+        state.publishMaps(transport)
+        repository.saveBookmark(root, Bookmark(0, 0.2, 20, 800_000_000.0))
+        state.queueBookmark(root, "Book", "book")
+        state.syncMaps(transport)
+        val files = listOf(".http_sync_exchange_cache.json", ".http_sync_pending_bookmarks.json")
+            .map { repository.booksDirectory.resolve(it) }
+        files.forEach {
+            assertTrue(it.isFile)
+            assertTrue(it.setLastModified(1_700_000_000_000L))
+        }
+        val stamps = files.map { it.lastModified() }
+        transport.resetCounts()
+
+        repeat(3) { state.syncMaps(transport) }
+
+        assertEquals(stamps, files.map { it.lastModified() })
+        assertEquals(3, transport.listCalls)
+        assertEquals(0, transport.putCalls)
+        assertEquals(0, transport.getCalls)
+    }
+
+    @Test
+    fun previousVersionOutboxStillUploadsItsPendingBookmark() = runBlocking {
+        val repository = BookRepository(temporaryFolder.newFolder())
+        val state = HttpSyncBatchState(repository)
+        val transport = CountingMapTransport()
+        val root = createBook(repository, "Book", "book")
+        state.publishMaps(transport)
+        repository.saveBookmark(root, Bookmark(0, 0.7, 70, 800_000_000.0))
+        repository.booksDirectory.resolve(".http_sync_pending_bookmarks.json").writeText(
+            """[{"key":"books/book/bookmark","mutationId":"old-write","bodyBase64":"legacy-unused-body"}]""",
+        )
+
+        assertTrue(state.hasPending())
+        state.syncMaps(transport)
+
+        assertEquals(0.7, transport.bookmarks().getValue("book").value!!.progress, 0.0)
+        assertFalse(state.hasPending())
+    }
+
+    @Test
     fun pageTurnsAcrossBooksUseOneBatchedPut() = runBlocking {
         val repository = BookRepository(temporaryFolder.newFolder())
         val state = HttpSyncBatchState(repository)

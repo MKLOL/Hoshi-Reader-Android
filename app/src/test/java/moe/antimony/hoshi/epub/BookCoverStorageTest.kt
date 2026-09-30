@@ -9,7 +9,7 @@ import java.nio.file.Files
 class BookCoverStorageTest {
     @Test
     fun coverFileResolvesMetadataCoverInsideBookRoot() = runBlocking {
-        val storage = BookStorage(Files.createTempDirectory("hoshi-cover").toFile())
+        val storage = BookRepository(Files.createTempDirectory("hoshi-cover").toFile())
         val root = storage.createBookDirectory("book")
         root.resolve("OPS/images").mkdirs()
         val cover = root.resolve("OPS/images/cover.jpg").apply { writeBytes(byteArrayOf(1, 2, 3)) }
@@ -29,7 +29,7 @@ class BookCoverStorageTest {
 
     @Test
     fun coverFileResolvesIosStyleBooksRelativeMetadataCover() = runBlocking {
-        val storage = BookStorage(Files.createTempDirectory("hoshi-cover-ios").toFile())
+        val storage = BookRepository(Files.createTempDirectory("hoshi-cover-ios").toFile())
         val root = storage.createBookDirectory("book")
         val cover = root.resolve("cover.jpg").apply { writeBytes(byteArrayOf(1, 2, 3)) }
         val entry = BookEntry(
@@ -48,7 +48,7 @@ class BookCoverStorageTest {
 
     @Test
     fun coverFileRejectsPathsOutsideBookRoot() = runBlocking {
-        val storage = BookStorage(Files.createTempDirectory("hoshi-cover-unsafe").toFile())
+        val storage = BookRepository(Files.createTempDirectory("hoshi-cover-unsafe").toFile())
         val root = storage.createBookDirectory("book")
         val entry = BookEntry(
             root = root,

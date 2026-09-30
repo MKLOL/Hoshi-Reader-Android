@@ -1,5 +1,6 @@
 package moe.antimony.hoshi.navigation
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -41,7 +42,7 @@ internal class ReaderRouteStateHolder(
             val parsedBook = parser.parse(entry.root, cachedBookInfo)
             val metadata = entry.metadata.copy(
                 title = parsedBook.title,
-                cover = repository.metadataCoverPath(entry.root, parsedBook.coverHref),
+                cover = repository.syncedCoverPath(entry.root, parsedBook.coverHref),
                 folder = entry.root.name,
                 lastAccess = repository.currentAppleReferenceDateSeconds(),
             )
@@ -63,6 +64,7 @@ internal class ReaderRouteStateHolder(
                 bookmark = bookmark,
             )
         }.getOrElse { error ->
+            if (error is CancellationException) throw error
             ReaderRouteLoadState.Error(error.localizedMessage ?: "Failed to open book.")
         }
     }

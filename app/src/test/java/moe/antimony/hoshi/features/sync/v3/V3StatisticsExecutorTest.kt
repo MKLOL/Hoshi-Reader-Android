@@ -156,7 +156,7 @@ class V3StatisticsExecutorTest {
             bookRepository = repoB,
             aiHistoryStore = history,
             payloadCodec = codec,
-            pushOps = V3PushOps(repoB, history, null, codec, locks),
+            pushOps = V3PushOps(repoB, null, codec, locks),
             bookLocks = locks,
         ).run(plan, fake) {}
 

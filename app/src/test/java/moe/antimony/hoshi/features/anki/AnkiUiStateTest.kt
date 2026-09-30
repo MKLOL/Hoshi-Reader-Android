@@ -8,6 +8,32 @@ import kotlinx.serialization.json.Json
 
 class AnkiUiStateTest {
     @Test
+    fun currentNoteTypeIdTakesPriorityWhenAnOlderNameWasReused() {
+        val selected = AnkiNoteType(7L, "Renamed", listOf("Expression"))
+        val nameReused = AnkiNoteType(8L, "Original", listOf("Front", "Back"))
+        val state = AnkiUiState(
+            settings = AnkiSettings(selectedNoteTypeId = 7L, selectedNoteTypeName = "Original"),
+            noteTypes = listOf(nameReused, selected),
+        )
+
+        assertEquals(selected, state.selectedNoteType)
+    }
+
+    @Test
+    fun restoredNoteTypeFindsTheSameNameWhenProviderIdsChanged() {
+        val selected = AnkiNoteType(27L, "Lapis", listOf("Expression"))
+        val state = AnkiUiState(
+            settings = AnkiSettings(
+                selectedNoteTypeId = 7L,
+                selectedNoteTypeName = "Lapis",
+                availableNoteTypes = listOf(selected),
+            ),
+        )
+
+        assertEquals(selected, state.selectedNoteType)
+    }
+
+    @Test
     fun restoresEditableNoteTypeFromPersistedSettingsAfterProcessRestart() {
         val lapis = AnkiNoteType(
             id = 7L,

@@ -1,6 +1,7 @@
 package moe.antimony.hoshi.navigation
 
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.CancellationException
 import moe.antimony.hoshi.epub.BookEntry
 import moe.antimony.hoshi.epub.BookInfo
 import moe.antimony.hoshi.epub.BookMetadata
@@ -15,6 +16,25 @@ import org.junit.Test
 import java.io.File
 
 class ReaderRouteStateHolderTest {
+    @Test
+    fun cancelledPreOpenRefreshPropagatesWithoutWritingReaderSidecars() = runBlocking {
+        val root = File("book-a")
+        val repository = FakeReaderRouteBookRepository(
+            entry = BookEntry(root, BookMetadata("book-a", "Book", null, "book-a", 0.0)),
+        )
+        val stateHolder = ReaderRouteStateHolder(repository, FakeReaderRouteEpubParser(readerBook()))
+        val cancellation = CancellationException("Reader closed during refresh")
+
+        val result = runCatching {
+            stateHolder.load("book-a", beforeBookmarkLoad = { throw cancellation })
+        }
+
+        assertTrue(result.exceptionOrNull() is CancellationException)
+        assertEquals(cancellation.message, result.exceptionOrNull()?.message)
+        assertEquals(null, repository.savedMetadata)
+        assertEquals(null, repository.savedBookInfo)
+    }
+
     @Test
     fun loadReadyParsesBookUpdatesSidecarsAndRestoresBookmark() = runBlocking {
         val root = File("book-a")
@@ -236,7 +256,7 @@ class ReaderRouteStateHolderTest {
 
         override suspend fun loadBookEntry(bookId: String): BookEntry? = entry
 
-        override suspend fun metadataCoverPath(bookRoot: File, coverHref: String?): String? =
+        override suspend fun syncedCoverPath(bookRoot: File, coverHref: String?): String? =
             coverHref?.let { "Books/${bookRoot.name}/${File(it).name}" }
 
         override suspend fun saveMetadata(bookRoot: File, metadata: BookMetadata) {

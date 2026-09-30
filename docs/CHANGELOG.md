@@ -7,6 +7,18 @@ Semantic Versioning.
 
 ## [Unreleased]
 
+### Changed
+- **Faster EPUB opening.** Bookshelf navigation leaves parsing to the reader, which reuses valid cached chapter information and preserves existing cover files.
+- **Lighter unchanged sync checks.** Idle sync reuses unchanged reading-history checks and avoids rewriting unchanged bookmark state and pending updates.
+
+### Fixed
+- **Keep newer reading progress during sync.** A page turn made while sync is waiting is preserved, and malformed remote bookmarks are reported without overwriting them.
+- **Preserve reading history across overlapping syncs.** Downloading older history no longer assigns it to the receiving device, and simultaneous reading and manga updates keep both sync checkpoints.
+- **Safer saved reading state and covers.** Failed file replacements preserve existing sidecars, temporary writes stay out of synced book content, and replacement books refresh their generated covers.
+- **Reliable HTTP Sync settings input.** Fast typing no longer loses characters, Sync uses the visible connection details, and changing accounts resets the previous connection’s progress cursor.
+- **More reliable Anki exports.** Invalid server responses no longer appear successful; equivalent Unicode text matches existing cards, and different audio or images no longer overwrite media with the same filename.
+- **Broader import and ッツ sync compatibility.** Filenames containing `#` or `?` import correctly, and large signed ッツ progress IDs survive synchronization.
+
 ## [v0.11.22] - 2026-09-30
 
 ### Fixed

@@ -326,7 +326,6 @@ class V3RaceTest {
         val engine = engineFor(repoA, transport, AiChatHistoryStore(), locks)
         val pushOps = V3PushOps(
             bookRepository = repoA,
-            aiHistoryStore = AiChatHistoryStore(),
             aiSettingsRepository = null,
             payloadCodec = HttpSyncPayloadCodec(kotlinx.coroutines.Dispatchers.Unconfined),
             bookLocks = locks,

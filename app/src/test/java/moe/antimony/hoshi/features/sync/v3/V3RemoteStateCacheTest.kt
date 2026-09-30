@@ -46,6 +46,45 @@ class V3RemoteStateCacheTest {
     }
 
     @Test
+    fun corruptedDiskCacheRefetchesCurrentBodiesWithoutFailingSync() = runBlocking {
+        val directory = temp.newFolder()
+        val server = CountingTransport()
+        val key = "books/book/metadata"
+        server.seed(key, """{"title":"Recovered","contentType":"epub"}""")
+        val expected = V3RemoteState(directory).read(server) {}
+        directory.resolve(".http_sync_v3_remote_cache.json").writeText("{ interrupted cache")
+        server.gets.clear()
+
+        val restored = V3RemoteState(directory).read(server) {}
+
+        assertEquals(expected.snapshot, restored.snapshot)
+        assertTrue(restored.errors.toString(), restored.errors.isEmpty())
+        assertEquals(listOf(key), server.gets.filter { it.startsWith("books/") })
+        server.gets.clear()
+        assertEquals(expected.snapshot, V3RemoteState(directory).read(server) {}.snapshot)
+        assertTrue(server.gets.none { it.startsWith("books/") })
+    }
+
+    @Test
+    fun cacheWriteFailureDoesNotFailSyncOrRetainStaleBodies() = runBlocking {
+        val directory = temp.newFolder()
+        // A directory at the sidecar path reliably rejects replacement on all test hosts.
+        assertTrue(directory.resolve(".http_sync_v3_remote_cache.json").mkdir())
+        val server = CountingTransport()
+        val key = "books/book/metadata"
+        server.seed(key, """{"title":"Before","contentType":"epub"}""")
+        val reader = V3RemoteState(directory)
+        assertTrue(reader.read(server) {}.errors.isEmpty())
+        server.seed(key, """{"title":"After","contentType":"epub"}""")
+
+        val changed = reader.read(server) {}
+
+        assertTrue(changed.errors.toString(), changed.errors.isEmpty())
+        assertEquals("After", changed.snapshot.books.getValue("book").metadata?.title)
+        assertFalse("Failed writes must not leave temporary sidecars", directory.listFiles().orEmpty().any { it.name.endsWith(".tmp") })
+    }
+
+    @Test
     fun missingKeysAreNotResurrectedFromCachedBodies() = runBlocking {
         val server = CountingTransport()
         val reader = V3RemoteState(temp.newFolder())

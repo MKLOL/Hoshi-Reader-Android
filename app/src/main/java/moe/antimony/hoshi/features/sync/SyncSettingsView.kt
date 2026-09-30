@@ -550,19 +550,6 @@ private fun AnnotatedString.Builder.appendLink(text: String, url: String, color:
 }
 
 @Composable
-private fun CopyValueButton(label: String, value: String, onCopied: () -> Unit) {
-    val context = LocalContext.current
-    IconButton(
-        onClick = {
-            context.copyTextToClipboard(label, value)
-            onCopied()
-        },
-    ) {
-        Icon(Icons.Rounded.ContentCopy, contentDescription = stringResource(R.string.action_copy_code))
-    }
-}
-
-@Composable
 private fun DriveAuthStatus.labelText(): String =
     when (this) {
         DriveAuthStatus.Connected -> stringResource(R.string.sync_status_connected)

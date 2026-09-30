@@ -775,6 +775,12 @@
     <string name="news_pretranslate_channel_name">Article translation</string>
     <string name="http_sync_not_configured">Add a base URL and token in Settings → Advanced → HTTP Sync.</string>
     <string name="http_sync_title">HTTP Sync</string>
+    <string name="http_sync_base_url">Base URL</string>
+    <string name="http_sync_base_url_hint">Default: %1$s</string>
+    <string name="http_sync_bearer_token">Bearer token</string>
+    <string name="http_sync_hide_token">Hide token</string>
+    <string name="http_sync_show_token">Show token</string>
+    <string name="http_sync_token_hint">Use the access token provided by your sync server.</string>
     <string name="http_sync_now">Sync now</string>
     <string name="http_sync_running">Syncing…</string>
     <string name="http_sync_starting">Starting sync</string>

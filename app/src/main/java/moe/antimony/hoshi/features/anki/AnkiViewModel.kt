@@ -28,8 +28,7 @@ data class AnkiUiState(
         get() = noteTypes.ifEmpty { settings.availableNoteTypes }
 
     val selectedNoteType: AnkiNoteType?
-        get() = availableNoteTypes.firstOrNull { it.id == settings.selectedNoteTypeId }
-            ?: settings.selectedNoteTypeName?.let { name -> availableNoteTypes.firstOrNull { it.name == name } }
+        get() = settings.findSelectedNoteType(availableNoteTypes)
 
     val isConfigured: Boolean
         get() = settings.selectedDeckId != null && settings.selectedNoteTypeId != null

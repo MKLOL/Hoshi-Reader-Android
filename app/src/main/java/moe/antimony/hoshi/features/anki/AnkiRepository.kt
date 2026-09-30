@@ -11,6 +11,7 @@ import moe.antimony.hoshi.features.audio.LocalAudioResolver
 import moe.antimony.hoshi.ui.UiText
 import java.io.File
 import java.net.URL
+import java.security.MessageDigest
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
@@ -22,6 +23,9 @@ class AnkiRepository(
     private val settingsRepository: AnkiSettingsRepository,
     private val localAudioRepository: LocalAudioRepository = LocalAudioRepository.fromContext(context),
     private val ankiConnectBackendFactory: (String) -> AnkiBackend = { endpoint -> AnkiConnectBackend(endpoint) },
+    private val loadDictionaryMedia: (DictionaryMedia) -> ByteArray? = { media ->
+        HoshiDicts.getMediaFile(HoshiDicts.lookupObject, media.dictionary, media.path)
+    },
 ) {
     val settings: Flow<AnkiSettings> = settingsRepository.settings
 
@@ -60,6 +64,11 @@ class AnkiRepository(
                 return@withContext AnkiFetchResult.Error(
                     message = if (error.message != error.failure.userMessage) {
                         UiText.Literal(error.message ?: error.failure.userMessage)
+                    } else if (
+                        currentSettings.backendKind == AnkiBackendKind.AnkiConnect &&
+                        error.failure == AnkiFetchFailure.ProviderFailure
+                    ) {
+                        UiText.Resource(R.string.anki_fetch_ankiconnect_provider_failure)
                     } else {
                         UiText.Resource(error.failure.userMessageRes)
                     },
@@ -137,12 +146,8 @@ class AnkiRepository(
         val activeBackend = activeBackendOrError(settings).getOrElse { return@withContext false }
         val availableDecks = decks.ifEmpty { activeBackend.fetchDecks() }
         val availableNoteTypes = noteTypes.ifEmpty { activeBackend.fetchNoteTypes() }
-        val deck = availableDecks.firstOrNull { it.id == settings.selectedDeckId }
-            ?: settings.selectedDeckName?.let { name -> availableDecks.firstOrNull { it.name == name } }
-            ?: return@withContext false
-        val noteType = availableNoteTypes.firstOrNull { it.id == settings.selectedNoteTypeId }
-            ?: settings.selectedNoteTypeName?.let { name -> availableNoteTypes.firstOrNull { it.name == name } }
-            ?: return@withContext false
+        val deck = settings.findSelectedDeck(availableDecks) ?: return@withContext false
+        val noteType = settings.findSelectedNoteType(availableNoteTypes) ?: return@withContext false
         val fieldMappings = settings.fieldMappings
         val payload = runCatching { AnkiMiningPayload.fromJson(rawPayload) }.getOrNull()
             ?: return@withContext false
@@ -153,10 +158,10 @@ class AnkiRepository(
             sentence = context.sentence,
             documentTitle = context.documentTitle,
             coverPath = context.coverPath?.takeIf { needsCover }?.let {
-                addMediaFile(it, "hoshi_cover_${File(it).name}", mimeTypeForPath(it), activeBackend, settings.backendKind)
+                addHashedMediaFile(it, "hoshi_cover", activeBackend, settings.backendKind)
             },
             sasayakiAudioPath = context.sasayakiAudioPath?.takeIf { needsSasayakiAudio }?.let {
-                addMediaFile(it, File(it).name, mimeTypeForPath(it), activeBackend, settings.backendKind)
+                addHashedMediaFile(it, "hoshi_sasayaki", activeBackend, settings.backendKind)
             },
             sentenceOffset = context.sentenceOffset,
         )
@@ -202,12 +207,8 @@ class AnkiRepository(
         val activeBackend = activeBackendOrError(settings).getOrElse { return@withContext false }
         val availableNoteTypes = noteTypes.ifEmpty { activeBackend.fetchNoteTypes() }
         val availableDecks = decks.ifEmpty { activeBackend.fetchDecks() }
-        val deck = availableDecks.firstOrNull { it.id == settings.selectedDeckId }
-            ?: settings.selectedDeckName?.let { name -> availableDecks.firstOrNull { it.name == name } }
-            ?: return@withContext false
-        val noteType = availableNoteTypes.firstOrNull { it.id == settings.selectedNoteTypeId }
-            ?: settings.selectedNoteTypeName?.let { name -> availableNoteTypes.firstOrNull { it.name == name } }
-            ?: return@withContext false
+        val deck = settings.findSelectedDeck(availableDecks) ?: return@withContext false
+        val noteType = settings.findSelectedNoteType(availableNoteTypes) ?: return@withContext false
         activeBackend.isDuplicate(
             deck = deck,
             noteType = noteType,
@@ -226,34 +227,42 @@ class AnkiRepository(
             )
                 ?: return null
             val media = ankiAudioMediaFile(url, data)
-            val file = mediaCacheFile(media.preferredName)
-            file.writeBytes(data)
-            addMediaFile(file.absolutePath, file.name, media.mimeType, activeBackend, backendKind)
+            addMediaBytes(data, media.preferredName, media.mimeType, activeBackend, backendKind)
         }.getOrNull()
 
     private fun addDictionaryMedia(media: DictionaryMedia, activeBackend: AnkiBackend, backendKind: AnkiBackendKind): String? =
         runCatching {
-            val data = HoshiDicts.getMediaFile(HoshiDicts.lookupObject, media.dictionary, media.path)
-                ?: return null
-            val file = mediaCacheFile("hoshi_dict_${data.contentHashCode()}.${media.path.substringAfterLast('.', "bin")}")
-            file.writeBytes(data)
-            addMediaFile(file.absolutePath, file.name, mimeTypeForPath(media.path), activeBackend, backendKind)
+            val data = loadDictionaryMedia(media) ?: return null
+            val filename = "hoshi_dict_${sha1Hex(data)}.${media.path.substringAfterLast('.', "bin")}"
+            addMediaBytes(data, filename, mimeTypeForPath(media.path), activeBackend, backendKind)
                 ?.let(::ankiInlineMediaReference)
         }.onFailure { Log.w(TAG, "Failed to add dictionary media ${media.path}", it) }
             .getOrNull()
 
-    private fun addMediaFile(
+    private fun addHashedMediaFile(
         path: String,
+        prefix: String,
+        activeBackend: AnkiBackend,
+        backendKind: AnkiBackendKind,
+    ): String? = runCatching {
+        val file = File(path).takeIf { it.isFile } ?: return@runCatching null
+        val bytes = file.readBytes()
+        val filename = "${prefix}_${sha1Hex(bytes)}.${file.extension}"
+        addMediaBytes(bytes, filename, mimeTypeForPath(path), activeBackend, backendKind)
+    }.getOrNull()
+
+    private fun addMediaBytes(
+        bytes: ByteArray,
         preferredName: String,
         mimeType: String,
         activeBackend: AnkiBackend,
         backendKind: AnkiBackendKind,
     ): String? {
-        val file = File(path).takeIf { it.isFile } ?: return null
         return runCatching {
             if (backendKind == AnkiBackendKind.AnkiConnect) {
-                return@runCatching activeBackend.addMediaFromBytes(file.readBytes(), preferredName, mimeType)
+                return@runCatching activeBackend.addMediaFromBytes(bytes, preferredName, mimeType)
             }
+            val file = mediaCacheFile(preferredName).also { it.writeBytes(bytes) }
             val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
             context.grantUriPermission("com.ichi2.anki", uri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
             activeBackend.addMediaFromUri(uri.toString(), preferredName, mimeType)
@@ -297,7 +306,7 @@ internal data class AnkiAudioMediaFile(
 
 internal fun ankiAudioMediaFile(url: String, data: ByteArray): AnkiAudioMediaFile {
     val extension = ankiAudioExtension(url)
-    val preferredName = "hoshi_audio_${data.contentHashCode()}.$extension"
+    val preferredName = "hoshi_audio_${sha1Hex(data)}.$extension"
     return AnkiAudioMediaFile(
         preferredName = preferredName,
         mimeType = mimeTypeForPath(preferredName),
@@ -321,6 +330,9 @@ private fun ankiAudioExtension(url: String): String {
 private fun isSupportedAnkiAudioExtension(extension: String): Boolean =
     extension in setOf("mp3", "opus", "ogg", "aac", "m4a", "wav")
 
+private fun sha1Hex(data: ByteArray): String =
+    MessageDigest.getInstance("SHA-1").digest(data).joinToString("") { "%02x".format(it) }
+
 private const val TAG = "AnkiRepository"
 
 private fun logAnkiFetchFailure(message: String, error: Throwable) {
@@ -331,8 +343,7 @@ internal fun selectDeckAfterFetch(
     decks: List<AnkiDeck>,
     current: AnkiSettings,
 ): AnkiDeck =
-    decks.firstOrNull { it.id == current.selectedDeckId }
-        ?: current.selectedDeckName?.let { name -> decks.firstOrNull { it.name == name } }
+    current.findSelectedDeck(decks)
         ?: decks.firstOrNull { !it.name.equals("Default", ignoreCase = true) }
         ?: decks.first()
 
@@ -340,8 +351,7 @@ internal fun selectNoteTypeAfterFetch(
     noteTypes: List<AnkiNoteType>,
     current: AnkiSettings,
 ): AnkiNoteType =
-    noteTypes.firstOrNull { it.id == current.selectedNoteTypeId }
-        ?: current.selectedNoteTypeName?.let { name -> noteTypes.firstOrNull { it.name == name } }
+    current.findSelectedNoteType(noteTypes)
         ?: noteTypes.firstOrNull { LapisPreset.matches(it) }
         ?: noteTypes.first()
 

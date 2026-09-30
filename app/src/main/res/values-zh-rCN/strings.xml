@@ -773,6 +773,12 @@
     <string name="news_pretranslate_channel_name">文章翻译</string>
     <string name="http_sync_not_configured">请在设置 → 高级 → HTTP 同步中添加服务器地址和令牌。</string>
     <string name="http_sync_title">HTTP 同步</string>
+    <string name="http_sync_base_url">服务器地址</string>
+    <string name="http_sync_base_url_hint">默认：%1$s</string>
+    <string name="http_sync_bearer_token">访问令牌</string>
+    <string name="http_sync_hide_token">隐藏令牌</string>
+    <string name="http_sync_show_token">显示令牌</string>
+    <string name="http_sync_token_hint">使用同步服务器提供的访问令牌。</string>
     <string name="http_sync_now">立即同步</string>
     <string name="http_sync_running">正在同步…</string>
     <string name="http_sync_starting">开始同步</string>

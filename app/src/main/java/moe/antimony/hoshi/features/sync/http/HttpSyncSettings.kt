@@ -17,8 +17,8 @@ import kotlinx.coroutines.flow.map
  *  - [baseUrl] and [bearerToken] — what the user pastes once. Sync (including the
  *    reader-side auto-push hooks, [HttpSyncReaderHooks]) is active whenever both are set.
  *  - [lastSyncedAt] — RFC 3339 cursor for the inbound `list?since=` filter. Managed by
- *    [HttpSyncReconciler], not the UI; lives in the same DataStore so it survives
- *    uninstalls / clears the way the rest of the settings do.
+ *    [HttpSyncReconciler], not the UI; persisted with the connection settings and reset
+ *    when the server or account changes.
  */
 data class HttpSyncSettings(
     /** Base URL of the sync server, e.g. `https://dragos.games/api/book_sync`. No trailing slash. */
@@ -71,13 +71,23 @@ class HttpSyncSettingsRepository(
 ) {
     val settings: Flow<HttpSyncSettings> = dataStore.data.map { it.toHttpSyncSettings() }
 
+    /** A pass started on another server/account cannot advance this connection's cursor. */
+    suspend fun recordSyncCursor(startedWith: HttpSyncSettings, cursor: String) = update { current ->
+        if (current.baseUrl == startedWith.baseUrl && current.bearerToken == startedWith.bearerToken) {
+            current.copy(lastSyncedAt = cursor)
+        } else current
+    }
+
     suspend fun update(transform: (HttpSyncSettings) -> HttpSyncSettings) {
         dataStore.edit { preferences ->
-            val next = transform(preferences.toHttpSyncSettings())
-            preferences[KEY_BASE_URL] = next.baseUrl.trim().trimEnd('/')
-            preferences[KEY_TOKEN] = next.bearerToken.trim()
+            val current = preferences.toHttpSyncSettings()
+            val edited = transform(current)
+            val next = edited.copy(baseUrl = edited.baseUrl.trim().trimEnd('/'), bearerToken = edited.bearerToken.trim())
+            preferences[KEY_BASE_URL] = next.baseUrl
+            preferences[KEY_TOKEN] = next.bearerToken
             preferences[KEY_USE_V3_SYNC] = next.useV3Sync
-            val cursor = next.lastSyncedAt?.trim()
+            val sameAccount = current.baseUrl == next.baseUrl && current.bearerToken == next.bearerToken
+            val cursor = next.lastSyncedAt?.trim()?.takeIf { sameAccount }
             if (cursor.isNullOrEmpty()) {
                 preferences.remove(KEY_LAST_SYNCED_AT)
             } else {

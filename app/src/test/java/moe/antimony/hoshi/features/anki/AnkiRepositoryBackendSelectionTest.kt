@@ -5,6 +5,7 @@ import java.nio.file.Files
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.runBlocking
+import moe.antimony.hoshi.R
 import moe.antimony.hoshi.ui.UiText
 import moe.antimony.hoshi.features.audio.LocalAudioRepository
 import org.junit.Assert.assertEquals
@@ -13,6 +14,34 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AnkiRepositoryBackendSelectionTest {
+    @Test
+    fun malformedAnkiConnectFetchKeepsSavedConfigurationAndShowsLocalizedFailure() = runBlocking {
+        val saved = AnkiSettings(
+            backendKind = AnkiBackendKind.AnkiConnect,
+            ankiConnectUrl = "https://anki.example.com",
+            selectedDeckId = 10L,
+            selectedDeckName = "Mining",
+            availableDecks = listOf(AnkiDeck(10L, "Mining")),
+        )
+        val settings = InMemoryAnkiSettingsRepository(saved)
+        val responses = ArrayDeque(listOf("""{"result":6,"error":null}""", "{}"))
+        val repository = repository(
+            settingsRepository = settings,
+            ankiConnectBackendFactory = { endpoint ->
+                AnkiConnectBackend(endpoint, AnkiConnectTransport { _, _, _ -> responses.removeFirst() })
+            },
+        )
+
+        assertEquals(
+            AnkiFetchResult.Error(
+                UiText.Resource(R.string.anki_fetch_ankiconnect_provider_failure),
+                AnkiFetchFailure.ProviderFailure,
+            ),
+            repository.fetchConfiguration(),
+        )
+        assertEquals(saved, settings.current)
+    }
+
     @Test
     fun fetchConfigurationUsesAnkiConnectBackendWhenSelected() = runBlocking {
         val settingsRepository = InMemoryAnkiSettingsRepository(
@@ -314,7 +343,23 @@ class AnkiRepositoryBackendSelectionTest {
 
         assertEquals(1, ankiConnect.addMediaFromBytesCalls)
         assertEquals(byteArrayOf(1, 2, 3).toList(), ankiConnect.lastMediaBytes.toList())
-        assertEquals("<img src=\"hoshi_cover_${cover.fileName}\">", ankiConnect.lastFields["Cover"])
+        val firstCoverTag = "<img src=\"hoshi_cover_7037807198c22a7d2b0807371d763779a84fdfcf.png\">"
+        assertEquals(firstCoverTag, ankiConnect.lastFields["Cover"])
+
+        // Different books commonly reuse cover.png; replacing the bytes must not replace
+        // the image referenced by an already mined card.
+        Files.write(cover, byteArrayOf(4, 5, 6))
+        assertTrue(
+            repository.mineEntry(
+                rawPayload = """{"expression":"読む"}""",
+                context = AnkiMiningContext(sentence = "本を読む。", coverPath = cover.toString()),
+                decks = emptyList(),
+                noteTypes = emptyList(),
+            ),
+        )
+        assertEquals(2, ankiConnect.addMediaFromBytesCalls)
+        assertEquals(byteArrayOf(4, 5, 6).toList(), ankiConnect.lastMediaBytes.toList())
+        assertFalse(firstCoverTag == ankiConnect.lastFields["Cover"])
     }
 
     @Test
@@ -397,7 +442,7 @@ class AnkiRepositoryBackendSelectionTest {
 
         assertEquals(2, ankiConnect.addMediaFromBytesCalls)
         assertTrue(ankiConnect.lastFields.getValue("Media").contains("hoshi_audio_"))
-        assertTrue(ankiConnect.lastFields.getValue("Media").contains(sasayaki.fileName.toString()))
+        assertTrue(ankiConnect.lastFields.getValue("Media").contains("hoshi_sasayaki_c4ea21bb365bbeeaf5f2c654883e56d11e43c44e.m4a"))
     }
 
     @Test
@@ -438,10 +483,56 @@ class AnkiRepositoryBackendSelectionTest {
         assertTrue(ankiConnect.lastFields.getValue("Media").contains(".opus"))
     }
 
+    @Test
+    fun dictionaryMediaWithCollidingLegacyHashesKeepsSeparateGlossaryImages() = runBlocking {
+        val firstImage = byteArrayOf(0, 31)
+        val secondImage = byteArrayOf(1, 0)
+        assertEquals(firstImage.contentHashCode(), secondImage.contentHashCode())
+        val deck = AnkiDeck(10L, "Mining")
+        val noteType = AnkiNoteType(20L, "Basic", listOf("Definition"))
+        val ankiConnect = RecordingBackend(decks = listOf(deck), noteTypes = listOf(noteType))
+        val repository = repository(
+            settingsRepository = InMemoryAnkiSettingsRepository(
+                AnkiSettings(
+                    backendKind = AnkiBackendKind.AnkiConnect,
+                    ankiConnectUrl = "https://anki.example.com",
+                    selectedDeckId = deck.id,
+                    selectedNoteTypeId = noteType.id,
+                    fieldMappings = mapOf("Definition" to "{glossary}"),
+                ),
+            ),
+            ankiConnectBackendFactory = { ankiConnect },
+            loadDictionaryMedia = { media ->
+                assertEquals("Images", media.dictionary)
+                when (media.path) {
+                    "first.png" -> firstImage
+                    "second.png" -> secondImage
+                    else -> throw AssertionError("Unexpected dictionary media ${media.path}")
+                }
+            },
+        )
+
+        val exportedNames = listOf("first.png", "second.png").map { path ->
+            assertTrue(
+                repository.mineEntry(
+                    rawPayload = """{"expression":"食べる","glossary":"<img src=\"placeholder\">","dictionaryMedia":"[{\"dictionary\":\"Images\",\"path\":\"$path\",\"filename\":\"placeholder\"}]"}""",
+                    context = AnkiMiningContext(sentence = "食べる。"),
+                    decks = emptyList(),
+                    noteTypes = emptyList(),
+                ),
+            )
+            assertEquals("<img src=\"${ankiConnect.lastMediaName}\">", ankiConnect.lastFields["Definition"])
+            ankiConnect.lastMediaName
+        }
+        assertEquals(2, ankiConnect.addMediaFromBytesCalls)
+        assertEquals(2, exportedNames.toSet().size)
+    }
+
     private fun repository(
         backend: AnkiBackend = RecordingBackend(),
         settingsRepository: InMemoryAnkiSettingsRepository = InMemoryAnkiSettingsRepository(),
         ankiConnectBackendFactory: (String) -> AnkiBackend = { RecordingBackend() },
+        loadDictionaryMedia: (DictionaryMedia) -> ByteArray? = { throw AssertionError("Unexpected dictionary media lookup") },
     ): AnkiRepository {
         val cacheDir = Files.createTempDirectory("hoshi-anki-cache").toFile()
         return AnkiRepository(
@@ -452,6 +543,7 @@ class AnkiRepositoryBackendSelectionTest {
             settingsRepository = settingsRepository,
             localAudioRepository = LocalAudioRepository(Files.createTempDirectory("hoshi-anki-test").toFile()),
             ankiConnectBackendFactory = ankiConnectBackendFactory,
+            loadDictionaryMedia = loadDictionaryMedia,
         )
     }
 

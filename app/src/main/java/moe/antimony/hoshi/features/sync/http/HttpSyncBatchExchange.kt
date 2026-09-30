@@ -1,5 +1,6 @@
 package moe.antimony.hoshi.features.sync.http
 
+import moe.antimony.hoshi.storage.writeSidecarAtomically
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
@@ -30,7 +31,6 @@ import moe.antimony.hoshi.epub.ContentType
 import moe.antimony.hoshi.epub.bookContentType
 import java.io.File
 import java.security.MessageDigest
-import java.util.Base64
 import java.util.UUID
 
 /** The two opaque maps live in the existing v1 KV store; no backend release is required. */
@@ -54,7 +54,6 @@ private data class CachedMapState(
 private data class PendingBookmarkWrite(
     val key: String,
     val mutationId: String,
-    val bodyBase64: String,
 )
 
 internal data class HttpSyncMapChanges(
@@ -167,13 +166,13 @@ class HttpSyncBatchState(
             bookmark.toBlob().copy(rev = rev),
         ).toByteArray(Charsets.UTF_8)
         synchronized(stateLock) {
-            val pending = loadPendingLocked().associateBy { it.key }.toMutableMap()
+            val previousPending = loadPendingLocked()
+            val pending = previousPending.associateBy { it.key }.toMutableMap()
             pending[key] = PendingBookmarkWrite(
                 key = key,
                 mutationId = UUID.randomUUID().toString(),
-                bodyBase64 = body.toBase64(),
             )
-            savePendingLocked(pending.values.sortedBy { it.key })
+            savePendingLocked(pending.values.sortedBy { it.key }, previousPending)
             val state = loadStateLocked()
             saveStateLocked(
                 state.copy(
@@ -185,6 +184,7 @@ class HttpSyncBatchState(
                         )
                     ),
                 ),
+                previous = state,
             )
         }
     }
@@ -199,9 +199,9 @@ class HttpSyncBatchState(
         onProgress(HttpSyncProgress(messageResource = R.string.http_sync_checking_changes))
         syncMutex.withLock {
             val before = synchronized(stateLock) { loadStateLocked() }
-            // Listing all metadata is still one small request for normal libraries. Besides the
-            // two fast maps it lets us notice writes from released per-book clients and changes
-            // to chats/settings/translations without fetching unchanged bodies.
+            // The cached metadata index fetches only changed keys on routine checks. It also
+            // notices writes from per-book clients and changes to chats/settings/translations
+            // without fetching unchanged bodies.
             val listing = listAllMetadata(transport)
             val booksMeta = listing.keys.firstOrNull { it.key == BOOKS_MAP_KEY }
             val bookmarkMetas = listing.keys.filter {
@@ -272,7 +272,8 @@ class HttpSyncBatchState(
             // in flight remains durable for the next five-second pass.
             val completed = pendingSnapshot.associate { it.key to it.mutationId }
             synchronized(stateLock) {
-                savePendingLocked(loadPendingLocked().filterNot { completed[it.key] == it.mutationId })
+                val pending = loadPendingLocked()
+                savePendingLocked(pending.filterNot { completed[it.key] == it.mutationId }, pending)
                 val latest = loadStateLocked()
                 saveStateLocked(
                     CachedMapState(
@@ -292,6 +293,7 @@ class HttpSyncBatchState(
                         },
                         initialized = before.initialized,
                     ),
+                    previous = latest,
                 )
             }
 
@@ -413,22 +415,25 @@ class HttpSyncBatchState(
                     .toByteArray(Charsets.UTF_8),
             )
             synchronized(stateLock) {
+                val latest = loadStateLocked()
                 saveStateLocked(
                     CachedMapState(
                         booksEtag = booksResponse.etag,
                         books = books,
                         bookmarkEtags = before.bookmarkEtags + (deviceKey to bookmarksResponse.etag),
                         bookmarkShards = before.bookmarkShards + (deviceKey to owned),
-                        ownedBookmarks = owned,
+                        ownedBookmarks = mergeBookmarkMaps(owned, latest.ownedBookmarks),
                         // A write arriving after preflight was not reconciled. Acknowledge only
                         // that exact snapshot so the next five-second list notices the new ETag.
                         legacyEtags = acknowledgedLegacyEtags,
                         initialized = true,
                     ),
+                    previous = latest,
                 )
                 // Preserve a page turn queued while either PUT was in flight.
                 val completed = pendingSnapshot.associate { it.key to it.mutationId }
-                savePendingLocked(loadPendingLocked().filterNot { completed[it.key] == it.mutationId })
+                val pending = loadPendingLocked()
+                savePendingLocked(pending.filterNot { completed[it.key] == it.mutationId }, pending)
             }
             HttpSyncMapChanges(uploadedBookmarks = localBookmarks.size, downloadedBookmarks = applied)
         }
@@ -595,7 +600,8 @@ class HttpSyncBatchState(
             .getOrDefault(CachedMapState())
     }
 
-    private fun saveStateLocked(state: CachedMapState) {
+    private fun saveStateLocked(state: CachedMapState, previous: CachedMapState) {
+        if (state == previous) return
         booksRoot.mkdirs()
         writeSidecarAtomically(
             booksRoot.resolve(CACHE_FILE_NAME),
@@ -610,7 +616,8 @@ class HttpSyncBatchState(
             .getOrDefault(emptyList())
     }
 
-    private fun savePendingLocked(pending: List<PendingBookmarkWrite>) {
+    private fun savePendingLocked(pending: List<PendingBookmarkWrite>, previous: List<PendingBookmarkWrite>) {
+        if (pending == previous) return
         booksRoot.mkdirs()
         writeSidecarAtomically(
             booksRoot.resolve(PENDING_FILE_NAME),
@@ -878,7 +885,5 @@ private fun ByteArray.sha256Etag(): String {
     val digest = MessageDigest.getInstance("SHA-256").digest(this)
     return "sha256:" + digest.joinToString("") { "%02x".format(it) }
 }
-
-private fun ByteArray.toBase64(): String = Base64.getEncoder().encodeToString(this)
 
 private fun bookmarkMapKey(deviceId: String): String = "$BOOKMARKS_MAP_PREFIX$deviceId.json"

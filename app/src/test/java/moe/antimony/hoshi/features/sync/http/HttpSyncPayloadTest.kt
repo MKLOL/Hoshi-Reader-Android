@@ -4,6 +4,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import moe.antimony.hoshi.epub.GENERATED_COVER_FILENAME
+import moe.antimony.hoshi.epub.BookRepository
+import moe.antimony.hoshi.storage.writeSidecarAtomically
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -88,6 +90,27 @@ class HttpSyncPayloadTest {
     }
 
     @Test
+    fun replacementRegeneratesCoverFromNewPayloadWithoutChangingItsContentHash() = runBlocking {
+        val repository = BookRepository(tempFolder.newFolder("cover-replacement"))
+        val root = repository.createBookDirectory("book")
+        root.resolve("images").mkdirs()
+        root.resolve("images/cover.jpg").writeText("old art")
+        repository.syncedCoverPath(root, "images/cover.jpg")
+        assertEquals("old art", root.resolve(GENERATED_COVER_FILENAME).readText())
+        val staging = tempFolder.newFolder("cover-staging")
+        staging.resolve("images").mkdirs()
+        staging.resolve("images/cover.jpg").writeText("new art")
+        val hash = codec.computePayloadContentSha(staging)
+
+        codec.installReplacement(root, staging, hash)
+
+        assertFalse(root.resolve(GENERATED_COVER_FILENAME).exists())
+        repository.syncedCoverPath(root, "images/cover.jpg")
+        assertEquals("new art", root.resolve(GENERATED_COVER_FILENAME).readText())
+        assertEquals(hash, codec.computePayloadContentSha(root))
+    }
+
+    @Test
     fun startupRecoveryRestoresOriginalBookIfCrashHappenedBeforePublish() {
         val parent = tempFolder.newFolder("recover-before-publish")
         val backup = parent.resolve(".hoshi-sync-backup-test").apply {
@@ -142,6 +165,26 @@ class HttpSyncPayloadTest {
             "sha256:dc5ddd76880180e6f4f6d7d57bdae426df8910c9ec8c2ae30a978b1034438dc7",
             codec.computePayloadContentSha(root),
         )
+    }
+
+    @Test
+    fun pendingAtomicSidecarWritesNeverEnterThePayloadOrItsContentHash() {
+        val root = tempFolder.newFolder("atomic-sidecar-payload")
+        root.resolve("chapter.xhtml").writeText("Book text")
+        // Unrelated EPUB resources whose names happen to end in .tmp are still content.
+        root.resolve("resource.tmp").writeText("Book resource")
+        val expectedHash = codec.computePayloadContentSha(root)
+
+        writeSidecarAtomically(root.resolve("statistics.json"), "new statistics") { source, target ->
+            assertTrue(source.exists())
+            assertEquals(expectedHash, codec.computePayloadContentSha(root))
+            val unpacked = tempFolder.newFolder("atomic-sidecar-unpacked")
+            codec.unzipInto(codec.zipDirectory(root).first, unpacked)
+            assertEquals(setOf("chapter.xhtml", "resource.tmp"), unpacked.listFiles()!!.map { it.name }.toSet())
+            source.renameTo(target)
+        }
+
+        assertEquals(expectedHash, codec.computePayloadContentSha(root))
     }
 
     @Test

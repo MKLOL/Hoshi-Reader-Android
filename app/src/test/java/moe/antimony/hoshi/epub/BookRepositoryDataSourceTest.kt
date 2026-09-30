@@ -21,6 +21,24 @@ class BookRepositoryDataSourceTest {
     }
 
     @Test
+    fun bookDirectoryCannotBeTheEntireLibraryOrAnExistingFile() = runBlocking {
+        val filesDir = Files.createTempDirectory("hoshi-book-invalid-folder").toFile()
+        val dataSource = BookFileDataSource(filesDir)
+        val keep = dataSource.createBookDirectory("keep").resolve("chapter.xhtml")
+        keep.writeText("Keep this book")
+        val existing = dataSource.booksDirectory.resolve("file").apply { writeText("Keep this file") }
+
+        for (folder in listOf("", ".", "keep/..", "../Books")) {
+            assertTrue("$folder must not resolve to Books", runCatching {
+                dataSource.createBookDirectory(folder)
+            }.exceptionOrNull() is IllegalArgumentException)
+        }
+        assertTrue(runCatching { dataSource.createBookDirectory("file") }.isFailure)
+        assertEquals("Keep this book", keep.readText())
+        assertEquals("Keep this file", existing.readText())
+    }
+
+    @Test
     fun repositoryPreservesSidecarNamesAndProgressCalculation() = runBlocking {
         val repository = BookRepository(Files.createTempDirectory("hoshi-book-repository").toFile())
         val bookRoot = repository.createBookDirectory("book-a")

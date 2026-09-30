@@ -4,9 +4,8 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import moe.antimony.hoshi.features.sync.http.HttpSyncKvFetched
 import moe.antimony.hoshi.features.sync.http.HttpSyncKvKeyMeta
+import moe.antimony.hoshi.storage.writeSidecarAtomically
 import java.io.File
-import java.nio.file.Files
-import java.nio.file.StandardCopyOption
 
 /** Small planner inputs, reused only after the current server listing verifies their version. */
 internal class V3RemoteBodyCache(private val directory: File?) {
@@ -72,14 +71,10 @@ internal class V3RemoteBodyCache(private val directory: File?) {
         if (directory == null || !dirty) return
         // Losing this cache only costs downloads; it must never fail a successful sync.
         runCatching {
-            val target = cacheFile()
-            val temp = File(directory, "$CACHE_FILENAME.tmp")
-            temp.writeText(json.encodeToString(Snapshot.serializer(), Snapshot(serverIdentity, entries)))
-            try {
-                Files.move(temp.toPath(), target.toPath(), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
-            } catch (_: Exception) {
-                Files.move(temp.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING)
-            }
+            writeSidecarAtomically(
+                cacheFile(),
+                json.encodeToString(Snapshot.serializer(), Snapshot(serverIdentity, entries)),
+            )
             dirty = false
         }
     }

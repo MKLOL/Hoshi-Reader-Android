@@ -3,10 +3,34 @@ package moe.antimony.hoshi.features.anki
 import moe.antimony.hoshi.features.audio.LocalAudioResolver
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AnkiRepositoryTest {
+    @Test
+    fun collidingByteArrayHashesDoNotOverwriteAnotherAudioExport() {
+        val first = byteArrayOf(0, 31)
+        val second = byteArrayOf(1, 0)
+        assertEquals(first.contentHashCode(), second.contentHashCode())
+
+        assertNotEquals(
+            ankiAudioMediaFile("https://example.com/word.mp3", first).preferredName,
+            ankiAudioMediaFile("https://example.com/word.mp3", second).preferredName,
+        )
+    }
+
+    @Test
+    fun identicalAudioBytesReuseAStableNameAcrossSourceUrls() {
+        val bytes = byteArrayOf(1, 2, 3)
+        val first = ankiAudioMediaFile("https://example.com/first.mp3?token=one", bytes)
+        val second = ankiAudioMediaFile("https://other.example.com/second.mp3?token=two", bytes)
+
+        assertEquals(first, second)
+        assertEquals("hoshi_audio_7037807198c22a7d2b0807371d763779a84fdfcf.mp3", first.preferredName)
+        assertEquals("audio/mpeg", first.mimeType)
+    }
+
     @Test
     fun dictionaryMediaUsesFilenameInsideExistingGlossaryHtml() {
         assertEquals(

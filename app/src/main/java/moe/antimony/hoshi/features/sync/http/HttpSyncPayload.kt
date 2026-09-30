@@ -1,5 +1,7 @@
 package moe.antimony.hoshi.features.sync.http
 
+import moe.antimony.hoshi.storage.writeSidecarAtomically
+import moe.antimony.hoshi.storage.isSidecarTemporaryFile
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
@@ -112,10 +114,10 @@ internal val PAYLOAD_EXCLUDED_FILES: Set<String> = setOf(
  */
 internal val PAYLOAD_EXCLUDED_DIRS: Set<String> = setOf("Sasayaki")
 
-// Derived from static EPUB bytes. It remains excluded from uploads, but a replacement must
-// regenerate it rather than carry chapter offsets from the old payload forward.
+// Derived from static payload bytes. Replacements regenerate chapter offsets and cover art.
 private val PAYLOAD_REPLACEMENT_PRESERVED_FILES = PAYLOAD_EXCLUDED_FILES - setOf(
     "bookinfo.json",
+    GENERATED_COVER_FILENAME,
     PAYLOAD_SHA_CACHE_FILENAME,
     PAYLOAD_ZIP_SHA_CACHE_FILENAME,
     PAYLOAD_REPLACEMENT_TARGET_FILENAME,
@@ -238,6 +240,7 @@ class HttpSyncPayloadCodec(
         val digest = MessageDigest.getInstance("SHA-256")
         val files = bookRoot.walkTopDown().filter { file ->
             file.isFile && file.name !in PAYLOAD_EXCLUDED_FILES &&
+                !file.isSidecarTemporaryFile() &&
                 !file.isInsideExcludedDir(bookRoot) &&
                 // Root-level candidates only, compared in the same NFC form the hash uses.
                 !(file.parentFile == bookRoot && nfc(file.name) in excludedRootFiles)
@@ -359,38 +362,9 @@ class HttpSyncPayloadCodec(
     }
 
     /**
-     * Outbound: returns `true` if a zip+manifest was uploaded, `false` if the server's
-     * manifest already matched (no-op fast path). Throws [HttpSyncException] on network /
-     * IO failure.
-     *
-     * **Fast path (the common case):** fetch the remote manifest first; if we have a valid
-     * cached local sha256 that matches, return without re-zipping. A 50 MB mokuro volume
-     * therefore costs one HTTPS GET (a few hundred bytes) on every sync after the first,
-     * instead of multi-second zip + sha256 work.
-     *
-     * **Slow path:** zip + hash + compare; upload only if the sha actually differs from
-     * what's on the server. Cache the freshly-computed sha so the next sync is fast.
-     */
-    /**
-     * **Manifest-existence policy.** If the server already has a manifest for this
-     * book, we **never** re-upload from this device. The user explicitly asked for this
-     * after the codec re-uploaded their 50-100 MB book three times in a row from per-
-     * device sidecar mtime drift (`metadata.json`, then `statistics.json`, then a fourth
-     * unknown write site we never nailed down). Mokuro/EPUB content is immutable post-
-     * import; everything that mutates as you read (bookmark, chat log, statistics, cover
-     * regeneration, etc.) already syncs through its own key or is per-device-by-design.
-     *
-     * Cost: each `Sync now` for an already-synced book is exactly one HTTPS GET (the
-     * manifest), no zip work, no hash work, no upload. Fast and predictable.
-     *
-     * Escape hatch: if the user genuinely modifies a book's content and wants to push
-     * the new version, they `curl -X DELETE
-     * https://<server>/v1/kv/books/{syncId}/payload.manifest` and run sync again. We
-     * could surface a "re-upload book" button in settings later.
-     *
-     * First-upload-from-this-device path: still works. If no manifest exists, the zip is
-     * built and PUT'd, the manifest is written, and the cache sidecar is updated so
-     * future syncs hit the (also fast) "manifest exists" return.
+     * Upload missing payloads and explicitly re-imported content. An existing remote manifest
+     * prevents an unchanged local book from being zipped or uploaded again; sidecar edits do
+     * not make its immutable content dirty. Upload the ZIP before publishing its manifest.
      */
     suspend fun uploadIfChanged(
         transport: HttpSyncKvTransport,
@@ -403,13 +377,7 @@ class HttpSyncPayloadCodec(
         val keys = HttpSyncPayloadKeys.forFormat(format, syncId)
         val remoteManifest = fetchManifest(transport, syncId, keys)
         if (remoteManifest != null) {
-            // Server already has this book — refuse to re-upload. No matter what mtime
-            // changes have happened locally (and they will happen, all the time — opening
-            // a book, scrolling, chatting, etc.), the manifest's existence is the
-            // authoritative signal that the user has already shipped a copy. We trust
-            // that and stay quiet.
-            // The server copy is authoritative for static book bytes. Persist its verified
-            // content hash so map checks never re-zip/re-hash this already-downloaded book.
+            // Only explicit local re-imports may replace an existing remote payload.
             val contentSha = ensurePayloadContentSha(bookRoot)
             val forceReplacement = hasPayloadContentDirty(bookRoot) &&
                 remoteManifest.contentSha256 != contentSha
@@ -453,42 +421,6 @@ class HttpSyncPayloadCodec(
             true
         } finally {
             zipFile.delete()
-        }
-    }
-
-    /**
-     * Returns the cached payload sha iff the cache sidecar exists AND no file under the
-     * book root (excluding the per-key sidecars [PAYLOAD_EXCLUDED_FILES] which legitimately
-     * change every page turn) has a `lastModified` newer than the cache itself.
-     */
-    private fun readCachedShaIfFresh(bookRoot: File, cacheFile: File): String? {
-        if (!cacheFile.exists()) return null
-        val cacheMtime = cacheFile.lastModified()
-        val anyContentNewerThanCache = bookRoot.walkTopDown().any { file ->
-            file.isFile &&
-                file.name !in PAYLOAD_EXCLUDED_FILES &&
-                !file.isInsideExcludedDir(bookRoot) &&
-                file.lastModified() > cacheMtime
-        }
-        if (anyContentNewerThanCache) return null
-        val raw = runCatching { cacheFile.readText().trim() }.getOrNull() ?: return null
-        return raw.takeIf { it.startsWith("sha256:") }
-    }
-
-    /**
-     * Returns `true` iff every non-excluded file under [bookRoot] has an mtime less than
-     * or equal to [cacheFile]'s. When [cacheFile] doesn't exist, returns `false` because
-     * we have no baseline to compare against. Used as the "extra-careful" gate before
-     * a payload re-upload when the server already has the book.
-     */
-    private fun noContentFileNewerThan(bookRoot: File, cacheFile: File): Boolean {
-        if (!cacheFile.exists()) return false
-        val cacheMtime = cacheFile.lastModified()
-        return bookRoot.walkTopDown().none { file ->
-            file.isFile &&
-                file.name !in PAYLOAD_EXCLUDED_FILES &&
-                !file.isInsideExcludedDir(bookRoot) &&
-                file.lastModified() > cacheMtime
         }
     }
 
@@ -732,6 +664,7 @@ class HttpSyncPayloadCodec(
                 continue
             }
             if (child.name in PAYLOAD_EXCLUDED_FILES) continue
+            if (child.isSidecarTemporaryFile()) continue
             if (child.isInsideExcludedDir(rootDir)) continue
             // Path inside the zip is the file's relative path under the book root, with
             // forward-slash separators so non-Android extractors decode it correctly.

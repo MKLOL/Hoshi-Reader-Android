@@ -7,6 +7,8 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -18,6 +20,22 @@ class AnkiConnectBackendTest {
 
         assertTrue(backend.isAvailable())
         assertEquals(listOf("version"), transport.actions)
+    }
+
+    @Test
+    fun invalidOrUnsupportedVersionResponsesAreNotConnected() {
+        listOf(
+            "{}",
+            """{"result":6}""",
+            """{"error":null}""",
+            """{"result":null,"error":null}""",
+            """{"result":5,"error":null}""",
+            """{"result":"unrelated service","error":null}""",
+            """{"result":6,"error":"permission denied"}""",
+        ).forEach { response ->
+            assertFalse(response, backend(response).isAvailable())
+        }
+        assertTrue(backend("""{"result":7,"error":null}""").isAvailable())
     }
 
     @Test
@@ -86,7 +104,7 @@ class AnkiConnectBackendTest {
     @Test
     fun addNoteStoresMediaAndCanSync() {
         val transport = FakeAnkiConnectTransport(
-            """{"result":null,"error":null}""",
+            """{"result":"hoshi_dict_image.png","error":null}""",
             """{"result":123,"error":null}""",
             """{"result":null,"error":null}""",
         )
@@ -127,6 +145,69 @@ class AnkiConnectBackendTest {
     }
 
     @Test
+    fun mediaReferencesUseTheFilenameActuallyStoredByAnki() {
+        val response = """{"result":"normalized.png","error":null}"""
+        assertEquals(
+            """<img src="normalized.png">""",
+            backend(response).addMediaFromBytes(byteArrayOf(1), "/folder/original.png", "image/png"),
+        )
+        assertEquals(
+            "[sound:normalized.mp3]",
+            backend("""{"result":"normalized.mp3","error":null}""")
+                .addMediaFromBytes(byteArrayOf(2), "original.mp3", "audio/mpeg"),
+        )
+    }
+
+    @Test
+    fun unsuccessfulMediaUploadsDoNotProduceBrokenReferences() {
+        listOf(
+            "{}",
+            """{"result":null,"error":null}""",
+            """{"result":"","error":null}""",
+            """{"result":true,"error":null}""",
+            """{"result":null,"error":"write failed"}""",
+        ).forEach { response ->
+            assertNull(response, backend(response).addMediaFromBytes(byteArrayOf(1), "cover.png", "image/png"))
+        }
+    }
+
+    @Test
+    fun miningSucceedsOnlyWhenAnkiReturnsAnAddedNoteId() {
+        listOf(
+            "{}",
+            """{"result":123}""",
+            """{"result":null,"error":null}""",
+            """{"result":false,"error":null}""",
+            """{"result":0,"error":null}""",
+            """{"result":null,"error":"duplicate"}""",
+        ).forEach { response ->
+            assertFalse(response, backend(response).addSampleNote())
+        }
+        assertTrue(backend("""{"result":1700000000001,"error":null}""").addSampleNote())
+    }
+
+    @Test
+    fun configurationFetchRejectsMalformedDeckLists() {
+        listOf(
+            "{}",
+            """{"result":null,"error":null}""",
+            """{"result":[null],"error":null}""",
+            """{"result":[123],"error":null}""",
+        ).forEach { response ->
+            val error = assertThrows(AnkiFetchException::class.java) { backend(response).fetchDecks() }
+            assertEquals(AnkiFetchFailure.ProviderFailure, error.failure)
+        }
+        assertEquals(emptyList<AnkiDeck>(), backend("""{"result":[],"error":null}""").fetchDecks())
+    }
+
+    @Test
+    fun syncAcceptsItsNullResultButRequiresAValidResponseEnvelope() {
+        assertTrue(backend("""{"result":null,"error":null}""").sync())
+        assertFalse(backend("{}").sync())
+        assertFalse(backend("""{"result":null,"error":"sync failed"}""").sync())
+    }
+
+    @Test
     fun ankiConnectErrorBecomesFetchExceptionMessage() {
         val transport = FakeAnkiConnectTransport("""{"result":null,"error":"permission denied"}""")
         val backend = AnkiConnectBackend("https://anki.example.com", transport)
@@ -140,6 +221,19 @@ class AnkiConnectBackendTest {
 
         assertEquals("permission denied", error.message)
     }
+
+    private fun backend(response: String) =
+        AnkiConnectBackend("https://anki.example.com", FakeAnkiConnectTransport(response))
+
+    private fun AnkiConnectBackend.addSampleNote(): Boolean = addNote(
+        deck = AnkiDeck(1L, "Mining"),
+        noteType = AnkiNoteType(2L, "Basic", listOf("Front")),
+        fieldsByName = mapOf("Front" to "食べる"),
+        tags = emptySet(),
+        allowDupes = false,
+        duplicateScope = AnkiDuplicateScope.Collection,
+        checkDuplicatesAcrossAllModels = false,
+    )
 
     private class FakeAnkiConnectTransport(
         vararg responses: String,

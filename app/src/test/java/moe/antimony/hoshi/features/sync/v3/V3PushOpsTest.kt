@@ -1,18 +1,22 @@
 package moe.antimony.hoshi.features.sync.v3
 
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import moe.antimony.hoshi.epub.BookMetadata
 import moe.antimony.hoshi.epub.BookRepository
 import moe.antimony.hoshi.epub.Bookmark
 import moe.antimony.hoshi.features.ai.AiChatEntry
-import moe.antimony.hoshi.features.ai.AiChatHistoryStore
 import moe.antimony.hoshi.features.sync.http.FakeKvTransport
 import moe.antimony.hoshi.features.sync.http.HttpSyncBookLocks
 import moe.antimony.hoshi.features.sync.http.HttpSyncBookmarkBlob
 import moe.antimony.hoshi.features.sync.http.HttpSyncChatEntryBlob
 import moe.antimony.hoshi.features.sync.http.HttpSyncContentType
 import moe.antimony.hoshi.features.sync.http.HttpSyncDeletedBookRecord
+import moe.antimony.hoshi.features.sync.http.HttpSyncKvFetched
+import moe.antimony.hoshi.features.sync.http.HttpSyncKvTransport
 import moe.antimony.hoshi.features.sync.http.HttpSyncMetadataBlob
 import moe.antimony.hoshi.features.sync.http.HttpSyncPayloadCodec
 import moe.antimony.hoshi.features.sync.http.HttpSyncRevisionStore
@@ -21,6 +25,8 @@ import moe.antimony.hoshi.features.sync.http.chatEntryKeySuffix
 import moe.antimony.hoshi.features.sync.http.chatKey
 import moe.antimony.hoshi.features.sync.http.metadataKey
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.fail
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -41,7 +47,6 @@ class V3PushOpsTest {
 
     private fun newPushOps(repo: BookRepository): V3PushOps = V3PushOps(
         bookRepository = repo,
-        aiHistoryStore = AiChatHistoryStore(),
         aiSettingsRepository = null,
         payloadCodec = HttpSyncPayloadCodec(kotlinx.coroutines.Dispatchers.Unconfined),
         bookLocks = HttpSyncBookLocks(),
@@ -178,51 +183,111 @@ class V3PushOpsTest {
     }
 
     @Test
+    fun pushUsesTheNewerSavedBookmarkInsteadOfThePlanSnapshot() = runBlocking {
+        val repo = newRepo()
+        val root = importMokuroBook(repo, "Advanced")
+        val current = Bookmark(9, 0.5, 90, 2_000_000_000.0)
+        repo.saveBookmark(root, current)
+        val transport = FakeKvTransport()
+
+        assertEquals(PushBookmarkOutcome.Pushed, newPushOps(repo).pushBookmarkConditional(
+            transport, root, "advanced", Bookmark(1, 0.0, 10, 100.0),
+        ))
+
+        val pushed = json.decodeFromString<HttpSyncBookmarkBlob>(
+            transport.kv.getValue(bookmarkKey("advanced")).body.toString(Charsets.UTF_8),
+        )
+        assertEquals(current.chapterIndex, pushed.chapterIndex)
+        assertEquals(current.characterCount, pushed.characterCount)
+    }
+
+    @Test(timeout = 10_000)
+    fun bookmarkSavedDuringRemoteReadCannotBeReplacedByOlderRemoteProgress() = runBlocking {
+        val repo = newRepo()
+        val root = importMokuroBook(repo, "Reading")
+        val old = Bookmark(1, 0.0, 10, 100.0)
+        val current = Bookmark(9, 0.5, 90, 2_000_000_000.0)
+        repo.saveBookmark(root, old)
+        val server = FakeKvTransport().apply {
+            putJson(bookmarkKey("reading"), HttpSyncBookmarkBlob.serializer(),
+                HttpSyncBookmarkBlob(4, 0.1, 40, "2025-01-01T00:00:00Z"), json,
+                lastModified = "2025-01-01T00:00:00Z")
+        }
+        val started = CompletableDeferred<Unit>()
+        val continueRead = CompletableDeferred<Unit>()
+        val transport = object : HttpSyncKvTransport by server {
+            override suspend fun get(key: String): HttpSyncKvFetched? {
+                started.complete(Unit)
+                continueRead.await()
+                return server.get(key)
+            }
+        }
+        val push = async { newPushOps(repo).pushBookmarkConditional(transport, root, "reading", old) }
+        started.await()
+        repo.saveBookmark(root, current)
+        continueRead.complete(Unit)
+
+        assertEquals(PushBookmarkOutcome.Pushed, push.await())
+        assertEquals(current, repo.loadBookmark(root))
+        val pushed = json.decodeFromString<HttpSyncBookmarkBlob>(
+            server.kv.getValue(bookmarkKey("reading")).body.toString(Charsets.UTF_8),
+        )
+        assertEquals(current.characterCount, pushed.characterCount)
+    }
+
+    @Test
+    fun malformedBookmarkDiscoveredAfterPlanningIsNeverOverwritten() = runBlocking {
+        val repo = newRepo()
+        val root = importMokuroBook(repo, "Recoverable")
+        val current = Bookmark(9, 0.5, 90, 2_000_000_000.0)
+        repo.saveBookmark(root, current)
+        val transport = FakeKvTransport()
+        val original = "{ truncated bookmark".toByteArray()
+        transport.put(bookmarkKey("recoverable"), "application/json", original)
+
+        try {
+            newPushOps(repo).pushBookmarkConditional(transport, root, "recoverable", current)
+            fail("A malformed remote bookmark must fail without overwriting it")
+        } catch (_: kotlinx.serialization.SerializationException) {
+            assertTrue(original.contentEquals(transport.kv.getValue(bookmarkKey("recoverable")).body))
+            assertEquals(current, repo.loadBookmark(root))
+        }
+    }
+
+    @Test(timeout = 10_000)
     fun pushBookmarkConditionalHoldsBookLockAcrossReadAndWrite() = runBlocking {
-        // Two concurrent calls on the same book must serialize through the per-book lock.
-        // We can verify this indirectly by giving the transport a one-shot delay on the GET
-        // and confirming that the second caller sees the first caller's stamp on its compare.
         val repo = newRepo()
         val root = importMokuroBook(repo, "Locked")
-        val transport = FakeKvTransport()
-        // Pre-seed an older remote.
-        transport.putJson(
-            bookmarkKey("locked"),
-            HttpSyncBookmarkBlob.serializer(),
-            HttpSyncBookmarkBlob(1, 0.0, 1, "2000-01-01T00:00:00Z"),
-            json,
-            lastModified = "2000-01-01T00:00:00Z",
-        )
-        val locks = HttpSyncBookLocks()
-        val pushOps = V3PushOps(
-            bookRepository = repo,
-            aiHistoryStore = AiChatHistoryStore(),
-            aiSettingsRepository = null,
-            payloadCodec = HttpSyncPayloadCodec(kotlinx.coroutines.Dispatchers.Unconfined),
-            bookLocks = locks,
-        )
-
-        // Run two pushes serially; second one will see the first's pushed stamp (Apple
-        // seconds → RFC 3339). The FakeKvTransport stamps each PUT with an incrementing
-        // synthetic timestamp; verifying both PUTs landed and the lock was correctly held
-        // is enough — corruption would manifest as a partial overwrite.
-        val mutex = locks.mutexFor(root)
-        mutex.lock()
-        try {
-            // Lock is held; if pushOps re-enters the lock from the same coroutine context,
-            // it would deadlock. Use a non-blocking acquire to confirm reentry is the issue.
-            assertTrue("lock should be held by this test", !mutex.tryLock())
-        } finally {
-            mutex.unlock()
+        val server = FakeKvTransport()
+        val started = CompletableDeferred<Unit>()
+        val continueRead = CompletableDeferred<Unit>()
+        var reads = 0
+        val transport = object : HttpSyncKvTransport by server {
+            override suspend fun get(key: String): HttpSyncKvFetched? {
+                reads++
+                if (reads == 1) {
+                    started.complete(Unit)
+                    continueRead.await()
+                }
+                return server.get(key)
+            }
         }
-        // Now an actual call should work.
-        pushOps.pushBookmarkConditional(
-            transport = transport,
-            bookRoot = root,
-            syncId = "locked",
-            localBookmark = Bookmark(7, 0.0, 7, 2_000_000_000.0),
-        )
-        assertNotNull(transport.kv[bookmarkKey("locked")])
+        val pushOps = newPushOps(repo)
+        val first = async {
+            pushOps.pushBookmarkConditional(transport, root, "locked", Bookmark(7, 0.0, 70, 2_000_000_000.0))
+        }
+        started.await()
+        val second = async(start = CoroutineStart.UNDISPATCHED) {
+            pushOps.pushBookmarkConditional(transport, root, "locked", Bookmark(1, 0.0, 10, 100.0))
+        }
+        assertEquals("Second push must wait before its GET", 1, reads)
+        assertFalse(second.isCompleted)
+        continueRead.complete(Unit)
+
+        assertEquals(PushBookmarkOutcome.Pushed, first.await())
+        assertEquals(PushBookmarkOutcome.AppliedRemote, second.await())
+        assertEquals(2, reads)
+        assertEquals(70, repo.loadBookmark(root)?.characterCount)
     }
 
     // --- chat -----------------------------------------------------------------
@@ -230,14 +295,13 @@ class V3PushOpsTest {
     @Test
     fun pushChatIsIdempotentOnSameKey() = runBlocking {
         val repo = newRepo()
-        val root = importMokuroBook(repo, "Chat Idem")
         val transport = FakeKvTransport()
         val pushOps = newPushOps(repo)
         val entry = AiChatEntry("hi", "p", "m", "r", 1.0)
         val key = chatKey("chat_idem", chatEntryKeySuffix(entry.timestampSeconds, entry.bubbleText, entry.response))
 
-        pushOps.pushChat(transport, root, "chat_idem", entry, key)
-        pushOps.pushChat(transport, root, "chat_idem", entry, key)
+        pushOps.pushChat(transport, entry, key)
+        pushOps.pushChat(transport, entry, key)
 
         // Same key → exactly one entry.
         assertEquals(1, transport.kv.keys.count { it.startsWith("books/chat_idem/chat/") })

@@ -1,5 +1,6 @@
 package moe.antimony.hoshi.features.sync.http
 
+import moe.antimony.hoshi.storage.writeSidecarAtomically
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.MapSerializer
 import kotlinx.serialization.builtins.serializer
@@ -97,27 +98,6 @@ class HttpSyncShelfStateStore(
          * would not serialize them. See [HttpSyncDeletedBookStateStore.lock].
          */
         val lock = Any()
-    }
-}
-
-/**
- * Atomic sidecar write: write to a `.tmp` sibling, then rename over the target. A bare
- * `writeText` truncates the file before writing, so a crash mid-write leaves a torn (or
- * empty) sidecar — for the revision sidecar that silently resets every rev to 0, for the
- * shelf sidecar it wipes every placement record. POSIX `rename` within one directory is
- * atomic; mirrors iOS's `Data.write(options: .atomic)`.
- */
-internal fun writeSidecarAtomically(file: File, text: String) {
-    val tmp = File(file.parentFile, "${file.name}.tmp")
-    tmp.writeText(text)
-    if (!tmp.renameTo(file)) {
-        // Rename can fail on exotic filesystems; fall back to delete + rename, then to a
-        // plain write (no worse than the previous behavior) as the last resort.
-        file.delete()
-        if (!tmp.renameTo(file)) {
-            tmp.delete()
-            file.writeText(text)
-        }
     }
 }
 
