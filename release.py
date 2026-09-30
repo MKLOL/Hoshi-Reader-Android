@@ -9,20 +9,22 @@ Usage:
     ./release.py            bump the patch number   (x.y.Z)
     ./release.py minor      bump the minor number   (x.Y.0)
     ./release.py major      bump the major number   (X.0.0)
+    ./release.py --resume   finish a release whose push or publication failed after
+                            its commit, reusing the same verified APK snapshot
 
-Run it from the repo root with a clean working tree. Commit any code changes
-first: this script only commits the version bump and the changelog.
+Run it from the repo root with a clean working tree and Python 3.11+. Commit any code
+changes first: this script only commits the version bump and the changelog.
 """
 
 from __future__ import annotations
 
 import datetime
+import json
 import os
 import re
 import shutil
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent
@@ -42,8 +44,47 @@ KEYSTORE_ENV = (
 )
 
 
+UNDO_VERSION_EDITS = (
+    "The version files were changed but nothing was committed — undo the bump with\n"
+    "    git checkout HEAD -- app/build.gradle.kts docs/CHANGELOG.md"
+)
+RESUME_HINT = (
+    "The release commit exists; do not undo it. Fix the problem above, then run\n"
+    "    ./release.py --resume\n"
+    "  It pushes missing refs, replaces an unpublished draft left by this script,\n"
+    "  and uploads the same verified APK. Published releases are never replaced."
+)
+SMOKE_RECEIPT = Path("build") / "reports" / "release-gate" / "release-smoke.json"
+
+
+class VersionFilesEdited(SystemExit):
+    """Someone else edited the version files mid-release; undoing them would discard that work."""
+
+
+def branch_push_rejected_hint(branch: str) -> str:
+    return (
+        f"origin/{branch} may have commits this release does not contain. Merge them, keeping the\n"
+        f"  release commit (do not rebase: that rewrites it and the verified tag would no longer match):\n"
+        f"    git pull --no-rebase origin {branch}\n"
+        f"    ./release.py --resume\n"
+        f"  {RESUME_HINT}"
+    )
+
+
 def die(msg: str) -> None:
     sys.exit(f"\n  error: {msg}")
+
+
+def describe(error: BaseException) -> str:
+    if isinstance(error, subprocess.CalledProcessError):
+        return f"command failed: {' '.join(str(c) for c in error.cmd)}"
+    return str(error) or type(error).__name__
+
+
+def require_python() -> None:
+    # hashlib.file_digest (3.11) verifies the upload only after the tag is pushed; fail first.
+    if sys.version_info < (3, 11):
+        die(f"Python 3.11+ is required (this is {sys.version.split()[0]}); run it with python3.11 or newer")
 
 
 def step(msg: str) -> None:
@@ -72,7 +113,10 @@ def require_release_source(expected_head: str, expected_files: dict[str, bytes] 
     if changed - expected_files.keys():
         die("source changed during release verification/build; commit it and rerun verification")
     if any((REPO / path).read_bytes() != content for path, content in expected_files.items()):
-        die("release version files changed unexpectedly during the build")
+        raise VersionFilesEdited(
+            "\n  error: app/build.gradle.kts or docs/CHANGELOG.md changed during the build, after this\n"
+            "  script bumped them. Nothing was committed, and those edits are yours: review them with\n"
+            "  `git diff`, restore the pre-release version by hand, and rerun ./release.py.")
 
 
 def sdk_dir() -> Path:
@@ -183,14 +227,135 @@ def update_changelog(new_name: str) -> str:
     raise AssertionError  # unreachable
 
 
+def candidate_dir(tag: str) -> Path:
+    """The verified APK, notes and receipt survive a failed publication so --resume reuses them."""
+    return REPO / "build" / "release-candidates" / tag
+
+
+def write_receipt(directory: Path, receipt: dict) -> None:
+    (directory / "receipt.json").write_text(json.dumps(receipt, indent=2) + "\n")
+
+
+def require_github_cli() -> None:
+    try:
+        subprocess.run(["gh", "auth", "status"], check=True, capture_output=True)
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        die("the GitHub CLI is missing or not logged in (run `gh auth login`)")
+
+
+def publish_candidate(directory: Path, receipt: dict, repo: str, branch: str, resume: bool) -> None:
+    tag = receipt["tag"]
+    step("Pushing to origin")
+    try:
+        run(["git", "push", "origin", branch])
+    except (subprocess.SubprocessError, OSError) as error:
+        die(f"{describe(error)}\n  {branch_push_rejected_hint(branch)}")
+    try:
+        run(["git", "push", "origin", tag])
+
+        step("Publishing the GitHub Release")
+        command = [sys.executable, "tools/release_artifacts.py", "--apk", str(directory / "app-release.apk"),
+                   "--repo", repo, "--tag", tag, "--notes", str(directory / "notes.md"),
+                   "--expected-sha256", receipt["sha256"]]
+        if resume:
+            command.append("--resume")
+        run(command)
+    except (subprocess.SubprocessError, OSError, ValueError) as error:
+        die(f"{describe(error)}\n  {RESUME_HINT}")
+    shutil.rmtree(directory, ignore_errors=True)
+
+
+def pending_releases() -> list[dict]:
+    """Receipts of releases that were committed but never finished publishing."""
+    root = REPO / "build" / "release-candidates"
+    pending = []
+    for receipt_file in sorted(root.glob("*/receipt.json")) if root.is_dir() else []:
+        try:
+            receipt = json.loads(receipt_file.read_text())
+        except (OSError, ValueError):
+            continue
+        if receipt.get("commit"):
+            pending.append(receipt)
+    return pending
+
+
+def contains_commit(commit: str) -> bool:
+    try:
+        out(["git", "merge-base", "--is-ancestor", commit, "HEAD"])
+        return True
+    except subprocess.CalledProcessError as error:
+        if error.returncode == 1:
+            return False
+        raise
+
+
+def resume() -> None:
+    step("Checking the interrupted release")
+    if not BUILD_GRADLE.exists():
+        die("run this from the repo root")
+    if out(["git", "status", "--porcelain"]):
+        die("working tree is not clean — commit or stash your changes first")
+    require_github_cli()
+    repo = origin_repo()
+    code, name = read_version()
+    tag = f"v{name}"
+    directory = candidate_dir(tag)
+    receipt_file = directory / "receipt.json"
+    if not receipt_file.is_file():
+        if out(["git", "tag", "-l", tag]):
+            die(f"{tag} is tagged, but its verified APK snapshot ({directory}) is gone — for example "
+                "build/ was deleted. Resume only publishes the exact bytes that passed the gate, so it "
+                f"cannot finish {tag}. Check whether GitHub already has the {tag} release; if not, "
+                f"publish {tag} from its tag with the manual release workflow, or leave {tag} unreleased "
+                "and cut the next patch release")
+        die(f"nothing to resume: {tag} has no verified release candidate in {directory} and no tag. "
+            "Start a new release with ./release.py")
+    receipt = json.loads(receipt_file.read_text())
+    if (receipt.get("tag"), receipt.get("version_name"), receipt.get("version_code")) != (tag, name, code):
+        die(f"the saved candidate is for {receipt.get('tag')}, but app/build.gradle.kts is at {tag} ({code})")
+    if receipt.get("smoke_passed") is not True:
+        die("the saved candidate never passed the release APK smoke test; start a new release")
+    release_commit = receipt.get("commit")
+    if not release_commit:
+        die(f"the saved {tag} candidate was never committed; undo the version edits and rerun ./release.py")
+    branch = out(["git", "rev-parse", "--abbrev-ref", "HEAD"])
+    if branch == "HEAD":
+        die(f"HEAD is detached. Check out the branch that contains the {tag} release commit "
+            f"{release_commit} (usually {receipt.get('branch') or 'the release branch'}) and rerun --resume, "
+            "so the branch is pushed with the release")
+    if receipt.get("branch") and branch != receipt["branch"]:
+        die(f"{tag} was released from {receipt['branch']}, but {branch} is checked out; "
+            f"check out {receipt['branch']} and rerun --resume")
+    # A merge of the remote branch after a rejected push keeps the release commit reachable.
+    if not contains_commit(release_commit):
+        die(f"HEAD does not contain the {tag} release commit {release_commit} (a rebase or reset rewrote "
+            f"it?). Check out a branch that contains it — merge rather than rebase — and rerun --resume")
+    from tools.release_artifacts import digest
+    candidate = directory / "app-release.apk"
+    if not candidate.is_file() or digest(candidate) != receipt.get("sha256"):
+        die(f"the verified APK snapshot in {directory} is missing or changed; it cannot be published")
+    if out(["git", "tag", "-l", tag]):
+        if out(["git", "rev-parse", f"{tag}^{{commit}}"]) != release_commit:
+            die(f"tag {tag} does not point at the release commit {release_commit}")
+    else:
+        step(f"Tagging {tag}")
+        run(["git", "tag", "-a", tag, release_commit, "-m", f"Release {name}"])
+    publish_candidate(directory, receipt, repo, branch, resume=True)
+    print(f"\n✓ Released {tag}  ->  https://github.com/{repo}/releases/tag/{tag}")
+
+
 def main() -> None:
     os.chdir(REPO)
     part = sys.argv[1] if len(sys.argv) > 1 else "patch"
     if part in ("-h", "--help"):
         print(__doc__)
         return
+    require_python()
+    if part == "--resume":
+        resume()
+        return
     if part not in ("patch", "minor", "major"):
-        die(f"unknown argument '{part}' — use patch, minor, major, or --help")
+        die(f"unknown argument '{part}' — use patch, minor, major, --resume, or --help")
 
     step("Checking preconditions")
     if not BUILD_GRADLE.exists():
@@ -201,13 +366,14 @@ def main() -> None:
     source_head = out(["git", "rev-parse", "HEAD"])
     if branch == "HEAD":
         die("detached HEAD — check out a branch first")
-    try:
-        subprocess.run(["gh", "auth", "status"], check=True, capture_output=True)
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        die("the GitHub CLI is missing or not logged in (run `gh auth login`)")
+    require_github_cli()
     ndk = resolve_ndk()
     repo = origin_repo()
 
+    for pending in pending_releases():
+        die(f"{pending.get('tag')} was committed ({pending.get('commit')}) but never finished publishing. "
+            "Run ./release.py --resume to finish it. If you are abandoning it on purpose, delete "
+            f"{candidate_dir(str(pending.get('tag')))} first (and its tag and draft, if any)")
     cur_code, cur_name = read_version()
     new_name = bump(cur_name, part)
     new_code = max(version_code(new_name), cur_code + 1)
@@ -229,42 +395,62 @@ def main() -> None:
     if not notes:
         print("    note: the [Unreleased] changelog section was empty")
 
-    step("Building the debug-signed release APK")
+    # Nothing is committed until the exact APK is built, launched, and upgrade-checked.
+    # Any failure in this block leaves only the version edits, so say how to undo them.
+    directory = candidate_dir(tag)
     try:
+        step("Building the debug-signed release APK")
         run(["./gradlew", ":app:assembleRelease", "--console=plain"], env=env)
-    except subprocess.CalledProcessError:
-        die(
-            "the build failed. The version files were changed but nothing was "
-            "committed — undo the bump with\n"
-            "    git checkout app/build.gradle.kts docs/CHANGELOG.md"
-        )
-    if not RELEASE_APK.exists():
-        die(f"the build finished but {RELEASE_APK} is missing")
+        if not RELEASE_APK.exists():
+            die(f"the build finished but {RELEASE_APK} is missing")
 
-    with tempfile.TemporaryDirectory(prefix="hoshi-release-candidate-") as directory:
-        # Keep the verified build private across commit/tag/push. Another local build
-        # may replace Gradle's output while those commands or the upload are running.
-        candidate = Path(directory) / "app-release.apk"
+        # Keep the verified build private across commit/tag/push/upload, and after a failed
+        # publication so --resume uploads the same bytes. Another local build may replace
+        # Gradle's output while those commands or the upload are running.
+        shutil.rmtree(directory, ignore_errors=True)
+        directory.mkdir(parents=True)
+        candidate = directory / "app-release.apk"
         shutil.copyfile(RELEASE_APK, candidate)
-        step("Verifying upgrade compatibility before committing or pushing")
-        from tools.release_artifacts import verify_candidate
-        verify_candidate(candidate, repo, tag)
-        require_release_source(source_head, version_files)
+        candidate.chmod(0o444)
+        (directory / "notes.md").write_text((notes or f"Release {new_name}") + "\n")
 
-        step(f"Committing and tagging {tag}")
+        step("Launching the exact release APK on a disposable emulator")
+        from tools.release_artifacts import digest, verify_candidate
+        sha256 = digest(candidate)
+        (REPO / SMOKE_RECEIPT).unlink(missing_ok=True)
+        run([sys.executable, "tools/verify_release.py", "--smoke-apk", str(candidate)], env=env)
+        smoked = json.loads((REPO / SMOKE_RECEIPT).read_text()).get("apk_sha256")
+        if smoked != sha256 or digest(candidate) != sha256:
+            die(f"the smoke-tested APK ({smoked}) is not the release candidate ({sha256})")
+
+        step("Verifying upgrade compatibility before committing or pushing")
+        verify_candidate(candidate, repo, tag, before_commit=True)
+        require_release_source(source_head, version_files)
+        receipt = {"tag": tag, "version_name": new_name, "version_code": new_code, "sha256": sha256,
+                   "smoke_passed": True, "source_head": source_head, "branch": branch, "commit": None}
+        write_receipt(directory, receipt)
+
+        step(f"Committing {tag}")
         run(["git", "add", "app/build.gradle.kts", "docs/CHANGELOG.md"])
         run(["git", "commit", "-m", f"chore: release {new_name}"])
+    except VersionFilesEdited:
+        shutil.rmtree(directory, ignore_errors=True)
+        raise
+    except SystemExit as error:
+        shutil.rmtree(directory, ignore_errors=True)
+        sys.exit(f"{error.code}\n  {UNDO_VERSION_EDITS}")
+    except (subprocess.SubprocessError, OSError, ValueError) as error:
+        shutil.rmtree(directory, ignore_errors=True)
+        die(f"{describe(error)}\n  {UNDO_VERSION_EDITS}")
+
+    receipt["commit"] = out(["git", "rev-parse", "HEAD"])
+    write_receipt(directory, receipt)
+    step(f"Tagging {tag}")
+    try:
         run(["git", "tag", "-a", tag, "-m", f"Release {new_name}"])
-
-        step("Pushing to origin")
-        run(["git", "push", "origin", branch])
-        run(["git", "push", "origin", tag])
-
-        step("Publishing the GitHub Release")
-        notes_file = Path(directory) / "notes.md"
-        notes_file.write_text((notes or f"Release {new_name}") + "\n")
-        run([sys.executable, "tools/release_artifacts.py", "--apk", str(candidate),
-             "--repo", repo, "--tag", tag, "--notes", str(notes_file)])
+    except subprocess.CalledProcessError as error:
+        die(f"{describe(error)}\n  {RESUME_HINT}")
+    publish_candidate(directory, receipt, repo, branch, resume=False)
 
     print(f"\n✓ Released {tag}  ->  https://github.com/{repo}/releases/tag/{tag}")
 

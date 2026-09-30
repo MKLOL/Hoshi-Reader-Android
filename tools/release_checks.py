@@ -4,6 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 import re
 import xml.etree.ElementTree as ET
+import zipfile
 
 PREFIX = "moe.antimony.hoshi."
 REQUIRED_JVM_CLASSES = {
@@ -135,3 +136,78 @@ def check_instrumentation(output: str, required: tuple[str, ...] = ANDROID_CLASS
             summary != [str(len(passed))] or final_codes != ["-1"] or missing):
         raise ValueError(f"Incomplete Android run: {len(passed)} passed, missing classes {sorted(missing)}")
     return len(passed)
+
+
+def apk_native_abis(apk: Path) -> set[str]:
+    """ABIs the APK ships native code for; an empty set means it runs on any ABI."""
+    with zipfile.ZipFile(apk) as archive:
+        return {parts[1] for parts in (name.split("/") for name in archive.namelist())
+                if len(parts) == 3 and parts[0] == "lib" and parts[2].endswith(".so")}
+
+
+def check_device_abi(apk_abis: set[str], device_abilist: str) -> None:
+    """The release APK must run natively or through the image's translation, never silently not at all."""
+    device = {abi.strip() for abi in device_abilist.split(",") if abi.strip()}
+    if not device:
+        raise ValueError("Cannot read the emulator's supported ABIs")
+    if apk_abis and not apk_abis & device:
+        raise ValueError(
+            f"Release APK smoke test cannot run: the APK ships only {sorted(apk_abis)}, but this emulator "
+            f"supports {sorted(device)}. Use a host/system image that can execute {sorted(apk_abis)}; "
+            "the release is not published without this check.")
+
+
+def launcher_component(resolve_output: str, package: str) -> str:
+    """Parses `cmd package resolve-activity --brief`; its last line is the launcher component."""
+    lines = [line.strip() for line in resolve_output.splitlines() if line.strip()]
+    component = lines[-1] if lines else ""
+    if not component.startswith(package + "/"):
+        raise ValueError(f"Release APK has no launcher activity for {package}: {resolve_output.strip()!r}")
+    return component
+
+
+def check_launch(output: str) -> bool:
+    """`am start -W` exits zero even when the launch failed; require an explicit status.
+
+    Returns False for `Status: timeout`: a slow emulator may not draw the first frame within
+    the wait, so the caller must then prove the process is alive and its activity focused.
+    """
+    if re.search(r"^Error", output, re.MULTILINE):
+        raise ValueError(f"Release APK did not launch: {output.strip()}")
+    if re.search(r"^Status: ok\s*$", output, re.MULTILINE):
+        return True
+    if re.search(r"^Status: timeout\s*$", output, re.MULTILINE):
+        return False
+    raise ValueError(f"Release APK did not launch: {output.strip()}")
+
+
+def app_has_focus(window_dump: str, package: str) -> bool:
+    """`dumpsys window`: the focused window must be one of the package's activities.
+
+    An ANR or crash dialog takes focus with a title such as `Application Not Responding:
+    <package>`, which has no `<package>/` component and so does not count.
+    """
+    focus = re.search(r"^\s*mCurrentFocus=(.*)$", window_dump, re.MULTILINE)
+    return bool(focus and re.search(r"\s" + re.escape(package) + r"/\S", focus.group(1)))
+
+
+def check_smoke(package: str, pid_at_launch: str, pid_after_wait: str, logcat: str) -> None:
+    """Fails when the launched release process crashed, hung, restarted, or died."""
+    # `pkg:service` processes belong to the app; `pkg.debug` is a different application.
+    name = re.escape(package) + r"(?![\w.])"
+    process = name + r"(?::[\w.]+)?"
+    problems = [
+        (r"AndroidRuntime.*Process: " + process, "crashed with an uncaught exception"),
+        (r"ANR in " + process, "stopped responding (ANR)"),
+        (r">>> " + process + r" <<<", "crashed in native code"),
+        (r"Process " + process + r" \(pid \d+\) has died", "process died"),
+        (r"Force finishing activity " + name, "was force-finished"),
+    ]
+    for pattern, problem in problems:
+        if re.search(pattern, logcat):
+            raise ValueError(f"Release APK {problem} after launch; see the smoke logcat")
+    first, last = pid_at_launch.split(), pid_after_wait.split()
+    if len(first) != 1 or not first[0].isdigit():
+        raise ValueError(f"Release APK process was not running after launch: {pid_at_launch.strip()!r}")
+    if last != first:
+        raise ValueError(f"Release APK process did not stay alive (pid {first[0]} -> {pid_after_wait.strip() or 'none'})")

@@ -1,11 +1,15 @@
 # Sync release testing
 
-Both supported publication paths (`release.py` and `.github/workflows/release-apk.yml`)
-require the same command:
+Releases are published by `./release.py`. It runs the gate below before changing any
+version file:
 
 ```bash
 python3 tools/verify_release.py
 ```
+
+`.github/workflows/release-apk.yml` is manual (`workflow_dispatch`) only. It is meant for
+keystore-signed releases and runs the same gate and release APK smoke test. Tag pushes do
+not start it, so a local release never races a second publisher.
 
 Use Python 3.11+ and the normal JDK/SDK/NDK/Rust build environment from `bootstrap.sh`.
 Install `emulator` and `system-images;android-36;google_apis;arm64-v8a` on Apple Silicon,
@@ -27,16 +31,78 @@ it afterward. It never selects an existing connected phone, tablet, or emulator.
    and selected Compose/WebView interactions on the disposable emulator. Every selected
    class must run; skipped tests, crashes, incomplete output, and zero-test success
    messages are failures, even when `adb` itself exits successfully.
-5. Before publication, the candidate must update the previous APK's package/signature,
-   increase its version code, and match its tag. The local release snapshots its APK
-   before verification and retains that same private copy through commit, push, and upload.
-   The draft's downloaded APK must match its SHA-256 before it becomes public/latest.
-   Existing releases/assets are never overwritten; competing publishers fail safely.
+5. The gate runs the debug build. After the version bump, `release.py` builds the minified,
+   resource-shrunk, arm64-only release APK and snapshots it. It runs
+   `tools/verify_release.py --smoke-apk <snapshot>`, which boots another disposable AVD.
+   That check installs the exact bytes that will be published, launches the launcher
+   activity, waits for it to hold window focus, sends key presses, and watches it for
+   20 seconds. It covers startup and first-screen breakage (R8 or resource shrinking on
+   the launch path); code the launch never runs is not exercised.
+   - Any of these fails the release: a crash or native crash (including secondary `:name`
+     processes), an ANR, the process restarting or dying, a failed launch, or the activity
+     never taking focus or losing it to an error dialog after input. A launch that only
+     timed out waiting for the first frame passes if the activity is focused within 60 s.
+   - An emulator that cannot execute the APK's ABIs fails loudly instead of skipping. Apple
+     Silicon hosts use an arm64 image. An x86_64 image must report `arm64-v8a` (ARM
+     translation) in `ro.product.cpu.abilist`.
+   - Logs are the `release-smoke*` files in the reports directory.
+   - Nothing is committed until this passes and its recorded SHA-256 matches the candidate.
+6. Before publication, the candidate must meet three conditions:
+   - it can update the previous APK's package and signature;
+   - its version code is higher;
+   - it matches its tag.
+
+   The same private snapshot is used for the smoke test, commit, push, and upload. The
+   draft's downloaded APK must match its SHA-256 before it becomes public/latest. Published
+   releases and assets are never overwritten. Competing publishers fail safely.
 
 The local release script also rejects source/HEAD changes during verification or build.
-GitHub runs on the checked-out release tag. Reports and emulator logs are kept under
+The manual GitHub workflow runs on the checked-out release tag. Reports and emulator logs are kept under
 `build/reports/release-gate/`; workflows upload them even on failure. A successful full
 run writes `summary.json`. A failed run removes any previous success summary.
+
+## Recovering an interrupted release
+
+Where the failure happens decides the fix. `release.py` prints the matching instruction.
+
+- **Before the release commit** (gate, build, smoke test, upgrade check, commit hook).
+  Only `app/build.gradle.kts` and `docs/CHANGELOG.md` changed. Undo them with
+  `git checkout HEAD -- app/build.gradle.kts docs/CHANGELOG.md` and rerun `./release.py`.
+  - If someone else edited those two files during the build, the script says so and does
+    not suggest that command, which would discard their edits.
+  - A draft that already exists for the new tag stops the run before the commit; delete it
+    with the printed `gh release delete` command.
+- **After the release commit** (tagging, push, upload, checksum, publication). Do not undo
+  the commit. Fix the cause (network, `gh auth`, a stuck upload) and run
+  `./release.py --resume` on the release branch.
+  - A rejected branch push means `origin` gained commits during the gate. Merge them with
+    `git pull --no-rebase origin <branch>` (never rebase: that rewrites the release commit),
+    then resume. Resume accepts any HEAD on the release branch that contains the release
+    commit, pushes the branch, and keeps the tag on the release commit.
+  - The verified snapshot, notes, and a receipt stay in `build/release-candidates/<tag>/`.
+    The receipt records the SHA-256, the release commit and branch, and that the smoke
+    test passed. `./release.py` refuses to start another release while one is pending.
+  - Resume refuses to continue in any of these cases:
+    - HEAD is detached, on another branch, or no longer contains the release commit;
+    - the tag points elsewhere;
+    - the snapshot bytes changed;
+    - the smoke test never passed.
+  - If the tag is missing, resume recreates it on the recorded commit. It then pushes
+    missing refs (already-pushed refs are no-ops).
+  - It deletes only a single unpublished draft that this tooling created. Drafts it creates
+    carry a hidden `<!-- sui-release-tool -->` marker; the title must be `Sui Manga Reader
+    <tag>` and the assets only the APK and `LICENSE`. It re-reads the draft by id and deletes
+    that id, so a release published meanwhile is never removed. The tag stays.
+  - It then uploads the same snapshot (checked against the receipt's SHA-256), checks its
+    downloaded SHA-256, and publishes.
+  - If publication already happened but the response was lost, a published release whose
+    APK matches the receipt counts as done. A published release with other or missing
+    bytes is never changed. Several drafts or an unmarked, renamed, or extra-asset draft stop
+    the run for manual review.
+  - The directory is removed after a successful publish. If it is gone (for example,
+    `build/` was deleted) resume cannot finish the tag, because only verified bytes are
+    published; publish that tag with the manual workflow or cut the next patch release.
+- `tools/release_artifacts.py --resume` applies the same draft rule when publishing by hand.
 
 ## Regression coverage
 
@@ -56,6 +122,8 @@ run writes `summary.json`. A failed run removes any previous success summary.
 | Shelf badges misreport offline translations | Availability tests reject empty, corrupt, unsupported, and wrong-book sidecars, exercise cache updates/deletion, and Compose checks the badge accessibility state. |
 | Interrupted or partial uploads damage books | Server contract and Android failure/race suites cover multipart ordering/retry/cancel, failures, preservation of old payloads, manifests, and later convergence. |
 | Filesystem optimization hides a change | Cache tests cover replacement with equal size/time, deletion/restoration, corruption, concurrent changes, bounded eviction, and real Android file identity. |
+| Minification or resource shrinking breaks the shipped APK's launch path | The release APK smoke test installs the exact published bytes on a fresh AVD, requires the activity to hold focus before and after key presses, and fails on crash, ANR, native crash (including secondary processes), process death/restart, failed launch, or an emulator that cannot execute the APK's ABI. Code the launch never reaches is not covered. |
+| An interrupted publish leaves a stuck draft, pushed tag, or rejected branch push | `tools/release_tests` cover undo hints before the commit, snapshot retention after it, the pending-release refusal, `--resume` guards (branch, ancestry, tag, bytes, smoke receipt), resume after merging a rejected push, idempotent resume after a lost publish response, and marker-only draft deletion by id that never touches published or foreign releases. |
 | Other important data paths regress | Full JVM coverage includes backup traversal/CRC/cancellation, stale cleanup previews, atomic sidecars, import routing, Anki validation/media, and reader state. Android also checks EPUB import, iOS ZIP64 payloads, Unicode lookup, settings typing, and bookshelf sync success/error UI. |
 
 Request counts are assertions; wall-clock benchmark numbers are diagnostic only. Races

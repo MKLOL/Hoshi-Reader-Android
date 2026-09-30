@@ -1,10 +1,12 @@
 ---
 name: Release APK
 
+# Manual only. `./release.py` is this repository's release path: it verifies, tags, pushes,
+# and publishes locally, so a tag-push trigger would start a second, competing publisher
+# for every local release. Run this workflow only for keystore-signed releases whose
+# package and certificate can update the previous published APK; the publisher refuses
+# anything else before creating a draft.
 "on":
-  push:
-    tags:
-      - "v*"
   workflow_dispatch:
     inputs:
       tag_name:
@@ -36,11 +38,7 @@ jobs:
           INPUT_TAG: ${{ inputs.tag_name }}
         run: |
           set -euo pipefail
-          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
-            input_tag="${INPUT_TAG}"
-          else
-            input_tag="${GITHUB_REF_NAME}"
-          fi
+          input_tag="${INPUT_TAG}"
 
           version_name="${input_tag#v}"
           if [[ ! "${version_name}" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
@@ -239,6 +237,21 @@ jobs:
 
           echo "apk_asset=${apk_asset}" >> "${GITHUB_OUTPUT}"
 
+      # The gate above runs the debug build. This installs and launches the exact minified
+      # APK that will be published. It fails, rather than skips, when the runner's emulator
+      # image cannot execute the APK's ABIs.
+      - name: Launch the release APK on a disposable emulator
+        shell: bash
+        run: python3 tools/verify_release.py --smoke-apk "${{ steps.assets.outputs.apk_asset }}"
+
+      - name: Preserve release APK smoke reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-apk-smoke
+          path: build/reports/release-gate/release-smoke*
+          if-no-files-found: ignore
+
       - name: Generate release notes from CHANGELOG
         shell: bash
         run: |
@@ -285,8 +298,7 @@ jobs:
           apk_asset="${{ steps.assets.outputs.apk_asset }}"
           prerelease_flag=()
 
-          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" \
-            && "${{ inputs.prerelease }}" == "true" ]]; then
+          if [[ "${{ inputs.prerelease }}" == "true" ]]; then
             prerelease_flag=(--prerelease)
           fi
 
