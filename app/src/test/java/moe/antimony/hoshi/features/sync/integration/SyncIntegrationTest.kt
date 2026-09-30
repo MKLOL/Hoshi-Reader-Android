@@ -584,14 +584,17 @@ class SyncIntegrationTest(private val engineA: SyncEngine, private val engineB: 
     }
 
     @Test
-    fun failedArchiveDownloadLeavesNothingBehindAndTheNextSyncRecovers() = runBlocking {
+    fun exhaustedArchiveRetriesLeaveNoPartialBookAndTheNextSyncRecovers() = runBlocking {
         val (a, _) = publishLibraryAndSyncFreshDevice()
         val zipPath = "/v1/kv/" + payloadZipKey(SyncCorpus.MANGA_SYNC_ID)
-        server.failNext(zipPath, status = 500, count = 1, method = "GET")
+        server.clearRequests()
+        server.failNext(zipPath, status = 500, count = 3, method = "GET")
 
         val c = device("C", engineB)
         val broken = c.sync()
         assertTrue("the failure is reported: ${broken.errors}", broken.errors.any { SyncCorpus.MANGA_SYNC_ID in it })
+        assertEquals("A failing transfer has a bounded retry budget", 3,
+            server.requests().count { it.method == "GET" && it.path == zipPath })
         assertNull("no half-imported book", c.bookOrNull(SyncCorpus.MANGA_SYNC_ID))
         assertNotNull("the unaffected book still imported", c.bookOrNull(SyncCorpus.NOVEL_SYNC_ID))
         assertNoImportLeftovers(c)

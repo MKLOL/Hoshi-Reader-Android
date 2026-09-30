@@ -41,6 +41,7 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.input.rememberTextFieldState
+import androidx.compose.material.icons.rounded.Translate
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.MenuBook
@@ -306,6 +307,7 @@ fun BookshelfView(
         sections = uiState.sections,
         bookProgressById = uiState.bookProgressById,
         coverSourcesById = uiState.coverSourcesById,
+        pretranslatedBookIds = uiState.pretranslatedBookIds,
         sortOption = uiState.sortOption,
         hasLoadedBooks = uiState.hasLoadedBooks,
         isLoading = uiState.isLoading,
@@ -672,6 +674,7 @@ private fun BooksTab(
     sections: List<BookshelfSectionModel>,
     bookProgressById: Map<String, Double>,
     coverSourcesById: Map<String, BookCoverSource>,
+    pretranslatedBookIds: Set<String>,
     sortOption: BookSortOption,
     hasLoadedBooks: Boolean,
     isLoading: Boolean,
@@ -816,6 +819,7 @@ private fun BooksTab(
                                             entry = entry,
                                             progress = bookProgressById[entry.metadata.id] ?: 0.0,
                                             coverSource = coverSourcesById[entry.metadata.id],
+                                            hasPretranslations = entry.metadata.id in pretranslatedBookIds,
                                             layoutSpec = layoutSpec,
                                             isSelecting = isSelecting,
                                             isSelected = entry.metadata.id in selectedBookIds,
@@ -867,6 +871,7 @@ private fun BooksTab(
                                         section.books.take(layoutSpec.collapsedShelfPreviewColumns(contentWidthDp)).forEach { entry ->
                                             BookCoverCard(
                                                 coverSource = coverSourcesById[entry.metadata.id],
+                                                hasPretranslations = entry.metadata.id in pretranslatedBookIds,
                                                 modifier = Modifier.width(collapsedCoverWidthDp.dp),
                                             )
                                         }
@@ -1142,6 +1147,7 @@ private fun BookGridCell(
     entry: BookEntry,
     progress: Double,
     coverSource: BookCoverSource?,
+    hasPretranslations: Boolean,
     layoutSpec: MainShellLayoutSpec,
     isSelecting: Boolean,
     isSelected: Boolean,
@@ -1164,7 +1170,7 @@ private fun BookGridCell(
         ),
     ) {
         Box {
-            BookCoverCard(coverSource = coverSource)
+            BookCoverCard(coverSource = coverSource, hasPretranslations = hasPretranslations)
             if (isSelecting) {
                 Icon(
                     imageVector = if (isSelected) {
@@ -1224,6 +1230,7 @@ internal suspend fun loadBookProgressById(
 @Composable
 internal fun BookCoverCard(
     coverSource: BookCoverSource?,
+    hasPretranslations: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     val cachedBitmap = remember(coverSource?.cacheKey) {
@@ -1267,6 +1274,18 @@ internal fun BookCoverCard(
         } else {
             Box(
                 modifier = coverModifier.background(coverPlaceholderColor),
+            )
+        }
+        if (hasPretranslations) {
+            Icon(
+                imageVector = Icons.Rounded.Translate,
+                contentDescription = stringResource(R.string.bookshelf_pretranslated),
+                tint = MaterialTheme.colorScheme.onTertiaryContainer,
+                modifier = Modifier.align(Alignment.TopStart)
+                    .padding(4.dp)
+                    .background(MaterialTheme.colorScheme.tertiaryContainer, RoundedCornerShape(5.dp))
+                    .padding(4.dp)
+                    .size(16.dp),
             )
         }
     }

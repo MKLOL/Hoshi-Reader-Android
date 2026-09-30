@@ -11,9 +11,8 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
-import kotlinx.coroutines.cancel
 import kotlinx.coroutines.runBlocking
-import moe.antimony.hoshi.HoshiAppContainer
+import moe.antimony.hoshi.HoshiApplication
 import moe.antimony.hoshi.LocalHoshiAppContainer
 import moe.antimony.hoshi.features.sync.v3.StubKvServer
 import org.junit.Assert.assertTrue
@@ -29,7 +28,7 @@ class HttpSyncBookshelfButtonInstrumentedTest {
     @Test
     fun savedTokenShowsShortcutAndSyncReportsSuccessAndFailure() {
         val context = ApplicationProvider.getApplicationContext<Context>()
-        val container = HoshiAppContainer(context)
+        val container = (context as HoshiApplication).appContainer
         val server = StubKvServer().apply { start() }
         try {
             runBlocking {
@@ -68,7 +67,7 @@ class HttpSyncBookshelfButtonInstrumentedTest {
             }
             compose.onNodeWithContentDescription("Sync now").assertDoesNotExist()
         } finally {
-            container.appScope.cancel()
+            runBlocking { container.httpSyncSettingsRepository.update { it.copy(bearerToken = "") } }
             server.close()
         }
     }

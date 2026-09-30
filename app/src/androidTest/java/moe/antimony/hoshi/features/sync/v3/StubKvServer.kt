@@ -90,6 +90,9 @@ class StubKvServer(
     // RFC 3339 strings (tests do LWW compares on these strings).
     private val monotonicMillis = AtomicLong(System.currentTimeMillis())
 
+    private val requests = Collections.synchronizedList(mutableListOf<StubKvRequest>())
+    fun requests(): List<StubKvRequest> = synchronized(requests) { requests.toList() }
+
     private val behaviorRef = AtomicReference<StubKvBehavior>(StubKvBehavior { _, _ -> BehaviorAction.Passthrough })
 
     private val json = Json {
@@ -139,6 +142,7 @@ class StubKvServer(
     fun reset() {
         synchronized(store) { store.clear() }
         synchronized(uploads) { uploads.clear() }
+        requests.clear()
         behaviorRef.set(StubKvBehavior { _, _ -> BehaviorAction.Passthrough })
     }
 
@@ -157,9 +161,11 @@ class StubKvServer(
         override fun serve(session: IHTTPSession): Response {
             val method = session.method?.name ?: "GET"
             val uri = session.uri ?: "/"
+            requests += StubKvRequest(method, uri, session.headers?.get("range"), session.headers?.get("if-range"))
 
             // Behavior intercept FIRST — failure-mode tests script per-call overrides.
-            when (val action = runCatching { behaviorRef.get().intercept(method, uri) }.getOrDefault(BehaviorAction.Passthrough)) {
+            val action = runCatching { behaviorRef.get().intercept(method, uri) }.getOrDefault(BehaviorAction.Passthrough)
+            when (action) {
                 is BehaviorAction.FailWith ->
                     return jsonResponse(statusFor(action.code), action.body.ifBlank { errorJson("injected failure") })
                 BehaviorAction.DropConnection -> {
@@ -186,7 +192,7 @@ class StubKvServer(
                     }
                     // fall through to default handler
                 }
-                BehaviorAction.Passthrough -> {
+                is BehaviorAction.Throttle, is BehaviorAction.TruncateAndClose, BehaviorAction.Passthrough -> {
                     // fall through
                 }
             }
@@ -198,7 +204,33 @@ class StubKvServer(
             }
 
             return try {
-                route(method, uri, session)
+                route(method, uri, session).also { response ->
+                    if (action is BehaviorAction.TruncateAndClose) {
+                        response.closeConnection(true)
+                        response.data = object : java.io.FilterInputStream(response.data) {
+                            private var remaining = action.afterBytes
+                            override fun read(bytes: ByteArray, offset: Int, length: Int): Int {
+                                if (remaining <= 0) return -1
+                                val count = super.read(bytes, offset, minOf(length, remaining))
+                                if (count > 0) {
+                                    remaining -= count
+                                    action.onBytes(count)
+                                }
+                                return count
+                            }
+                        }
+                    }
+                    if (action is BehaviorAction.Throttle) {
+                        response.data = object : java.io.FilterInputStream(response.data) {
+                            override fun read(bytes: ByteArray, offset: Int, length: Int): Int {
+                                Thread.sleep(action.delayMillis)
+                                val count = super.read(bytes, offset, minOf(length, action.chunkBytes))
+                                if (count > 0) action.onBytes(count)
+                                return count
+                            }
+                        }
+                    }
+                }
             } catch (e: Exception) {
                 jsonResponse(Response.Status.INTERNAL_ERROR, errorJson("stub server error: ${e.message ?: e.javaClass.simpleName}"))
             }
@@ -237,7 +269,7 @@ class StubKvServer(
                     val key = decodeKey(path.removePrefix("/v1/kv/"))
                     return when (method) {
                         "PUT" -> handlePut(key, session)
-                        "GET" -> handleGet(key)
+                        "GET" -> handleGet(key, session)
                         "DELETE" -> handleDelete(key)
                         else -> jsonResponse(Response.Status.METHOD_NOT_ALLOWED, errorJson("method not allowed"))
                     }
@@ -265,15 +297,38 @@ class StubKvServer(
             )
         }
 
-        private fun handleGet(key: String): Response {
+        private fun handleGet(key: String, session: IHTTPSession): Response {
             val entry = synchronized(store) { store[key] }
                 ?: return jsonResponse(Response.Status.NOT_FOUND, errorJson("no such key: $key"))
+            val range = session.headers?.get("range")
+            val ifRange = session.headers?.get("if-range")
+            val matched = range?.let { Regex("bytes=(\\d*)-(\\d*)").matchEntire(it) }
+                ?.takeIf { it.groupValues[1].isNotEmpty() || it.groupValues[2].isNotEmpty() }
+            var start = 0
+            var end = entry.body.lastIndex
+            val partial = matched != null && (ifRange == null || ifRange == entry.etag)
+            if (partial) {
+                val first = matched!!.groupValues[1].toLongOrNull()
+                val last = matched.groupValues[2].toLongOrNull()
+                val requestedStart = first ?: maxOf(0, entry.body.size.toLong() - (last ?: 0))
+                val requestedEnd = if (first != null) last ?: entry.body.lastIndex.toLong() else entry.body.lastIndex.toLong()
+                if (requestedStart >= entry.body.size || requestedEnd < requestedStart || entry.body.isEmpty()) {
+                    return newFixedLengthResponse(statusFor(416), entry.contentType, "").apply {
+                        addHeader("Content-Range", "bytes */${entry.body.size}")
+                        addHeader("ETag", entry.etag)
+                    }
+                }
+                start = requestedStart.toInt()
+                end = minOf(requestedEnd, entry.body.lastIndex.toLong()).toInt()
+            }
             val response = newFixedLengthResponse(
-                Response.Status.OK,
+                if (partial) Response.Status.PARTIAL_CONTENT else Response.Status.OK,
                 entry.contentType,
-                ByteArrayInputStream(entry.body),
-                entry.body.size.toLong(),
+                ByteArrayInputStream(entry.body, start, end - start + 1),
+                (end - start + 1).toLong(),
             )
+            response.addHeader("Accept-Ranges", "bytes")
+            if (partial) response.addHeader("Content-Range", "bytes $start-$end/${entry.body.size}")
             response.addHeader("Last-Modified", entry.lastModified)
             response.addHeader("ETag", entry.etag)
             // NanoHTTPD doesn't always emit a Content-Type header from the mime parameter
@@ -587,4 +642,9 @@ sealed interface BehaviorAction {
     data class FailWith(val code: Int, val body: String = "") : BehaviorAction
     data object DropConnection : BehaviorAction
     data class Delay(val millis: Long) : BehaviorAction
+    data class TruncateAndClose(val afterBytes: Int, val onBytes: (Int) -> Unit = {}) : BehaviorAction
+    data class Throttle(val chunkBytes: Int, val delayMillis: Long, val onBytes: (Int) -> Unit = {}) : BehaviorAction
 }
+
+/** Request headers retained for transport contract assertions. */
+data class StubKvRequest(val method: String, val path: String, val range: String?, val ifRange: String?)

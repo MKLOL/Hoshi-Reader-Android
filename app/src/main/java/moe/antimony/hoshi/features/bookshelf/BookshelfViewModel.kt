@@ -455,6 +455,7 @@ internal class BookshelfViewModel(
                 bookEntries = result.entries,
                 bookProgressById = result.progressById,
                 coverSourcesById = result.coverSourcesById,
+                pretranslatedBookIds = result.pretranslatedBookIds,
                 shelves = result.shelves,
                 sections = bookshelfSections(
                     entries = result.entries,

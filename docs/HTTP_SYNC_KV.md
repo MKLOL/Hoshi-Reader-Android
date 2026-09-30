@@ -123,6 +123,18 @@ best-effort if a part or complete request fails.
 Return the stored bytes. Returns the original `Content-Type`, plus `Last-Modified`
 (RFC 3339 UTC) and `ETag` (sha256). **404** if the key does not exist.
 
+Resumable servers advertise `Accept-Ranges: bytes` and support one `Range: bytes=start-`
+(or start-end / suffix) with `If-Range` containing the original strong ETag. A matching
+validator returns **206**, the exact stored suffix, and `Content-Range: bytes start-end/size`.
+A changed, weak, or date validator returns the complete current value with **200**;
+clients must truncate rather than append. A valid range beyond EOF returns **416** with
+`Content-Range: bytes */size`. Unsupported/malformed or multiple ranges may fall back to
+200. HEAD ignores ranges and returns full-object metadata. GET bodies must preserve the
+stored representation and its hash (`Content-Encoding: identity`, `Cache-Control: no-transform`).
+Android retains partial archives across interruption, checks response offset/size/ETag,
+and verifies the manifest SHA before extraction; it safely accepts legacy servers' 200
+responses, but saving transfer bandwidth across retries requires server range support.
+
 ### `DELETE /v1/kv/{key}`
 
 Remove the key. Returns `204`. **404** is a no-op success from the client's view.

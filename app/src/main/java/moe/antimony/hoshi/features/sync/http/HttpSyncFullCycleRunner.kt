@@ -19,6 +19,9 @@ class HttpSyncFullCycleRunner(private val scope: CoroutineScope) {
     private val lock = Any()
     private var flight: Flight? = null
 
+    /** Android withdrew execution permission; stop the shared work as well as its UI waiter. */
+    fun cancelActive() = synchronized(lock) { flight?.result?.cancel() }
+
     suspend fun run(
         onProgress: suspend (HttpSyncProgress) -> Unit = {},
         statisticsOnly: Boolean = false,

@@ -879,4 +879,7 @@
     <string name="card_preview_word" translatable="false">本</string>
     <string name="card_preview_reading" translatable="false">ほん</string>
     <string name="card_preview_source" translatable="false">本を読むのが好きだ</string>
+    <string name="bookshelf_pretranslated">Pre-translations available</string>
+    <string name="http_sync_background_start_failed">Could not start background sync. Open Hoshi and try again.</string>
+    <string name="http_sync_download_failed">The server could not provide this download. Check your sync settings and try again.</string>
 </resources>

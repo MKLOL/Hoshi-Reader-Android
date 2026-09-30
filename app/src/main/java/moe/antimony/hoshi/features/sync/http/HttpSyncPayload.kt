@@ -5,7 +5,11 @@ import moe.antimony.hoshi.storage.isSidecarTemporaryFile
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import moe.antimony.hoshi.epub.GENERATED_COVER_FILENAME
@@ -496,6 +500,7 @@ class HttpSyncPayloadCodec(
     }
 
     private companion object {
+        val downloadLocks = Array(32) { Mutex() }
         val SHA256_VALUE = Regex("^sha256:[0-9a-f]{64}$")
     }
 
@@ -523,39 +528,71 @@ class HttpSyncPayloadCodec(
             )
         }
         val spoolDir = targetDir.parentFile ?: targetDir
-        val zipFile = File.createTempFile("hoshi-sync-download-", ".zip", spoolDir)
-        try {
-            transport.downloadToFile(keys.zip, zipFile, onByteProgress)
-                ?: throw HttpSyncException("Payload zip missing for $syncId (manifest existed).")
-            if (zipFile.length() != manifest.sizeBytes) {
-                throw HttpSyncException(
-                    "Payload zip for $syncId has ${zipFile.length()} bytes; manifest declares ${manifest.sizeBytes}.",
-                )
+        if (manifest.sizeBytes < 0 || !SHA256_VALUE.matches(manifest.sha256)) {
+            throw HttpSyncException(moe.antimony.hoshi.R.string.http_sync_download_failed)
+        }
+        // Staging directories are disposable. Keep partial archives beside them, keyed by
+        // account, remote key and manifest, so a restarted process can find the same bytes.
+        val identity = MessageDigest.getInstance("SHA-256")
+            .digest("${transport.cacheIdentity}\n${keys.zip}".toByteArray())
+            .joinToString("") { "%02x".format(it) }
+        downloadLocks[(identity.hashCode() and Int.MAX_VALUE) % downloadLocks.size].withLock {
+            val downloadDir = spoolDir.resolve(".http-sync-downloads").resolve(identity).apply { mkdirs() }
+            val name = "${manifest.sha256.removePrefix("sha256:")}-${manifest.sizeBytes}.zip"
+            val zipFile = downloadDir.resolve(name)
+            downloadDir.listFiles()?.filter { it.name != name && it.name != "$name.resume" }?.forEach { it.delete() }
+            var unpacked = false
+            try {
+                val alreadyComplete = zipFile.isFile && zipFile.length() == manifest.sizeBytes &&
+                    sha256Hex(zipFile) == manifest.sha256
+                if (!alreadyComplete) {
+                    if (zipFile.length() >= manifest.sizeBytes) {
+                        zipFile.delete()
+                        File(zipFile.path + ".resume").delete()
+                    }
+                    transport.downloadToFile(keys.zip, zipFile, onByteProgress)
+                        ?: throw HttpSyncException("Payload zip missing for $syncId (manifest existed).")
+                } else {
+                    onByteProgress?.invoke(manifest.sizeBytes, manifest.sizeBytes)
+                }
+                val actualSize = zipFile.length()
+                if (actualSize != manifest.sizeBytes) {
+                    zipFile.delete()
+                    File(zipFile.path + ".resume").delete()
+                    throw HttpSyncException(
+                        "Payload zip for $syncId has $actualSize bytes; manifest declares ${manifest.sizeBytes}.",
+                    )
+                }
+                // Validate sha256 before unpacking — a corrupted zip should fail loud, not produce a
+                // half-imported book directory.
+                val actualSha = sha256Hex(zipFile)
+                if (actualSha != manifest.sha256) {
+                    zipFile.delete()
+                    File(zipFile.path + ".resume").delete()
+                    throw HttpSyncException(
+                        "Payload zip for $syncId failed sha256 check (expected ${manifest.sha256}, got $actualSha).",
+                    )
+                }
+                currentCoroutineContext().ensureActive()
+                unzipInto(zipFile, targetDir)
+                currentCoroutineContext().ensureActive()
+                // The archive sha256 above is the integrity check; the content hash is a change
+                // detector derived from those verified bytes. A manifest that disagrees was written
+                // by a client whose derivation differed (iOS builds through 0.11.3 did), so it is
+                // corrected rather than treated as corruption.
+                val contentSha = computePayloadContentSha(targetDir)
+                val verified = manifest.copy(contentSha256 = contentSha)
+                if (manifest.contentSha256 != contentSha) {
+                    repairManifest(transport, keys, verifiedAgainst = fetchedManifest.body, verified = verified)
+                }
+                // Keep both hashes next to the unpacked book so later syncs are sidecar reads.
+                writeCachedSha(targetDir.resolve(PAYLOAD_SHA_CACHE_FILENAME), contentSha)
+                rememberZipSha(targetDir, manifest.sha256)
+                unpacked = true
+                verified
+            } finally {
+                if (unpacked) downloadDir.deleteRecursively()
             }
-            // Validate sha256 before unpacking — a corrupted zip should fail loud, not produce a
-            // half-imported book directory.
-            val actualSha = sha256Hex(zipFile)
-            if (actualSha != manifest.sha256) {
-                throw HttpSyncException(
-                    "Payload zip for $syncId failed sha256 check (expected ${manifest.sha256}, got $actualSha).",
-                )
-            }
-            unzipInto(zipFile, targetDir)
-            // The archive sha256 above is the integrity check; the content hash is a change
-            // detector derived from those verified bytes. A manifest that disagrees was written
-            // by a client whose derivation differed (iOS builds through 0.11.3 did), so it is
-            // corrected rather than treated as corruption.
-            val contentSha = computePayloadContentSha(targetDir)
-            val verified = manifest.copy(contentSha256 = contentSha)
-            if (manifest.contentSha256 != contentSha) {
-                repairManifest(transport, keys, verifiedAgainst = fetchedManifest.body, verified = verified)
-            }
-            // Keep both hashes next to the unpacked book so later syncs are sidecar reads.
-            writeCachedSha(targetDir.resolve(PAYLOAD_SHA_CACHE_FILENAME), contentSha)
-            rememberZipSha(targetDir, manifest.sha256)
-            verified
-        } finally {
-            zipFile.delete()
         }
     }
 

@@ -15,6 +15,7 @@ data class BookshelfUiState(
     val bookEntries: List<BookEntry> = emptyList(),
     val bookProgressById: Map<String, Double> = emptyMap(),
     val coverSourcesById: Map<String, BookCoverSource> = emptyMap(),
+    val pretranslatedBookIds: Set<String> = emptySet(),
     val shelves: List<BookShelf> = emptyList(),
     val sections: List<BookshelfSectionModel> = emptyList(),
     val sortOption: BookSortOption = BookSortOption.Recent,
@@ -42,4 +43,5 @@ data class BookshelfLoadResult(
     val coverSourcesById: Map<String, BookCoverSource>,
     val shelves: List<BookShelf>,
     val settings: BookshelfSettings,
+    val pretranslatedBookIds: Set<String> = emptySet(),
 )

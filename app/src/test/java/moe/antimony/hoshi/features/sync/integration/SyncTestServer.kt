@@ -6,6 +6,8 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -91,6 +93,26 @@ class SyncTestServer private constructor(
             payload.toString().toByteArray(Charsets.UTF_8),
             "application/json; charset=utf-8",
         )
+    }
+
+    /** Changes the next real download response, including an EOF after [disconnectAfter] bytes. */
+    fun downloadFault(
+        key: String,
+        count: Int = 1,
+        disconnectAfter: Int? = null,
+        ignoreRange: Boolean = false,
+        etag: String? = null,
+        contentRange: String? = null,
+    ) {
+        val body = buildJsonObject {
+            put("pathPrefix", "/v1/kv/$key")
+            put("count", count)
+            disconnectAfter?.let { put("disconnectAfter", it) }
+            if (ignoreRange) put("ignoreRange", true)
+            etag?.let { put("etag", it) }
+            contentRange?.let { put("contentRange", it) }
+        }
+        post("/_test/download_next", body.toString().toByteArray(), "application/json; charset=utf-8")
     }
 
     /** Every request the server handled since the last [clearRequests] / [reset]. */
@@ -209,6 +231,8 @@ data class RecordedRequest(
     val status: Int,
     /** Bytes in the server's response body (not the request's). */
     @SerialName("size") val responseBytes: Int,
+    val range: String? = null,
+    val ifRange: String? = null,
 ) {
     /** The listing every sync pass starts with. */
     val isListing: Boolean

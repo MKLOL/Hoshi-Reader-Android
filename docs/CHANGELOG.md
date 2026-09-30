@@ -7,11 +7,15 @@ Semantic Versioning.
 
 ## [Unreleased]
 
+### Added
+- **Spot pre-translated books and manga.** A small translation badge appears on covers, including collapsed shelf previews, when offline translations are available.
+
 ### Changed
 - **Faster EPUB opening.** Bookshelf navigation leaves parsing to the reader, which reuses valid cached chapter information and preserves existing cover files.
 - **Lighter unchanged sync checks.** Idle sync reuses unchanged reading-history checks and avoids rewriting unchanged bookmark state and pending updates.
 
 ### Fixed
+- **Keep downloading with the screen off.** Manual sync runs as an Android-managed transfer. Interrupted book downloads retain their progress and resume safely when the server supports partial downloads.
 - **Keep newer reading progress during sync.** A page turn made while sync is waiting is preserved, and malformed remote bookmarks are reported without overwriting them.
 - **Preserve reading history across overlapping syncs.** Downloading older history no longer assigns it to the receiving device, and simultaneous reading and manga updates keep both sync checkpoints.
 - **Safer saved reading state and covers.** Failed file replacements preserve existing sidecars, temporary writes stay out of synced book content, and replacement books refresh their generated covers.

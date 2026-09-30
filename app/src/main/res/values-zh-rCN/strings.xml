@@ -877,4 +877,7 @@
     <string name="card_preview_word" translatable="false">本</string>
     <string name="card_preview_reading" translatable="false">ほん</string>
     <string name="card_preview_source" translatable="false">本を読むのが好きだ</string>
+    <string name="bookshelf_pretranslated">已有预翻译</string>
+    <string name="http_sync_background_start_failed">无法启动后台同步。请打开 Hoshi 后重试。</string>
+    <string name="http_sync_download_failed">服务器无法提供此下载。请检查同步设置后重试。</string>
 </resources>

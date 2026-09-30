@@ -9,10 +9,12 @@ PREFIX = "moe.antimony.hoshi."
 REQUIRED_JVM_CLASSES = {
     PREFIX + name for name in (
         "features.sync.integration.RealServerKvClientTest",
+        "features.sync.integration.RealServerResumeIntegrationTest",
         "features.sync.integration.SyncIntegrationTest",
         "features.sync.integration.SyncReleaseRegressionTest",
         "features.sync.integration.SyncReleasePerformanceTest",
         "features.sync.http.HttpSyncBatchExchangeTest",
+        "features.sync.http.HttpSyncDownloadTest",
         "features.sync.http.HttpSyncFullCycleRunnerTest",
         "features.sync.http.HttpSyncManualSyncTest",
         "features.sync.http.HttpSyncMetadataIndexTest",
@@ -23,6 +25,7 @@ REQUIRED_JVM_CLASSES = {
         "features.statistics.StreakHistoryTest",
         "features.statistics.SyncedReadingTrendsTest",
         "features.backup.HoshiBackupRepositoryTest",
+        "features.bookshelf.BookTranslationAvailabilityTest",
         "features.storage.StorageCleanupRepositoryTest",
         "features.anki.AnkiConnectBackendTest",
         "navigation.ReaderRoutePayloadStabilityTest",
@@ -39,6 +42,7 @@ OPTIONAL_LIVE_TESTS = {
     "wrongTokenReturnsHttpSyncException",
 }
 ANDROID_CLASSES = tuple(PREFIX + name for name in (
+    "features.bookshelf.BookPretranslationBadgeTest",
     "features.sync.v3.StubKvServerTest",
     "features.sync.v3.V3SyncIntegrationTest",
     "features.sync.v3.V3SyncFailureModeTest",
@@ -47,6 +51,8 @@ ANDROID_CLASSES = tuple(PREFIX + name for name in (
     "features.sync.v3.EpubHttpSyncE2ETest",
     "features.sync.http.HttpSyncPayloadArchiveInstrumentedTest",
     "features.sync.http.HttpSyncBookshelfButtonInstrumentedTest",
+    "features.sync.http.HttpSyncDownloadInstrumentedTest",
+    "features.sync.http.HttpSyncSleepTransferTest",
     "features.sync.http.HttpSyncSettingsInputTest",
     "features.sync.http.HttpSyncStatisticsCacheDeviceTest",
     "features.reader.ReaderSelectionUnicodeWebViewTest",

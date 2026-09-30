@@ -556,48 +556,19 @@ class HttpSyncKvClient(
         onByteProgress: ((bytesTransferred: Long, totalBytes: Long) -> Unit)?,
     ): HttpSyncKvFileFetched? =
         withContext(ioDispatcher) {
-            val connection = openConnection("GET", "/v1/kv/${encodeKey(key)}", contentType = null)
             try {
-                val code = connection.responseCode
-                if (code == 404) return@withContext null
-                if (code !in 200..299) {
-                    val raw = (connection.errorStream ?: connection.inputStream)
-                        ?.bufferedReader()?.use { it.readText() }
-                        .orEmpty()
-                    throw HttpSyncException(parseError(code, raw))
-                }
-                targetFile.parentFile?.mkdirs()
-                // `contentLengthLong` is -1 if the server didn't send Content-Length
-                // (chunked transfer). The progress callback tolerates a non-positive
-                // total — the consumer skips fraction math when total <= 0.
-                val totalBytes = connection.contentLengthLong
-                val buffer = ByteArray(DEFAULT_STREAM_BUFFER_SIZE)
-                connection.inputStream.buffered(DEFAULT_STREAM_BUFFER_SIZE).use { input ->
-                    targetFile.outputStream().buffered(DEFAULT_STREAM_BUFFER_SIZE).use { output ->
-                        var transferred = 0L
-                        while (true) {
-                            val read = input.read(buffer)
-                            if (read < 0) break
-                            output.write(buffer, 0, read)
-                            transferred += read.toLong()
-                            onByteProgress?.invoke(transferred, totalBytes)
-                        }
-                    }
-                }
-                HttpSyncKvFileFetched(
-                    contentType = connection.getHeaderField("Content-Type")
-                        ?: "application/octet-stream",
-                    lastModified = connection.getHeaderField("Last-Modified") ?: "",
-                    etag = connection.getHeaderField("ETag") ?: "",
+                downloadHttpSyncFile(
+                    target = targetFile,
+                    identity = "$cacheIdentity\n$key",
+                    openConnection = { openConnection("GET", "/v1/kv/${encodeKey(key)}", contentType = null) },
+                    progress = onByteProgress,
                 )
-            } catch (e: HttpSyncException) {
-                targetFile.delete()
-                throw e
-            } catch (e: Exception) {
-                targetFile.delete()
-                throw HttpSyncException(friendlyMessage(e))
-            } finally {
-                connection.disconnect()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: HttpSyncException) {
+                throw error
+            } catch (error: Exception) {
+                throw HttpSyncException(friendlyMessage(error))
             }
         }
 

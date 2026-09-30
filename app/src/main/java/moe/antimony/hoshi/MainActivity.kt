@@ -44,7 +44,7 @@ class MainActivity : ComponentActivity() {
             window.isNavigationBarContrastEnforced = false
         }
         setContent {
-            val appContainer = remember { HoshiAppContainer(applicationContext) }
+            val appContainer = remember { (application as HoshiApplication).appContainer }
             val readerSettingsRepository = appContainer.readerSettingsRepository
             val scope = rememberCoroutineScope()
             var readerSettings by remember { mutableStateOf<ReaderSettings?>(null) }

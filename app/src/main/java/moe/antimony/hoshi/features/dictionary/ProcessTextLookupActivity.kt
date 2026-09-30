@@ -31,6 +31,7 @@ import de.manhhao.hoshi.LookupResult
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
+import moe.antimony.hoshi.HoshiApplication
 import moe.antimony.hoshi.HoshiAppContainer
 import moe.antimony.hoshi.LocalHoshiAppContainer
 import moe.antimony.hoshi.ProcessTextLookupRequest
@@ -57,7 +58,7 @@ class ProcessTextLookupActivity : ComponentActivity() {
         setFinishOnTouchOutside(true)
 
         setContent {
-            val appContainer = remember { HoshiAppContainer(applicationContext) }
+            val appContainer = remember { (application as HoshiApplication).appContainer }
             var readerSettings by remember { mutableStateOf<ReaderSettings?>(null) }
             LaunchedEffect(appContainer) {
                 appContainer.readerSettingsRepository.settings.collect { settings ->

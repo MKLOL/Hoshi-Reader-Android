@@ -452,6 +452,7 @@ internal suspend fun loadBookshelfResult(
         entries = entries,
         progressById = loadBookProgressById(entries, bookRepository),
         coverSourcesById = loadBookCoverSourcesById(entries, bookRepository),
+        pretranslatedBookIds = BookTranslationAvailability.load(entries),
         shelves = bookRepository.loadShelves(),
         settings = settings,
     )

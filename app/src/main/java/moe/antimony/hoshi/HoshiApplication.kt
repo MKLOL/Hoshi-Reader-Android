@@ -17,6 +17,7 @@ import moe.antimony.hoshi.features.update.UpdateStartupSnapshot
 import moe.antimony.hoshi.features.update.updateDownloadStore
 
 class HoshiApplication : Application() {
+    internal val appContainer by lazy { HoshiAppContainer(this) }
     internal val podcastRepository by lazy {
         moe.antimony.hoshi.features.podcasts.PodcastRepository(
             this, httpSyncSettingsRepository(),

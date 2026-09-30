@@ -25,6 +25,21 @@ import java.nio.file.Files
 
 class BookshelfViewModelTest {
     @Test
+    fun refreshedTranslationAvailabilityReplacesBadgesInUiState() {
+        val repository = FakeBookshelfRepository(entries = listOf(bookEntry("book-a"), bookEntry("book-b")))
+        val viewModel = BookshelfViewModel(repository, testScope())
+        viewModel.reloadBookEntries()
+        assertTrue(viewModel.uiState.value.pretranslatedBookIds.isEmpty())
+
+        repository.pretranslatedBookIds = setOf("book-a")
+        viewModel.reloadBookEntries()
+        assertEquals(setOf("book-a"), viewModel.uiState.value.pretranslatedBookIds)
+        repository.pretranslatedBookIds = setOf("book-b")
+        viewModel.reloadBookEntries()
+        assertEquals(setOf("book-b"), viewModel.uiState.value.pretranslatedBookIds)
+    }
+
+    @Test
     fun initialStateWaitsForFirstShelfLoadBeforeShowingEmptyBooks() {
         val viewModel = BookshelfViewModel(FakeBookshelfRepository(), testScope())
 
@@ -578,6 +593,7 @@ class BookshelfViewModelTest {
         var shelves: List<BookShelf> = emptyList(),
         var coverSourcesById: Map<String, BookCoverSource> = emptyMap(),
         var settings: BookshelfSettings = BookshelfSettings(),
+        var pretranslatedBookIds: Set<String> = emptySet(),
     ) : BookshelfRepository {
         val loadRequests = mutableListOf<BookSortOption>()
         val deletedEntries = mutableListOf<BookEntry>()
@@ -591,7 +607,7 @@ class BookshelfViewModelTest {
 
         override suspend fun loadBooks(sortOption: BookSortOption): BookshelfLoadResult {
             loadRequests += sortOption
-            return BookshelfLoadResult(entries, progressById, coverSourcesById, shelves, settings)
+            return BookshelfLoadResult(entries, progressById, coverSourcesById, shelves, settings, pretranslatedBookIds)
         }
 
         override suspend fun openBook(entry: BookEntry): String = openBookId

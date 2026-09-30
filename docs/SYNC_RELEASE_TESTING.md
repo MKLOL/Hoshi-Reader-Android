@@ -49,12 +49,19 @@ run writes `summary.json`. A failed run removes any previous success summary.
 | Idle sync work grows with an already installed library | `SyncReleasePerformanceTest` checks one versus 40 mixed EPUB/manga books with daily/hourly history: repeated polls and restart each require exactly one delta LIST. The metadata unit suite also covers 10,001 keys. |
 | One history edit triggers book downloads | Exactly two history GETs for a changed manga's time/OCR records, at most seven total requests, and no payload transfer. |
 | Manual sync joins an outdated background pass | Freeze a real response, publish newer phone history, cancel the original waiter, and verify the manual tap still performs a fresh pass. |
+| Screen sleep stops a book transfer | `HttpSyncSleepTransferTest` turns the disposable emulator screen off during throttled real book downloads through both UIDT and foreground WorkManager, verifying continued bytes, completion, and identical installed content. |
+| An interrupted download starts again from zero or appends the wrong file | `HttpSyncDownloadTest`, `RealServerResumeIntegrationTest`, and `HttpSyncDownloadInstrumentedTest` check durable partial archives, Range/If-Range, ignored ranges, changed validators/manifests, malformed responses, cancellation, and final SHA verification. Android requires exactly two GETs after a truncated response, with no prefix bytes sent twice. |
+| Shelf badges misreport offline translations | Availability tests reject empty, corrupt, unsupported, and wrong-book sidecars, exercise cache updates/deletion, and Compose checks the badge accessibility state. |
 | Interrupted or partial uploads damage books | Server contract and Android failure/race suites cover multipart ordering/retry/cancel, failures, preservation of old payloads, manifests, and later convergence. |
 | Filesystem optimization hides a change | Cache tests cover replacement with equal size/time, deletion/restoration, corruption, concurrent changes, bounded eviction, and real Android file identity. |
 | Other important data paths regress | Full JVM coverage includes backup traversal/CRC/cancellation, stale cleanup previews, atomic sidecars, import routing, Anki validation/media, and reader state. Android also checks EPUB import, iOS ZIP64 payloads, Unicode lookup, settings typing, and bookshelf sync success/error UI. |
 
 Request counts are assertions; wall-clock benchmark numbers are diagnostic only. Races
 use explicit rendezvous/deferred responses instead of timing-dependent sleeps.
+
+## Transfer ownership
+
+Manual sync uses [user-initiated data transfer jobs](https://developer.android.com/develop/background-work/background-tasks/uidt) on Android 14+, with a foreground WorkManager worker on older versions. Android manages wakefulness. The application shares one sync container across activities and jobs; system cancellation stops the shared transfer and keeps its partial archive. Partial files live outside published books, keyed by account, remote key, and manifest, and are removed after successful extraction. A server must honor byte ranges to avoid transferring the saved prefix; servers that return 200 are handled safely by replacing the partial file.
 
 ## External tests and limits
 

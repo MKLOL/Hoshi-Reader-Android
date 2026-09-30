@@ -5,14 +5,34 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /** App-owned manual sync, shared by the shelf shortcut and settings. Closing either UI is safe. */
 class HttpSyncManualSync(
     private val scope: CoroutineScope,
+    private val schedule: (suspend () -> Unit)? = null,
+    private val onCancelled: () -> Unit = {},
     private val sync: suspend (onProgress: suspend (HttpSyncProgress) -> Unit) -> HttpSyncResult,
 ) {
+    private val execution = Mutex()
     private val mutableStatus = MutableStateFlow<SyncStatus>(SyncStatus.Idle)
     val status = mutableStatus.asStateFlow()
+
+    internal fun backgroundStartFailed() {
+        mutableStatus.value = SyncStatus.Failed(null, moe.antimony.hoshi.R.string.http_sync_background_start_failed)
+    }
+
+    internal fun cancelledBeforeExecution() {
+        // A queued owner must not reset/cancel another owner's running pass.
+        if (!execution.tryLock()) return
+        try {
+            val previous = mutableStatus.value
+            if (previous is SyncStatus.Running) mutableStatus.compareAndSet(previous, SyncStatus.Idle)
+        } finally {
+            execution.unlock()
+        }
+    }
 
     fun start() {
         val previous = status.value
@@ -20,14 +40,28 @@ class HttpSyncManualSync(
         if (!mutableStatus.compareAndSet(previous, SyncStatus.Running())) return
         scope.launch {
             try {
-                val result = sync { mutableStatus.value = SyncStatus.Running(it) }
-                mutableStatus.value = SyncStatus.Done(result)
+                if (schedule != null) schedule.invoke() else execute()
             } catch (cancelled: CancellationException) {
                 mutableStatus.value = SyncStatus.Idle
                 throw cancelled
             } catch (error: Exception) {
                 mutableStatus.value = SyncStatus.Failed(error.message, (error as? HttpSyncException)?.messageResource)
             }
+        }
+    }
+
+    /** Called by Android's transfer job/worker, including after process recreation. */
+    suspend fun execute() = execution.withLock {
+        mutableStatus.value = SyncStatus.Running()
+        try {
+            val result = sync { mutableStatus.value = SyncStatus.Running(it) }
+            mutableStatus.value = SyncStatus.Done(result)
+        } catch (cancelled: CancellationException) {
+            onCancelled()
+            mutableStatus.value = SyncStatus.Idle
+            throw cancelled
+        } catch (error: Exception) {
+            mutableStatus.value = SyncStatus.Failed(error.message, (error as? HttpSyncException)?.messageResource)
         }
     }
 }

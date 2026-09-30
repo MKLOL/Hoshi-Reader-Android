@@ -10,10 +10,17 @@ python3 tools/sync-test-server/sync_test_server.py --port 0 --token secret
 SYNC_TEST_SERVER_READY port=51234
 ```
 
+Downloads support single byte ranges and strong `If-Range` validators. Matching ranges return
+`206` with `Content-Range`; changed validators return the complete `200` representation, and
+unsatisfiable ranges return `416`. `HEAD` ignores ranges.
+
 Test-only routes (`/_test/health`, `/_test/reset`, `/_test/dump`, `/_test/load`,
 `/_test/requests`, `/_test/requests/clear`, and `/_test/fail_next` to make the next matching
-API requests fail with a chosen status) let a test inspect or shape server state from outside the
-client under test. `test_sync_test_server.py` pins the server's own contract.
+API requests fail with a chosen status, plus `/_test/download_next` for early connection closure,
+ignored ranges, or invalid response validators) let a test inspect or shape server state from outside the
+client under test. `test_sync_test_server.py` pins the server's own contract. Download faults accept `pathPrefix`,
+optional `count`, `disconnectAfter`, `ignoreRange`, `etag`, and `contentRange`; request logs retain
+`Range`/`If-Range` and actual response bytes so tests can prove prefixes are never downloaded twice.
 
 A green suite proves the clients agree with *this* implementation of the documented contract; it
 says nothing about the production deployment, which is only covered by the live smoke test.

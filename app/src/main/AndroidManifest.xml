@@ -3,6 +3,7 @@
     xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.RUN_USER_INITIATED_JOBS" />
     <!-- NetworkReachability.isOnline reads the active network to decide whether to serve an
          offline pre-translation. Declared explicitly: it currently arrives transitively via
          WorkManager, and losing that dependency would turn every bubble tap into a
@@ -59,6 +60,9 @@
         </service>
         <service android:name="androidx.work.impl.foreground.SystemForegroundService"
             android:foregroundServiceType="dataSync" tools:node="merge" />
+        <service android:name=".features.sync.http.HttpSyncTransferJob"
+            android:exported="false" android:permission="android.permission.BIND_JOB_SERVICE"
+            tools:targetApi="34" />
 
         <service
             android:name=".features.ai.offline.ModelDownloadService"
