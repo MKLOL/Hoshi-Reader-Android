@@ -213,8 +213,8 @@ The Android client uses this layout under one shared root prefix `books/`:
 | `books/{syncId}/epub.zip` | `application/zip` | zip of an extracted EPUB directory | overwrite (rare; effectively immutable) | 1 MB – 200 MB |
 | `books/{syncId}/epub.manifest` | `application/json` | `{sha256, sizeBytes, originalName, format: "epub"}` | overwrite | ~150 B |
 | `books/{syncId}/sentences` | `application/json` | validated EPUB sentence translations | download-only | 1 MB – 5 MB typical |
-| `books/{syncId}/statistics` | `application/json` | `{version: 1, syncId, entries: [{title, dateKey, charactersRead, readingTime, minReadingSpeed, altMinReadingSpeed, lastReadingSpeed, maxReadingSpeed, lastStatisticModified, deviceId?, deviceName?}]}` | two-way, merged per (day, device): every device keeps its own entry per day (`deviceId` is the installation id also used for bookmark shards; `deviceName` is display-only and may change), union of (day, device) entries, newest `lastStatisticModified` wins within one device, equal stamps resolved by content so every device picks the same entry; a `version` above 1 is refused in both directions; union means a day is never deleted through sync; a converged book costs no request (per-device `.http_sync_statistics.json` remembers the last exchange's local sha, remote size and stamp) | ~250 B per day read |
-| `books/{syncId}/manga_statistics` | `application/json` | `{version: 1, syncId, entries: [{dateKey, charactersRead, lastModified, deviceId?, deviceName?}]}` | as above, manga only. Entries without `deviceId` (older clients) stay their own "unknown device" bucket through sync; only a local file that has never named a device and never been exchanged is claimed by the device it is on, once, on load. `deviceName` is the user's Android device name and is uploaded with the entries | ~80 B per day read |
+| `books/{syncId}/statistics` | `application/json` | `{version: 2, syncId, entries: [{title, dateKey, charactersRead, readingTime, minReadingSpeed, altMinReadingSpeed, lastReadingSpeed, maxReadingSpeed, lastStatisticModified, deviceId?, deviceName?}]}` | two-way, merged per (day, device): every device keeps its own entry per day (`deviceId` is the installation id also used for bookmark shards; `deviceName` is display-only and may change), union of (day, device) entries, newest `lastStatisticModified` wins within one device, equal stamps resolved by content so every device picks the same entry; a `version` above 2 is refused in both directions; union means a day is never deleted through sync; a converged book costs no request (per-device `.http_sync_statistics.json` remembers the last exchange's local sha, remote size, stamp and ETag) | ~250 B per day read |
+| `books/{syncId}/manga_statistics` | `application/json` | `{version: 2, syncId, entries: [{dateKey, charactersRead, lastModified, deviceId?, deviceName?}]}` | as above, manga only. Entries without `deviceId` (older clients) stay their own "unknown device" bucket through sync; only a local file that has never named a device and never been exchanged is claimed by the device it is on, once, on load. `deviceName` is the user's Android device name and is uploaded with the entries | ~80 B per day read |
 
 - `syncId` is persisted in `metadata.json`. New imports derive it from title plus a folder
   hash only when duplicate-title folder uniquification requires one; legacy records backfill
@@ -241,8 +241,18 @@ book-map mismatch, or a changed non-map metadata ETag.
 
 ### Request budget
 
-- Nothing changed: one `GET /v1/kv`; matching ETags end the sync. Listing all metadata also
-  catches older per-book clients and changed chats/settings without fetching unchanged bodies.
+- Nothing changed: one incremental `GET /v1/kv?since=...`; a persisted account-scoped
+  metadata index retains unchanged keys. Matching ETags end the sync, while local statistics
+  are checked against their last successful exchange so a missed reader push cannot be skipped.
+- Bootstrap and a daily audit perform a full metadata listing. Before paginated scans, one
+  tiny opaque `sync/maps/checkpoint.json` PUT establishes a server-time boundary; writes that
+  race the scan remain visible on the next poll. A repeated timestamp boundary covers coarse
+  server timestamps. The index records observation, separately from successful reconciliation,
+  so failed imports/merges continue to retry even when the next delta is empty.
+- Full reconciliation caches small remote bodies by account and listed ETag/stamp/size.
+  Only changed metadata, bookmarks and manifests are downloaded; installed translations are
+  compared by their content hash rather than size alone. Reading stats for existing books
+  are reconciled ahead of unrelated payload imports.
 - Any number of local bookmark changes: the list above plus one
   `PUT /v1/kv/sync/maps/bookmarks/{deviceId}.json` containing the device shard.
 - Remote bookmark shard changed: the list plus one GET for that changed shard. Concurrent

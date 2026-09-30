@@ -1,6 +1,5 @@
 package moe.antimony.hoshi.features.sync.v3
 
-import moe.antimony.hoshi.features.ai.PRETRANSLATIONS_FILENAME
 import moe.antimony.hoshi.features.sync.http.MAX_STATISTICS_BLOB_BYTES
 import moe.antimony.hoshi.features.sync.http.StatisticsSyncKind
 import moe.antimony.hoshi.features.sync.http.HttpSyncContentType
@@ -15,7 +14,6 @@ import moe.antimony.hoshi.features.sync.http.compareRfc3339
 import moe.antimony.hoshi.features.sync.http.localImportedAtOverridesRemoteDeletion
 import moe.antimony.hoshi.features.sync.http.maxRfc
 import moe.antimony.hoshi.features.sync.http.shouldApplyRemoteShelfPlacement
-import java.io.File
 
 /**
  * Step 3 of the v3 algorithm — **PURE**. Given a snapshot of local and remote
@@ -158,10 +156,10 @@ class V3Planner {
                         }
                     }
                     r.statisticsKey?.let { key ->
-                        syncStatistics += V3Action.SyncStatistics(sentinelRoot(syncId), syncId, StatisticsSyncKind.Reading, key, r.statisticsSize, r.statisticsLastModified)
+                        syncStatistics += V3Action.SyncStatistics(sentinelRoot(syncId), syncId, StatisticsSyncKind.Reading, key, r.statisticsSize, r.statisticsLastModified, r.statisticsEtag)
                     }
                     r.mangaStatisticsKey?.takeIf { r.manifest.format == HttpSyncContentType.Mokuro }?.let { key ->
-                        syncStatistics += V3Action.SyncStatistics(sentinelRoot(syncId), syncId, StatisticsSyncKind.MangaText, key, r.mangaStatisticsSize, r.mangaStatisticsLastModified)
+                        syncStatistics += V3Action.SyncStatistics(sentinelRoot(syncId), syncId, StatisticsSyncKind.MangaText, key, r.mangaStatisticsSize, r.mangaStatisticsLastModified, r.mangaStatisticsEtag)
                     }
                     if (
                         r.manifest.format == HttpSyncContentType.Epub &&
@@ -377,11 +375,8 @@ class V3Planner {
                     // local copy is already the same bytes the server lists.
                     val pretranslationsKey = r?.pretranslationsKey
                     if (pretranslationsKey != null) {
-                        val local = File(l.root, PRETRANSLATIONS_FILENAME)
-                        val remoteSize = r.pretranslationsSize
-                        val unchanged = remoteSize != null &&
-                            local.isFile &&
-                            local.length() == remoteSize.toLong()
+                        val unchanged = r.pretranslationsEtag != null &&
+                            r.pretranslationsEtag == l.pretranslationsEtag
                         if (!unchanged) {
                             importPretranslations += V3Action.ImportPretranslations(
                                 root = l.root,
@@ -407,18 +402,18 @@ class V3Planner {
                 if ((r?.statisticsSize ?: 0) > MAX_STATISTICS_BLOB_BYTES) {
                     plannerErrors += V3Error(syncId, "SyncStatistics", "remote statistics exceed the $MAX_STATISTICS_BLOB_BYTES-byte limit")
                 } else {
-                    syncStatistics += V3Action.SyncStatistics(l.root, syncId, StatisticsSyncKind.Reading, r?.statisticsKey, r?.statisticsSize, r?.statisticsLastModified)
+                    syncStatistics += V3Action.SyncStatistics(l.root, syncId, StatisticsSyncKind.Reading, r?.statisticsKey, r?.statisticsSize, r?.statisticsLastModified, r?.statisticsEtag)
                 }
                 if (l.contentType == moe.antimony.hoshi.epub.ContentType.Mokuro) {
                     if ((r?.mangaStatisticsSize ?: 0) > MAX_STATISTICS_BLOB_BYTES) {
                         plannerErrors += V3Error(syncId, "SyncStatistics", "remote manga statistics exceed the $MAX_STATISTICS_BLOB_BYTES-byte limit")
                     } else {
-                        syncStatistics += V3Action.SyncStatistics(l.root, syncId, StatisticsSyncKind.MangaText, r?.mangaStatisticsKey, r?.mangaStatisticsSize, r?.mangaStatisticsLastModified)
+                        syncStatistics += V3Action.SyncStatistics(l.root, syncId, StatisticsSyncKind.MangaText, r?.mangaStatisticsKey, r?.mangaStatisticsSize, r?.mangaStatisticsLastModified, r?.mangaStatisticsEtag)
                     }
                 }
                 if (l.contentType == moe.antimony.hoshi.epub.ContentType.Epub) {
                     val sentencesKey = r?.sentencesKey
-                    if (sentencesKey != null) {
+                    if (sentencesKey != null && (r.sentencesEtag == null || r.sentencesEtag != l.sentencesEtag)) {
                         if ((r.sentencesSize ?: 0) > MAX_EPUB_SENTENCES_BLOB_BYTES) {
                             plannerErrors += V3Error(
                                 syncId,
@@ -511,6 +506,9 @@ class V3Planner {
             addAll(pushTombstones.sortedBy { it.syncId })
             addAll(applyRemoteMetadata.sortedBy { it.syncId })
             addAll(deleteLocalBooks.sortedBy { it.syncId })
+            // Existing reading history must not wait behind downloading unrelated books.
+            val (existingStatistics, importedStatistics) = syncStatistics.partition { it.syncId in localBySyncId }
+            addAll(existingStatistics.sortedWith(compareBy({ it.syncId }, { it.kind })))
             addAll(importRemoteBooks.sortedBy { it.syncId })
             addAll(replaceRemotePayloads.sortedBy { it.syncId })
             // Apply-remote bucket: bookmarks, chats (sorted by key for stable ordering),
@@ -519,7 +517,7 @@ class V3Planner {
             addAll(importChats.sortedWith(compareBy({ it.syncId }, { it.key })))
             addAll(importPretranslations.sortedBy { it.syncId })
             addAll(importSentences.sortedBy { it.syncId })
-            addAll(syncStatistics.sortedWith(compareBy({ it.syncId }, { it.kind })))
+            addAll(importedStatistics.sortedWith(compareBy({ it.syncId }, { it.kind })))
             addAll(applyAiSettings)
             // Push bucket: bookmark, chat, payload, metadata, ai settings.
             addAll(pushBookmarks.sortedBy { it.syncId })

@@ -36,7 +36,7 @@ class HttpSyncBookmarkSchedulerTest {
     private fun newScheduler(currentSettings: suspend () -> HttpSyncSettings?) = HttpSyncBookmarkScheduler(
         state = HttpSyncBatchState(BookRepository(temporaryFolder.newFolder())),
         currentSettings = currentSettings,
-        syncBooksNow = { _, _ -> error("no full sync expected") },
+        syncBooksNow = { _, _, _ -> error("no full sync expected") },
         fullCycleRunner = HttpSyncFullCycleRunner(scope),
         scope = scope,
     )

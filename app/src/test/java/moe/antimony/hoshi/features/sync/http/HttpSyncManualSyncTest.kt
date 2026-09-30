@@ -55,4 +55,13 @@ class HttpSyncManualSyncTest {
         yield()
         assertTrue(sync.status.value is SyncStatus.Done)
     }
+
+    @Test
+    fun protocolFailuresKeepTheLocalizedMessageForTheUi() = runBlocking {
+        val resource = moe.antimony.hoshi.R.string.http_sync_invalid_pagination
+        val sync = HttpSyncManualSync(this) { throw HttpSyncException(resource) }
+        sync.start()
+        yield()
+        assertEquals(resource, (sync.status.value as SyncStatus.Failed).messageResource)
+    }
 }

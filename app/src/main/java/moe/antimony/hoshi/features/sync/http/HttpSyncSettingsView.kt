@@ -166,7 +166,8 @@ internal fun HttpSyncStatusLine(status: SyncStatus) {
         }
         is SyncStatus.Failed -> stringResource(
             R.string.http_sync_failed_format,
-            status.message ?: stringResource(R.string.http_sync_unknown_error),
+            status.messageResource?.let { stringResource(it) }
+                ?: status.message ?: stringResource(R.string.http_sync_unknown_error),
         ) to MaterialTheme.colorScheme.error
     }
     if (text.isNotEmpty()) {
@@ -187,7 +188,7 @@ private fun SyncProgressView(progress: HttpSyncProgress) {
             )
         }
         Text(
-            text = progress.message,
+            text = progress.messageResource?.let { stringResource(it) } ?: progress.message,
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurface,
         )

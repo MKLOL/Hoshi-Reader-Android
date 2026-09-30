@@ -26,7 +26,7 @@ class HttpSyncManualSync(
                 mutableStatus.value = SyncStatus.Idle
                 throw cancelled
             } catch (error: Exception) {
-                mutableStatus.value = SyncStatus.Failed(error.message)
+                mutableStatus.value = SyncStatus.Failed(error.message, (error as? HttpSyncException)?.messageResource)
             }
         }
     }
@@ -36,5 +36,5 @@ sealed interface SyncStatus {
     data object Idle : SyncStatus
     data class Running(val progress: HttpSyncProgress? = null) : SyncStatus
     data class Done(val result: HttpSyncResult) : SyncStatus
-    data class Failed(val message: String?) : SyncStatus
+    data class Failed(val message: String?, val messageResource: Int? = null) : SyncStatus
 }

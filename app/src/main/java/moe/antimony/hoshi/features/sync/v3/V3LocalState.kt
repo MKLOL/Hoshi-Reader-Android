@@ -13,6 +13,12 @@ import moe.antimony.hoshi.features.sync.http.bookmarkKey
 import moe.antimony.hoshi.features.sync.http.syncIdForMetadata
 import moe.antimony.hoshi.features.sync.http.metadataKey
 import java.time.Instant
+import java.io.File
+import java.nio.file.Files
+import java.nio.file.attribute.BasicFileAttributes
+import java.security.MessageDigest
+import moe.antimony.hoshi.features.ai.PRETRANSLATIONS_FILENAME
+import moe.antimony.hoshi.features.ai.EPUB_TRANSLATIONS_FILENAME
 
 /**
  * Step 1 of the v3 algorithm. Reads everything an immediate sync would need to know
@@ -40,6 +46,29 @@ class V3LocalState(
     private val shelfStateStore = HttpSyncShelfStateStore(json)
     private val deletedBookStateStore = HttpSyncDeletedBookStateStore(json)
     private val revisionStore = HttpSyncRevisionStore(json)
+    private data class CachedHash(val modified: java.nio.file.attribute.FileTime, val size: Long, val fileKey: Any?, val etag: String)
+    private val translationHashes = mutableMapOf<String, CachedHash>()
+
+    private fun translationEtag(file: File): String? = runCatching {
+        val stat = Files.readAttributes(file.toPath(), BasicFileAttributes::class.java)
+        if (!stat.isRegularFile) return@runCatching null
+        val cached = translationHashes[file.path]
+        if (cached != null && cached.fileKey != null && cached.modified == stat.lastModifiedTime() && cached.size == stat.size() && cached.fileKey == stat.fileKey()) {
+            return@runCatching cached.etag
+        }
+        val digest = MessageDigest.getInstance("SHA-256")
+        file.inputStream().buffered().use { input ->
+            val buffer = ByteArray(8192)
+            while (true) {
+                val size = input.read(buffer)
+                if (size < 0) break
+                digest.update(buffer, 0, size)
+            }
+        }
+        val etag = "sha256:" + digest.digest().joinToString("") { "%02x".format(it) }
+        translationHashes[file.path] = CachedHash(stat.lastModifiedTime(), stat.size(), stat.fileKey(), etag)
+        etag
+    }.getOrNull()
 
     suspend fun read(): V3LocalSnapshot {
         val entries = bookRepository.loadBookEntries()
@@ -149,6 +178,8 @@ class V3LocalState(
                 }.getOrNull(),
                 payloadDirty = moe.antimony.hoshi.features.sync.http.HttpSyncPayloadCodec()
                     .hasPayloadContentDirty(entry.root),
+                pretranslationsEtag = translationEtag(entry.root.resolve(PRETRANSLATIONS_FILENAME)),
+                sentencesEtag = translationEtag(entry.root.resolve(EPUB_TRANSLATIONS_FILENAME)),
             )
         }
 

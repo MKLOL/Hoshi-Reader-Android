@@ -17,10 +17,8 @@ import moe.antimony.hoshi.features.sync.http.HttpSyncSettings
 /**
  * Public entry point for the v3 sync algorithm.
  *
- * Design contract: see `docs/SYNC_V3_SPEC.md`. **Not hooked up.** The
- * production sync still runs through [moe.antimony.hoshi.features.sync.http.HttpSyncReconciler].
- * v3 ships as parallel code with its own tests until the user gives the
- * go-ahead to swap.
+ * Design contract: see `docs/SYNC_V3_SPEC.md`. The production default behind
+ * [moe.antimony.hoshi.features.sync.http.HttpSyncEngineDispatcher].
  *
  * Algorithm (four steps):
  *   1. snapshot local state via [V3LocalState].
@@ -44,7 +42,7 @@ class V3SyncEngine(
         aiHistoryStore = aiHistoryStore,
         aiSettingsRepository = aiSettingsRepository,
     )
-    private val remoteState = V3RemoteState()
+    private val remoteState = V3RemoteState(bookRepository.booksDirectory)
     private val planner = V3Planner()
     private val pushOps = V3PushOps(
         bookRepository = bookRepository,

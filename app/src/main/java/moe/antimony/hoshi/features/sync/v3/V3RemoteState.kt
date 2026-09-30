@@ -1,6 +1,10 @@
 package moe.antimony.hoshi.features.sync.v3
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.json.Json
+import moe.antimony.hoshi.features.sync.http.HttpSyncKvKeyMeta
+import moe.antimony.hoshi.features.sync.http.HttpSyncException
+import java.io.File
 import moe.antimony.hoshi.features.sync.http.AI_CHAT_SETTINGS_KEY
 import moe.antimony.hoshi.features.sync.http.ALL_BOOKS_PREFIX
 import moe.antimony.hoshi.features.sync.http.HttpSyncAiChatSettingsBlob
@@ -21,7 +25,8 @@ import moe.antimony.hoshi.features.sync.http.HttpSyncContentType
  * returned [V3RemoteSnapshotResult.errors] list — the engine surfaces them in the
  * final [V3SyncResult].
  */
-class V3RemoteState {
+class V3RemoteState(cacheDirectory: File? = null) {
+    private val bodyCache = V3RemoteBodyCache(cacheDirectory)
     private val json = Json {
         ignoreUnknownKeys = true
         encodeDefaults = true
@@ -41,9 +46,11 @@ class V3RemoteState {
             val lastModified: String,
             /** Byte size from the listing; lets the planner skip an unchanged blob download. */
             val size: Int,
+            val meta: HttpSyncKvKeyMeta,
         )
         val keys = mutableListOf<RemoteKey>()
         var cursor: String? = null
+        val seenCursors = mutableSetOf<String>()
         var pages = 0
         do {
             onProgress(
@@ -61,10 +68,17 @@ class V3RemoteState {
             pages += 1
             for (meta in page.keys) {
                 val parsed = parseBookKey(meta.key) ?: continue
-                keys += RemoteKey(parsed.first, parsed.second, meta.key, meta.lastModified, meta.size)
+                keys += RemoteKey(parsed.first, parsed.second, meta.key, meta.lastModified, meta.size, meta)
             }
             cursor = page.nextCursor
+            if (page.truncated && (cursor == null || !seenCursors.add(cursor))) {
+                throw HttpSyncException(moe.antimony.hoshi.R.string.http_sync_invalid_pagination)
+            }
         } while (cursor != null && page.truncated)
+        bodyCache.begin(transport.cacheIdentity, keys.mapTo(mutableSetOf()) { it.key })
+
+        suspend fun readBody(key: RemoteKey) = bodyCache.get(key.meta)
+            ?: transport.get(key.key).also { bodyCache.put(key.meta, it) }
 
         // ── Pass B: group by syncId, build V3RemoteBook by fetching needed blob bodies.
         val grouped: MutableMap<String, MutableList<RemoteKey>> = linkedMapOf()
@@ -93,19 +107,23 @@ class V3RemoteState {
             val chatKeys = mutableSetOf<String>()
             var pretranslationsKey: String? = null
             var pretranslationsSize: Int? = null
+            var pretranslationsEtag: String? = null
             var sentencesKey: String? = null
             var sentencesSize: Int? = null
+            var sentencesEtag: String? = null
             var statisticsKey: String? = null
             var statisticsSize: Int? = null
             var statisticsLastModified: String? = null
+            var statisticsEtag: String? = null
             var mangaStatisticsKey: String? = null
             var mangaStatisticsSize: Int? = null
             var mangaStatisticsLastModified: String? = null
+            var mangaStatisticsEtag: String? = null
             for (k in grouped.getValue(syncId)) {
                 when (k.kind) {
                     BookKind.Metadata -> {
                         try {
-                            val fetched = transport.get(k.key)
+                            val fetched = readBody(k)
                             if (fetched != null) {
                                 metadata = json.decodeFromString(
                                     HttpSyncMetadataBlob.serializer(),
@@ -113,6 +131,8 @@ class V3RemoteState {
                                 )
                                 metadataLastModified = fetched.lastModified
                             }
+                        } catch (e: CancellationException) {
+                            throw e
                         } catch (e: Exception) {
                             // Bug 5: surface the decode error AND mark the field as
                             // malformed so the planner refuses to overwrite the corrupt
@@ -129,7 +149,7 @@ class V3RemoteState {
                     BookKind.EpubManifest -> epubManifestKey = k
                     BookKind.Bookmark -> {
                         try {
-                            val fetched = transport.get(k.key)
+                            val fetched = readBody(k)
                             if (fetched != null) {
                                 bookmark = json.decodeFromString(
                                     HttpSyncBookmarkBlob.serializer(),
@@ -137,6 +157,8 @@ class V3RemoteState {
                                 )
                                 bookmarkLastModified = fetched.lastModified
                             }
+                        } catch (e: CancellationException) {
+                            throw e
                         } catch (e: Exception) {
                             bookmarkMalformed = true
                             errors += V3Error(
@@ -152,20 +174,24 @@ class V3RemoteState {
                         // needed when the planner decides it actually changed.
                         pretranslationsKey = k.key
                         pretranslationsSize = k.size
+                        pretranslationsEtag = k.meta.etag
                     }
                     BookKind.Sentences -> {
                         sentencesKey = k.key
                         sentencesSize = k.size
+                        sentencesEtag = k.meta.etag
                     }
                     BookKind.Statistics -> {
                         statisticsKey = k.key
                         statisticsSize = k.size
                         statisticsLastModified = k.lastModified
+                        statisticsEtag = k.meta.etag
                     }
                     BookKind.MangaStatistics -> {
                         mangaStatisticsKey = k.key
                         mangaStatisticsSize = k.size
                         mangaStatisticsLastModified = k.lastModified
+                        mangaStatisticsEtag = k.meta.etag
                     }
                     BookKind.PayloadZip, BookKind.EpubZip -> Unit // body not fetched here
                 }
@@ -225,7 +251,7 @@ class V3RemoteState {
             var manifestMalformed = selectionError != null
             if (candidate != null) {
                 try {
-                    val fetched = transport.get(candidate.remoteKey.key)
+                    val fetched = readBody(candidate.remoteKey)
                     if (fetched != null) {
                         val decoded = json.decodeFromString(
                             HttpSyncPayloadManifest.serializer(),
@@ -240,6 +266,8 @@ class V3RemoteState {
                         manifestLastModified = fetched.lastModified
                         payloadKeys = candidate.keys
                     }
+                } catch (e: CancellationException) {
+                    throw e
                 } catch (e: Exception) {
                     manifestMalformed = true
                     errors += V3Error(
@@ -261,14 +289,18 @@ class V3RemoteState {
                 chatKeys = chatKeys,
                 pretranslationsKey = pretranslationsKey,
                 pretranslationsSize = pretranslationsSize,
+                pretranslationsEtag = pretranslationsEtag,
                 sentencesKey = sentencesKey,
                 sentencesSize = sentencesSize,
+                sentencesEtag = sentencesEtag,
                 statisticsKey = statisticsKey,
                 statisticsSize = statisticsSize,
                 statisticsLastModified = statisticsLastModified,
+                statisticsEtag = statisticsEtag,
                 mangaStatisticsKey = mangaStatisticsKey,
                 mangaStatisticsSize = mangaStatisticsSize,
                 mangaStatisticsLastModified = mangaStatisticsLastModified,
+                mangaStatisticsEtag = mangaStatisticsEtag,
                 metadataMalformed = metadataMalformed,
                 manifestMalformed = manifestMalformed,
                 bookmarkMalformed = bookmarkMalformed,
@@ -289,6 +321,8 @@ class V3RemoteState {
                 )
                 aiSettingsLastModified = fetched.lastModified
             }
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             // Bug 5: same as the per-book fields — surface AND mark as malformed so the
             // planner doesn't push our local AI settings over the corrupt remote.
@@ -300,6 +334,7 @@ class V3RemoteState {
             )
         }
 
+        bodyCache.save()
         return V3RemoteSnapshotResult(
             snapshot = V3RemoteSnapshot(
                 books = books,

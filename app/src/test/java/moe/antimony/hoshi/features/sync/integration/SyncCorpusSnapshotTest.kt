@@ -64,6 +64,7 @@ class SyncCorpusSnapshotTest {
             epubZipKey(SyncCorpus.NOVEL_SYNC_ID), epubManifestKey(SyncCorpus.NOVEL_SYNC_ID),
             bookmarkKey(SyncCorpus.NOVEL_SYNC_ID), metadataKey(SyncCorpus.NOVEL_SYNC_ID), sentencesKey(SyncCorpus.NOVEL_SYNC_ID),
             BOOKS_MAP_KEY,
+            "sync/maps/checkpoint.json",
         )
         for (key in expectedKeys) assertTrue("server holds $key", key in etags)
         val chatKeys = etags.keys.filter { it.startsWith("books/${SyncCorpus.MANGA_SYNC_ID}/chat/") }

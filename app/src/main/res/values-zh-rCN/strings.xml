@@ -776,6 +776,13 @@
     <string name="http_sync_now">立即同步</string>
     <string name="http_sync_running">正在同步…</string>
     <string name="http_sync_starting">开始同步</string>
+    <string name="http_sync_checking_changes">正在检查同步更改</string>
+    <string name="http_sync_reading_history">正在同步阅读历史</string>
+    <string name="http_sync_invalid_pagination">同步服务器返回的更改列表不完整。请重试。</string>
+    <string name="http_sync_reading_local">正在读取本地同步状态</string>
+    <string name="http_sync_updating_positions">正在更新阅读位置</string>
+    <string name="http_sync_waiting_for_sync">正在加入当前同步</string>
+    <string name="http_sync_finishing_maps">正在完成同步</string>
     <string name="http_sync_errors">同步错误：</string>
     <string name="http_sync_complete_format">同步完成：%1$s</string>
     <string name="http_sync_failed_format">同步失败：%1$s</string>

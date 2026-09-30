@@ -50,8 +50,6 @@ class UsageLog(
 
     /** Totals of days that are over: their files no longer change, so they are read once. */
     internal val finishedDayCounts: MutableMap<LocalDate, UsageDayCounts> = ConcurrentHashMap()
-    /** Compact reading-only evidence for historical streak reconstruction; never cache an open day. */
-    internal val finishedDayReadingEvents: MutableMap<LocalDate, List<UsageEvent>> = ConcurrentHashMap()
 
     /** A new event of [type] stamped with the current time and UTC offset. */
     fun newEvent(type: UsageEventType): UsageEvent {
@@ -74,10 +72,7 @@ class UsageLog(
                 // Whatever goes wrong loses this one event; logging must never break reading.
                 false
             }
-            if (written) {
-                finishedDayReadingEvents.remove(dateOf(event.at))
-                writes.update { it + 1 }
-            }
+            if (written) writes.update { it + 1 }
         }
     }
 

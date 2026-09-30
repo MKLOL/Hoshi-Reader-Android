@@ -727,7 +727,7 @@ class HttpSyncReconciler(
                         }
                     BookKeyKind.Statistics, BookKeyKind.MangaStatistics -> {
                         val kind = if (parsed.kind == BookKeyKind.Statistics) StatisticsSyncKind.Reading else StatisticsSyncKind.MangaText
-                        val outcome = statisticsSync.sync(transport, root, parsed.syncId, kind, StatisticsRemoteListing.Listed(meta.size, meta.lastModified))
+                        val outcome = statisticsSync.sync(transport, root, parsed.syncId, kind, StatisticsRemoteListing.Listed(meta.size, meta.lastModified, meta.etag))
                         if (outcome.downloaded) downloadedStatistics += 1
                         if (outcome.uploaded) uploadedStatisticsWhilePulling += 1
                     }
@@ -1848,10 +1848,11 @@ class HttpSyncReconciler(
 }
 
 data class HttpSyncProgress(
-    val message: String,
+    val message: String = "",
     val detail: String? = null,
     val completed: Int? = null,
     val total: Int? = null,
+    @param:androidx.annotation.StringRes val messageResource: Int? = null,
 ) {
     val fraction: Float?
         get() {

@@ -14,8 +14,6 @@ import moe.antimony.hoshi.features.bookshelf.toBookCoverSource
 import moe.antimony.hoshi.mokuro.MangaTextStatistic
 import moe.antimony.hoshi.mokuro.deduplicateMangaTextStatistics
 import moe.antimony.hoshi.features.statistics.reconstructStreakHistory
-import moe.antimony.hoshi.features.statistics.loadHistoricalReadingHours
-import moe.antimony.hoshi.features.usage.UsageLog
 
 /** One day of reading: seconds spent and the amount read (characters, or OCR characters for manga). */
 data class DailyReading(
@@ -110,8 +108,6 @@ fun summarizeReadingStatistics(
     inputs: List<BookStatisticsInput>,
     todayKey: String,
     streakResetHour: Int = 0,
-    loggedHours: Map<String, Map<String, Double>> = emptyMap(),
-    localDeviceId: String? = null,
 ): ReadingStatisticsOverview {
     val dailySeconds = mutableMapOf<String, Double>()
     val dailyCharacters = mutableMapOf<String, Int>()
@@ -171,7 +167,7 @@ fun summarizeReadingStatistics(
     val daily = (dailySeconds.keys + dailyCharacters.keys).distinct()
         .map { DailyReading(it, dailySeconds[it] ?: 0.0, dailyCharacters[it] ?: 0) }
         .sortedByDescending { it.dateKey }
-    val streak = reconstructStreakHistory(inputs, streakResetHour, loggedHours, localDeviceId)
+    val streak = reconstructStreakHistory(inputs, streakResetHour)
     return ReadingStatisticsOverview(
         totalSeconds = books.sumOf { it.totalSeconds },
         todaySeconds = dailySeconds[todayKey] ?: 0.0,
@@ -253,8 +249,6 @@ suspend fun loadReadingStatisticsOverview(
     bookRepository: BookRepository,
     todayKey: String,
     streakResetHour: Int = 0,
-    usageLog: UsageLog? = null,
-    localDeviceId: String? = null,
 ): ReadingStatisticsOverview = withContext(Dispatchers.IO) {
     val inputs = bookRepository.loadBookEntries().map { entry ->
         val contentType = bookContentType(entry.root)
@@ -271,6 +265,5 @@ suspend fun loadReadingStatisticsOverview(
             coverSource = bookRepository.coverFile(entry)?.toBookCoverSource(),
         )
     }
-    val hours = usageLog?.let { loadHistoricalReadingHours(it) }.orEmpty()
-    summarizeReadingStatistics(inputs, todayKey, streakResetHour, hours, localDeviceId)
+    summarizeReadingStatistics(inputs, todayKey, streakResetHour)
 }

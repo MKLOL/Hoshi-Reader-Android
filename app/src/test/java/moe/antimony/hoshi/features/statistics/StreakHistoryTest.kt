@@ -4,8 +4,6 @@ import moe.antimony.hoshi.epub.ContentType
 import moe.antimony.hoshi.epub.ReadingStatistics
 import moe.antimony.hoshi.features.reader.BookStatisticsInput
 import moe.antimony.hoshi.features.reader.summarizeReadingStatistics
-import moe.antimony.hoshi.features.usage.UsageEvent
-import moe.antimony.hoshi.features.usage.UsageEventType
 import org.junit.Assert.*
 import org.junit.Test
 import java.time.LocalDate
@@ -56,22 +54,22 @@ class StreakHistoryTest {
         assertTrue(history.hasEstimatedHistory)
     }
 
-    @Test fun olderLocalLogRecoversExactHoursAndNeverExplainsOtherDevices() {
-        val logs = mapOf("b" to mapOf("2026-09-29T01:00" to 600.0))
-        val entry = row("2026-09-29", 10.0)
-        val history = reconstructStreakHistory(input(entry), 3, logs, "local")
-        assertFalse(history.hasEstimatedHistory)
-        assertEquals(600.0, seconds(history, "2026-09-28"), 0.0)
-        assertEquals(0.0, seconds(history, "2026-09-29"), 0.0)
-        assertTrue(reconstructStreakHistory(input(entry.copy(deviceId = "remote")), 3, logs, "local").hasEstimatedHistory)
+    @Test fun oldAfterMidnightReadingCannotLoseItsCalendarDayOnTheOriginatingDevice() {
+        val synced = input(row("2026-09-29", 10.0).copy(deviceId = "tablet"))
+        // Before this fix the tablet's private 1am log moved all 600s to Sep28, yielding 0,
+        // while the phone's optimistic view of the same synced row retained a 2-day streak.
+        val history = reconstructStreakHistory(synced, 3)
+        val today = LocalDate.parse("2026-09-30")
+        assertEquals(2, computeReadingStreak(history.days, 600.0, today).currentDays)
+        assertEquals(600.0, seconds(history, "2026-09-29"), 0.0)
+        assertTrue(history.hasEstimatedHistory)
     }
 
-    @Test fun logAndNewHoursAreNotDoubleCounted() {
-        val entry = row("2026-09-29", 20.0, "2026-09-29T04:00" to 10.0)
-        val logs = mapOf("b" to mapOf("2026-09-29T02:00" to 600.0, "2026-09-29T04:00" to 600.0))
-        val history = reconstructStreakHistory(input(entry), 3, logs, "local")
+    @Test fun newAfterMidnightReadingRemainsExactOnBothDevices() {
+        val synced = input(row("2026-09-29", 10.0, "2026-09-29T01:00" to 10.0).copy(deviceId = "tablet"))
+        val history = reconstructStreakHistory(synced, 3)
         assertEquals(600.0, seconds(history, "2026-09-28"), 0.0)
-        assertEquals(600.0, seconds(history, "2026-09-29"), 0.0)
+        assertEquals(0.0, seconds(history, "2026-09-29"), 0.0)
         assertFalse(history.hasEstimatedHistory)
     }
 
@@ -80,22 +78,6 @@ class StreakHistoryTest {
         val newer = row("2026-09-29", 6.0, "2026-09-29T04:00" to 6.0).copy(lastStatisticModified = 1)
         val remote = row("2026-09-29", 4.0, "2026-09-29T04:00" to 4.0).copy(deviceId = "remote")
         assertEquals(600.0, seconds(reconstructStreakHistory(input(older, newer, remote), 3), "2026-09-29"), 0.0)
-    }
-
-    @Test fun logUsesRecordedOffsetAndOnlyCompletedCountedSpans() {
-        val end = ZonedDateTime.parse("2026-09-29T03:05:00+09:00").toInstant().toEpochMilli()
-        val event = UsageEvent(end, "+09:00", UsageEventType.ReadingStopped, session = "s", bookId = "b", startedAt = end - 600_000)
-        val started = event.copy(at = end - 600_000, type = UsageEventType.ReadingStarted, startedAt = null)
-        val hours = historicalReadingHours(listOf(started, event, event, event.copy(type = UsageEventType.ReaderClosed)))
-        assertEquals(mapOf("2026-09-29T02:00" to 300.0, "2026-09-29T03:00" to 300.0), hours["b"])
-    }
-
-    @Test fun incompleteAndOffsetChangingLogsStayUnknown() {
-        val end = ZonedDateTime.parse("2026-03-08T03:10:00-04:00").toInstant().toEpochMilli()
-        val stop = UsageEvent(end, "-04:00", UsageEventType.ReadingStopped, session = "s", bookId = "b", startedAt = end - 1_200_000)
-        val start = stop.copy(at = end - 1_200_000, utcOffset = "-05:00", type = UsageEventType.ReadingStarted, startedAt = null)
-        assertTrue(historicalReadingHours(listOf(stop)).isEmpty())
-        assertTrue(historicalReadingHours(listOf(start, stop)).isEmpty())
     }
 
     @Test fun malformedAndOversizedHourDataNeverInflatesExactTime() {

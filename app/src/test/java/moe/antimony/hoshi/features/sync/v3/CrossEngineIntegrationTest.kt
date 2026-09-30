@@ -510,7 +510,7 @@ class CrossEngineIntegrationTest {
      * Cross-version shelf interop on a fresh device. v2 imports a book + places it on the
      * "Light Novels" shelf via `BookRepository.saveShelves`, then syncs. The v2 outbound
      * writes a metadata blob carrying `shelfName=Light Novels` (and a `shelfUpdatedAt`
-     * derived from the local `.bookshelves.json` mtime — see [HttpSyncReconciler.localShelvesUpdatedAt]).
+     * derived from the local `shelves.json` mtime — see [HttpSyncReconciler.localShelvesUpdatedAt]).
      * The v3 fresh device's planner sees a remote-only book + `shelfName`, threads the
      * shelf placement into the [V3Action.ImportRemoteBook] action (Bug 2 codepath), and
      * the executor applies it.
@@ -584,7 +584,7 @@ class CrossEngineIntegrationTest {
      * and syncs. B (v3) moves it to "Shelf B" at T2 > T1 and syncs. A (v2) re-syncs and
      * must converge on "Shelf B".
      *
-     * v2 keys its shelf-LWW timestamp on the `.bookshelves.json` mtime ([HttpSyncReconciler.localShelvesUpdatedAt])
+     * v2 keys its shelf-LWW timestamp on the `shelves.json` mtime ([HttpSyncReconciler.localShelvesUpdatedAt])
      * unless a `.http_sync_shelf_state.json` sidecar already pins a specific
      * `shelfUpdatedAt`. To make the timestamps deterministic without sleeping, we set the
      * shelves file's mtime explicitly via `File.setLastModified` after each write.
@@ -611,7 +611,8 @@ class CrossEngineIntegrationTest {
         // 3. A places on "Shelf A" at T1 (older) and syncs.
         placeBookOnShelf(repoA, rootA, "Shelf A")
         val t1Millis = Instant.parse("2030-01-01T00:00:00Z").toEpochMilli()
-        repoA.booksDirectory.resolve(".bookshelves.json").setLastModified(t1Millis)
+        assertTrue("Set A's shelf timestamp", repoA.booksDirectory.resolve("shelves.json").setLastModified(t1Millis))
+        assertEquals(t1Millis, repoA.shelvesLastModifiedMillis())
         v2Reconciler(repoA, transport).syncOnce(configured).also {
             assertTrue("v2 shelf-A push errors: ${it.errors}", it.errors.isEmpty())
         }
@@ -619,7 +620,8 @@ class CrossEngineIntegrationTest {
         // 4. B places on "Shelf B" at T2 > T1 and syncs.
         placeBookOnShelf(repoB, rootB, "Shelf B")
         val t2Millis = Instant.parse("2030-01-02T00:00:00Z").toEpochMilli()
-        repoB.booksDirectory.resolve(".bookshelves.json").setLastModified(t2Millis)
+        assertTrue("Set B's shelf timestamp", repoB.booksDirectory.resolve("shelves.json").setLastModified(t2Millis))
+        assertEquals(t2Millis, repoB.shelvesLastModifiedMillis())
         v3Engine(repoB, transport).syncOnce(configured).also {
             assertEquals("v3 shelf-B push errors", emptyList<V3Error>(), it.errors)
         }

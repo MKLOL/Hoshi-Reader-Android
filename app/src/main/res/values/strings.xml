@@ -778,6 +778,13 @@
     <string name="http_sync_now">Sync now</string>
     <string name="http_sync_running">Syncing…</string>
     <string name="http_sync_starting">Starting sync</string>
+    <string name="http_sync_checking_changes">Checking for sync changes</string>
+    <string name="http_sync_reading_history">Syncing reading history</string>
+    <string name="http_sync_invalid_pagination">The sync server returned an incomplete list of changes. Please try again.</string>
+    <string name="http_sync_reading_local">Reading local sync state</string>
+    <string name="http_sync_updating_positions">Updating reading positions</string>
+    <string name="http_sync_waiting_for_sync">Joining the current sync</string>
+    <string name="http_sync_finishing_maps">Finishing sync</string>
     <string name="http_sync_errors">Sync errors:</string>
     <string name="http_sync_complete_format">Sync complete: %1$s</string>
     <string name="http_sync_failed_format">Sync failed: %1$s</string>

@@ -66,10 +66,12 @@ class HttpSyncRevisionStore(
         synchronized(lock) {
             val state = loadLocked(booksRoot).toMutableMap()
             val record = state[key] ?: HttpSyncRevisionRecord()
-            state[key] = record.copy(
+            val observed = record.copy(
                 baseRev = maxOf(record.baseRev, rr),
                 localRev = if (appliedLocally) maxOf(record.localRev, rr) else record.localRev,
             )
+            if (observed == record) return@synchronized
+            state[key] = observed
             saveLocked(booksRoot, state)
         }
     }

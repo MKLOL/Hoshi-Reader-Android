@@ -92,6 +92,19 @@ class V3StatisticsPlannerTest {
     }
 
     @Test
+    fun existingBookStatisticsDoNotWaitForUnrelatedPayloadDownloads() {
+        val root = temp.newFolder("book")
+        val existing = remoteBook(withStatistics = true)
+        val newBook = existing.copy(syncId = "new-book")
+        val actions = planner.compute(localSnapshot(listOf(localBook(root))), remoteSnapshot(listOf(existing, newBook))).actions
+        val importIndex = actions.indexOfFirst { it is V3Action.ImportRemoteBook }
+        val existingStats = actions.indexOfLast { it is V3Action.SyncStatistics && it.syncId == "shirokuma" }
+        val importedStats = actions.indexOfFirst { it is V3Action.SyncStatistics && it.syncId == "new-book" }
+        assertTrue(existingStats >= 0 && existingStats < importIndex)
+        assertTrue(importedStats > importIndex)
+    }
+
+    @Test
     fun statisticsAreAppliedBeforeAnythingIsPushed() {
         val root = temp.newFolder("book")
         val actions = planner.compute(localSnapshot(listOf(localBook(root))), remoteSnapshot(listOf(remoteBook(withStatistics = true)))).actions

@@ -36,9 +36,10 @@ class V3PretranslationsPlannerTest {
         chatEntries = emptyList(),
         pendingDeletion = null,
         importedAt = null,
+        pretranslationsEtag = File(root, PRETRANSLATIONS_FILENAME).takeIf { it.isFile }?.let { hash(it.readBytes()) },
     )
 
-    private fun remoteBook(size: Int?) = V3RemoteBook(
+    private fun remoteBook(size: Int?, etag: String? = null) = V3RemoteBook(
         syncId = "004yotsubato",
         metadata = HttpSyncMetadataBlob(
             title = "004Yotsubato",
@@ -52,6 +53,7 @@ class V3PretranslationsPlannerTest {
         ),
         pretranslationsKey = "books/004yotsubato/pretranslations",
         pretranslationsSize = size,
+        pretranslationsEtag = etag,
     )
 
     private fun snapshot(root: File) = V3LocalSnapshot(
@@ -66,8 +68,8 @@ class V3PretranslationsPlannerTest {
         aiSettingsLastModified = null,
     )
 
-    private fun plan(root: File, remoteSize: Int?) = planner.compute(
-        snapshot(root), remoteSnapshot(listOf(remoteBook(remoteSize))),
+    private fun plan(root: File, remoteSize: Int?, remoteEtag: String? = null) = planner.compute(
+        snapshot(root), remoteSnapshot(listOf(remoteBook(remoteSize, remoteEtag))),
     ).actions.filterIsInstance<V3Action.ImportPretranslations>()
 
     @Test
@@ -83,7 +85,7 @@ class V3PretranslationsPlannerTest {
         val root = temp.newFolder("book")
         val body = "x".repeat(500)
         File(root, PRETRANSLATIONS_FILENAME).writeText(body)
-        assertTrue(plan(root, remoteSize = body.length).isEmpty())
+        assertTrue(plan(root, remoteSize = body.length, remoteEtag = hash(body.toByteArray())).isEmpty())
     }
 
     @Test
@@ -92,6 +94,23 @@ class V3PretranslationsPlannerTest {
         File(root, PRETRANSLATIONS_FILENAME).writeText("x".repeat(100))
         assertEquals(1, plan(root, remoteSize = 999).size)
     }
+
+    @Test
+    fun equalSizedChangedBlobIsReimported() {
+        val root = temp.newFolder("book")
+        File(root, PRETRANSLATIONS_FILENAME).writeText("old")
+        assertEquals(1, plan(root, remoteSize = 3, remoteEtag = hash("new".toByteArray())).size)
+    }
+
+    @Test
+    fun matchingSizeWithoutContentValidatorDoesNotHideRemoteChanges() {
+        val root = temp.newFolder("book")
+        File(root, PRETRANSLATIONS_FILENAME).writeText("old")
+        assertEquals(1, plan(root, remoteSize = 3).size)
+    }
+
+    private fun hash(bytes: ByteArray) = "sha256:" + java.security.MessageDigest.getInstance("SHA-256")
+        .digest(bytes).joinToString("") { "%02x".format(it) }
 
     @Test
     fun serverWithoutPretranslationsPlansNothing() {

@@ -102,11 +102,10 @@ fun StatisticsScreen(
     val resetHour = readerSettings.statisticsDayResetHour
     val streakToday = streakDate(now, resetHour)
     val resumeCount = rememberResumeCount()
-    LaunchedEffect(statisticsVersion, usageVersion, resumeCount, today, resetHour) {
+    LaunchedEffect(statisticsVersion, resumeCount, today, resetHour) {
         overview = null
         overview = loadReadingStatisticsOverview(
             appContainer.bookRepository, today.toString(), resetHour,
-            appContainer.usageLog, appContainer.deviceIdentity.id,
         )
     }
     LaunchedEffect(usageVersion, resumeCount, today) {

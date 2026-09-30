@@ -64,7 +64,11 @@ enum class StatisticsSyncKind {
 /** What the caller knows about the remote key before the exchange. */
 sealed interface StatisticsRemoteListing {
     /** The key was in the listing with this body size and (when the listing carries it) modification stamp. */
-    data class Listed(val size: Int, val lastModified: String? = null) : StatisticsRemoteListing
+    data class Listed(
+        val size: Int,
+        val lastModified: String? = null,
+        val remoteEtag: String? = null,
+    ) : StatisticsRemoteListing
 
     /** The listing did not contain the key. */
     data object Absent : StatisticsRemoteListing
@@ -85,6 +89,8 @@ internal data class StatisticsSyncStateEntry(
     val remoteSize: Int,
     /** The server's stamp for the body we last read or wrote; a same-size edit elsewhere changes it. */
     val remoteLastModified: String? = null,
+    /** Content identity also distinguishes same-size writes within one server timestamp tick. */
+    val remoteEtag: String? = null,
 )
 
 @Serializable
@@ -114,6 +120,40 @@ class HttpSyncStatisticsSync(
         encodeDefaults = true
     }
 
+    /**
+     * Local statistics are outside the book payload/map hash. A missed reader push must
+     * still make a manual/background sync run the full exchange even if the server has not
+     * changed. Compare the same canonical body as [sync], without making a network request.
+     * Missing exchange state for a listed remote key and a missing sidecar with earlier
+     * exchange state also need reconciliation: the full exchange can restore those days
+     * from the server instead of calling an empty book synced.
+     */
+    suspend fun hasLocalChanges(
+        bookRoot: File,
+        syncId: String,
+        remoteReadingPresent: Boolean = false,
+        remoteMangaPresent: Boolean = false,
+    ): Boolean {
+        if (!bookRoot.isDirectory) return false
+        val readingChanged = bookLocks.withKeyLock(statisticsKey(syncId)) {
+            val entries = bookRepository.loadStatistics(bookRoot)
+                .deduplicateReadingStatistics().sortedBy { dayDeviceKey(it.dateKey, it.deviceId) }
+            val previous = loadState(bookRoot).reading
+            if (previous == null) entries.isNotEmpty() || remoteReadingPresent
+            else (remoteReadingPresent && previous.remoteEtag == null) ||
+                previous.localSha256 != sha256(readingBody(syncId, entries))
+        }
+        if (readingChanged || bookContentType(bookRoot) != ContentType.Mokuro) return readingChanged
+        return bookLocks.withKeyLock(mangaStatisticsKey(syncId)) {
+            val entries = bookRepository.loadMangaTextStatistics(bookRoot)
+                .deduplicateMangaTextStatistics().sortedBy { dayDeviceKey(it.dateKey, it.deviceId) }
+            val previous = loadState(bookRoot).mangaText
+            if (previous == null) entries.isNotEmpty() || remoteMangaPresent
+            else (remoteMangaPresent && previous.remoteEtag == null) ||
+                previous.localSha256 != sha256(mangaBody(syncId, entries))
+        }
+    }
+
     suspend fun sync(
         transport: HttpSyncKvTransport,
         bookRoot: File,
@@ -138,9 +178,7 @@ class HttpSyncStatisticsSync(
                     merge = { it.deduplicateReadingStatistics() },
                     entryKey = { dayDeviceKey(it.dateKey, it.deviceId) },
                     stamp = { it.lastStatisticModified },
-                    encode = { entries ->
-                        json.encodeToString(HttpSyncStatisticsBlob.serializer(), HttpSyncStatisticsBlob(syncId = syncId, entries = entries))
-                    },
+                    encode = { entries -> readingBody(syncId, entries) },
                     decode = { body ->
                         val blob = json.decodeFromString(HttpSyncStatisticsBlob.serializer(), body)
                         if (blob.version > HttpSyncStatisticsBlob.SUPPORTED_VERSION) {
@@ -161,9 +199,7 @@ class HttpSyncStatisticsSync(
                     merge = { it.deduplicateMangaTextStatistics() },
                     entryKey = { dayDeviceKey(it.dateKey, it.deviceId) },
                     stamp = { it.lastModified },
-                    encode = { entries ->
-                        json.encodeToString(HttpSyncMangaStatisticsBlob.serializer(), HttpSyncMangaStatisticsBlob(syncId = syncId, entries = entries))
-                    },
+                    encode = { entries -> mangaBody(syncId, entries) },
                     decode = { body ->
                         val blob = json.decodeFromString(HttpSyncMangaStatisticsBlob.serializer(), body)
                         if (blob.version > HttpSyncMangaStatisticsBlob.SUPPORTED_VERSION) {
@@ -177,6 +213,12 @@ class HttpSyncStatisticsSync(
             }
         }
     }
+
+    private fun readingBody(syncId: String, entries: List<ReadingStatistics>): String =
+        json.encodeToString(HttpSyncStatisticsBlob.serializer(), HttpSyncStatisticsBlob(syncId = syncId, entries = entries))
+
+    private fun mangaBody(syncId: String, entries: List<MangaTextStatistic>): String =
+        json.encodeToString(HttpSyncMangaStatisticsBlob.serializer(), HttpSyncMangaStatisticsBlob(syncId = syncId, entries = entries))
 
     private suspend fun <T> exchange(
         transport: HttpSyncKvTransport,
@@ -203,12 +245,29 @@ class HttpSyncStatisticsSync(
         when (remote) {
             is StatisticsRemoteListing.Listed -> {
                 val sameStamp = remote.lastModified == null || last?.remoteLastModified == remote.lastModified
-                if (unchangedLocally && last.remoteSize == remote.size && sameStamp) return StatisticsSyncOutcome.NONE
+                // Older state files have no ETag: revalidate the applied body even if its
+                // size and timestamp happen to match. The content proof below can avoid a GET.
+                val sameEtag = remote.remoteEtag == null || last?.remoteEtag == remote.remoteEtag
+                if (unchangedLocally && last.remoteSize == remote.size && sameStamp && sameEtag) return StatisticsSyncOutcome.NONE
+                // A content-addressed ETag can prove the canonical local bytes already match
+                // the server. Upgrade the validator without downloading unchanged histories;
+                // opaque ETags and changed bodies still take the normal GET + merge path.
+                if (remote.remoteEtag == "sha256:$localSha" &&
+                    remote.size == localBody.toByteArray(Charsets.UTF_8).size
+                ) {
+                    saveState(bookRoot, writeState(state, StatisticsSyncStateEntry(
+                        localSha256 = localSha, remoteSize = remote.size,
+                        remoteLastModified = remote.lastModified, remoteEtag = remote.remoteEtag,
+                    )))
+                    return StatisticsSyncOutcome.NONE
+                }
             }
             // Nothing local and never exchanged: there is nothing to push, and a reconcile with a
             // listing pulls remote days, so the reader path must not fetch on every save.
             StatisticsRemoteListing.Unknown -> if (unchangedLocally || (last == null && local.isEmpty())) return StatisticsSyncOutcome.NONE
-            StatisticsRemoteListing.Absent -> return uploadWhole(transport, bookRoot, key, local, localBody, localSha, state, writeState)
+            // Absence is a listing snapshot, not a write lock. Another device can create
+            // this key before our upload, so nonempty local data still gets a fresh merge.
+            StatisticsRemoteListing.Absent -> if (local.isEmpty()) return StatisticsSyncOutcome.NONE
         }
         val fetched = transport.getBounded(key, MAX_STATISTICS_BLOB_BYTES)
             ?: return uploadWhole(transport, bookRoot, key, local, localBody, localSha, state, writeState)
@@ -231,17 +290,24 @@ class HttpSyncStatisticsSync(
         val mergedBody = encode(merged)
         val remoteSize: Int
         val remoteStamp: String?
+        val remoteEtag: String?
         if (uploaded) {
             val bytes = mergedBody.toByteArray(Charsets.UTF_8)
-            remoteStamp = transport.put(key = key, contentType = JSON_CONTENT_TYPE, body = bytes).lastModified
+            val written = transport.put(key = key, contentType = JSON_CONTENT_TYPE, body = bytes)
+            remoteStamp = written.lastModified
+            remoteEtag = written.etag
             remoteSize = bytes.size
         } else {
             remoteSize = fetched.body.size
             remoteStamp = fetched.lastModified
+            remoteEtag = fetched.etag
         }
         saveState(
             bookRoot,
-            writeState(state, StatisticsSyncStateEntry(localSha256 = sha256(mergedBody), remoteSize = remoteSize, remoteLastModified = remoteStamp)),
+            writeState(state, StatisticsSyncStateEntry(
+                localSha256 = sha256(mergedBody), remoteSize = remoteSize,
+                remoteLastModified = remoteStamp, remoteEtag = remoteEtag,
+            )),
         )
         return StatisticsSyncOutcome(downloaded = downloaded, uploaded = uploaded)
     }
@@ -261,7 +327,10 @@ class HttpSyncStatisticsSync(
         val written = transport.put(key = key, contentType = JSON_CONTENT_TYPE, body = bytes)
         saveState(
             bookRoot,
-            writeState(state, StatisticsSyncStateEntry(localSha256 = localSha, remoteSize = bytes.size, remoteLastModified = written.lastModified)),
+            writeState(state, StatisticsSyncStateEntry(
+                localSha256 = localSha, remoteSize = bytes.size,
+                remoteLastModified = written.lastModified, remoteEtag = written.etag,
+            )),
         )
         return StatisticsSyncOutcome(downloaded = false, uploaded = true)
     }

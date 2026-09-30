@@ -130,12 +130,13 @@ class SyncDevice(
      * including cursor persistence for v2.
      */
     suspend fun sync(): SyncOutcome {
-        val result = fastSync.syncNow(settings.copy(lastSyncedAt = cursor)) { reconcileSettings, transport ->
+        val result = fastSync.syncNow(settings.copy(lastSyncedAt = cursor)) { reconcileSettings, transport, report ->
             HttpSyncEngineDispatcher.syncOnce(
                 reconciler = reconciler,
                 v3Engine = v3,
                 settings = reconcileSettings,
                 transport = transport,
+                onProgress = report,
             )
         }
         result.newLastSyncedAt?.let { cursor = it }

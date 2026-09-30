@@ -12,6 +12,7 @@ import kotlinx.serialization.json.Json
 import moe.antimony.hoshi.epub.BookMetadata
 import moe.antimony.hoshi.epub.BookRepository
 import moe.antimony.hoshi.epub.Bookmark
+import moe.antimony.hoshi.epub.ReadingStatistics
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -181,6 +182,101 @@ class HttpSyncBatchExchangeTest {
         listOf(manual, background).awaitAll()
         assertEquals(1, invocations)
     }
+
+    @Test
+    fun manualSyncUploadsMissedStatisticsAndRecoversAnEmptyTabletWithAlreadyAcknowledgedEtags() = runBlocking {
+        val server = CountingMapTransport()
+        val phoneRepository = BookRepository(temporaryFolder.newFolder("phone"))
+        val tabletRepository = BookRepository(temporaryFolder.newFolder("tablet"))
+        val phoneRoot = createBook(phoneRepository, "Book", "book")
+        val tabletRoot = createBook(tabletRepository, "Book", "book")
+        for (root in listOf(phoneRoot, tabletRoot)) {
+            root.resolve(PAYLOAD_SHA_CACHE_FILENAME).writeText("sha256:" + "a".repeat(64))
+        }
+        val phoneState = HttpSyncBatchState(phoneRepository)
+        val tabletState = HttpSyncBatchState(tabletRepository)
+        phoneState.publishMaps(server)
+        val record = ReadingStatistics("Book", "2026-09-29", readingTime = 600.0, deviceId = "phone")
+        phoneRepository.saveStatistics(phoneRoot, listOf(record)) // no reader push, e.g. offline
+        val settings = HttpSyncSettings(baseUrl = "https://example.invalid", bearerToken = "test")
+        val phoneSync = HttpSyncFastSync(phoneState, HttpSyncFullCycleRunner(this)) { server }
+        val phoneResult = phoneSync.syncNow(settings) { _, _, _ ->
+            error("Reading history must not start a full book scan")
+        }
+        assertEquals(1, phoneResult.uploadedStatistics)
+        assertTrue(phoneResult.errors.isEmpty())
+
+        // An older build/cache has acknowledged the server's keys, but never materialized stats.
+        tabletState.publishMaps(server, tabletState.observeLegacyEtags(server))
+        assertTrue(tabletRepository.loadStatistics(tabletRoot).isEmpty())
+        val tabletSync = HttpSyncFastSync(tabletState, HttpSyncFullCycleRunner(this)) { server }
+        val tabletResult = tabletSync.syncNow(settings) { _, _, _ ->
+            error("Reading history recovery must not start a full book scan")
+        }
+        assertEquals(1, tabletResult.downloadedStatistics)
+        assertTrue(tabletResult.errors.isEmpty())
+        assertEquals(listOf(record), tabletRepository.loadStatistics(tabletRoot))
+        server.resetCounts()
+        tabletSync.syncNow(settings) { _, _, _ -> error("Unchanged library must use the fast path") }
+        assertEquals(1, server.listCalls)
+        assertEquals(0, server.getCalls)
+        assertEquals(0, server.putCalls)
+
+        val newer = record.copy(readingTime = 900.0, lastStatisticModified = 1)
+        val changedBody = json.encodeToString(
+            HttpSyncStatisticsBlob.serializer(), HttpSyncStatisticsBlob(syncId = "book", entries = listOf(newer)),
+        ).toByteArray()
+        assertEquals(server.body(statisticsKey("book")).size, changedBody.size)
+        server.overwriteKeepingTimestamp(statisticsKey("book"), changedBody)
+        val sameSecond = tabletSync.syncNow(settings) { _, _, _ ->
+            error("Changed statistics should stay on the history-only lane")
+        }
+        assertEquals(1, sameSecond.downloadedStatistics)
+        assertEquals(listOf(newer), tabletRepository.loadStatistics(tabletRoot))
+    }
+
+    @Test(timeout = 5_000)
+    fun manualSyncRechecksStatisticsThatArrivedAfterTheJoinedBackgroundSnapshot() = runBlocking {
+        val server = CountingMapTransport()
+        val repository = BookRepository(temporaryFolder.newFolder())
+        val root = createBook(repository, "Book", "book")
+        root.resolve(PAYLOAD_SHA_CACHE_FILENAME).writeText("sha256:" + "a".repeat(64))
+        val state = HttpSyncBatchState(repository)
+        state.publishMaps(server)
+        val runner = HttpSyncFullCycleRunner(this)
+        val snapshotted = CompletableDeferred<Unit>()
+        val joined = CompletableDeferred<Unit>()
+        val finishOldPass = CompletableDeferred<Unit>()
+        val oldBackground = async {
+            runner.run { report ->
+                report(HttpSyncProgress("Old snapshot"))
+                snapshotted.complete(Unit)
+                finishOldPass.await()
+                HttpSyncResult(
+                    uploadedBookmarks = 0, uploadedChatEntries = 0, uploadedMetadata = 0,
+                    downloadedBookmarks = 0, downloadedChatEntries = 0, remoteOnlyBooks = 0, errors = emptyList(),
+                )
+            }
+        }
+        snapshotted.await()
+        val history = ReadingStatistics("Book", "2026-09-29", readingTime = 600.0, deviceId = "phone")
+        server.put(statisticsKey("book"), "application/json", json.encodeToString(
+            HttpSyncStatisticsBlob.serializer(), HttpSyncStatisticsBlob(syncId = "book", entries = listOf(history)),
+        ).toByteArray())
+        val manual = async {
+            HttpSyncFastSync(state, runner) { server }.syncNow(
+                HttpSyncSettings(baseUrl = "https://example.invalid", bearerToken = "test"),
+                onProgress = { if (it.message == "Old snapshot") joined.complete(Unit) },
+            ) { _, _, _ -> error("Only new reading history needs downloading") }
+        }
+        joined.await()
+        assertTrue(repository.loadStatistics(root).isEmpty())
+        finishOldPass.complete(Unit)
+        oldBackground.await()
+        assertEquals(1, manual.await().downloadedStatistics)
+        assertEquals(listOf(history), repository.loadStatistics(root))
+    }
+
 
     @Test
     fun coldCacheNeverErasesItsExistingServerShard() = runBlocking {
@@ -451,6 +547,10 @@ private class CountingMapTransport : HttpSyncKvTransport {
     }
 
     fun body(key: String): ByteArray = values.getValue(key).body.copyOf()
+
+    fun overwriteKeepingTimestamp(key: String, body: ByteArray) {
+        values[key] = values.getValue(key).copy(body = body.copyOf(), etag = body.etag())
+    }
 
     fun storeBookmarkMap(map: Map<String, HttpSyncBookmarkMapEntry>) {
         val json = Json { encodeDefaults = true }

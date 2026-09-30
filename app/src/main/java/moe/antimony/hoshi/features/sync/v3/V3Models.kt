@@ -73,6 +73,9 @@ data class V3LocalBook(
     val payloadSha: String? = null,
     /** A user import changed immutable bytes and must win over the existing remote payload. */
     val payloadDirty: Boolean = false,
+    /** Content hashes of installed translation sidecars, matching the KV server ETag format. */
+    val pretranslationsEtag: String? = null,
+    val sentencesEtag: String? = null,
 )
 
 /**
@@ -106,16 +109,20 @@ data class V3RemoteBook(
     val pretranslationsKey: String? = null,
     /** Its size, used to skip re-downloading an unchanged blob. */
     val pretranslationsSize: Int? = null,
+    val pretranslationsEtag: String? = null,
     /** `books/{syncId}/sentences`, when the server has EPUB sentence translations. */
     val sentencesKey: String? = null,
     val sentencesSize: Int? = null,
+    val sentencesEtag: String? = null,
     /** `books/{syncId}/statistics` and `books/{syncId}/manga_statistics`, with their listed sizes. */
     val statisticsKey: String? = null,
     val statisticsSize: Int? = null,
     val statisticsLastModified: String? = null,
+    val statisticsEtag: String? = null,
     val mangaStatisticsKey: String? = null,
     val mangaStatisticsSize: Int? = null,
     val mangaStatisticsLastModified: String? = null,
+    val mangaStatisticsEtag: String? = null,
     /**
      * Bug 5: per-field "remote returned bytes but they didn't decode" markers. The
      * decoded field (e.g. [metadata]) is left null on decode failure, but the planner
@@ -202,6 +209,7 @@ sealed interface V3Action {
         val remoteKey: String?,
         val remoteSize: Int?,
         val remoteLastModified: String? = null,
+        val remoteEtag: String? = null,
     ) : V3Action
     data class PushPayload(val root: File, override val syncId: String, val title: String, val format: HttpSyncContentType) : V3Action
     data class PushTombstone(override val syncId: String, val record: HttpSyncDeletedBookRecord) : V3Action

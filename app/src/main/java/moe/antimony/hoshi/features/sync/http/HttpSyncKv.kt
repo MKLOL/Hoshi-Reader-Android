@@ -114,7 +114,14 @@ private data class HttpSyncMultipartCompleteResponse(
     val contentType: String? = null,
 )
 
-class HttpSyncException(message: String, val httpCode: Int? = null) : Exception(message)
+class HttpSyncException(message: String, val httpCode: Int? = null) : Exception(message) {
+    var messageResource: Int? = null
+        private set
+
+    constructor(@androidx.annotation.StringRes messageResource: Int) : this("") {
+        this.messageResource = messageResource
+    }
+}
 
 private fun InputStream.readBytesBounded(key: String, maxBytes: Int): ByteArray {
     val output = ByteArrayOutputStream(minOf(maxBytes, DEFAULT_BUFFER_SIZE))
@@ -140,6 +147,9 @@ private fun InputStream.readBytesBounded(key: String, maxBytes: Int): ByteArray 
  * network with an in-memory map and never touch [HttpSyncKvClient].
  */
 interface HttpSyncKvTransport {
+    /** Opaque account/server identity for caches. Null disables persisted transport caches. */
+    val cacheIdentity: String? get() = null
+
     suspend fun put(key: String, contentType: String, body: ByteArray): HttpSyncKvWriteResponse
 
     /**
@@ -219,6 +229,12 @@ class HttpSyncKvClient(
     private val multipartPartSizeBytes: Long = DEFAULT_MULTIPART_PART_SIZE_BYTES,
     private val multipartThresholdBytes: Long = DEFAULT_MULTIPART_UPLOAD_THRESHOLD_BYTES,
 ) : HttpSyncKvTransport {
+    override val cacheIdentity: String by lazy {
+        java.security.MessageDigest.getInstance("SHA-256")
+            .digest((baseUrl.trimEnd('/') + "\n" + bearerToken).toByteArray(Charsets.UTF_8))
+            .joinToString("") { "%02x".format(it) }
+    }
+
     private val json = Json {
         ignoreUnknownKeys = true
         encodeDefaults = true

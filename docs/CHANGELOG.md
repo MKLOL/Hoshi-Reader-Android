@@ -7,6 +7,11 @@ Semantic Versioning.
 
 ## [Unreleased]
 
+### Fixed
+- **Recover missing reading statistics when syncing.** Manual and background sync retry reading history that never uploaded and restore history missing on another device, even when the sync cache previously marked it complete.
+- **Faster sync for existing libraries.** Routine checks request changes since the last check and reuse unchanged book records and translations. Reading history for books already on the device is handled before unrelated book downloads, and manual sync displays progress when joining a background sync.
+- **Consistent streaks across devices.** Older reading gets the same optimistic credit on every device; private activity logs no longer make one device show a shorter streak than another with the same history and settings.
+
 ## [v0.11.21] - 2026-09-29
 
 ### Added

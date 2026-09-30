@@ -1,16 +1,19 @@
 package moe.antimony.hoshi.features.sync.v3
 
 import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.json.Json
 import moe.antimony.hoshi.epub.BookMetadata
 import moe.antimony.hoshi.epub.BookRepository
 import moe.antimony.hoshi.epub.ReadingStatistics
 import moe.antimony.hoshi.features.ai.AiChatHistoryStore
 import moe.antimony.hoshi.features.sync.http.FakeKvTransport
 import moe.antimony.hoshi.features.sync.http.HttpSyncKvFetched
+import moe.antimony.hoshi.features.sync.http.HttpSyncKvList
 import moe.antimony.hoshi.features.sync.http.HttpSyncKvTransport
 import moe.antimony.hoshi.features.sync.http.HttpSyncKvWriteResponse
 import moe.antimony.hoshi.features.sync.http.HttpSyncPayloadCodec
 import moe.antimony.hoshi.features.sync.http.HttpSyncSettings
+import moe.antimony.hoshi.features.sync.http.HttpSyncStatisticsBlob
 import moe.antimony.hoshi.features.sync.http.STATISTICS_SYNC_STATE_FILENAME
 import moe.antimony.hoshi.features.sync.http.mangaStatisticsKey
 import moe.antimony.hoshi.features.sync.http.payloadZipKey
@@ -160,5 +163,43 @@ class V3StatisticsExecutorTest {
         assertTrue("no statistics error: ${result.errors}", result.errors.none { it.action == "SyncStatistics" })
         assertEquals(0, result.applied.statistics)
         assertTrue("directory not recreated by the state file", !rootB.exists())
+    }
+
+    @Test
+    fun changedStatisticsWithTheSameSizeAndTimestampStillReachTheOtherDevice() = runBlocking {
+        val fake = FakeKvTransport()
+        publishFromDeviceA(fake)
+        fun etag(bytes: ByteArray) = "sha256:" + java.security.MessageDigest.getInstance("SHA-256")
+            .digest(bytes).joinToString("") { "%02x".format(it) }
+        val transport = object : HttpSyncKvTransport by fake {
+            override suspend fun getBounded(key: String, maxBytes: Int): HttpSyncKvFetched? =
+                fake.getBounded(key, maxBytes)?.let {
+                    HttpSyncKvFetched(it.body, it.contentType, it.lastModified, etag(it.body))
+                }
+            override suspend fun list(prefix: String?, since: String?, cursor: String?, limit: Int?): HttpSyncKvList {
+                val listed = fake.list(prefix, since, cursor, limit)
+                return listed.copy(keys = listed.keys.map { it.copy(etag = etag(fake.kv.getValue(it.key).body)) })
+            }
+            override suspend fun put(key: String, contentType: String, body: ByteArray): HttpSyncKvWriteResponse =
+                fake.put(key, contentType, body).copy(etag = etag(body))
+        }
+        val repository = BookRepository(temp.newFolder("B"))
+        val engine = engine(repository, transport)
+        assertTrue(engine.syncOnce(configured).errors.isEmpty())
+        val root = repository.loadBookEntries().single().root
+        val key = statisticsKey(syncId)
+        val before = fake.kv.getValue(key)
+        val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
+        val blob = json.decodeFromString(HttpSyncStatisticsBlob.serializer(), before.body.decodeToString())
+        val updated = blob.copy(entries = blob.entries.map { it.copy(readingTime = 601.0, lastStatisticModified = 11) })
+        val bytes = json.encodeToString(HttpSyncStatisticsBlob.serializer(), updated).toByteArray()
+        assertEquals(before.body.size, bytes.size)
+        fake.kv[key] = before.copy(body = bytes) // server clock is still in the same second
+
+        val result = engine.syncOnce(configured)
+
+        assertTrue(result.errors.toString(), result.errors.isEmpty())
+        assertEquals(1, result.applied.statistics)
+        assertEquals(601.0, repository.loadStatistics(root).single().readingTime, 0.0)
     }
 }
