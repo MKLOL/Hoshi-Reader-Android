@@ -12,6 +12,46 @@ from tools import verify_release
 
 
 class ReleaseEntryPointTest(unittest.TestCase):
+    def test_build_output_replaced_during_push_cannot_change_verified_release(self):
+        from tools import release_artifacts
+        with tempfile.TemporaryDirectory() as directory, ExitStack() as stack:
+            root = Path(directory)
+            gradle = root / "app/build.gradle.kts"
+            gradle.parent.mkdir()
+            gradle.write_text('versionCode = 1122\nversionName = "0.11.22"\n')
+            changelog = root / "docs/CHANGELOG.md"
+            changelog.parent.mkdir()
+            changelog.write_text("## [Unreleased]\n\n### Added\n- A reviewed feature.\n")
+            apk = root / "app-release.apk"
+            verified, published = [], []
+
+            def command(args, env=None):
+                if args[0] == "./gradlew":
+                    apk.write_bytes(b"reviewed release build")
+                elif args[:2] == ["git", "push"]:
+                    apk.write_bytes(b"unrelated concurrent build")
+                elif "tools/release_artifacts.py" in args:
+                    published.append(Path(args[args.index("--apk") + 1]).read_bytes())
+
+            def verify(candidate, repo, tag):
+                self.assertEqual("v0.12.0", tag)
+                verified.append(candidate.read_bytes())
+
+            for field, value in (("REPO", root), ("BUILD_GRADLE", gradle),
+                                 ("CHANGELOG", changelog), ("RELEASE_APK", apk)):
+                stack.enter_context(patch.object(release, field, value))
+            stack.enter_context(patch.object(sys, "argv", ["release.py", "minor"]))
+            stack.enter_context(patch.object(release.os, "chdir"))
+            stack.enter_context(patch.object(release.subprocess, "run"))
+            stack.enter_context(patch.object(release, "out", side_effect=lambda args, **kwargs: "source-head" if "rev-parse" in args else ""))
+            stack.enter_context(patch.object(release, "resolve_ndk", return_value="/ndk"))
+            stack.enter_context(patch.object(release, "origin_repo", return_value="test/repo"))
+            stack.enter_context(patch.object(release, "run", side_effect=command))
+            stack.enter_context(patch.object(release_artifacts, "verify_candidate", side_effect=verify))
+            release.main()
+            self.assertEqual([b"reviewed release build"], verified)
+            self.assertEqual(verified, published)
+
     def test_source_or_head_changes_during_verification_are_blocking(self):
         for head, status in (("changed-head", ""), ("expected-head", " M app/src/main/Changed.kt\0"),
                              ("expected-head", "?? untracked-source.kt\0")):

@@ -124,7 +124,7 @@ Last updated: 2026-09-30
 
 ### Release Distribution
 
-- Local and GitHub releases require `python3 tools/verify_release.py`: full JVM/local-KV checks, lint/build, and disposable-emulator sync regressions. Shared publication verifies package/certificate/version and downloaded SHA-256 before publishing, never overwriting assets. Coverage and limits: [Sync release testing](SYNC_RELEASE_TESTING.md).
+- Local and GitHub releases require `python3 tools/verify_release.py`: full JVM/local-KV checks, lint/build, and disposable-emulator sync regressions. Publication keeps the verified APK private across commit/push/upload, checks upgrade identity and downloaded SHA-256, and never overwrites assets. Coverage and limits: [Sync release testing](SYNC_RELEASE_TESTING.md).
 - Update transfers reconcile with DownloadManager on startup and while About is visible; queued/paused/progress/failure states, retry/cancel, and the always-available latest-release link are covered by `UpdateDownloadCoordinatorTest`, `UpdateDownloadDestinationTest`, `AboutUpdateStatusTest`, `UpdateDownloadManagerInstrumentedTest`, and `AboutUpdateLinkInstrumentedTest`. `Application.onCreate` blocks only on `UpdateStartup.snapshot()`; the DownloadManager query and APK hashing in `UpdateStartup.reconcile()` stay in the background. Cancel, Retry and Skip never discard a verified download (`UpdateDownloadCoordinatorTest`).
 - Before F-Droid distribution, split update behavior by distribution channel so F-Droid builds do not bypass F-Droid update checks.
 - Device-validate GitHub update prompts after the check/download split, covering skip-version, manual checks, completed-download prompts, user-triggered install, and same-version APK cleanup.

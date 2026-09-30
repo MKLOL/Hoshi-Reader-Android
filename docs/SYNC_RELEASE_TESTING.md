@@ -28,7 +28,8 @@ it afterward. It never selects an existing connected phone, tablet, or emulator.
    class must run; skipped tests, crashes, incomplete output, and zero-test success
    messages are failures, even when `adb` itself exits successfully.
 5. Before publication, the candidate must update the previous APK's package/signature,
-   increase its version code, and match its tag. Upload uses a private verified copy.
+   increase its version code, and match its tag. The local release snapshots its APK
+   before verification and retains that same private copy through commit, push, and upload.
    The draft's downloaded APK must match its SHA-256 before it becomes public/latest.
    Existing releases/assets are never overwritten; competing publishers fail safely.
 

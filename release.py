@@ -19,6 +19,7 @@ from __future__ import annotations
 import datetime
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -240,25 +241,29 @@ def main() -> None:
     if not RELEASE_APK.exists():
         die(f"the build finished but {RELEASE_APK} is missing")
 
-    step("Verifying upgrade compatibility before committing or pushing")
-    from tools.release_artifacts import verify_candidate
-    verify_candidate(RELEASE_APK, repo, tag)
-    require_release_source(source_head, version_files)
+    with tempfile.TemporaryDirectory(prefix="hoshi-release-candidate-") as directory:
+        # Keep the verified build private across commit/tag/push. Another local build
+        # may replace Gradle's output while those commands or the upload are running.
+        candidate = Path(directory) / "app-release.apk"
+        shutil.copyfile(RELEASE_APK, candidate)
+        step("Verifying upgrade compatibility before committing or pushing")
+        from tools.release_artifacts import verify_candidate
+        verify_candidate(candidate, repo, tag)
+        require_release_source(source_head, version_files)
 
-    step(f"Committing and tagging {tag}")
-    run(["git", "add", "app/build.gradle.kts", "docs/CHANGELOG.md"])
-    run(["git", "commit", "-m", f"chore: release {new_name}"])
-    run(["git", "tag", "-a", tag, "-m", f"Release {new_name}"])
+        step(f"Committing and tagging {tag}")
+        run(["git", "add", "app/build.gradle.kts", "docs/CHANGELOG.md"])
+        run(["git", "commit", "-m", f"chore: release {new_name}"])
+        run(["git", "tag", "-a", tag, "-m", f"Release {new_name}"])
 
-    step("Pushing to origin")
-    run(["git", "push", "origin", branch])
-    run(["git", "push", "origin", tag])
+        step("Pushing to origin")
+        run(["git", "push", "origin", branch])
+        run(["git", "push", "origin", tag])
 
-    step("Publishing the GitHub Release")
-    with tempfile.TemporaryDirectory(prefix="hoshi-release-notes-") as directory:
+        step("Publishing the GitHub Release")
         notes_file = Path(directory) / "notes.md"
         notes_file.write_text((notes or f"Release {new_name}") + "\n")
-        run([sys.executable, "tools/release_artifacts.py", "--apk", str(RELEASE_APK),
+        run([sys.executable, "tools/release_artifacts.py", "--apk", str(candidate),
              "--repo", repo, "--tag", tag, "--notes", str(notes_file)])
 
     print(f"\n✓ Released {tag}  ->  https://github.com/{repo}/releases/tag/{tag}")
