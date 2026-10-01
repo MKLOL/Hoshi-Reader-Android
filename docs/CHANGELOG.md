@@ -7,6 +7,8 @@ Semantic Versioning.
 
 ## [Unreleased]
 
+## [v0.12.1] - 2026-10-01
+
 ### Added
 - **Podcast transcripts.** Episodes the server has a transcript for offer Get transcript: the original recording (not the lesson) downloads with its timed Japanese transcript. The transcript screen highlights the line being spoken and keeps it in view; tap a word to pause and look it up in your dictionaries, tap a line's time to play from there, and show the English when you want it.
 
