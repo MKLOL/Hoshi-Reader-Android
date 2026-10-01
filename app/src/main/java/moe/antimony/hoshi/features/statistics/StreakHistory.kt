@@ -1,6 +1,7 @@
 package moe.antimony.hoshi.features.statistics
 
 import moe.antimony.hoshi.epub.ContentType
+import moe.antimony.hoshi.epub.ReadingStatistics
 import moe.antimony.hoshi.epub.deduplicateReadingStatistics
 import moe.antimony.hoshi.features.reader.BookStatisticsInput
 import moe.antimony.hoshi.features.reader.DailyReading
@@ -8,7 +9,6 @@ import moe.antimony.hoshi.mokuro.deduplicateMangaTextStatistics
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.ZonedDateTime
-import kotlin.math.roundToInt
 
 /** A wall-clock boundary, not a fixed 24-hour duration: this also works on DST days. */
 fun streakDate(now: ZonedDateTime, resetHour: Int): LocalDate =
@@ -17,62 +17,98 @@ fun streakDate(now: ZonedDateTime, resetHour: Int): LocalDate =
 data class StreakHistory(val days: List<DailyReading>, val hasEstimatedHistory: Boolean)
 
 /** The reading day an exact hour belongs to: before [reset] it is still the previous day. */
-private fun readingDayOf(hour: LocalDateTime, reset: Int): LocalDate =
+internal fun readingDayOf(hour: LocalDateTime, reset: Int): LocalDate =
     if (hour.hour < reset) hour.toLocalDate().minusDays(1) else hour.toLocalDate()
 
 /**
- * What was read on one reading day: from [resetHour] on [day] until [resetHour] the next morning,
- * the same day the streak counts, so "Today" and the streak goal never disagree after midnight.
- * Time comes from the exact hours; time recorded without them stays on its own calendar date
- * (unlike the streak's benefit of the doubt, a total must never count it twice). Characters are
- * only stored per calendar day, so each day's characters follow where that day's time fell.
+ * One book's records regrouped into reading days: each day runs from [resetHour] until the same
+ * hour the next morning, the day the streak counts, so nothing in the statistics changes day
+ * at midnight. Records stay keyed by calendar date on disk (iOS and ッツ read them); only what
+ * is shown is regrouped. Time comes from the exact hours; time recorded without a plausible
+ * hour stays on its own date (unlike the streak's benefit of the doubt, a total must never
+ * count it twice). Characters are only stored per calendar date, so each date's characters
+ * follow where that date's time fell, rounded so the book's total is unchanged.
+ * Newest day first; days with neither time nor characters are left out.
  */
+fun readingDays(
+    statistics: List<ReadingStatistics>,
+    charactersByDate: Map<String, Int>,
+    resetHour: Int,
+): List<DailyReading> {
+    val reset = resetHour.coerceIn(0, 23)
+    val seconds = mutableMapOf<String, Double>()
+    // Calendar date -> reading day -> seconds of that date's records that fell on that day.
+    val split = mutableMapOf<String, MutableMap<String, Double>>()
+    statistics.deduplicateReadingStatistics().forEach { entry ->
+        val total = entry.readingTime.takeIf { it.isFinite() && it > 0.0 } ?: return@forEach
+        val date = runCatching { LocalDate.parse(entry.dateKey) }.getOrNull()
+        // With a midnight reset the reading day is the record's own date. Otherwise an hour
+        // belongs to its record's date, or to the evening before when a tick crossed midnight;
+        // anything else came from a skewed clock and counts as an unknown hour.
+        val hours = if (reset == 0) emptyList() else entry.readingTimeByHour.mapNotNull { (key, value) ->
+            val hour = runCatching { LocalDateTime.parse(key) }.getOrNull()
+            val plausible = hour != null && date != null &&
+                (hour.toLocalDate() == date || hour.toLocalDate() == date.minusDays(1))
+            if (plausible && value.isFinite() && value > 0.0) hour to value else null
+        }
+        val known = hours.sumOf { it.second }
+        // Bound malformed/imported hour maps to the record's counted time, as the streak does.
+        val scale = if (known > total) total / known else 1.0
+        val shares = split.getOrPut(entry.dateKey) { mutableMapOf() }
+        fun credit(day: String, value: Double) {
+            if (value <= 0.0) return
+            seconds[day] = (seconds[day] ?: 0.0) + value
+            shares[day] = (shares[day] ?: 0.0) + value
+        }
+        hours.forEach { (hour, value) -> credit(readingDayOf(hour, reset).toString(), value * scale) }
+        credit(entry.dateKey, (total - known * scale).coerceAtLeast(0.0))
+    }
+    val characters = mutableMapOf<String, Int>()
+    charactersByDate.forEach { (dateKey, read) ->
+        if (read <= 0) return@forEach
+        val shares = split[dateKey].orEmpty().filterValues { it > 0.0 }
+        if (shares.isEmpty()) {
+            characters[dateKey] = (characters[dateKey] ?: 0) + read
+            return@forEach
+        }
+        // Largest remainder, so the date's characters add up exactly.
+        val time = shares.values.sum()
+        val exact = shares.mapValues { (_, value) -> read * value / time }
+        val floors = exact.mapValues { (_, value) -> value.toInt() }.toMutableMap()
+        var left = read - floors.values.sum()
+        exact.entries.sortedByDescending { it.value - it.value.toInt() }.forEach { (day, _) ->
+            if (left > 0) {
+                floors[day] = floors.getValue(day) + 1
+                left -= 1
+            }
+        }
+        floors.forEach { (day, value) -> characters[day] = (characters[day] ?: 0) + value }
+    }
+    return (seconds.keys + characters.keys).distinct()
+        .map { DailyReading(it, seconds[it] ?: 0.0, characters[it] ?: 0) }
+        .filter { it.seconds > 0.0 || it.characters > 0 }
+        .sortedByDescending { it.dateKey }
+}
+
+/** The characters a book's records hold per calendar date: text for an EPUB, OCR text for a manga. */
+internal fun BookStatisticsInput.charactersByDate(): Map<String, Int> = when (contentType) {
+    ContentType.Epub -> statistics.deduplicateReadingStatistics()
+        .groupBy { it.dateKey }.mapValues { (_, entries) -> entries.sumOf { it.charactersRead } }
+    ContentType.Mokuro -> mangaTextStatistics.deduplicateMangaTextStatistics()
+        .groupBy { it.dateKey }.mapValues { (_, entries) -> entries.sumOf { it.charactersRead } }
+}
+
+/** What every listed book read on one reading day (see [readingDays]). */
 fun readingDayTotals(
     inputs: List<BookStatisticsInput>,
     day: LocalDate,
     resetHour: Int,
 ): DailyReading {
-    val reset = resetHour.coerceIn(0, 23)
-    val dayKey = day.toString()
-    var seconds = 0.0
-    var characters = 0.0
-    inputs.forEach { book ->
-        val statistics = book.statistics.deduplicateReadingStatistics()
-        val inWindow = mutableMapOf<String, Double>()
-        val recorded = mutableMapOf<String, Double>()
-        statistics.forEach { entry ->
-            val total = entry.readingTime.takeIf { it.isFinite() && it > 0.0 } ?: 0.0
-            val date = runCatching { LocalDate.parse(entry.dateKey) }.getOrNull()
-            // An hour belongs to its record's date, or to the evening before when a tick crossed
-            // midnight. Anything else came from a skewed clock and counts as an unknown hour.
-            val hours = entry.readingTimeByHour.mapNotNull { (key, value) ->
-                val hour = runCatching { LocalDateTime.parse(key) }.getOrNull()
-                val plausible = hour != null && date != null &&
-                    (hour.toLocalDate() == date || hour.toLocalDate() == date.minusDays(1))
-                if (plausible && value.isFinite() && value > 0.0) hour to value else null
-            }
-            val known = hours.sumOf { it.second }
-            // Bound malformed/imported hour maps to the record's counted time, as the streak does.
-            val scale = if (known > total && known > 0.0) total / known else 1.0
-            val unknown = (total - known * scale).coerceAtLeast(0.0)
-            val counted = hours.filter { readingDayOf(it.first, reset) == day }.sumOf { it.second * scale } +
-                if (entry.dateKey == dayKey) unknown else 0.0
-            seconds += counted
-            inWindow[entry.dateKey] = (inWindow[entry.dateKey] ?: 0.0) + counted
-            recorded[entry.dateKey] = (recorded[entry.dateKey] ?: 0.0) + total
-        }
-        val charactersByDate: Map<String, Int> = when (book.contentType) {
-            ContentType.Epub -> statistics.groupBy { it.dateKey }.mapValues { (_, entries) -> entries.sumOf { it.charactersRead } }
-            ContentType.Mokuro -> book.mangaTextStatistics.deduplicateMangaTextStatistics()
-                .groupBy { it.dateKey }.mapValues { (_, entries) -> entries.sumOf { it.charactersRead } }
-        }
-        charactersByDate.forEach { (dateKey, read) ->
-            val time = recorded[dateKey] ?: 0.0
-            val share = if (time > 0.0) (inWindow[dateKey] ?: 0.0) / time else if (dateKey == dayKey) 1.0 else 0.0
-            characters += read * share
-        }
+    val key = day.toString()
+    val days = inputs.mapNotNull { book ->
+        readingDays(book.statistics, book.charactersByDate(), resetHour).firstOrNull { it.dateKey == key }
     }
-    return DailyReading(dayKey, seconds, characters.roundToInt())
+    return DailyReading(key, days.sumOf { it.seconds }, days.sumOf { it.characters })
 }
 
 /**

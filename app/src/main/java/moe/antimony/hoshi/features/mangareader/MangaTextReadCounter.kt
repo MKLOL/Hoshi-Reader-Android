@@ -39,6 +39,10 @@ class MangaTextReadCounter(
             )
         }
 
+    /** Every device's characters per calendar date, for counting them by reading day. */
+    fun charactersByDate(): Map<String, Int> =
+        statistics.groupBy { it.dateKey }.mapValues { (_, entries) -> entries.sumOf { it.charactersRead } }
+
     fun add(characters: Int) {
         if (characters <= 0) return
         val today = clock.currentDate().toString()

@@ -98,32 +98,28 @@ fun StatisticsScreen(
     var overview by remember { mutableStateOf<ReadingStatisticsOverview?>(null) }
     var usage by remember { mutableStateOf<UsageStatistics?>(null) }
     var now by remember { mutableStateOf(ZonedDateTime.now()) }
-    val today = now.toLocalDate()
     val resetHour = readerSettings.statisticsDayResetHour
-    val streakToday = streakDate(now, resetHour)
+    // Every day on this screen is a reading day: it starts at the configured reset hour, never at
+    // midnight, so Today, the streak, the history and the charts all change day together.
+    val today = streakDate(now, resetHour)
     val resumeCount = rememberResumeCount()
-    // "Today" is the streak's reading day (until the reset hour, after midnight is still last
-    // night), so the Today card and the streak goal always describe the same reading.
-    LaunchedEffect(statisticsVersion, resumeCount, streakToday, resetHour) {
+    LaunchedEffect(statisticsVersion, resumeCount, today, resetHour) {
         overview = null
         overview = loadReadingStatisticsOverview(
-            appContainer.bookRepository, streakToday.toString(), resetHour,
+            appContainer.bookRepository, today.toString(), resetHour,
         )
     }
-    LaunchedEffect(usageVersion, resumeCount, today, streakToday, resetHour) {
+    LaunchedEffect(usageVersion, resumeCount, today, resetHour) {
         usage = loadUsageStatistics(
-            appContainer.usageLog, today, historyDays = TrendRange.Quarter.days,
-            readingDay = streakToday, resetHour = resetHour,
+            appContainer.usageLog, today, historyDays = TrendRange.Quarter.days, resetHour = resetHour,
         )
     }
-    // Refresh at the actual wall-clock boundary, and recheck zone/clock changes at least each minute.
+    // Refresh at the reset hour, and recheck zone/clock changes at least each minute.
     LaunchedEffect(resumeCount, resetHour) {
         while (true) {
             now = ZonedDateTime.now()
-            val midnight = now.toLocalDate().plusDays(1).atStartOfDay(now.zone)
             val reset = streakDate(now, resetHour).plusDays(1).atTime(resetHour, 0).atZone(now.zone)
-            val next = minOf(midnight.toInstant(), reset.toInstant())
-            delay(Duration.between(now.toInstant(), next).toMillis().coerceIn(1_000L, 60_000L))
+            delay(Duration.between(now.toInstant(), reset.toInstant()).toMillis().coerceIn(1_000L, 60_000L))
         }
     }
     StatisticsScreenContent(
@@ -131,7 +127,6 @@ fun StatisticsScreen(
         usage = usage,
         today = today,
         minimumMinutes = readerSettings.statisticsStreakMinimumMinutes,
-        streakToday = streakToday,
         resetHour = resetHour,
         onResetHourChange = { hour ->
             scope.launch { appContainer.readerSettingsRepository.update { it.copy(statisticsDayResetHour = hour) } }
@@ -232,8 +227,7 @@ fun StatisticsScreenContent(
                     listState = overviewListState,
                     overview = overview,
                     usage = usage,
-                    // The Today card's day is the streak's reading day; the charts keep calendar days.
-                    today = streakToday,
+                    today = today,
                     streak = streak,
                     heatmap = heatmap,
                     weekdays = weekdays,

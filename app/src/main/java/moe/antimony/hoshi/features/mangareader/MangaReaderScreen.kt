@@ -281,6 +281,7 @@ internal fun MangaReaderScreen(
         usageBookId?.let { id -> ReaderUsageSession(usageLog, id, book.title, UsageContentType.Manga) }
     }
     val currentUsageSession = rememberUpdatedState(usageSession)
+    val currentResetHour = rememberUpdatedState(readerSettings.statisticsDayResetHour)
     val statisticsTracker = remember(bookRoot, book.title, persistedStatistics) {
         persistedStatistics?.let { statistics ->
             ReaderStatisticsTracker(
@@ -289,6 +290,7 @@ internal fun MangaReaderScreen(
                 enabled = true,
                 device = statisticsDevice,
                 onTrackingChanged = { reading -> currentUsageSession.value?.readingChanged(reading, pageIndex + 1) },
+                resetHour = { currentResetHour.value },
             )
         }
     }
@@ -298,11 +300,16 @@ internal fun MangaReaderScreen(
     val textReadCounter = remember(bookRoot, persistedTextStatistics) {
         persistedTextStatistics?.let { MangaTextReadCounter(initialStatistics = it, device = statisticsDevice) }
     }
-    var textReadState by remember(textReadCounter) { mutableStateOf(textReadCounter?.state) }
+    // The OCR characters' "Today" is the same reading day as the page counter's.
+    fun currentTextReadState(): MangaTextReadState? = textReadCounter?.state?.let { state ->
+        statisticsTracker?.let { tracker -> state.copy(todayCharacters = tracker.readingDayCharacters(textReadCounter.charactersByDate())) }
+            ?: state
+    }
+    var textReadState by remember(textReadCounter) { mutableStateOf(currentTextReadState()) }
 
     fun syncStatisticsState() {
         statisticsState = statisticsTracker?.state
-        textReadState = textReadCounter?.state
+        textReadState = currentTextReadState()
     }
 
     fun textStatisticsForSave(): List<MangaTextStatistic>? = textReadCounter?.statisticsForPersistenceOrNull()

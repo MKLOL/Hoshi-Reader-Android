@@ -31,8 +31,8 @@ data class UsageStatistics(
  * Reads today's timeline and daily totals ending on [today]: [historyDays] days plus the
  * [averageWindow] - 1 before them, so the first day's trailing average is real rather than
  * padded with days that were never read. Days before today are cached once read.
- * The daily totals are calendar days; "today" is the reading day [readingDay], running from
- * [resetHour] to the same hour the next morning, the same day the streak counts.
+ * Every day is a reading day running from [resetHour] to the same hour the next morning, the
+ * day the streak counts, so each one reads its own calendar file and the next morning's.
  */
 suspend fun loadUsageStatistics(
     log: UsageLog,
@@ -40,36 +40,38 @@ suspend fun loadUsageStatistics(
     historyDays: Int,
     zone: ZoneId = ZoneId.systemDefault(),
     averageWindow: Int = 3,
-    readingDay: LocalDate = today,
     resetHour: Int = 0,
 ): UsageStatistics = withContext(Dispatchers.Default) {
+    val reset = resetHour.coerceIn(0, 23)
     val firstLoggedDate = log.dayFiles().firstNotNullOfOrNull { file ->
         runCatching { LocalDate.parse(file.name.substringBefore('.')) }.getOrNull()
     }
+    // The first file's early morning belongs to the reading day before it.
+    val firstDay = firstLoggedDate?.let { if (reset > 0) it.minusDays(1) else it }
     val days = mutableMapOf<LocalDate, UsageDayCounts>()
     var todaySummary: UsageDaySummary? = null
     var date = today.minusDays(historyDays + averageWindow - 2L)
-    if (firstLoggedDate != null && date < firstLoggedDate) date = firstLoggedDate
+    if (firstDay != null && date < firstDay) date = firstDay
+    // Each calendar file is read once even though two reading days share it.
+    var events: List<UsageEvent>? = null
     while (!date.isAfter(today)) {
-        val cached = if (date < today) log.finishedDayCounts[date] else null
+        val cached = if (date < today) log.finishedDayCounts[date to reset] else null
         val counts = cached ?: run {
-            val summary = summarizeUsageDay(log.eventsOn(date), date, zone)
+            val own = events ?: log.eventsOn(date)
+            val next = if (reset > 0) log.eventsOn(date.plusDays(1)) else emptyList()
+            events = next.takeIf { reset > 0 }
+            val summary = summarizeUsageDay(own + next, date, zone, resetHour = reset)
             if (date == today) todaySummary = summary
-            summary.toCounts().also { if (date < today) log.finishedDayCounts[date] = it }
+            summary.toCounts().also { if (date < today) log.finishedDayCounts[date to reset] = it }
         }
+        if (cached != null) events = null
         if (!counts.isEmpty) days[date] = counts
         date = date.plusDays(1)
     }
-    // A reading day that is not the calendar day reaches into the next day's log file.
-    if (resetHour.coerceIn(0, 23) != 0 || readingDay != today) {
-        todaySummary = summarizeUsageDay(
-            log.eventsOn(readingDay) + log.eventsOn(readingDay.plusDays(1)), readingDay, zone, resetHour = resetHour,
-        )
-    }
     UsageStatistics(
-        today = todaySummary ?: summarizeUsageDay(emptyList(), today, zone),
+        today = todaySummary ?: summarizeUsageDay(emptyList(), today, zone, resetHour = reset),
         days = days,
-        firstLoggedDate = firstLoggedDate,
+        firstLoggedDate = firstDay,
     )
 }
 

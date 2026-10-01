@@ -258,7 +258,7 @@
     <string name="statistics_streak_goal">Daily goal</string>
     <string name="statistics_streak_goal_minutes_format">%1$d min</string>
     <string name="statistics_streak_reset">Streak day resets at</string>
-    <string name="statistics_streak_reset_help">Reading before this time counts toward the previous day, for the streak and for Today. Changing either setting recalculates your streak history. History and charts use calendar days.</string>
+    <string name="statistics_streak_reset_help">Reading before this time counts toward the previous day everywhere in your statistics: the streak, Today, history and charts. Changing either setting recalculates them.</string>
     <string name="statistics_streak_history_credit">Older reading without an exact time gets streak credit on either possible day.</string>
     <string name="statistics_heatmap_title">Last 16 weeks</string>
     <string name="statistics_today_title">Today</string>

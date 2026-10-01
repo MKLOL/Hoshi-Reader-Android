@@ -3,6 +3,7 @@ package moe.antimony.hoshi.features.statistics
 import moe.antimony.hoshi.epub.ContentType
 import moe.antimony.hoshi.epub.ReadingStatistics
 import moe.antimony.hoshi.features.reader.BookStatisticsInput
+import moe.antimony.hoshi.features.reader.DailyReading
 import moe.antimony.hoshi.features.reader.summarizeReadingStatistics
 import org.junit.Assert.*
 import org.junit.Test
@@ -127,5 +128,27 @@ class StreakHistoryTest {
         val entries = input(row("2026-10-01", 10.0, "1970-01-01T00:00" to 10.0))
         assertEquals(600.0, readingDayTotals(entries, LocalDate.parse("2026-10-01"), 3).seconds, 0.0)
         assertEquals(0.0, readingDayTotals(entries, LocalDate.parse("1969-12-31"), 3).seconds, 0.0)
+    }
+
+    @Test fun historyBookDaysAndLastReadAreReadingDaysToo() {
+        // Nothing changes day at midnight: last night's reading after 00:00 is one day with it.
+        val entries = input(
+            row("2026-09-30", 60.0, "2026-09-30T21:00" to 60.0).copy(charactersRead = 3000),
+            row("2026-10-01", 30.0, "2026-10-01T01:00" to 30.0).copy(charactersRead = 1500),
+        )
+        val overview = summarizeReadingStatistics(entries, "2026-09-30", 3)
+        assertEquals(listOf(DailyReading("2026-09-30", 5400.0, 4500)), overview.daily)
+        assertEquals(overview.daily, overview.books.single().days)
+        assertEquals("2026-09-30", overview.books.single().lastReadDateKey)
+        assertEquals("2026-09-30", overview.devices.single().lastReadDateKey)
+        // A midnight reset keeps the records' own calendar dates, exactly as before.
+        assertEquals(listOf("2026-10-01", "2026-09-30"), summarizeReadingStatistics(entries, "2026-10-01", 0).daily.map { it.dateKey })
+    }
+
+    @Test fun charactersSplitAcrossReadingDaysStillAddUpToTheBooksTotal() {
+        val book = input(row("2026-10-01", 3.0, "2026-10-01T01:00" to 1.0, "2026-10-01T10:00" to 2.0).copy(charactersRead = 1001)).single()
+        val days = readingDays(book.statistics, book.charactersByDate(), 3)
+        assertEquals(listOf("2026-10-01" to 667, "2026-09-30" to 334), days.map { it.dateKey to it.characters })
+        assertEquals(1001, days.sumOf { it.characters })
     }
 }

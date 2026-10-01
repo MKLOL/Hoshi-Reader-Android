@@ -32,7 +32,6 @@ import moe.antimony.hoshi.features.bookshelf.BookCoverCard
 import moe.antimony.hoshi.features.bookshelf.bookshelfProgressText
 import moe.antimony.hoshi.features.reader.BookReadingSummary
 import moe.antimony.hoshi.features.reader.ReadingStatisticsOverview
-import moe.antimony.hoshi.features.reader.SystemReaderStatisticsClock
 import moe.antimony.hoshi.features.reader.formatDurationSeconds
 import moe.antimony.hoshi.features.reader.loadReadingStatisticsOverview
 import moe.antimony.hoshi.features.settings.GroupCard
@@ -41,6 +40,7 @@ import moe.antimony.hoshi.features.settings.SettingsDetailScaffold
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 import java.util.Locale
+import java.time.ZonedDateTime
 
 /** One book's statistics: dates, totals, pace and the per-day history. Reloads like [StatisticsScreen]. */
 @Composable
@@ -53,10 +53,15 @@ fun BookStatisticsScreen(
     val statisticsVersion by appContainer.bookRepository.statisticsChanges.collectAsStateWithLifecycle()
     var overview by remember { mutableStateOf<ReadingStatisticsOverview?>(null) }
     val resumeCount = rememberResumeCount()
-    LaunchedEffect(statisticsVersion, resumeCount) {
+    val readerSettings by appContainer.readerSettingsRepository.settings.collectAsStateWithLifecycle(initialValue = null)
+    // The same reading days as the Statistics screen: they start at the configured reset hour.
+    val resetHour = readerSettings?.statisticsDayResetHour
+    LaunchedEffect(statisticsVersion, resumeCount, resetHour) {
+        val hour = resetHour ?: return@LaunchedEffect
         overview = loadReadingStatisticsOverview(
             appContainer.bookRepository,
-            SystemReaderStatisticsClock.currentDate().toString(),
+            streakDate(ZonedDateTime.now(), hour).toString(),
+            hour,
         )
     }
     BookStatisticsContent(

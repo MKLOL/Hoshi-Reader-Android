@@ -457,6 +457,7 @@ fun ReaderWebView(
         }
     }
     val currentUsageSession = rememberUpdatedState(usageSession)
+    val currentResetHour = rememberUpdatedState(readerSettings.statisticsDayResetHour)
     val statisticsTracker = remember(bookRoot, book.title, persistedStatistics) {
         persistedStatistics?.let { statistics ->
             ReaderStatisticsTracker(
@@ -465,6 +466,7 @@ fun ReaderWebView(
                 enabled = true,
                 device = appContainer.deviceIdentity,
                 onTrackingChanged = { reading -> currentUsageSession.value?.readingChanged(reading) },
+                resetHour = { currentResetHour.value },
             )
         }
     }

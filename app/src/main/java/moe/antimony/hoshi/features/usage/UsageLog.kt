@@ -48,8 +48,11 @@ class UsageLog(
     /** Counts written events; collect it to refresh anything that shows the log. */
     val changes: StateFlow<Long> = writes.asStateFlow()
 
-    /** Totals of days that are over: their files no longer change, so they are read once. */
-    internal val finishedDayCounts: MutableMap<LocalDate, UsageDayCounts> = ConcurrentHashMap()
+    /**
+     * Totals of reading days that are over, keyed by day and reset hour: their files no longer
+     * change, so they are read once per reset hour.
+     */
+    internal val finishedDayCounts: MutableMap<Pair<LocalDate, Int>, UsageDayCounts> = ConcurrentHashMap()
 
     /** A new event of [type] stamped with the current time and UTC offset. */
     fun newEvent(type: UsageEventType): UsageEvent {

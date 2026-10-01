@@ -9,6 +9,10 @@ import moe.antimony.hoshi.epub.sumReadingHours
 import java.time.LocalDate
 import java.time.ZoneId
 import kotlin.math.abs
+import java.time.Instant
+import java.time.LocalDateTime
+import moe.antimony.hoshi.features.statistics.readingDayOf
+import moe.antimony.hoshi.features.statistics.readingDays
 
 data class ReaderStatisticsState(
     val isTracking: Boolean,
@@ -46,6 +50,12 @@ class ReaderStatisticsTracker(
      * usage log opens and closes its reading spans here so they cover exactly the counted time.
      */
     private val onTrackingChanged: (Boolean) -> Unit = {},
+    /**
+     * The hour a reading day starts (the Statistics reset setting). "Today" runs from it until
+     * the same hour the next morning, like the Statistics screen and the streak. Read on every
+     * use, so changing the setting applies without reopening the book.
+     */
+    private val resetHour: () -> Int = { 0 },
 ) {
     private var statistics = initialStatistics.deduplicateReadingStatistics()
     private var lastTimestampMillis: Long = clock.currentTimeMillis()
@@ -58,19 +68,33 @@ class ReaderStatisticsTracker(
     private var currentState: ReaderStatisticsState = ReaderStatisticsState(
         isTracking = false,
         session = defaultStatistic(clock.currentDate()),
-        today = todayAcrossDevices(clock.currentDate()),
+        today = todayAcrossDevices(),
         allTime = allTimeStatistic(statistics),
     )
 
     /**
-     * The sheet's numbers. "Today" follows the clock even while tracking is stopped, so a
-     * sheet read after midnight labels the new day as today exactly like the Statistics page.
+     * The sheet's numbers. "Today" follows the clock even while tracking is stopped, so a sheet
+     * read after the reset hour labels the new reading day as today exactly like the Statistics page.
      */
     val state: ReaderStatisticsState
         get() {
             rollTodayIfNeeded()
+            if (currentState.today.dateKey != readingDay().toString()) {
+                currentState = currentState.copy(today = todayAcrossDevices())
+            }
             return currentState
         }
+
+    /**
+     * [charactersByDate] (calendar date to characters, e.g. a manga's OCR text) as read on the
+     * current reading day, each date's count split the way its reading time fell.
+     */
+    fun readingDayCharacters(charactersByDate: Map<String, Int>): Int {
+        rollTodayIfNeeded()
+        val day = readingDay().toString()
+        return readingDays(recordsWithRunningToday(), charactersByDate, resetHour())
+            .firstOrNull { it.dateKey == day }?.characters ?: 0
+    }
 
     fun start(currentCharacter: Int) {
         if (!enabled) return
@@ -122,7 +146,7 @@ class ReaderStatisticsTracker(
         todayOnThisDevice = todayOnThisDevice.updated(timeDiff, finalCharDiff, modified, hours)
         currentState = currentState.copy(
             session = currentState.session.updated(timeDiff, finalCharDiff, modified, hours),
-            today = currentState.today.updated(timeDiff, finalCharDiff, modified, hours),
+            today = todayAcrossDevices(),
             allTime = currentState.allTime.updated(timeDiff, finalCharDiff, modified),
         )
         hasUpdated = true
@@ -163,7 +187,7 @@ class ReaderStatisticsTracker(
         if (todayOnThisDevice.dateKey == currentDateKey) return
         storeToday()
         todayOnThisDevice = statisticForDate(currentDate)
-        currentState = currentState.copy(today = todayAcrossDevices(currentDate))
+        currentState = currentState.copy(today = todayAcrossDevices())
     }
 
     /** This device's stored entry for [date], carrying the device's current name, or a fresh one. */
@@ -172,20 +196,46 @@ class ReaderStatisticsTracker(
             ?.let { stored -> if (device != null) stored.copy(deviceName = device.name) else stored }
             ?: defaultStatistic(date)
 
+    /** The reading day the clock is in: before the reset hour it is still the previous date. */
+    private fun readingDay(): LocalDate {
+        val date = clock.currentDate()
+        val reset = resetHour().coerceIn(0, 23)
+        if (reset == 0) return date
+        val hour = Instant.ofEpochMilli(clock.currentTimeMillis()).atZone(clock.zoneId()).hour
+        return if (hour < reset) date.minusDays(1) else date
+    }
+
+    /** Every device's records, with this device's running entry standing in for its stored one. */
+    private fun recordsWithRunningToday(): List<ReadingStatistics> =
+        statistics.filterNot { it.dateKey == todayOnThisDevice.dateKey && it.deviceId == todayOnThisDevice.deviceId } +
+            todayOnThisDevice
+
     /**
-     * Every device's entry for [date] added up, with this device's running entry standing in for
-     * its stored one. Time, characters and the average speed are the whole day's; the min/max
-     * speed fields stay this device's session values, which is all the sheets show them for.
+     * Today for this book across every device, as a reading day (see [readingDays]): after
+     * midnight and before the reset hour it is still last night. Time, characters and the
+     * average speed are the whole day's; the min/max speed fields stay this device's session
+     * values, which is all the sheets show them for. Records stay keyed by calendar date.
      */
-    private fun todayAcrossDevices(date: LocalDate): ReadingStatistics {
-        val dateKey = date.toString()
-        val others = statistics.filter { it.dateKey == dateKey && it.deviceId != todayOnThisDevice.deviceId }
-        val readingTime = todayOnThisDevice.readingTime + others.sumOf { it.readingTime }
-        val charactersRead = todayOnThisDevice.charactersRead + others.sumOf { it.charactersRead }
+    private fun todayAcrossDevices(): ReadingStatistics {
+        val records = recordsWithRunningToday()
+        val reset = resetHour()
+        val day = readingDay().toString()
+        val characters = records.groupBy { it.dateKey }.mapValues { (_, entries) -> entries.sumOf { it.charactersRead } }
+        val total = readingDays(records, characters, reset).firstOrNull { it.dateKey == day }
+        val readingTime = total?.seconds ?: 0.0
+        val charactersRead = total?.characters ?: 0
         return todayOnThisDevice.copy(
+            dateKey = day,
             readingTime = readingTime,
             charactersRead = charactersRead,
-            readingTimeByHour = (others.map { it.readingTimeByHour } + todayOnThisDevice.readingTimeByHour).sumReadingHours(),
+            // The hours that make up the day: its own records' with a midnight reset, as before.
+            readingTimeByHour = if (reset <= 0) {
+                records.filter { it.dateKey == day }.map { it.readingTimeByHour }.sumReadingHours()
+            } else {
+                records.map { it.readingTimeByHour }.sumReadingHours().filterKeys { key ->
+                    runCatching { readingDayOf(LocalDateTime.parse(key), reset).toString() == day }.getOrDefault(false)
+                }
+            },
             lastReadingSpeed = if (readingTime > 0.0) (charactersRead / readingTime * 3600.0).toInt() else 0,
         )
     }
