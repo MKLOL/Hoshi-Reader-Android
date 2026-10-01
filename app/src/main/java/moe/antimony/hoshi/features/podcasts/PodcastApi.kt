@@ -80,4 +80,9 @@ internal class PodcastApi {
         require(validPodcastId(id))
         return json.decodeFromString(text(settings, "/$id/prepare", true))
     }
+    /** The raw transcript JSON (at most 2 MB); [parsePodcastTranscript] decides whether it is usable. */
+    suspend fun transcript(settings: HttpSyncSettings, id: String): String {
+        require(validPodcastId(id))
+        return text(settings, "/$id/transcript")
+    }
 }

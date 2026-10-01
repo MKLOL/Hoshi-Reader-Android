@@ -864,6 +864,16 @@
     <string name="podcasts_reason_too_large">文件超过允许的大小</string>
     <string name="podcasts_reason_incomplete">传输提前中断</string>
     <string name="podcasts_reason_save_failed">无法保存文件</string>
+    <string name="podcasts_reason_transcript_invalid">无法读取文稿</string>
+    <string name="podcasts_transcript_download">获取文稿</string>
+    <string name="podcasts_transcript_open">文稿</string>
+    <string name="podcasts_transcript_downloading">正在下载文稿… %1$d%%</string>
+    <string name="podcasts_transcript_failed_detail">文稿下载失败（%1$s）。点击“获取文稿”重试。</string>
+    <string name="podcasts_transcript_missing">此设备上已没有这份文稿。请在播客页重新下载。</string>
+    <string name="podcasts_transcript_show_english">显示翻译</string>
+    <string name="podcasts_transcript_hide_english">隐藏翻译</string>
+    <string name="podcasts_transcript_follow">跟随播放</string>
+    <string name="podcasts_transcript_play_from">从 %1$s 开始播放</string>
     <string name="reader_behavior_manga_enlarge_small_text">漫画：放大小字</string>
     <string name="reader_behavior_manga_enlarge_small_text_desc">放大漫画中显示的小字，便于点击。关闭后保留原始 OCR 字号。此设置不影响翻译和辞典弹窗的字号。</string>
 

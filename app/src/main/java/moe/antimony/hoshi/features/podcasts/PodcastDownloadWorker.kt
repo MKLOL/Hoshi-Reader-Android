@@ -32,14 +32,21 @@ class PodcastDownloadWorker(context: Context, params: WorkerParameters) : Corout
         val settingsRepo = applicationContext.httpSyncSettingsRepository()
         val settings = settingsRepo.settings.first()
         if (account != podcastAccount(settings)) return@withContext failed("account_changed")
-        val destination = PodcastFiles(applicationContext).audio(account, id)
+        // A transcript download fetches the original recording and its timed transcript instead of the lesson.
+        val transcript = inputData.getString(PodcastKeys.INPUT_KIND) == PodcastKeys.KIND_TRANSCRIPT
+        val files = PodcastFiles(applicationContext)
+        val destination = if (transcript) files.original(account, id) else files.audio(account, id)
         val temporary = java.io.File(destination.path + ".part")
         try {
             // Android 12+ refuses a foreground promotion from the background (a deferred or retried
             // start). The transfer is bounded and constrained, so it proceeds as ordinary work.
             try { setForeground(getForegroundInfo()) } catch (cancelled: CancellationException) { throw cancelled } catch (_: Exception) { }
             val api = PodcastApi.shared
-            api.client.newCall(api.request(settings, "/$id/audio")).execute().use { response ->
+            // Fetched first: it is small, and an unusable transcript should not cost the recording's download.
+            val transcriptText = if (!transcript) null else api.transcript(settings, id).also {
+                if (parsePodcastTranscript(it, id) == null) throw DownloadProblem("transcript_invalid")
+            }
+            api.client.newCall(api.request(settings, if (transcript) "/$id/original" else "/$id/audio")).execute().use { response ->
                 if (!response.isSuccessful) {
                     if (response.code in listOf(401, 403) && account == podcastAccount(settingsRepo.settings.first())) {
                         PodcastRepository.getInstance(applicationContext).invalidate()
@@ -76,9 +83,25 @@ class PodcastDownloadWorker(context: Context, params: WorkerParameters) : Corout
                 if (account != podcastAccount(settingsRepo.settings.first())) return@withContext failed("account_changed")
                 if (!temporary.renameTo(destination)) throw DownloadProblem("save_failed")
             }
+            // Written last: the transcript screen opens only once both halves are on disk.
+            transcriptText?.let { text ->
+                val target = files.transcript(account, id)
+                val part = java.io.File(target.path + ".part")
+                part.writeText(text)
+                if (!part.renameTo(target)) {
+                    part.delete()
+                    throw DownloadProblem("save_failed")
+                }
+            }
             Result.success()
         } catch (cancelled: CancellationException) {
             throw cancelled
+        } catch (error: PodcastHttpException) {
+            // The transcript request failed; the same rules as the recording's own response apply.
+            if (error.status in listOf(401, 403) && account == podcastAccount(settingsRepo.settings.first())) {
+                PodcastRepository.getInstance(applicationContext).invalidate()
+            }
+            if (error.status in listOf(429, 503) && runAttemptCount < 2) Result.retry() else failed("http:${error.status}")
         } catch (error: Exception) {
             Log.w("PodcastDownloadWorker", "Download attempt ${runAttemptCount + 1} failed (${error.javaClass.simpleName})")
             if (runAttemptCount < 2) Result.retry() else failed(if (error is DownloadProblem) error.code else "exception:" + error.javaClass.simpleName)

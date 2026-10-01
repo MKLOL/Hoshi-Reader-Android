@@ -54,6 +54,12 @@ sealed interface AppRoute : NavKey {
         val bookId: String,
     ) : AppRoute
 
+    /** An episode's original recording with its timed transcript, pushed from Podcasts. */
+    @Serializable
+    data class PodcastTranscriptRoute(
+        val episodeId: String,
+    ) : AppRoute
+
     @Serializable
     data class SasayakiMatchRoute(
         val bookId: String,

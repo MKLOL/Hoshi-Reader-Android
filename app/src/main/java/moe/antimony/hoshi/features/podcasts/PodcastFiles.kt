@@ -69,8 +69,10 @@ internal class PodcastFiles(
         shows = shows.filter { show -> episodes.any { it.show == show.id } }.map { it.copy(feedStale = false) },
     )
 
+    /** Rows with anything saved on this device: the lesson, or the original and its transcript. */
     private fun downloadedIds(account: String, episodes: List<PodcastEpisode>): Set<String> =
-        episodes.filter { validPodcastId(it.id) && audio(account, it.id).isFile }.map { it.id }.toSet()
+        episodes.filter { validPodcastId(it.id) && (audio(account, it.id).isFile || hasTranscript(account, it.id)) }
+            .map { it.id }.toSet()
 
     private fun read(account: String, name: String): PodcastCatalogue? = runCatching {
         json.decodeFromString<PodcastCatalogue>(atomicFile(File(File(root, account), name)).readFully().toString(Charsets.UTF_8))
@@ -92,6 +94,17 @@ internal class PodcastFiles(
         require(validPodcastId(account) && validPodcastId(id))
         return File(File(root, account), "$id.mp3")
     }
+    /** The episode's original recording, which the transcript's times refer to. */
+    fun original(account: String, id: String): File {
+        require(validPodcastId(account) && validPodcastId(id))
+        return File(File(root, account), "$id.original.mp3")
+    }
+    fun transcript(account: String, id: String): File {
+        require(validPodcastId(account) && validPodcastId(id))
+        return File(File(root, account), "$id.transcript.json")
+    }
+    /** Both halves are needed: a transcript without its recording has nothing to follow. */
+    fun hasTranscript(account: String, id: String): Boolean = original(account, id).isFile && transcript(account, id).isFile
     /** Removes every account's lessons, catalogue and partial downloads except [keep]'s. */
     fun pruneExcept(keep: String?) = synchronized(storageLock) {
         root.listFiles()?.filter { it.isDirectory && it.name != keep }?.forEach { it.deleteRecursively() }

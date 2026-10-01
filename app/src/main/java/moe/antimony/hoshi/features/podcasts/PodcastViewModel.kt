@@ -38,6 +38,12 @@ internal data class PodcastUiState(
     /** Episode id to the reason its last download failed. */
     val downloadFailures: Map<String, String> = emptyMap(),
     val preparing: Set<String> = emptySet(),
+    /** Episodes whose original recording and transcript are both on this device. */
+    val transcripts: Set<String> = emptySet(),
+    /** Transcript downloads in progress (percent), waiting, and failed (reason code). */
+    val transcriptDownloads: Map<String, Int> = emptyMap(),
+    val transcriptWaiting: Set<String> = emptySet(),
+    val transcriptFailures: Map<String, String> = emptyMap(),
 ) {
     private val inChosenShow get() = episodes.filter { showId == null || it.show == showId }
     val filtered get() = inChosenShow.filter(length::includes)
@@ -126,7 +132,8 @@ internal class PodcastViewModel(val repository: PodcastRepository) : ViewModel()
                 if (account != null) {
                     withContext(Dispatchers.IO) { repository.files.loadCatalogue(account) }?.let { cached ->
                         val downloaded = withContext(Dispatchers.IO) { cached.episodes.filter { validPodcastId(it.id) && repository.files.audio(account, it.id).isFile }.map { it.id }.toSet() }
-                        _state.update { it.withCatalogue(cached, downloaded) }
+                        val transcripts = withContext(Dispatchers.IO) { transcriptsOnDisk(account, cached.episodes.map { it.id }) }
+                        _state.update { it.withCatalogue(cached, downloaded).copy(transcripts = transcripts) }
                     }
                     launch { observeDownloads() }
                     launch {
@@ -162,8 +169,11 @@ internal class PodcastViewModel(val repository: PodcastRepository) : ViewModel()
                 val saved = repository.files.saveCatalogue(podcastAccount(settings), catalogue)
                 saved to saved.episodes.filter { repository.files.audio(podcastAccount(settings), it.id).isFile }.map { it.id }.toSet()
             }
+            val transcripts = withContext(Dispatchers.IO) { transcriptsOnDisk(podcastAccount(settings), merged.episodes.map { it.id }) }
             if (settings != repository.credentials || !repository.access.value || !visible.value) return
-            _state.update { it.withCatalogue(merged, downloaded, SystemClock.elapsedRealtime(), downloadedBeforeScan) }
+            _state.update {
+                it.withCatalogue(merged, downloaded, SystemClock.elapsedRealtime(), downloadedBeforeScan).copy(transcripts = transcripts)
+            }
         } catch (cancelled: CancellationException) { throw cancelled
         } catch (error: Exception) {
             if (settings == repository.credentials) _state.update { it.withoutLivePodcastStatus() }
@@ -171,10 +181,14 @@ internal class PodcastViewModel(val repository: PodcastRepository) : ViewModel()
         }
     }
 
-    fun download(episode: PodcastEpisode) {
+    /** Both halves of a transcript on disk; one without the other is not worth opening. */
+    private fun transcriptsOnDisk(account: String, ids: Iterable<String>): Set<String> =
+        ids.filter { validPodcastId(it) && repository.files.hasTranscript(account, it) }.toSet()
+
+    fun download(episode: PodcastEpisode, transcript: Boolean = false) {
         val settings = repository.credentials
         viewModelScope.launch {
-            try { repository.download(episode)
+            try { repository.download(episode, transcript)
             } catch (cancelled: CancellationException) { throw cancelled
             } catch (error: Exception) { handle(error, settings) }
         }
@@ -217,7 +231,19 @@ internal class PodcastViewModel(val repository: PodcastRepository) : ViewModel()
             val waiting = mutableSetOf<String>()
             val failed = mutableMapOf<String, String>()
             val completed = mutableSetOf<String>()
+            val transcriptActive = mutableMapOf<String, Int>()
+            val transcriptWaiting = mutableSetOf<String>()
+            val transcriptFailed = mutableMapOf<String, String>()
             infos.forEach { info ->
+                info.tags.firstOrNull { it.startsWith(PodcastKeys.TRANSCRIPT_TAG_PREFIX) }?.removePrefix(PodcastKeys.TRANSCRIPT_TAG_PREFIX)?.let { id ->
+                    when (info.state) {
+                        WorkInfo.State.FAILED -> transcriptFailed[id] = info.outputData.getString(PodcastKeys.OUTPUT_REASON).orEmpty()
+                        WorkInfo.State.ENQUEUED, WorkInfo.State.BLOCKED -> transcriptWaiting += id
+                        WorkInfo.State.RUNNING -> transcriptActive[id] = info.progress.getInt(PodcastKeys.PROGRESS_PERCENT, 0)
+                        else -> Unit
+                    }
+                    return@forEach
+                }
                 val id = info.tags.firstOrNull { it.startsWith(PodcastKeys.EPISODE_TAG_PREFIX) }?.removePrefix(PodcastKeys.EPISODE_TAG_PREFIX) ?: return@forEach
                 when (info.state) {
                     WorkInfo.State.SUCCEEDED -> completed += id
@@ -233,12 +259,18 @@ internal class PodcastViewModel(val repository: PodcastRepository) : ViewModel()
                 cached to (downloadedBeforeScan + completed + cached.episodes.map { it.id })
                     .filter { validPodcastId(it) && repository.files.audio(account, it).isFile }.toSet()
             }
+            val transcripts = withContext(Dispatchers.IO) {
+                transcriptsOnDisk(account, _state.value.episodes.map { it.id } + local.episodes.map { it.id })
+            }
             _state.update {
                 // A transfer can finish after the server archived its show. Restore its local
                 // row immediately, including when the next catalogue poll cannot get online.
                 val updated = it.withDownloadObservation(local, downloaded, downloadedBeforeScan)
                 updated.copy(downloads = active, waiting = waiting - active.keys,
-                    downloadFailures = failed.filterKeys { id -> id !in active && id !in waiting && id !in updated.downloaded })
+                    downloadFailures = failed.filterKeys { id -> id !in active && id !in waiting && id !in updated.downloaded },
+                    transcripts = transcripts, transcriptDownloads = transcriptActive,
+                    transcriptWaiting = transcriptWaiting - transcriptActive.keys,
+                    transcriptFailures = transcriptFailed.filterKeys { id -> id !in transcriptActive && id !in transcriptWaiting && id !in transcripts })
             }
         }
     }

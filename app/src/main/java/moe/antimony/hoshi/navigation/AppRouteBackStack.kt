@@ -39,6 +39,11 @@ internal fun MutableList<NavKey>.openSentenceReaderRoute(bookId: String) {
     add(AppRoute.SentenceReaderRoute(bookId))
 }
 
+/** Pushed on top of the Podcasts tab, so Back returns to the episode list. */
+internal fun MutableList<NavKey>.openPodcastTranscriptRoute(episodeId: String) {
+    add(AppRoute.PodcastTranscriptRoute(episodeId))
+}
+
 /** Pushed on top of whatever the user is looking at, so Back returns there. */
 internal fun MutableList<NavKey>.openStatisticsRoute() {
     add(AppRoute.StatisticsRoute)

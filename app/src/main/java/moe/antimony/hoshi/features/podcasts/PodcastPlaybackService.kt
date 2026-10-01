@@ -46,9 +46,9 @@ class PodcastPlaybackService : MediaSessionService() {
                 override fun onAddMediaItems(mediaSession: MediaSession, controller: MediaSession.ControllerInfo, mediaItems: List<MediaItem>): ListenableFuture<List<MediaItem>> {
                     val account = repository.account.value
                     val accepted = mediaItems.mapNotNull { item ->
-                        val parts = item.mediaId.split(':')
-                        if (account == null || parts.size != 2 || parts[0] != account || !validPodcastId(parts[1])) return@mapNotNull null
-                        val file = repository.files.audio(account, parts[1])
+                        val ref = parsePodcastMediaId(item.mediaId)
+                        if (account == null || ref == null || ref.account != account) return@mapNotNull null
+                        val file = if (ref.original) repository.files.original(account, ref.episode) else repository.files.audio(account, ref.episode)
                         // Only the id and title come from the controller; the file and everything else are ours.
                         if (!file.isFile) null
                         else MediaItem.Builder().setMediaId(item.mediaId).setUri(android.net.Uri.fromFile(file))

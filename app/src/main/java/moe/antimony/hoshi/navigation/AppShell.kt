@@ -38,6 +38,7 @@ import moe.antimony.hoshi.features.bookshelf.SettingsTab
 import moe.antimony.hoshi.epub.ContentType
 import moe.antimony.hoshi.features.diagnostics.DiagnosticsView
 import moe.antimony.hoshi.features.dictionary.DictionarySearchView
+import moe.antimony.hoshi.features.podcasts.PodcastTranscriptScreen
 import moe.antimony.hoshi.features.podcasts.PodcastsView
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import moe.antimony.hoshi.features.news.NewsFeedView
@@ -206,6 +207,7 @@ fun AppShell(
                         onOpenSasayakiMatch = ::openSasayakiMatch,
                         bookshelfRefreshKey = bookshelfRefreshKey,
                         onSelectedTabChange = { selectTopLevelRoute(it.toRoute()) },
+                        onOpenPodcastTranscript = { backStack.openPodcastTranscriptRoute(it) },
                     )
                     AppRoute.DictionaryRoute -> TopLevelRouteContent(
                         selectedTab = MainTab.Dictionary,
@@ -277,6 +279,12 @@ fun AppShell(
                     )
                     is AppRoute.StatisticsBookRoute -> BookStatisticsScreen(
                         bookId = route.bookId,
+                        onClose = ::popRoute,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                    is AppRoute.PodcastTranscriptRoute -> PodcastTranscriptScreen(
+                        episodeId = route.episodeId,
+                        readerSettings = currentReaderSettings,
                         onClose = ::popRoute,
                         modifier = Modifier.fillMaxSize(),
                     )
@@ -368,6 +376,7 @@ private fun TopLevelRouteContent(
     onOpenStatistics: () -> Unit = {},
     pendingNewsUrl: String? = null,
     onPendingNewsUrlConsumed: () -> Unit = {},
+    onOpenPodcastTranscript: (String) -> Unit = {},
 ) {
     val podcastAccess by LocalHoshiAppContainer.current.podcastRepository.access.collectAsStateWithLifecycle()
     LaunchedEffect(podcastAccess, selectedTab) {
@@ -396,7 +405,7 @@ private fun TopLevelRouteContent(
                 onPendingSharedUrlConsumed = onPendingNewsUrlConsumed,
                 modifier = contentModifier,
             )
-            MainTab.Podcasts -> if (podcastAccess) PodcastsView(modifier = contentModifier)
+            MainTab.Podcasts -> if (podcastAccess) PodcastsView(modifier = contentModifier, onOpenTranscript = onOpenPodcastTranscript)
             MainTab.Dictionary -> DictionarySearchView(
                 readerSettings = readerSettings,
                 modifier = contentModifier.fillMaxSize(),

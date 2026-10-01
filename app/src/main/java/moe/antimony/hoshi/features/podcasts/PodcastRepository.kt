@@ -101,7 +101,8 @@ internal class PodcastRepository(
         if (credentials.isConfigured) workManager.cancelAllWorkByTag(PodcastKeys.accountTag(podcastAccount(credentials)))
     }
 
-    suspend fun download(episode: PodcastEpisode): Unit = withContext(Dispatchers.IO) {
+    /** The lesson, or with [transcript] the original recording and its timed transcript. */
+    suspend fun download(episode: PodcastEpisode, transcript: Boolean = false): Unit = withContext(Dispatchers.IO) {
         val settings = credentials
         val account = this@PodcastRepository.account.value ?: return@withContext
         if (!access.value || account != podcastAccount(settings) || !validPodcastId(episode.id)) return@withContext
@@ -109,8 +110,13 @@ internal class PodcastRepository(
         if (settings != credentials || account != this@PodcastRepository.account.value) return@withContext
         val request = OneTimeWorkRequestBuilder<PodcastDownloadWorker>()
             .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).setRequiresStorageNotLow(true).build())
-            .setInputData(workDataOf(PodcastKeys.INPUT_ACCOUNT to account, PodcastKeys.INPUT_EPISODE to episode.id))
-            .addTag(PodcastKeys.accountTag(account)).addTag(PodcastKeys.EPISODE_TAG_PREFIX + episode.id).build()
-        workManager.enqueueUniqueWork(PodcastKeys.workName(account, episode.id), ExistingWorkPolicy.KEEP, request)
+            .setInputData(workDataOf(
+                PodcastKeys.INPUT_ACCOUNT to account, PodcastKeys.INPUT_EPISODE to episode.id,
+                PodcastKeys.INPUT_KIND to if (transcript) PodcastKeys.KIND_TRANSCRIPT else null,
+            ))
+            .addTag(PodcastKeys.accountTag(account))
+            .addTag((if (transcript) PodcastKeys.TRANSCRIPT_TAG_PREFIX else PodcastKeys.EPISODE_TAG_PREFIX) + episode.id).build()
+        val name = if (transcript) PodcastKeys.transcriptWorkName(account, episode.id) else PodcastKeys.workName(account, episode.id)
+        workManager.enqueueUniqueWork(name, ExistingWorkPolicy.KEEP, request)
     }
 }

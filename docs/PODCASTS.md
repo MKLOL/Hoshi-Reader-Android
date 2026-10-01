@@ -28,6 +28,28 @@ Downloaded lessons and their show names remain listed after a show is archived o
 by the server, including offline. A download that finishes after its show was archived also
 keeps its metadata. Undownloaded episodes disappear with the server listing.
 
+## Transcripts
+
+A ready episode whose catalogue entry says `transcript: true` offers **Get transcript**: the
+server's original recording (`/v1/podcasts/<id>/original`, not the lesson) and its timed
+Japanese transcript (`/v1/podcasts/<id>/transcript`), both into the same app-private
+directory as `<id>.original.mp3` and `<id>.transcript.json`. The transcript is fetched first
+and must parse for this episode (lines in time order) before the recording is downloaded; it
+is written last, so **Transcript** appears only when both are on the device. The download
+runs as the same WorkManager job as a lesson, tagged `transcript-<id>` instead of
+`episode-<id>`. Either half alone keeps the episode listed offline.
+
+The transcript screen (`PodcastTranscriptScreen`, route `PodcastTranscriptRoute`) plays the
+original through the same playback service under the media id `<account>:<id>:original`, so
+it keeps its own resume position. A 200 ms ticker follows the controller: the line being
+spoken (the last whose start has passed) is highlighted and kept a third of the way down,
+until the user drags the list; **Follow playback** resumes following. Tapping a word pauses
+playback and opens the reader's dictionary popup (`createLookupPopupItem` +
+`LookupPopupAndroidStack`, the sentence reader's tap query); playback stays paused until Play.
+A line's time plays from that line. English is hidden until toggled, and offered only when
+the transcript has it. Lines are the server's units: one per lesson unit for a pipeline
+lesson, whatever the uploader chose for an uploaded one.
+
 Lesson recipe: Japanese sentence → English → vocabulary (Japanese → English meaning
 → Japanese replay, short pause) → original Japanese replay → loud beep → one-second
 pause. Male Kokoro voices; repeated vocabulary is retained.

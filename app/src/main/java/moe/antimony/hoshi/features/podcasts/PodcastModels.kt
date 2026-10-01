@@ -22,6 +22,10 @@ data class PodcastEpisode(
     val show: String = "",
     /** False when the server needs an administrator to resolve and reset this failure. */
     val retryable: Boolean = true,
+    /** The server has the original recording and its timed transcript for this episode. */
+    val transcript: Boolean = false,
+    /** The lesson was uploaded by an administrator instead of made by the server's pipeline. */
+    val uploaded: Boolean = false,
 )
 
 /** The server's lesson worker as seen by the web tier: heartbeat liveness and start-up problems. */
@@ -107,6 +111,7 @@ internal fun podcastDownloadReasonRes(code: String): Int? = when (code) {
     "too_large" -> moe.antimony.hoshi.R.string.podcasts_reason_too_large
     "incomplete" -> moe.antimony.hoshi.R.string.podcasts_reason_incomplete
     "save_failed" -> moe.antimony.hoshi.R.string.podcasts_reason_save_failed
+    "transcript_invalid" -> moe.antimony.hoshi.R.string.podcasts_reason_transcript_invalid
     else -> null
 }
 
@@ -136,13 +141,19 @@ internal object PodcastKeys {
     const val POSITIONS_PREFS = "podcast-positions"
     const val OPEN_EXTRA = "openPodcasts"
     const val EPISODE_TAG_PREFIX = "episode-"
+    /** Tags a transcript download; deliberately not under [EPISODE_TAG_PREFIX]. */
+    const val TRANSCRIPT_TAG_PREFIX = "transcript-"
     const val PROGRESS_PERCENT = "percent"
     const val INPUT_ACCOUNT = "account"
     const val INPUT_EPISODE = "episode"
+    /** What a download fetches: the lesson (default) or [KIND_TRANSCRIPT]. */
+    const val INPUT_KIND = "kind"
+    const val KIND_TRANSCRIPT = "transcript"
     /** Why a download finally failed, for the episode row. */
     const val OUTPUT_REASON = "reason"
     fun accountTag(account: String) = "podcast-$account"
     fun workName(account: String, episode: String) = "podcast-$account-$episode"
+    fun transcriptWorkName(account: String, episode: String) = "podcast-$account-$episode-transcript"
 }
 
 internal fun podcastAccount(settings: HttpSyncSettings): String = MessageDigest.getInstance("SHA-256")

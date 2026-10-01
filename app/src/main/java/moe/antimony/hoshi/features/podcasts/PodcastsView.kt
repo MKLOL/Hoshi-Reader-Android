@@ -19,6 +19,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.material3.TextButton
@@ -52,7 +53,7 @@ import moe.antimony.hoshi.R
 
 @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 @Composable
-internal fun PodcastsView(modifier: Modifier = Modifier) {
+internal fun PodcastsView(modifier: Modifier = Modifier, onOpenTranscript: (String) -> Unit = {}) {
     val repository = LocalHoshiAppContainer.current.podcastRepository
     val available by repository.access.collectAsStateWithLifecycle()
     val model: PodcastViewModel = viewModel(factory = viewModelFactory { initializer { PodcastViewModel(repository) } })
@@ -261,9 +262,33 @@ internal fun PodcastsView(modifier: Modifier = Modifier) {
                         needsAdministrator -> Unit
                         else -> Button(onClick = { model.prepare(episode) }) { Text(stringResource(R.string.podcasts_prepare)) }
                     }
+                    TranscriptAction(episode, state, onDownload = { model.download(episode, transcript = true) }, onOpen = { onOpenTranscript(episode.id) })
                 }
             }
         }
+    }
+}
+
+/**
+ * The original recording with its timed transcript: listened to on its own screen, where a tap on
+ * a word opens the dictionary. Offered once the server has one; kept once it is on the device.
+ */
+@Composable
+private fun TranscriptAction(episode: PodcastEpisode, state: PodcastUiState, onDownload: () -> Unit, onOpen: () -> Unit) {
+    val id = episode.id
+    when {
+        id in state.transcripts -> OutlinedButton(onClick = onOpen) { Text(stringResource(R.string.podcasts_transcript_open)) }
+        id in state.transcriptDownloads -> Text(
+            stringResource(R.string.podcasts_transcript_downloading, state.transcriptDownloads.getValue(id)),
+            style = MaterialTheme.typography.bodySmall,
+        )
+        id in state.transcriptWaiting -> Text(stringResource(R.string.podcasts_download_waiting), style = MaterialTheme.typography.bodySmall)
+        episode.transcript && episode.status == "ready" -> OutlinedButton(onClick = onDownload) {
+            Text(stringResource(R.string.podcasts_transcript_download))
+        }
+    }
+    state.transcriptFailures[id]?.takeIf { id !in state.transcripts }?.let { code ->
+        Text(stringResource(R.string.podcasts_transcript_failed_detail, downloadReason(code)), color = MaterialTheme.colorScheme.error, maxLines = 3)
     }
 }
 
