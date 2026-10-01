@@ -135,4 +135,24 @@ class UsageDaySummaryTest {
     fun aDayWithoutEventsIsEmpty() {
         assertTrue(summarizeUsageDay(emptyList(), day, zone).isEmpty)
     }
+
+    @Test
+    fun aReadingDayRunsFromTheResetHourToTheResetHour() {
+        val nextDay = day.plusDays(1)
+        fun next(hour: Int): Long = nextDay.atTime(hour, 0).toInstant(zone).toEpochMilli()
+        val events = listOf(
+            event(UsageEventType.WordLookedUp, at(1)),
+            event(UsageEventType.WordLookedUp, at(22)),
+            event(UsageEventType.WordLookedUp, next(1)),
+            event(UsageEventType.WordLookedUp, next(4)),
+        )
+
+        // From 03:00 on the day until 03:00 the next morning, as the streak counts it.
+        val summary = summarizeUsageDay(events, day, zone, resetHour = 3)
+
+        assertEquals(2, summary.wordLookups)
+        assertEquals(at(22), summary.firstActivityMillis)
+        assertEquals(next(1), summary.lastActivityMillis)
+        assertEquals(2, summarizeUsageDay(events, day, zone).wordLookups)
+    }
 }

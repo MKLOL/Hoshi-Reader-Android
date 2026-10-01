@@ -43,8 +43,10 @@ import java.time.LocalTime
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle
+import java.time.temporal.ChronoUnit
 import kotlin.math.ceil
 import kotlin.math.floor
+import kotlin.math.max
 
 /** Recent reading spans listed under the timeline; older ones are still drawn on it. */
 private const val TODAY_LISTED_SPANS = 5
@@ -125,7 +127,7 @@ internal fun TodayCard(
                     Spacer(Modifier.height(18.dp))
                     TodaySectionTitle(stringResource(R.string.statistics_today_timeline))
                     Spacer(Modifier.height(8.dp))
-                    TodayTimeline(usage.spans, zone, timeFormat)
+                    TodayTimeline(usage.spans, usage.date, zone, timeFormat)
                     Spacer(Modifier.height(8.dp))
                     usage.spans.takeLast(TODAY_LISTED_SPANS).asReversed().forEach { span ->
                         TodaySpanRow(span, clock(span.startMillis), clock(span.endMillis))
@@ -190,30 +192,35 @@ private fun TodayCountTiles(usage: UsageDaySummary) {
 
 /**
  * The day's reading spans on a strip that covers only the hours around them (at least four),
- * so a short session is still visible instead of a sliver of a 24-hour bar.
+ * so a short session is still visible instead of a sliver of a 24-hour bar. Hours count from
+ * the start of [day] on the wall clock, so reading after midnight on a day that resets later
+ * (00:30 is hour 24.5) is drawn after the evening, not before it.
  */
 @Composable
-private fun TodayTimeline(spans: List<UsageReadingSpan>, zone: ZoneId, timeFormat: DateTimeFormatter) {
+private fun TodayTimeline(spans: List<UsageReadingSpan>, day: LocalDate, zone: ZoneId, timeFormat: DateTimeFormatter) {
     val colorScheme = MaterialTheme.colorScheme
     val eInk = LocalHoshiEInkMode.current
     val fill = if (eInk) colorScheme.onBackground else colorScheme.primary
     // E-ink's surface variant is white, which would make the strip itself invisible.
     val track = if (eInk) colorScheme.onBackground.copy(alpha = 0.08f) else colorScheme.surfaceVariant
-    fun hourOf(millis: Long): Double =
-        Instant.ofEpochMilli(millis).atZone(zone).toLocalTime().toSecondOfDay() / 3600.0
+    fun hourOf(millis: Long): Double {
+        val local = Instant.ofEpochMilli(millis).atZone(zone).toLocalDateTime()
+        return ChronoUnit.DAYS.between(day, local.toLocalDate()) * 24.0 + local.toLocalTime().toSecondOfDay() / 3600.0
+    }
+    // The strip never runs past the end of the last span's day.
+    val limit = max(24.0, ceil(hourOf(spans.maxOf { it.endMillis }) / 24.0) * 24.0)
     var startHour = (floor(hourOf(spans.minOf { it.startMillis })) - 1).coerceAtLeast(0.0)
-    var endHour = (ceil(hourOf(spans.maxOf { it.endMillis })) + 1).coerceAtMost(24.0)
+    var endHour = (ceil(hourOf(spans.maxOf { it.endMillis })) + 1).coerceAtMost(limit)
     if (endHour - startHour < 4.0) {
-        endHour = (startHour + 4.0).coerceAtMost(24.0)
+        endHour = (startHour + 4.0).coerceAtMost(limit)
         startHour = (endHour - 4.0).coerceAtLeast(0.0)
     }
     // An even number of hours, so the middle label falls on a whole hour too.
     if ((endHour - startHour).toInt() % 2 == 1) {
-        if (endHour < 24.0) endHour += 1.0 else startHour -= 1.0
+        if (endHour < limit) endHour += 1.0 else startHour -= 1.0
     }
     val window = endHour - startHour
-    fun hourLabel(hour: Double): String =
-        if (hour >= 24.0) LocalTime.MIDNIGHT.format(timeFormat) else LocalTime.of(hour.toInt(), 0).format(timeFormat)
+    fun hourLabel(hour: Double): String = LocalTime.of(hour.toInt() % 24, 0).format(timeFormat)
     val timelineDescription = stringResource(
         R.string.statistics_today_timeline_description_format,
         hourLabel(startHour),

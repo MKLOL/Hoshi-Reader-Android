@@ -11,6 +11,7 @@ Semantic Versioning.
 - **Podcast transcripts.** Episodes the server has a transcript for offer Get transcript: the original recording (not the lesson) downloads with its timed Japanese transcript. The transcript screen highlights the line being spoken and keeps it in view; tap a word to pause and look it up in your dictionaries, tap a line's time to play from there, and show the English when you want it.
 
 ### Fixed
+- **Today follows your day reset.** After midnight and before your reset hour (3 a.m. by default), Statistics' Today card keeps showing last night's reading time, characters, lookups and timeline — the same day the streak goal counts — instead of starting over at midnight while the streak still said the goal was reached.
 - **Sync no longer waits forever without a connection.** Tapping Sync while offline reports that there is no network right away. Self-hosted servers on networks without internet access sync again, and a running sync can be stopped from HTTP Sync settings or the Books sync dialog.
 - **Reclaim space from abandoned sync downloads.** A successful sync removes partly downloaded books that no sync has resumed for a week, and Storage Cleanup lists interrupted sync downloads.
 - **Faster Books screen with many translated books.** The shelf appears without waiting for translation badges, and reloads no longer re-read unchanged translation files.

@@ -13,7 +13,9 @@ import moe.antimony.hoshi.features.bookshelf.isBookCompleted
 import moe.antimony.hoshi.features.bookshelf.toBookCoverSource
 import moe.antimony.hoshi.mokuro.MangaTextStatistic
 import moe.antimony.hoshi.mokuro.deduplicateMangaTextStatistics
+import moe.antimony.hoshi.features.statistics.readingDayTotals
 import moe.antimony.hoshi.features.statistics.reconstructStreakHistory
+import java.time.LocalDate
 
 /** One day of reading: seconds spent and the amount read (characters, or OCR characters for manga). */
 data class DailyReading(
@@ -102,7 +104,9 @@ data class BookStatisticsInput(
 
 /**
  * Folds every book's per-day statistics into per-book and per-day totals. A book without any
- * reading time is left out; [todayKey] is the ISO date whose records count as "today".
+ * reading time is left out. [todayKey] is the reading day shown as "today": with a
+ * [streakResetHour] it runs from that hour until the same hour the next morning, exactly the
+ * day the streak counts (see [readingDayTotals]); the per-day history stays calendar days.
  */
 fun summarizeReadingStatistics(
     inputs: List<BookStatisticsInput>,
@@ -168,11 +172,15 @@ fun summarizeReadingStatistics(
         .map { DailyReading(it, dailySeconds[it] ?: 0.0, dailyCharacters[it] ?: 0) }
         .sortedByDescending { it.dateKey }
     val streak = reconstructStreakHistory(inputs, streakResetHour)
+    // Only listed books, so "today" can never exceed "all time".
+    val listed = books.map { it.bookId }.toSet()
+    val today = runCatching { LocalDate.parse(todayKey) }.getOrNull()
+        ?.let { readingDayTotals(inputs.filter { it.bookId in listed }, it, streakResetHour) }
     return ReadingStatisticsOverview(
         totalSeconds = books.sumOf { it.totalSeconds },
-        todaySeconds = dailySeconds[todayKey] ?: 0.0,
+        todaySeconds = today?.seconds ?: 0.0,
         totalCharacters = books.sumOf { it.charactersRead },
-        todayCharacters = dailyCharacters[todayKey] ?: 0,
+        todayCharacters = today?.characters ?: 0,
         books = books,
         daily = daily,
         devices = books.flatMap { it.devices }.mergeDevices(),

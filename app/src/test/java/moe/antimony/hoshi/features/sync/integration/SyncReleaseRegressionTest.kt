@@ -147,9 +147,12 @@ class SyncReleaseRegressionTest(private val phoneEngine: SyncEngine, private val
 
     private fun assertPhoneHistory(history: VisibleHistory) {
         assertEquals(2_400.0, history.totalSeconds, 0.0)
-        assertEquals(1_200.0, history.todaySeconds, 0.0)
+        // "Today" is the 30th's reading day, from 3 a.m. as the streak counts it: the 1 a.m.
+        // reading recorded on the 30th belongs to the 29th's reading day. The calendar totals
+        // below (daily, trends) still carry it on the 30th.
+        assertEquals(0.0, history.todaySeconds, 0.0)
         assertEquals(4_000, history.totalCharacters)
-        assertEquals(2_000, history.todayCharacters)
+        assertEquals(0, history.todayCharacters)
         assertEquals(2, history.currentStreak)
         assertEquals(2, history.longestStreak)
         assertFalse(history.estimatedStreak)

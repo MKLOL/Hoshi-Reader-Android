@@ -52,7 +52,7 @@ data class UsageDaySummary(
  * Rebuilds [date]'s timeline from its events.
  *
  * A reading span is a `reading-stopped` event's [UsageEvent.startedAt]..[UsageEvent.at], cut to
- * the day, so a span that began before midnight still counts from midnight. A span that never
+ * the day, so a span that began before the day started still counts from its start. A span that never
  * saw its stop (the app was killed mid-read) ends at the last thing its session logged: that
  * is the last moment the reader is known to have been in use.
  */
@@ -61,9 +61,12 @@ fun summarizeUsageDay(
     date: LocalDate,
     zone: ZoneId,
     maxRepeatedWords: Int = 5,
+    /** The day runs from this hour on [date] to the same hour the next morning; 0 is midnight. */
+    resetHour: Int = 0,
 ): UsageDaySummary {
-    val dayStart = date.atStartOfDay(zone).toInstant().toEpochMilli()
-    val dayEnd = date.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli()
+    val reset = resetHour.coerceIn(0, 23)
+    val dayStart = date.atTime(reset, 0).atZone(zone).toInstant().toEpochMilli()
+    val dayEnd = date.plusDays(1).atTime(reset, 0).atZone(zone).toInstant().toEpochMilli()
     val ordered = events.filter { it.at in dayStart until dayEnd }.sortedBy { it.at }
 
     fun span(start: Long, end: Long, event: UsageEvent): UsageReadingSpan? {

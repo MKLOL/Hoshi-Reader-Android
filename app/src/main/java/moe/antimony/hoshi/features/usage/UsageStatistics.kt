@@ -31,6 +31,8 @@ data class UsageStatistics(
  * Reads today's timeline and daily totals ending on [today]: [historyDays] days plus the
  * [averageWindow] - 1 before them, so the first day's trailing average is real rather than
  * padded with days that were never read. Days before today are cached once read.
+ * The daily totals are calendar days; "today" is the reading day [readingDay], running from
+ * [resetHour] to the same hour the next morning, the same day the streak counts.
  */
 suspend fun loadUsageStatistics(
     log: UsageLog,
@@ -38,6 +40,8 @@ suspend fun loadUsageStatistics(
     historyDays: Int,
     zone: ZoneId = ZoneId.systemDefault(),
     averageWindow: Int = 3,
+    readingDay: LocalDate = today,
+    resetHour: Int = 0,
 ): UsageStatistics = withContext(Dispatchers.Default) {
     val firstLoggedDate = log.dayFiles().firstNotNullOfOrNull { file ->
         runCatching { LocalDate.parse(file.name.substringBefore('.')) }.getOrNull()
@@ -55,6 +59,12 @@ suspend fun loadUsageStatistics(
         }
         if (!counts.isEmpty) days[date] = counts
         date = date.plusDays(1)
+    }
+    // A reading day that is not the calendar day reaches into the next day's log file.
+    if (resetHour.coerceIn(0, 23) != 0 || readingDay != today) {
+        todaySummary = summarizeUsageDay(
+            log.eventsOn(readingDay) + log.eventsOn(readingDay.plusDays(1)), readingDay, zone, resetHour = resetHour,
+        )
     }
     UsageStatistics(
         today = todaySummary ?: summarizeUsageDay(emptyList(), today, zone),

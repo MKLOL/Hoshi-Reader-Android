@@ -84,4 +84,48 @@ class StreakHistoryTest {
         val entry = row("2026-09-29", 10.0).copy(readingTimeByHour = mapOf("broken" to 99.0, "2026-09-29T04:00" to 900.0))
         assertEquals(600.0, seconds(reconstructStreakHistory(input(entry), 3), "2026-09-29"), 0.0)
     }
+
+    @Test fun todayAfterMidnightIsTheWholeReadingDayTheStreakCounts() {
+        // Read 21:00-23:00, then a second just after midnight. At 00:20 with a 3am reset the
+        // streak's day is still Sep 30 and its goal was reached, while Today showed 1 second.
+        val entries = input(
+            row("2026-09-30", 120.0, "2026-09-30T21:00" to 60.0, "2026-09-30T22:00" to 60.0).copy(charactersRead = 6000),
+            row("2026-10-01", 1.0 / 60, "2026-10-01T00:00" to 1.0 / 60).copy(charactersRead = 10),
+        )
+        val readingDay = streakDate(ZonedDateTime.parse("2026-10-01T00:20:00+09:00"), 3)
+        val overview = summarizeReadingStatistics(entries, readingDay.toString(), 3)
+        assertEquals(7201.0, overview.todaySeconds, 0.001)
+        assertEquals(6010, overview.todayCharacters)
+        // The Today card and the streak card now agree about the same day.
+        assertEquals(overview.todaySeconds, computeReadingStreak(overview.streakDaily, 600.0, readingDay).todaySeconds, 0.001)
+    }
+
+    @Test fun theReadingDayEndsAtTheResetHourAndSplitsCharactersByWhereTheTimeFell() {
+        val entries = input(
+            row("2026-09-30", 60.0, "2026-09-30T21:00" to 60.0).copy(charactersRead = 3000),
+            row("2026-10-01", 60.0, "2026-10-01T02:00" to 20.0, "2026-10-01T09:00" to 40.0).copy(charactersRead = 600),
+        )
+        val octoberFirst = readingDayTotals(entries, LocalDate.parse("2026-10-01"), 3)
+        assertEquals(2400.0, octoberFirst.seconds, 0.001)
+        assertEquals(400, octoberFirst.characters)
+        val septemberThirtieth = readingDayTotals(entries, LocalDate.parse("2026-09-30"), 3)
+        assertEquals(4800.0, septemberThirtieth.seconds, 0.001)
+        assertEquals(3200, septemberThirtieth.characters)
+        // With midnight as the reset the reading day is simply the calendar day.
+        assertEquals(3600.0, readingDayTotals(entries, LocalDate.parse("2026-10-01"), 0).seconds, 0.001)
+    }
+
+    @Test fun timeWithoutAnHourStaysOnItsOwnDateAndIsNeverCountedTwice() {
+        // The streak gives unknown-hour time to both possible days; a total must not.
+        val entries = input(row("2026-10-01", 10.0).copy(charactersRead = 500))
+        assertEquals(600.0, readingDayTotals(entries, LocalDate.parse("2026-10-01"), 3).seconds, 0.0)
+        assertEquals(500, readingDayTotals(entries, LocalDate.parse("2026-10-01"), 3).characters)
+        assertEquals(0.0, readingDayTotals(entries, LocalDate.parse("2026-09-30"), 3).seconds, 0.0)
+    }
+
+    @Test fun anHourFromASkewedClockCountsAsAnUnknownHourOnItsOwnDate() {
+        val entries = input(row("2026-10-01", 10.0, "1970-01-01T00:00" to 10.0))
+        assertEquals(600.0, readingDayTotals(entries, LocalDate.parse("2026-10-01"), 3).seconds, 0.0)
+        assertEquals(0.0, readingDayTotals(entries, LocalDate.parse("1969-12-31"), 3).seconds, 0.0)
+    }
 }
