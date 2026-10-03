@@ -7,6 +7,8 @@ Semantic Versioning.
 
 ## [Unreleased]
 
+## [v0.12.2] - 2026-10-03
+
 ### Added
 - **See how current your other devices' reading is.** With HTTP sync set up, Statistics says when it last checked your other devices, or why it couldn't (no connection, a server error, or reading it couldn't read), and opening Statistics or returning to the app checks them at once.
 
