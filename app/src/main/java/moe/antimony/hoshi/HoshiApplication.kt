@@ -3,6 +3,8 @@ package moe.antimony.hoshi
 import android.app.Activity
 import android.app.Application
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import moe.antimony.hoshi.features.sync.http.httpSyncSettingsRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -31,17 +33,24 @@ class HoshiApplication : Application() {
         // HTTP sync polls only while a screen is visible, and pulls at once when one appears.
         registerActivityLifecycleCallbacks(object : ActivityLifecycleCallbacks {
             private var started = 0
+            private val handler = Handler(Looper.getMainLooper())
+            private val leave = Runnable {
+                if (started == 0) appContainer.httpSyncBookmarkScheduler.setForeground(false)
+            }
 
             override fun onActivityStarted(activity: Activity) {
                 started += 1
+                handler.removeCallbacks(leave)
                 appContainer.httpSyncBookmarkScheduler.setForeground(true)
             }
 
             override fun onActivityStopped(activity: Activity) {
                 started = (started - 1).coerceAtLeast(0)
-                // A rotation stops and restarts the activity; that is not leaving the app.
+                // A rotation stops and restarts the activity, and a quick switch (a lookup
+                // from another app) comes straight back: neither is leaving the app.
                 if (started == 0 && !activity.isChangingConfigurations) {
-                    appContainer.httpSyncBookmarkScheduler.setForeground(false)
+                    handler.removeCallbacks(leave)
+                    handler.postDelayed(leave, BACKGROUND_SETTLE_MS)
                 }
             }
 
@@ -66,6 +75,11 @@ class HoshiApplication : Application() {
         } else {
             UpdateScheduler.cancel(this)
         }
+    }
+
+    private companion object {
+        /** How long the app must stay out of sight before HTTP sync treats it as backgrounded. */
+        const val BACKGROUND_SETTLE_MS = 1_500L
     }
 
     private fun prepareUpdateStartupState() {

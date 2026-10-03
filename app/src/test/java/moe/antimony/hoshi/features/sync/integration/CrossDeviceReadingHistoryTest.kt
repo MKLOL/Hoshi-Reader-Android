@@ -3,10 +3,12 @@ package moe.antimony.hoshi.features.sync.integration
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import moe.antimony.hoshi.epub.Bookmark
+import moe.antimony.hoshi.epub.ContentType
 import moe.antimony.hoshi.epub.DeviceIdentity
 import moe.antimony.hoshi.epub.ReadingStatistics
 import moe.antimony.hoshi.features.reader.loadReadingStatisticsOverview
 import moe.antimony.hoshi.features.statistics.computeReadingStreak
+import moe.antimony.hoshi.features.sync.http.HttpSyncBookmarkBlob
 import moe.antimony.hoshi.features.sync.http.HttpSyncException
 import moe.antimony.hoshi.features.sync.http.HttpSyncKvFileFetched
 import moe.antimony.hoshi.features.sync.http.HttpSyncKvTransport
@@ -14,7 +16,9 @@ import moe.antimony.hoshi.features.sync.http.HttpSyncStatisticsBlob
 import moe.antimony.hoshi.features.sync.http.HttpSyncStatisticsShard
 import moe.antimony.hoshi.features.sync.http.StatisticsPreferences
 import moe.antimony.hoshi.features.sync.http.StatisticsPreferencesStore
+import moe.antimony.hoshi.features.sync.http.bookmarkKey
 import moe.antimony.hoshi.features.sync.http.metadataKey
+import moe.antimony.hoshi.mokuro.MangaTextStatistic
 import moe.antimony.hoshi.features.sync.http.statisticsKey
 import moe.antimony.hoshi.features.sync.http.statisticsShardKey
 import org.junit.After
@@ -279,8 +283,119 @@ class CrossDeviceReadingHistoryTest {
         assertNotNull(server.client().get(metadataKey(SyncCorpus.NOVEL_SYNC_ID)))
     }
 
+    @Test(timeout = 60_000)
+    fun theStreakArrivesFromATabletStillOnTheOldBuild() = runBlocking {
+        // An older build writes only the per-book key: no monthly shards on the server at all.
+        val oldTablet = DeviceIdentity("tablet", "Tablet")
+        server.client().put(statisticsKey(SyncCorpus.NOVEL_SYNC_ID), "application/json", json.encodeToString(
+            HttpSyncStatisticsBlob.serializer(),
+            HttpSyncStatisticsBlob(syncId = SyncCorpus.NOVEL_SYNC_ID, entries = (0L until 22L).map { day(TODAY.minusDays(it), 1_200.0, oldTablet) }),
+        ).toByteArray())
+        server.client().put(metadataKey(SyncCorpus.NOVEL_SYNC_ID), "application/json",
+            """{"title":"${SyncCorpus.NOVEL_TITLE}","contentType":"epub"}""".toByteArray())
+
+        val phone = device(PHONE, decorate = noBookDownloads)
+        phone.sync()
+
+        assertEquals(Visible(1_200.0, 22 * 1_200.0, streak = 22, longest = 22), visible(phone))
+        val kept = phone.repo.loadStatisticsHistory().single()
+        assertEquals(SyncCorpus.NOVEL_TITLE, kept.title)
+        assertTrue(server.etags().keys.none { it.startsWith("sync/maps/stats/tablet/") })
+    }
+
+    @Test(timeout = 60_000)
+    fun mangaReadOnAnotherDeviceCountsItsPagesAndOcrCharactersOnAPhoneWithoutIt() = runBlocking {
+        val tablet = device(TABLET)
+        val root = tablet.importManga()
+        assertClean(tablet.sync())
+        val pages = ReadingStatistics(
+            title = SyncCorpus.MANGA_TITLE, dateKey = TODAY.toString(), readingTime = 900.0, charactersRead = 12,
+            lastStatisticModified = 1, deviceId = TABLET.id, deviceName = TABLET.name,
+            readingTimeByHour = mapOf("${TODAY}T20:00" to 900.0),
+        )
+        tablet.repo.saveStatistics(root, listOf(pages))
+        tablet.repo.saveMangaTextStatistics(root, listOf(MangaTextStatistic(TODAY.toString(), 1_234, 1, TABLET.id, TABLET.name)))
+        assertClean(tablet.sync())
+
+        val phone = device(PHONE, decorate = noBookDownloads)
+        phone.sync()
+
+        val overview = loadReadingStatisticsOverview(phone.repo, TODAY.toString(), RESET_HOUR)
+        assertEquals(900.0, overview.todaySeconds, 0.0)
+        assertEquals("OCR characters, not pages", 1_234, overview.todayCharacters)
+        assertEquals(12, overview.books.single().pagesRead)
+        assertEquals(ContentType.Mokuro, phone.repo.loadStatisticsHistory().single().contentType)
+    }
+
+    @Test(timeout = 60_000)
+    fun stalePerBookBookmarkKeysNeitherMovePositionsBackNorCountAsDownloads() = runBlocking {
+        val tablet = device(TABLET)
+        val phone = device(PHONE)
+        tablet.importNovel()
+        tablet.importManga()
+        assertClean(tablet.sync())
+        assertClean(phone.sync())
+        assertClean(tablet.sync())
+        assertClean(phone.sync())
+        val novel = phone.book(SyncCorpus.NOVEL_SYNC_ID).root
+        phone.turnPage(novel, SyncCorpus.NOVEL_TITLE, Bookmark(4, 0.4, 40, 800_000_500.0))
+        assertClean(tablet.sync())
+        // What an older build's full reconcile leaves on the server: old positions, deep revisions.
+        for (syncId in listOf(SyncCorpus.NOVEL_SYNC_ID, SyncCorpus.MANGA_SYNC_ID)) {
+            server.client().put(bookmarkKey(syncId), "application/json", json.encodeToString(
+                HttpSyncBookmarkBlob.serializer(),
+                HttpSyncBookmarkBlob(0, 0.0, 0, "2026-01-01T00:00:00Z", 999),
+            ).toByteArray())
+        }
+        // The tablet reads one page of the manga and moves a book to a shelf (a full reconcile).
+        val manga = tablet.book(SyncCorpus.MANGA_SYNC_ID).root
+        tablet.turnPage(manga, SyncCorpus.MANGA_TITLE, Bookmark(2, 0.5, 20, 800_000_900.0))
+        tablet.placeOnShelf(tablet.book(SyncCorpus.NOVEL_SYNC_ID), "Shelf")
+        server.clearRequests()
+
+        val pulled = phone.sync()
+
+        assertClean(pulled)
+        assertEquals("only the manga moved", 1, pulled.downloadedBookmarks)
+        assertEquals(4, phone.repo.loadBookmark(novel)!!.chapterIndex)
+        assertEquals(2, phone.repo.loadBookmark(phone.book(SyncCorpus.MANGA_SYNC_ID).root)!!.chapterIndex)
+        assertTrue(
+            "per-book bookmark keys are left alone after bootstrap",
+            server.requests().none { it.method == "PUT" && it.path.endsWith("/bookmark") },
+        )
+    }
+
+    @Test(timeout = 60_000)
+    fun devicesAgreeOnTodayAndTheStreakAfterOneChangesTheDayReset() = runBlocking {
+        val tabletPreferences = MemoryPreferences()
+        val phonePreferences = MemoryPreferences()
+        val tablet = device(TABLET, tabletPreferences)
+        val phone = device(PHONE, phonePreferences, decorate = noBookDownloads)
+        val root = tablet.importNovel()
+        assertClean(tablet.sync())
+        // Twenty minutes after 1 a.m. every day: with a 5 a.m. reset that is the evening before.
+        tablet.repo.saveStatistics(root, (0L until 5L).map { offset ->
+            val date = TODAY.minusDays(offset)
+            day(date, 1_200.0, TABLET).copy(readingTimeByHour = mapOf("${date}T01:00" to 1_200.0))
+        })
+        tabletPreferences.value = StatisticsPreferences(streakMinimumMinutes = 15, dayResetHour = 5, updatedAt = 10_000)
+        assertClean(tablet.sync())
+        phone.sync()
+
+        suspend fun seen(device: SyncDevice, preferences: MemoryPreferences): Pair<Double, Int> {
+            val reset = preferences.value.dayResetHour
+            val today = TODAY.minusDays(1).toString()
+            val overview = loadReadingStatisticsOverview(device.repo, today, reset)
+            val streak = computeReadingStreak(overview.streakDaily, preferences.value.streakMinimumMinutes * 60.0, TODAY.minusDays(1))
+            return overview.todaySeconds to streak.currentDays
+        }
+        assertEquals(tabletPreferences.value, phonePreferences.value)
+        assertEquals(seen(tablet, tabletPreferences), seen(phone, phonePreferences))
+    }
+
     private class MemoryPreferences : StatisticsPreferencesStore {
-        var value = StatisticsPreferences(streakMinimumMinutes = 10, dayResetHour = 3, updatedAt = 0)
+        override val defaults = StatisticsPreferences(streakMinimumMinutes = 10, dayResetHour = 3, updatedAt = 0)
+        var value = defaults
         override suspend fun load(): StatisticsPreferences = value
         override suspend fun save(preferences: StatisticsPreferences) {
             value = preferences

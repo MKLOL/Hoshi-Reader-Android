@@ -14,16 +14,18 @@ import moe.antimony.hoshi.HoshiApplication
 import java.util.concurrent.TimeUnit
 
 /**
- * Sends the reading time of a session that just ended even when Android freezes or ends the
- * app right after the reader closes, or the device is offline until later. The in-app push
- * usually finishes first; this pass then only confirms that nothing is left (one listing).
+ * Sends the reading time and position of a session that just ended even when Android freezes
+ * or ends the app right after the reader closes, or the device is offline until later. The
+ * in-app push usually finishes first; this pass then only confirms that nothing is left.
  */
 class HttpSyncStatisticsFlushWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
     override suspend fun doWork(): Result {
         val container = (applicationContext as? HoshiApplication)?.appContainer ?: return Result.success()
         return try {
-            val result = container.httpSyncBookmarkScheduler.syncStatisticsNow()
-            if (result == null || result.errors.isEmpty() || runAttemptCount >= MAX_ATTEMPTS) Result.success() else Result.retry()
+            // Per-key problems retry with their own pauses on later passes; only a pass that
+            // could not reach the server at all is worth WorkManager's retry.
+            container.httpSyncBookmarkScheduler.flushInBackground()
+            Result.success()
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (_: Exception) {

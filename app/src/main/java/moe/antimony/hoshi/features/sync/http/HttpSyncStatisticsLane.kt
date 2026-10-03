@@ -106,16 +106,41 @@ data class StatisticsPreferences(
 
 /** Where [HttpSyncStatisticsLane] reads and applies the synced statistics settings. */
 interface StatisticsPreferencesStore {
+    /** The values before anyone chooses; a device still on them has made no choice. */
+    val defaults: StatisticsPreferences
+
     suspend fun load(): StatisticsPreferences
     suspend fun save(preferences: StatisticsPreferences)
+
+    /** [preferences] as the app would store them (out-of-range values brought in range). */
+    fun normalize(preferences: StatisticsPreferences): StatisticsPreferences = preferences
+}
+
+/** Why other devices' reading may be missing here, shown as a localized line on Statistics. */
+enum class StatisticsSyncProblem {
+    /** The sync server could not be reached. */
+    Offline,
+
+    /** The server answered with an error. */
+    Server,
+
+    /** Statistics another device wrote could not be read. */
+    Unreadable,
 }
 
 /** What the Statistics screen tells the reader about how current other devices' reading is. */
 data class StatisticsSyncStatus(
-    /** Epoch milliseconds of the last pass that checked every device's statistics without error. */
+    /** Epoch milliseconds when every device's statistics were last checked without a problem. */
     val lastSuccessAtMillis: Long? = null,
-    val lastError: String? = null,
+    /** What keeps some reading out right now; null when nothing does. */
+    val problem: StatisticsSyncProblem? = null,
 )
+
+/** A statistics body this build cannot use. */
+internal open class StatisticsDataException(message: String) : Exception(message)
+
+/** Written by a newer app version, or gone from the server: skipped quietly and checked again later. */
+internal class StatisticsSkippedException(message: String) : StatisticsDataException(message)
 
 data class StatisticsLaneResult(
     /** Books whose statistics here gained days from other devices. */
@@ -142,10 +167,13 @@ data class StatisticsLaneResult(
  *    devices can be updated one at a time.
  *
  * Every key is acknowledged on its own, only after its content was merged (per-root exchange
- * state for book keys, [LaneIndex] for shards), never through a global "seen" snapshot.
- * Statistics of a book without a folder here go to its history folder
- * ([BookRepository.statisticsHistoryRoot]), so Today, the streak and every total count all
- * reading, whichever device it happened on. Callers serialize runs (the batch exchange mutex).
+ * state for book keys, [LaneIndex] for shards and settings), never through a global "seen"
+ * snapshot. This device's own keys are read back before they are written, so a reinstall or a
+ * restore never overwrites days the server still holds. Statistics of a book without a folder
+ * here go to its history folder ([BookRepository.statisticsHistoryRoot]), so Today, the streak
+ * and every total count all reading, whichever device it happened on. A key that fails is tried
+ * again when it changes, or after a pause that doubles up to [MAX_RETRY_MS]; only a manual sync
+ * retries at once. Callers serialize runs.
  */
 class HttpSyncStatisticsLane(
     private val bookRepository: BookRepository,
@@ -163,23 +191,37 @@ class HttpSyncStatisticsLane(
     /** Last time this device sent local days up; batches them while someone keeps reading. */
     @Volatile private var lastLocalPushAtMillis = 0L
 
+    /**
+     * Last time local days went into the per-book keys. Builds up to 0.11.21 run a full
+     * reconcile for every change of such a key, so while reading they are written less often
+     * than the shards (and at once on leaving the reader); updated devices read the shards.
+     */
+    @Volatile private var lastLegacyPushAtMillis = 0L
     private val failures = ConcurrentHashMap<String, Failure>()
-    private val ownEntriesCache = mutableMapOf<String, OwnEntriesSnapshot>()
+    private val ownEntriesCache = ConcurrentHashMap<String, OwnEntriesSnapshot>()
 
-    private data class Failure(val etag: String?, val retryAtMillis: Long)
+    /** [problem] is null for a quiet skip (a newer version's body, a vanished key). */
+    private data class Failure(
+        val etag: String?,
+        val retryAtMillis: Long,
+        val attempts: Int,
+        val problem: StatisticsSyncProblem?,
+    )
 
     @Serializable
     private data class LaneIndex(
         val scope: String = "",
         /** Other devices' shard and settings keys -> the ETag whose content was merged here. */
         val applied: Map<String, String> = emptyMap(),
-        /** This device's keys -> the ETag it wrote or confirmed. */
+        /** This device's keys -> the server ETag of a body this install wrote or merged. */
         val published: Map<String, String> = emptyMap(),
+        /** This device's keys -> SHA-256 of the body it wrote, for servers whose ETag is not one. */
+        val publishedSha: Map<String, String> = emptyMap(),
         /** Settings keys -> the value read or written, so an unchanged key is never fetched again. */
         val preferences: Map<String, HttpSyncStatisticsPreferences> = emptyMap(),
         /** Set after the first complete pass; each failed key retries on its own afterwards. */
         val bootstrapped: Boolean = false,
-        /** Own months a pass could not publish yet (batched or failed); kept across restarts. */
+        /** Own months a pass could not publish yet (batched, unmerged or failed). */
         val ownPending: Boolean = false,
     )
 
@@ -188,13 +230,21 @@ class HttpSyncStatisticsLane(
         val root: File,
         val title: String?,
         val contentType: ContentType,
+        /** A history folder (no book folder here) rather than an installed book. */
+        val isHistory: Boolean,
+        /** False while a history folder only guesses its type. */
+        val typeKnown: Boolean,
     )
 
     private data class LegacyKeys(
         val reading: HttpSyncKvKeyMeta? = null,
         val manga: HttpSyncKvKeyMeta? = null,
         val metadata: HttpSyncKvKeyMeta? = null,
-    )
+        val epubManifest: HttpSyncKvKeyMeta? = null,
+        val payloadManifest: HttpSyncKvKeyMeta? = null,
+    ) {
+        val statistics: List<HttpSyncKvKeyMeta> get() = listOfNotNull(reading, manga)
+    }
 
     private data class OwnEntriesSnapshot(
         val stamp: List<Long>,
@@ -223,36 +273,37 @@ class HttpSyncStatisticsLane(
         for (root in roots.all) {
             val remote = legacy[root.syncId]
             when (statisticsSync.pendingExchange(root.root, root.syncId, remote?.reading?.etag, remote?.manga?.etag)) {
-                StatisticsExchangeNeed.Remote ->
-                    if (listOfNotNull(remote?.reading, remote?.manga).any { !blocked(it) }) return true
-                StatisticsExchangeNeed.Local -> if (localDue) return true
+                StatisticsExchangeNeed.Remote -> if (remoteChanges(root, remote).any { !blocked(it) }) return true
+                StatisticsExchangeNeed.Local -> if (localDue && !ownBlocked(statisticsKey(root.syncId))) return true
                 StatisticsExchangeNeed.None -> Unit
             }
         }
-        val rooted = roots.all.mapTo(mutableSetOf()) { it.syncId }
-        if (legacy.any { (syncId, keys) -> syncId !in rooted && (keys.reading ?: keys.manga) != null && !blocked(keys.reading ?: keys.manga) }) {
-            return true
-        }
-        if (index.ownPending && localDue) return true
+        val rooted = roots.all.mapTo(HashSet()) { it.syncId }
+        if (legacy.any { (syncId, keys) -> syncId !in rooted && keys.statistics.any { !blocked(it) } }) return true
+        if (index.ownPending && localDue && !ownBlocked(OWN_SHARDS)) return true
+        val listed = HashSet<String>()
         for (meta in listing) {
             val key = parseStatisticsLaneKey(meta.key) ?: continue
+            listed += meta.key
             val known = if (key.deviceId == deviceId) index.published[meta.key] else index.applied[meta.key]
             if (known != meta.etag && !blocked(meta)) return true
         }
-        val listed = listing.mapTo(mutableSetOf()) { it.key }
-        if (index.published.keys.any { it !in listed }) return true
-        return preferencesDirty(index, deviceId)
+        if (index.published.keys.any { it !in listed && !ownBlocked(it) }) return true
+        return preferencesDirty(index, deviceId, listing)
     }
 
     /**
      * Brings this device's statistics and every other device's in line. [flush] sends local
-     * days at once instead of batching them (the reader was just left, a manual sync, the
-     * Statistics screen opened).
+     * days at once instead of batching them (the reader was just left, Statistics opened, a
+     * manual sync). [retryFailed] retries failed keys without waiting for their pause (a manual
+     * sync). [onProgress] hears about each book that needs an exchange.
      */
     suspend fun run(
         transport: HttpSyncKvTransport,
         listing: List<HttpSyncKvKeyMeta>,
         flush: Boolean = false,
+        retryFailed: Boolean = false,
+        onProgress: suspend (HttpSyncProgress) -> Unit = {},
     ): StatisticsLaneResult {
         val deviceId = ownDeviceId()
         var index = loadIndex(transport)
@@ -260,7 +311,11 @@ class HttpSyncStatisticsLane(
         val downloaded = mutableSetOf<String>()
         val uploaded = mutableSetOf<String>()
         val localDue = flush || !index.bootstrapped || flushDue()
+        val legacyDue = flush || !index.bootstrapped || now() - lastLegacyPushAtMillis >= LEGACY_PUSH_INTERVAL_MS
         var pushedLocal = false
+        var pushedLegacy = false
+        fun skipped(meta: HttpSyncKvKeyMeta?) = !retryFailed && blocked(meta)
+        fun skippedOwn(key: String) = !retryFailed && ownBlocked(key)
 
         val entries = bookRepository.loadBookEntries()
         var roots = statisticsRoots(entries, bookRepository.loadStatisticsHistory())
@@ -271,7 +326,7 @@ class HttpSyncStatisticsLane(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
-                errors += "statistics ${history.syncId}: ${error.message ?: error.javaClass.simpleName}"
+                fail(history.syncId, null, errors, error)
             }
         }
         if (roots.absorb.isNotEmpty()) {
@@ -279,24 +334,37 @@ class HttpSyncStatisticsLane(
         }
         val rootsBySyncId = roots.all.associateBy { it.syncId }.toMutableMap()
 
+        /** The root days of [syncId] go to; better evidence fills in what a history folder lacked. */
         suspend fun rootFor(syncId: String, title: String?, contentType: ContentType?): StatisticsRoot? {
-            rootsBySyncId[syncId]?.let { return it }
-            val created = bookRepository.statisticsHistoryRoot(syncId, title, contentType) ?: return null
-            return StatisticsRoot(syncId, created, title, statisticsContentType(created)).also { rootsBySyncId[syncId] = it }
+            val existing = rootsBySyncId[syncId]
+            if (existing != null && (!existing.isHistory ||
+                    ((title == null || existing.title != null) && (contentType == null || existing.typeKnown)))
+            ) return existing
+            val folder = bookRepository.statisticsHistoryRoot(syncId, title, contentType) ?: return existing
+            val info = readStatisticsHistoryInfo(folder)
+            return StatisticsRoot(
+                syncId = syncId,
+                root = folder,
+                title = info?.title?.takeIf { it.isNotBlank() },
+                contentType = statisticsContentType(folder),
+                isHistory = true,
+                typeKnown = info?.contentType != null,
+            ).also { rootsBySyncId[syncId] = it }
         }
 
-        // 1. Other devices' shards (and this device's own, if a reinstall or restore left the
-        //    server with days this install lost): merge what changed into the books' statistics.
+        // 1. Other devices' shards, and this device's own when the server holds a version this
+        //    install never merged (a reinstall or a restore): merge what changed.
         for (meta in listing) {
             val key = parseStatisticsLaneKey(meta.key) as? StatisticsLaneKey.Shard ?: continue
             val own = key.deviceId == deviceId
             val known = if (own) index.published[meta.key] else index.applied[meta.key]
-            if (known == meta.etag || (!flush && blocked(meta))) continue
+            if (known == meta.etag || skipped(meta)) continue
             try {
                 if (meta.size > MAX_STATISTICS_BLOB_BYTES) {
-                    throw HttpSyncException("Statistics at ${meta.key} exceed the $MAX_STATISTICS_BLOB_BYTES-byte limit.")
+                    throw StatisticsDataException("Statistics at ${meta.key} exceed the $MAX_STATISTICS_BLOB_BYTES-byte limit.")
                 }
-                val fetched = transport.getBounded(meta.key, MAX_STATISTICS_BLOB_BYTES) ?: continue
+                val fetched = transport.getBounded(meta.key, MAX_STATISTICS_BLOB_BYTES)
+                    ?: throw StatisticsSkippedException("Statistics at ${meta.key} are no longer on the server.")
                 val shard = decodeShard(meta.key, key, fetched.body)
                 for ((syncId, book) in shard.books.toSortedMap()) {
                     if (!isValidSyncId(syncId)) continue
@@ -304,7 +372,8 @@ class HttpSyncStatisticsLane(
                     val reading = book.reading.filter { it.deviceId == key.deviceId && it.dateKey.startsWith(key.month) }
                     val mangaText = book.mangaText.filter { it.deviceId == key.deviceId && it.dateKey.startsWith(key.month) }
                     if (reading.isEmpty() && mangaText.isEmpty()) continue
-                    val root = rootFor(syncId, book.title ?: reading.firstOrNull()?.title, book.contentType) ?: continue
+                    val title = book.title?.takeIf { it.isNotBlank() } ?: reading.firstOrNull { it.title.isNotBlank() }?.title
+                    val root = rootFor(syncId, title, book.contentType) ?: continue
                     if (merge(root, reading, mangaText)) downloaded += syncId
                 }
                 index = if (own) {
@@ -323,40 +392,63 @@ class HttpSyncStatisticsLane(
         // 2. The per-book keys of released builds: every kept history, plus books only the
         //    server knows about (not downloaded here, or deleted before history was kept).
         val legacy = legacyKeys(listing)
-        val syncIds = (rootsBySyncId.keys + legacy.filterValues { (it.reading ?: it.manga) != null }.keys).toSortedSet()
-        for (syncId in syncIds) {
+        val candidates = (rootsBySyncId.keys + legacy.filterValues { it.statistics.isNotEmpty() }.keys).toSortedSet()
+        val work = candidates.filter { syncId ->
             val remote = legacy[syncId]
+            val root = rootsBySyncId[syncId]
+            if (root == null) {
+                remote != null && remote.statistics.any { !skipped(it) }
+            } else {
+                when (statisticsSync.pendingExchange(root.root, syncId, remote?.reading?.etag, remote?.manga?.etag)) {
+                    StatisticsExchangeNeed.None -> false
+                    StatisticsExchangeNeed.Local -> legacyDue && !skippedOwn(statisticsKey(syncId))
+                    StatisticsExchangeNeed.Remote -> remoteChanges(root, remote).any { !skipped(it) } ||
+                        (legacyDue && !skippedOwn(statisticsKey(syncId)))
+                }
+            }
+        }
+        for ((position, syncId) in work.withIndex()) {
+            val remote = legacy[syncId]
+            val existing = rootsBySyncId[syncId]
+            onProgress(HttpSyncProgress(
+                messageResource = moe.antimony.hoshi.R.string.http_sync_reading_history,
+                detail = existing?.title ?: syncId, completed = position, total = work.size,
+            ))
             try {
-                val existing = rootsBySyncId[syncId]
-                if (existing == null && !flush && blocked(remote?.reading ?: remote?.manga)) continue
-                val root = existing ?: describeRemoteBook(transport, syncId, remote).let { (title, type) ->
-                    rootFor(syncId, title, type)
+                val root = when {
+                    existing == null -> describeRemoteBook(transport, remote).let { (title, type) -> rootFor(syncId, title, type) }
+                    // OCR statistics on the server settle a history folder's guessed type.
+                    existing.isHistory && !existing.typeKnown && remote?.manga != null -> rootFor(syncId, null, ContentType.Mokuro)
+                    else -> existing
                 } ?: continue
                 val need = statisticsSync.pendingExchange(root.root, syncId, remote?.reading?.etag, remote?.manga?.etag)
                 if (need == StatisticsExchangeNeed.None) continue
-                if (need == StatisticsExchangeNeed.Local && !localDue) continue
                 val kinds = if (root.contentType == ContentType.Mokuro) StatisticsSyncKind.entries else listOf(StatisticsSyncKind.Reading)
+                var sentLocal = false
                 for (kind in kinds) {
                     val meta = if (kind == StatisticsSyncKind.Reading) remote?.reading else remote?.manga
-                    if (meta != null && !flush && need == StatisticsExchangeNeed.Remote && blocked(meta)) continue
+                    if (skipped(meta) || (meta == null && skippedOwn(kind.key(syncId)))) continue
                     try {
                         if (meta != null && meta.size > MAX_STATISTICS_BLOB_BYTES) {
-                            throw HttpSyncException("Statistics at ${meta.key} exceed the $MAX_STATISTICS_BLOB_BYTES-byte limit.")
+                            throw StatisticsDataException("Statistics at ${meta.key} exceed the $MAX_STATISTICS_BLOB_BYTES-byte limit.")
                         }
                         val listed = meta?.let { StatisticsRemoteListing.Listed(it.size, it.lastModified, it.etag) }
                             ?: StatisticsRemoteListing.Absent
                         val outcome = statisticsSync.sync(transport, root.root, syncId, kind, listed)
                         if (outcome.downloaded) downloaded += syncId
-                        if (outcome.uploaded) uploaded += syncId
-                        meta?.let { failures.remove(it.key) }
+                        if (outcome.uploaded) {
+                            uploaded += syncId
+                            sentLocal = true
+                        }
+                        failures.remove(meta?.key ?: kind.key(syncId))
                     } catch (cancelled: CancellationException) {
                         throw cancelled
                     } catch (error: Exception) {
                         fail(meta?.key ?: kind.key(syncId), meta?.etag, errors, error)
                     }
                 }
-                if (need == StatisticsExchangeNeed.Local) pushedLocal = true
-                if (existing == null || existing.title == null) nameFromEntries(root)
+                if (sentLocal) pushedLegacy = true
+                if (root.isHistory && root.title == null) nameFromEntries(root)
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
@@ -368,71 +460,120 @@ class HttpSyncStatisticsLane(
         if (deviceId != null) {
             val listed = listing.associateBy { it.key }
             val months = ownMonths(deviceId, rootsBySyncId.values.toList())
-            var skipped = false
+            var pending = false
             for ((month, body) in months) {
                 val key = statisticsShardKey(deviceId, month)
-                val etag = "sha256:" + sha256(body)
-                if (listed[key]?.etag == etag) {
-                    if (index.published[key] != etag) index = index.copy(published = index.published + (key to etag))
+                val sha = sha256(body)
+                val onServer = listed[key]
+                if (onServer != null &&
+                    (onServer.etag == "sha256:$sha" || (onServer.etag == index.published[key] && index.publishedSha[key] == sha))
+                ) {
+                    index = index.copy(published = index.published + (key to onServer.etag), publishedSha = index.publishedSha + (key to sha))
                     continue
                 }
-                if (!localDue) {
-                    skipped = true
+                // A server copy this install has not merged yet is never overwritten unread.
+                val unmerged = onServer != null && index.published[key] != onServer.etag
+                if (unmerged || !localDue || skippedOwn(key)) {
+                    pending = true
                     continue
                 }
                 try {
                     val written = transport.put(key, JSON_CONTENT_TYPE, body)
-                    index = index.copy(published = index.published + (key to written.etag))
+                    index = index.copy(
+                        published = index.published + (key to written.etag),
+                        publishedSha = index.publishedSha + (key to sha),
+                    )
+                    failures.remove(key)
+                    failures.remove(OWN_SHARDS)
                     pushedLocal = true
                 } catch (cancelled: CancellationException) {
                     throw cancelled
                 } catch (error: Exception) {
                     fail(key, null, errors, error)
-                    skipped = true
+                    fail(OWN_SHARDS, null, mutableListOf(), error)
+                    pending = true
                 }
             }
-            index = index.copy(ownPending = skipped)
+            // A month this install no longer has days for is not republished; forget it.
+            val generated = months.keys.mapTo(HashSet()) { statisticsShardKey(deviceId, it) }
+            fun keep(key: String) = (parseStatisticsLaneKey(key) as? StatisticsLaneKey.Shard)?.deviceId != deviceId ||
+                key in generated || key in listed
+            index = index.copy(
+                published = index.published.filterKeys(::keep),
+                publishedSha = index.publishedSha.filterKeys(::keep),
+                ownPending = pending,
+            )
         }
 
         // 4. The streak goal and day reset: the newest choice of any device applies everywhere.
         if (deviceId != null && preferencesStore != null) {
-            index = syncPreferences(transport, listing, index, deviceId, errors)
+            index = syncPreferences(transport, listing, index, deviceId, errors, retryFailed)
         }
 
         if (pushedLocal) lastLocalPushAtMillis = now()
-        val cleanPass = errors.isEmpty()
+        if (pushedLegacy) lastLegacyPushAtMillis = now()
         index = index.copy(bootstrapped = true)
         saveIndex(index)
-        _status.value = if (cleanPass) {
-            StatisticsSyncStatus(lastSuccessAtMillis = now())
-        } else {
-            _status.value.copy(lastError = errors.first())
-        }
+        publishStatus()
         return StatisticsLaneResult(downloaded.size, uploaded.size, errors)
     }
 
-    /** A listing pass with nothing to do still proves this device is current. */
+    /** A listing pass with nothing to do proves this device is current, unless a key is failing. */
     fun markChecked() {
-        _status.value = StatisticsSyncStatus(lastSuccessAtMillis = now())
+        publishStatus()
     }
 
     /** The listing could not be read, so nothing about other devices is known. */
     fun markFailed(error: Throwable) {
-        _status.value = _status.value.copy(lastError = error.message ?: error.javaClass.simpleName)
+        _status.value = _status.value.copy(problem = problemOf(error) ?: StatisticsSyncProblem.Server)
+    }
+
+    private fun publishStatus() {
+        val outstanding = failures.values.mapNotNull { it.problem }.firstOrNull()
+        val current = _status.value
+        if (outstanding != null) {
+            if (current.problem != outstanding) _status.value = current.copy(problem = outstanding)
+            return
+        }
+        val time = now()
+        // A new value (and a recomposition of Statistics) at most every half minute.
+        val recent = current.lastSuccessAtMillis?.let { time - it in 0 until STATUS_REFRESH_MS } == true
+        if (current.problem == null && recent) return
+        _status.value = StatisticsSyncStatus(lastSuccessAtMillis = time)
     }
 
     private fun flushDue(): Boolean = now() - lastLocalPushAtMillis >= localPushIntervalMs
 
+    /** A remote key that failed with this very content is not fetched again before its pause ends. */
     private fun blocked(meta: HttpSyncKvKeyMeta?): Boolean {
         meta ?: return false
         val failure = failures[meta.key] ?: return false
         return failure.etag == meta.etag && now() < failure.retryAtMillis
     }
 
-    /** A failing key is retried when it changes, or after a pause; it never fails every poll. */
+    /** A write of this device's own key that failed waits out its pause. */
+    private fun ownBlocked(key: String): Boolean = failures[key]?.let { now() < it.retryAtMillis } == true
+
     private fun fail(key: String, etag: String?, errors: MutableList<String>, error: Exception) {
-        failures[key] = Failure(etag, now() + FAILURE_RETRY_MS)
-        errors += "$key: ${error.message ?: error.javaClass.simpleName}"
+        val problem = problemOf(error)
+        val previous = failures[key]
+        val attempts = if (previous != null && previous.etag == etag) previous.attempts + 1 else 1
+        val pause = (FIRST_RETRY_MS shl (attempts - 1).coerceAtMost(8)).coerceAtMost(MAX_RETRY_MS)
+        failures[key] = Failure(etag, now() + pause, attempts, problem)
+        if (problem != null) errors += "$key: ${error.message ?: error.javaClass.simpleName}"
+    }
+
+    private fun problemOf(error: Throwable): StatisticsSyncProblem? = when (error) {
+        is StatisticsSkippedException -> null
+        is StatisticsDataException -> StatisticsSyncProblem.Unreadable
+        is HttpSyncException -> when {
+            error.httpCode != null -> StatisticsSyncProblem.Server
+            error.message.orEmpty().contains("malformed", ignoreCase = true) ||
+                error.message.orEmpty().contains("unsupported version", ignoreCase = true) -> StatisticsSyncProblem.Unreadable
+            else -> StatisticsSyncProblem.Offline
+        }
+        is java.io.IOException -> StatisticsSyncProblem.Offline
+        else -> StatisticsSyncProblem.Server
     }
 
     private fun ownDeviceId(): String? = bookRepository.statisticsDevice?.id?.takeIf(::isUsableDeviceId)
@@ -449,14 +590,31 @@ class HttpSyncStatisticsLane(
             val syncId = syncIdForMetadata(entry.metadata) ?: continue
             installed.putIfAbsent(
                 syncId,
-                StatisticsRoot(syncId, entry.root, entry.displayTitle.ifBlank { null }, bookContentType(entry.root)),
+                StatisticsRoot(syncId, entry.root, entry.displayTitle.ifBlank { null }, bookContentType(entry.root), isHistory = false, typeKnown = true),
             )
         }
         val absorb = history.mapNotNull { kept -> installed[kept.syncId]?.let { kept to it.root } }
-        val kept = history.filter { it.syncId !in installed }
-            .map { StatisticsRoot(it.syncId, it.root, it.title.takeIf { title -> title != it.syncId }, it.contentType) }
+        val kept = history.filter { it.syncId !in installed }.map { entry ->
+            val info = readStatisticsHistoryInfo(entry.root)
+            StatisticsRoot(
+                syncId = entry.syncId,
+                root = entry.root,
+                title = info?.title?.takeIf { it.isNotBlank() },
+                contentType = entry.contentType,
+                isHistory = true,
+                typeKnown = info?.contentType != null,
+            )
+        }
         return Roots(installed.values.toList() + kept, absorb)
     }
+
+    /** The listed per-book keys of [root] whose content [root] has not merged. */
+    private suspend fun remoteChanges(root: StatisticsRoot, remote: LegacyKeys?): List<HttpSyncKvKeyMeta> = listOfNotNull(
+        remote?.reading?.takeIf { statisticsSync.remoteDiffers(root.root, StatisticsSyncKind.Reading, it.etag) },
+        remote?.manga?.takeIf {
+            root.contentType == ContentType.Mokuro && statisticsSync.remoteDiffers(root.root, StatisticsSyncKind.MangaText, it.etag)
+        },
+    )
 
     private fun legacyKeys(listing: List<HttpSyncKvKeyMeta>): Map<String, LegacyKeys> {
         val keys = mutableMapOf<String, LegacyKeys>()
@@ -468,20 +626,27 @@ class HttpSyncStatisticsLane(
                 "statistics" -> current.copy(reading = meta)
                 "manga_statistics" -> current.copy(manga = meta)
                 "metadata" -> current.copy(metadata = meta)
+                "epub.manifest" -> current.copy(epubManifest = meta)
+                "payload.manifest" -> current.copy(payloadManifest = meta)
                 else -> continue
             }
         }
         return keys
     }
 
-    /** Title and type of a book known only from the server, from its metadata when listed. */
-    private suspend fun describeRemoteBook(
-        transport: HttpSyncKvTransport,
-        syncId: String,
-        remote: LegacyKeys?,
-    ): Pair<String?, ContentType?> {
-        val guessedType = if (remote?.manga != null) ContentType.Mokuro else null
-        val metadata = remote?.metadata ?: return null to guessedType
+    /**
+     * Title and type of a book known only from the server. The listing usually tells the type
+     * (OCR statistics or a manifest), and the days carry the title; the book's metadata is
+     * fetched only when the type is still open.
+     */
+    private suspend fun describeRemoteBook(transport: HttpSyncKvTransport, remote: LegacyKeys?): Pair<String?, ContentType?> {
+        val listedType = when {
+            remote?.manga != null -> ContentType.Mokuro
+            remote?.epubManifest != null -> ContentType.Epub
+            else -> null
+        }
+        val metadata = remote?.metadata
+        if (listedType != null || metadata == null) return null to listedType
         val blob = try {
             transport.getBounded(metadata.key, MAX_METADATA_BYTES)?.let {
                 json.decodeFromString(HttpSyncMetadataBlob.serializer(), it.body.toString(Charsets.UTF_8))
@@ -491,17 +656,15 @@ class HttpSyncStatisticsLane(
         } catch (_: Exception) {
             null
         }
-        return blob?.title?.takeIf { it.isNotBlank() } to (blob?.contentType?.toLocal() ?: guessedType)
+        return blob?.title?.takeIf { it.isNotBlank() } to blob?.contentType?.toLocal()
     }
 
     /** A history folder that only knew its sync id takes the title its days carry. */
     private suspend fun nameFromEntries(root: StatisticsRoot) {
-        if (root.title != null || readTitle(root.root) != null) return
+        if (readStatisticsHistoryInfo(root.root)?.title?.isNotBlank() == true) return
         val title = bookRepository.loadStatistics(root.root).firstOrNull { it.title.isNotBlank() }?.title ?: return
         bookRepository.statisticsHistoryRoot(root.syncId, title, null)
     }
-
-    private fun readTitle(root: File): String? = readStatisticsHistoryInfo(root)?.title?.takeIf { it.isNotBlank() }
 
     /** Merges another device's days into [root]; true when anything there changed. */
     private suspend fun merge(root: StatisticsRoot, reading: List<ReadingStatistics>, mangaText: List<MangaTextStatistic>): Boolean {
@@ -526,17 +689,17 @@ class HttpSyncStatisticsLane(
     /** This device's own days in every book it keeps, as one canonical shard body per month. */
     private suspend fun ownMonths(deviceId: String, roots: List<StatisticsRoot>): Map<String, ByteArray> {
         val books = sortedMapOf<String, MutableMap<String, HttpSyncStatisticsShardBook>>()
-        val live = mutableSetOf<String>()
+        val live = HashSet<String>()
         for (root in roots) {
-            val path = root.root.absolutePath
-            live += path
+            live += root.root.absolutePath
             val own = ownEntries(root, deviceId)
             val readingByMonth = own.reading.groupBy { it.dateKey.take(7) }
             val mangaByMonth = own.mangaText.groupBy { it.dateKey.take(7) }
             for (month in (readingByMonth.keys + mangaByMonth.keys)) {
                 books.getOrPut(month) { sortedMapOf() }[root.syncId] = HttpSyncStatisticsShardBook(
-                    title = root.title ?: readingByMonth[month]?.firstOrNull()?.title,
-                    contentType = root.contentType,
+                    title = root.title ?: readingByMonth[month]?.firstOrNull { it.title.isNotBlank() }?.title,
+                    // A history folder's guessed type is not passed on as fact.
+                    contentType = root.contentType.takeIf { root.typeKnown },
                     reading = readingByMonth[month].orEmpty().sortedBy { it.dateKey },
                     mangaText = mangaByMonth[month].orEmpty().sortedBy { it.dateKey },
                 )
@@ -553,6 +716,7 @@ class HttpSyncStatisticsLane(
 
     private suspend fun ownEntries(root: StatisticsRoot, deviceId: String): OwnEntriesSnapshot {
         val files = listOf("statistics.json", "manga_statistics.json").map { root.root.resolve(it) }
+        // Stamped before reading: a save landing during the read is read again next time.
         val stamp = files.flatMap { listOf(it.lastModified(), it.length()) }
         val path = root.root.absolutePath
         ownEntriesCache[path]?.takeIf { it.stamp == stamp }?.let { return it }
@@ -563,34 +727,40 @@ class HttpSyncStatisticsLane(
         } else {
             emptyList()
         }
-        // Loading may rewrite a file once (legacy attribution); stamp what is there now.
-        val settled = files.flatMap { listOf(it.lastModified(), it.length()) }
-        return OwnEntriesSnapshot(settled, reading, mangaText).also { ownEntriesCache[path] = it }
+        return OwnEntriesSnapshot(stamp, reading, mangaText).also { ownEntriesCache[path] = it }
     }
 
     private fun decodeShard(key: String, parsed: StatisticsLaneKey.Shard, body: ByteArray): HttpSyncStatisticsShard {
+        val version = runCatching {
+            json.decodeFromString(VersionProbe.serializer(), body.toString(Charsets.UTF_8)).version
+        }.getOrNull()
+        if (version != null && version > HttpSyncStatisticsShard.SUPPORTED_VERSION) {
+            throw StatisticsSkippedException("Statistics at $key: written by a newer version ($version).")
+        }
         val shard = try {
             json.decodeFromString(HttpSyncStatisticsShard.serializer(), body.toString(Charsets.UTF_8))
         } catch (error: Exception) {
-            throw HttpSyncException("Statistics at $key: malformed JSON (${error.message ?: error.javaClass.simpleName})")
-        }
-        if (shard.version > HttpSyncStatisticsShard.SUPPORTED_VERSION) {
-            throw HttpSyncException("Statistics at $key: unsupported version ${shard.version}.")
+            throw StatisticsDataException("Statistics at $key: malformed JSON (${error.message ?: error.javaClass.simpleName})")
         }
         if (shard.deviceId != parsed.deviceId || shard.month != parsed.month) {
-            throw HttpSyncException("Statistics at $key: written for another device or month.")
+            throw StatisticsDataException("Statistics at $key: written for another device or month.")
         }
         return shard
     }
 
-    private suspend fun preferencesDirty(index: LaneIndex, deviceId: String?): Boolean {
+    @Serializable
+    private data class VersionProbe(val version: Int = 1)
+
+    private suspend fun preferencesDirty(index: LaneIndex, deviceId: String?, listing: List<HttpSyncKvKeyMeta>): Boolean {
         val store = preferencesStore ?: return false
         deviceId ?: return false
-        val local = effectiveLocalPreferences(store.load())
-        val own = index.preferences[statisticsPreferencesKey(deviceId)]
-        val newest = newestRemotePreferences(index, deviceId)
-        return (local.updatedAt > 0L && own != local.toBlob()) ||
-            (newest != null && wins(newest.second, newest.first, local, deviceId))
+        val local = effectiveLocalPreferences(store.load(), store)
+        val ownKey = statisticsPreferencesKey(deviceId)
+        if (local.updatedAt > 0L && !ownBlocked(ownKey) &&
+            !ownPreferencesCurrent(index, listing.firstOrNull { it.key == ownKey }, local)
+        ) return true
+        val newest = newestPreferences(index) ?: return false
+        return wins(store.normalize(newest.second.toPreferences()), newest.first, local, deviceId)
     }
 
     private suspend fun syncPreferences(
@@ -599,19 +769,34 @@ class HttpSyncStatisticsLane(
         start: LaneIndex,
         deviceId: String,
         errors: MutableList<String>,
+        retryFailed: Boolean,
     ): LaneIndex {
         val store = preferencesStore ?: return start
         var index = start
+        // Every settings key with a new ETag, this device's own included: a reinstall finds its
+        // earlier choice there.
         for (meta in listing) {
             val key = parseStatisticsLaneKey(meta.key) as? StatisticsLaneKey.Preferences ?: continue
-            if (key.deviceId == deviceId || index.applied[meta.key] == meta.etag) continue
+            val own = key.deviceId == deviceId
+            val known = if (own) index.published[meta.key] else index.applied[meta.key]
+            if (known == meta.etag || (!retryFailed && blocked(meta))) continue
             try {
-                val fetched = transport.getBounded(meta.key, MAX_METADATA_BYTES) ?: continue
-                val value = json.decodeFromString(HttpSyncStatisticsPreferences.serializer(), fetched.body.toString(Charsets.UTF_8))
+                val fetched = transport.getBounded(meta.key, MAX_METADATA_BYTES)
+                    ?: throw StatisticsSkippedException("Settings at ${meta.key} are no longer on the server.")
+                val text = fetched.body.toString(Charsets.UTF_8)
+                val version = runCatching { json.decodeFromString(VersionProbe.serializer(), text).version }.getOrNull()
+                if (version != null && version > 1) throw StatisticsSkippedException("Settings at ${meta.key}: written by a newer version.")
+                val value = try {
+                    json.decodeFromString(HttpSyncStatisticsPreferences.serializer(), text)
+                } catch (error: Exception) {
+                    throw StatisticsDataException("Settings at ${meta.key}: malformed JSON (${error.message ?: error.javaClass.simpleName})")
+                }
                 index = index.copy(
-                    applied = index.applied + (meta.key to fetched.etag),
                     preferences = index.preferences + (meta.key to value),
+                    applied = if (own) index.applied else index.applied + (meta.key to fetched.etag),
+                    published = if (own) index.published + (meta.key to fetched.etag) else index.published,
                 )
+                failures.remove(meta.key)
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
@@ -619,55 +804,71 @@ class HttpSyncStatisticsLane(
             }
         }
         val stored = store.load()
-        var local = effectiveLocalPreferences(stored)
+        var local = effectiveLocalPreferences(stored, store)
         if (local != stored) store.save(local)
-        newestRemotePreferences(index, deviceId)?.let { (remoteDevice, remote) ->
-            if (wins(remote, remoteDevice, local, deviceId)) {
-                local = StatisticsPreferences(
-                    streakMinimumMinutes = remote.streakMinimumMinutes.coerceIn(1, 600),
-                    dayResetHour = remote.dayResetHour.coerceIn(0, 23),
-                    updatedAt = remote.updatedAt,
-                )
-                store.save(local)
+        newestPreferences(index)?.let { (device, remote) ->
+            val candidate = store.normalize(remote.toPreferences())
+            if (wins(candidate, device, local, deviceId)) {
+                store.save(candidate)
+                local = candidate
             }
         }
         val ownKey = statisticsPreferencesKey(deviceId)
-        if (local.updatedAt > 0L && index.preferences[ownKey] != local.toBlob()) {
-            try {
-                val blob = local.toBlob()
-                val written = transport.put(ownKey, JSON_CONTENT_TYPE, json.encodeToString(HttpSyncStatisticsPreferences.serializer(), blob).toByteArray(Charsets.UTF_8))
-                index = index.copy(
-                    published = index.published + (ownKey to written.etag),
-                    preferences = index.preferences + (ownKey to blob),
-                )
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (error: Exception) {
-                fail(ownKey, null, errors, error)
+        val onServer = listing.firstOrNull { it.key == ownKey }
+        if (local.updatedAt > 0L && !ownPreferencesCurrent(index, onServer, local)) {
+            // This device's own server copy is read (above) before it is ever replaced.
+            val unread = onServer != null && index.published[ownKey] != onServer.etag
+            if (!unread && !(!retryFailed && ownBlocked(ownKey))) {
+                try {
+                    val blob = local.toBlob()
+                    val body = json.encodeToString(HttpSyncStatisticsPreferences.serializer(), blob).toByteArray(Charsets.UTF_8)
+                    val written = transport.put(ownKey, JSON_CONTENT_TYPE, body)
+                    index = index.copy(
+                        published = index.published + (ownKey to written.etag),
+                        publishedSha = index.publishedSha + (ownKey to sha256(body)),
+                        preferences = index.preferences + (ownKey to blob),
+                    )
+                    failures.remove(ownKey)
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (error: Exception) {
+                    fail(ownKey, null, errors, error)
+                }
             }
         }
         return index
     }
 
-    /** A goal or reset changed before choices were synced counts as chosen, older than any synced choice. */
-    private fun effectiveLocalPreferences(local: StatisticsPreferences): StatisticsPreferences =
-        if (local.updatedAt == 0L && (local.streakMinimumMinutes != DEFAULT_MINIMUM_MINUTES || local.dayResetHour != DEFAULT_RESET_HOUR)) {
-            local.copy(updatedAt = LEGACY_CHOICE_STAMP)
-        } else {
-            local
-        }
+    /** Whether the server holds exactly [local] under this device's settings key. */
+    private fun ownPreferencesCurrent(index: LaneIndex, onServer: HttpSyncKvKeyMeta?, local: StatisticsPreferences): Boolean {
+        onServer ?: return false
+        val body = json.encodeToString(HttpSyncStatisticsPreferences.serializer(), local.toBlob()).toByteArray(Charsets.UTF_8)
+        val sha = sha256(body)
+        return onServer.etag == "sha256:$sha" || (onServer.etag == index.published[onServer.key] && index.publishedSha[onServer.key] == sha)
+    }
 
-    private fun newestRemotePreferences(index: LaneIndex, deviceId: String): Pair<String, HttpSyncStatisticsPreferences>? =
+    /** A goal or reset changed before choices were synced counts as chosen, older than any synced choice. */
+    private fun effectiveLocalPreferences(local: StatisticsPreferences, store: StatisticsPreferencesStore): StatisticsPreferences {
+        val defaults = store.defaults
+        val unchosen = local.streakMinimumMinutes == defaults.streakMinimumMinutes && local.dayResetHour == defaults.dayResetHour
+        return if (local.updatedAt == 0L && !unchosen) local.copy(updatedAt = LEGACY_CHOICE_STAMP) else local
+    }
+
+    /** The newest choice on the server, this device's own included; the larger device id breaks a tie. */
+    private fun newestPreferences(index: LaneIndex): Pair<String, HttpSyncStatisticsPreferences>? =
         index.preferences.mapNotNull { (key, value) ->
             val device = (parseStatisticsLaneKey(key) as? StatisticsLaneKey.Preferences)?.deviceId ?: return@mapNotNull null
-            if (device == deviceId || value.version > 1) null else device to value
+            device to value
         }.maxWithOrNull(compareBy<Pair<String, HttpSyncStatisticsPreferences>>({ it.second.updatedAt }, { it.first }))
 
-    /** Newest choice wins; the larger device id breaks a tie, so every device picks the same one. */
-    private fun wins(remote: HttpSyncStatisticsPreferences, remoteDevice: String, local: StatisticsPreferences, deviceId: String): Boolean {
-        if (remote.streakMinimumMinutes == local.streakMinimumMinutes && remote.dayResetHour == local.dayResetHour) return false
-        return remote.updatedAt > local.updatedAt || (remote.updatedAt == local.updatedAt && remoteDevice > deviceId)
+    /** Whether [candidate] should replace [local]: newer, or as new from a larger device id, and different. */
+    private fun wins(candidate: StatisticsPreferences, candidateDevice: String, local: StatisticsPreferences, deviceId: String): Boolean {
+        if (candidate == local) return false
+        return candidate.updatedAt > local.updatedAt ||
+            (candidate.updatedAt == local.updatedAt && candidateDevice > deviceId)
     }
+
+    private fun HttpSyncStatisticsPreferences.toPreferences() = StatisticsPreferences(streakMinimumMinutes, dayResetHour, updatedAt)
 
     private fun StatisticsPreferences.toBlob() = HttpSyncStatisticsPreferences(
         streakMinimumMinutes = streakMinimumMinutes,
@@ -694,12 +895,18 @@ class HttpSyncStatisticsLane(
     companion object {
         /** While someone keeps reading, local days go up at most this often (and at once on leaving). */
         const val LOCAL_PUSH_INTERVAL_MS: Long = 30_000L
-        private const val FAILURE_RETRY_MS: Long = 10 * 60_000L
+
+        /** The same for the per-book keys older builds read (see [lastLegacyPushAtMillis]). */
+        const val LEGACY_PUSH_INTERVAL_MS: Long = 3 * 60_000L
+        private const val FIRST_RETRY_MS: Long = 30_000L
+        const val MAX_RETRY_MS: Long = 10 * 60_000L
+        private const val STATUS_REFRESH_MS: Long = 30_000L
         private const val MAX_METADATA_BYTES: Int = 64 * 1024
         private const val INDEX_FILE_NAME = ".http_sync_statistics_lane.json"
         private const val JSON_CONTENT_TYPE = "application/json; charset=utf-8"
-        private const val DEFAULT_MINIMUM_MINUTES = 10
-        private const val DEFAULT_RESET_HOUR = 3
         private const val LEGACY_CHOICE_STAMP = 1L
+
+        /** Failure slot for "some own month could not be published". */
+        private const val OWN_SHARDS = "own-shards"
     }
 }

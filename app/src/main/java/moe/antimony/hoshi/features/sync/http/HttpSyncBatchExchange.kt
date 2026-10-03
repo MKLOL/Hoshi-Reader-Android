@@ -269,15 +269,17 @@ class HttpSyncBatchState(
                 before.books
             }
             val shardBodies = linkedMapOf<String, Map<String, HttpSyncBookmarkMapEntry>>()
+            val ownShardKey = bookmarkMapKey(loadDeviceIdLocked())
             for (meta in bookmarkMetas) {
                 shardBodies[meta.key] = if (!before.initialized || before.bookmarkEtags[meta.key] != meta.etag) {
-                    // One device's malformed or just-deleted shard must not stop every other
-                    // device's positions from applying: keep what was known of it and go on.
+                    // A failed request aborts this poll, so the shard is fetched again. Only
+                    // another device's unreadable or just-deleted shard is passed over (until it
+                    // changes), so it cannot stop every other device's positions from applying.
+                    val fetched = transport.get(meta.key)
                     try {
-                        decodeBookmarksMap(transport.get(meta.key))
-                    } catch (cancelled: CancellationException) {
-                        throw cancelled
-                    } catch (_: HttpSyncException) {
+                        decodeBookmarksMap(fetched)
+                    } catch (error: HttpSyncException) {
+                        if (meta.key == ownShardKey) throw error
                         before.bookmarkShards[meta.key].orEmpty()
                     }
                 } else {
@@ -381,10 +383,12 @@ class HttpSyncBatchState(
         transport: HttpSyncKvTransport,
         listing: List<HttpSyncKvKeyMeta>,
         flush: Boolean = false,
+        retryFailed: Boolean = false,
+        onProgress: suspend (HttpSyncProgress) -> Unit = {},
     ): StatisticsLaneResult = withContext(ioDispatcher) {
         statisticsMutex.withLock {
             try {
-                statisticsLane.run(transport, listing, flush)
+                statisticsLane.run(transport, listing, flush, retryFailed, onProgress)
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
@@ -394,7 +398,10 @@ class HttpSyncBatchState(
         }
     }
 
-    /** Lists the server and runs the statistics lane: leaving a reader, opening Statistics, the background flush. */
+    /**
+     * Lists the server and runs the statistics lane: leaving a reader, opening Statistics, the
+     * background flush ([flush]), or a poll whose bookmark maps failed (only when it has work).
+     */
     internal suspend fun syncStatisticsNow(transport: HttpSyncKvTransport, flush: Boolean = true): StatisticsLaneResult {
         val listing = try {
             withContext(ioDispatcher) { syncMutex.withLock { listAllMetadata(transport).keys } }
@@ -404,8 +411,15 @@ class HttpSyncBatchState(
             statisticsLane.markFailed(error)
             throw error
         }
+        if (!flush && !withContext(ioDispatcher) { statisticsLane.needsRun(transport, listing) }) {
+            statisticsLane.markChecked()
+            return StatisticsLaneResult.NONE
+        }
         return runStatistics(transport, listing, flush)
     }
+
+    /** Whether page turns are queued for this installation's bookmark shard. */
+    internal fun hasPendingBookmarks(): Boolean = hasPending()
 
     /** Every installed book's reading position, to count the books a sync actually moved. */
     internal suspend fun bookmarkPositions(): Map<String, Triple<Int, Double, Int>> = withContext(ioDispatcher) {
@@ -717,7 +731,7 @@ class HttpSyncFastSync(
         // A tap sends this device's reading at once and takes every other device's, before and
         // independently of any book transfer.
         onProgress(HttpSyncProgress(messageResource = R.string.http_sync_reading_history))
-        val statistics = state.runStatistics(client, maps.listing, flush = true)
+        val statistics = state.runStatistics(client, maps.listing, flush = true, retryFailed = true, onProgress = onProgress)
         val result = if (!maps.needsBootstrap && !maps.booksChanged && !maps.otherChanged) {
             // Nothing left to download, so any remaining partial archive has no retry coming.
             HttpSyncDownloadSpool.pruneAfterSync(state.booksDirectory)
@@ -810,11 +824,17 @@ class HttpSyncBookmarkScheduler(
     suspend fun onBookmarkChanged(bookRoot: File, title: String?, persistedSyncId: String? = null) {
         state.queueBookmark(bookRoot, title, persistedSyncId)
         start()
+        // The poll waits while the app is not visible; a position saved just after leaving it
+        // (a debounced page turn, audio still playing) goes up now instead of at the next visit.
+        if (!foreground.value) refreshNow()
     }
 
     fun start() = synchronized(jobLock) {
         if (pollingJob?.isActive == true) return
         pollingJob = scope.launch {
+            // Started by a background job, the process does not poll (nor start a full
+            // reconcile it could be frozen in) until a screen is shown.
+            foreground.first { it }
             runMaps()
             while (isActive) {
                 delay(BOOKMARK_SYNC_INTERVAL_MS)
@@ -877,6 +897,18 @@ class HttpSyncBookmarkScheduler(
         val settings = currentSettings() ?: return null
         if (!settings.isConfigured) return null
         return state.syncStatisticsNow(transportFactory(settings), flush = true)
+    }
+
+    /**
+     * What the background flush worker does: publishes queued page turns and sends this
+     * device's reading time. Null when sync is not set up.
+     */
+    suspend fun flushInBackground(): StatisticsLaneResult? {
+        val settings = currentSettings() ?: return null
+        if (!settings.isConfigured) return null
+        val client = transportFactory(settings)
+        if (state.hasPendingBookmarks()) state.syncMaps(client)
+        return state.syncStatisticsNow(client, flush = true)
     }
 
     /** [syncStatisticsNow] without waiting; a failure shows on the Statistics screen. */

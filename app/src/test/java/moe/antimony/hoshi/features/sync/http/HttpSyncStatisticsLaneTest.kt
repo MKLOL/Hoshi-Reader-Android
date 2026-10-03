@@ -247,6 +247,140 @@ class HttpSyncStatisticsLaneTest {
     }
 
     @Test
+    fun aReinstalledDeviceTakesBackItsOwnSettingsAndSettles() = runBlocking {
+        val repository = repository()
+        val server = ContentAddressedKv()
+        server.put(statisticsPreferencesKey("phone"), "application/json", json.encodeToString(
+            HttpSyncStatisticsPreferences.serializer(), HttpSyncStatisticsPreferences(streakMinimumMinutes = 25, dayResetHour = 5, updatedAt = 500),
+        ).toByteArray())
+        val store = MemoryPreferences(StatisticsPreferences(10, 3, updatedAt = 0))
+        val lane = lane(repository, store)
+
+        lane.run(server, server.listing())
+
+        assertEquals(StatisticsPreferences(25, 5, 500), store.value)
+        assertFalse("no pass every five seconds afterwards", lane.needsRun(server, server.listing()))
+        server.resetCounts()
+        lane.run(server, server.listing())
+        assertEquals(0, server.gets + server.puts)
+    }
+
+    @Test
+    fun anOutOfRangeChoiceFromAnotherDeviceSettlesOnceClamped() = runBlocking {
+        val repository = repository()
+        val server = ContentAddressedKv()
+        server.put(statisticsPreferencesKey("tablet"), "application/json", json.encodeToString(
+            HttpSyncStatisticsPreferences.serializer(), HttpSyncStatisticsPreferences(streakMinimumMinutes = 5_000, dayResetHour = 40, updatedAt = 900),
+        ).toByteArray())
+        val store = MemoryPreferences(StatisticsPreferences(10, 3, updatedAt = 0))
+        val lane = lane(repository, store)
+        lane.run(server, server.listing())
+        assertEquals(StatisticsPreferences(600, 23, 900), store.value)
+        lane.run(server, server.listing())
+        assertFalse(lane.needsRun(server, server.listing()))
+    }
+
+    @Test
+    fun aShardFromANewerVersionIsSkippedQuietlyNotReportedEveryPass() = runBlocking {
+        val repository = repository()
+        book(repository, "book")
+        val server = ContentAddressedKv()
+        server.put(statisticsShardKey("tablet", "2026-10"), "application/json", """{"version":2,"deviceId":"tablet","month":"2026-10"}""".toByteArray())
+        val lane = lane(repository)
+
+        val result = lane.run(server, server.listing(), flush = true)
+
+        assertTrue("not an error a user can act on", result.errors.isEmpty())
+        assertEquals(null, lane.status.value.problem)
+        assertFalse(lane.needsRun(server, server.listing()))
+        server.resetCounts()
+        lane.run(server, server.listing(), flush = true)
+        assertEquals("a flush does not fetch it again before its pause ends", 0, server.gets)
+    }
+
+    @Test
+    fun aKeyAStaleListingStillShowsIsNotFetchedEveryPoll() = runBlocking {
+        val repository = repository()
+        val server = ContentAddressedKv()
+        server.listGhost(statisticsKey("gone"))
+        server.listGhost(statisticsShardKey("tablet", "2026-09"))
+        val lane = lane(repository)
+
+        val result = lane.run(server, server.listing())
+
+        assertTrue(result.errors.isEmpty())
+        assertFalse(lane.needsRun(server, server.listing()))
+        assertEquals("no empty history folder for a key that is gone", null, repository.loadStatisticsHistory().singleOrNull { repository.loadStatistics(it.root).isEmpty() && it.syncId != "gone" })
+    }
+
+    @Test
+    fun failedUploadsOfThisDevicesMonthsPauseInsteadOfRetryingEveryPoll() = runBlocking {
+        val repository = repository()
+        val root = book(repository, "book")
+        repository.saveStatistics(root, listOf(day("2026-10-01", 600.0, phone)))
+        val server = ContentAddressedKv()
+        server.failPuts = { it.startsWith(STATISTICS_SHARD_PREFIX) }
+        val lane = lane(repository)
+
+        val first = lane.run(server, server.listing(), flush = true)
+        assertTrue(first.errors.isNotEmpty())
+        assertEquals(StatisticsSyncProblem.Offline, lane.status.value.problem)
+        // The pause doubles: 30 s after the first failure, 60 s after the second.
+        nowMs += 20_000
+        assertFalse("waits out its pause", lane.needsRun(server, server.listing()))
+        lane.markChecked()
+        assertEquals("the problem stays shown while the month is unsent", StatisticsSyncProblem.Offline, lane.status.value.problem)
+        nowMs += 10_000
+        assertTrue(lane.needsRun(server, server.listing()))
+        server.resetCounts()
+        assertTrue(lane.run(server, server.listing(), flush = true).errors.isNotEmpty())
+        nowMs += 40_000
+        assertFalse(lane.needsRun(server, server.listing()))
+        server.resetCounts()
+        lane.run(server, server.listing(), flush = true)
+        assertEquals("a reader flush honours the pause too", emptyList<String>(), server.putKeys)
+
+        server.failPuts = { false }
+        nowMs += 20_000
+        assertTrue(lane.needsRun(server, server.listing()))
+        assertTrue(lane.run(server, server.listing()).errors.isEmpty())
+        assertEquals(null, lane.status.value.problem)
+    }
+
+    @Test
+    fun aServerWithOpaqueEtagsIsNotSentUnchangedMonthsAgain() = runBlocking {
+        val repository = repository()
+        val root = book(repository, "book")
+        repository.saveStatistics(root, listOf(day("2026-09-30", 600.0, phone), day("2026-10-01", 600.0, phone)))
+        val server = ContentAddressedKv(opaqueEtags = true)
+        val lane = lane(repository)
+        lane.run(server, server.listing(), flush = true)
+        server.resetCounts()
+
+        lane.run(server, server.listing(), flush = true)
+
+        assertEquals(emptyList<String>(), server.putKeys)
+        assertFalse(lane.needsRun(server, server.listing()))
+    }
+
+    @Test
+    fun anOwnMonthIsNotOverwrittenBeforeItsServerCopyCouldBeRead() = runBlocking {
+        val server = ContentAddressedKv()
+        server.put(statisticsShardKey("phone", "2026-09"), "application/json", "{ damaged".toByteArray())
+        val repository = repository()
+        val root = book(repository, "book")
+        repository.saveStatistics(root, listOf(day("2026-09-21", 300.0, phone)))
+        server.resetCounts()
+
+        lane(repository).run(server, server.listing(), flush = true)
+
+        assertFalse(
+            "the server's copy of this device's month was never merged, so it is not replaced",
+            statisticsShardKey("phone", "2026-09") in server.putKeys,
+        )
+    }
+
+    @Test
     fun laneKeysParseOnlyWhatTheLaneWrites() {
         assertEquals(StatisticsLaneKey.Shard("phone", "2026-10"), parseStatisticsLaneKey("sync/maps/stats/phone/2026-10.json"))
         assertEquals(StatisticsLaneKey.Preferences("phone"), parseStatisticsLaneKey("sync/maps/stats/phone/settings.json"))
@@ -257,6 +391,11 @@ class HttpSyncStatisticsLaneTest {
     }
 
     private class MemoryPreferences(var value: StatisticsPreferences) : StatisticsPreferencesStore {
+        override val defaults = StatisticsPreferences(10, 3, 0)
+        override fun normalize(preferences: StatisticsPreferences) = preferences.copy(
+            streakMinimumMinutes = preferences.streakMinimumMinutes.coerceIn(1, 600),
+            dayResetHour = preferences.dayResetHour.coerceIn(0, 23),
+        )
         override suspend fun load() = value
         override suspend fun save(preferences: StatisticsPreferences) {
             value = preferences
@@ -265,7 +404,21 @@ class HttpSyncStatisticsLaneTest {
 }
 
 /** A KV store whose ETags are the content hash, as the real server's are; counts requests. */
-internal class ContentAddressedKv(override val cacheIdentity: String? = "test") : HttpSyncKvTransport {
+internal class ContentAddressedKv(
+    override val cacheIdentity: String? = "test",
+    /** ETags like many servers give: not a hash of the body. */
+    private val opaqueEtags: Boolean = false,
+) : HttpSyncKvTransport {
+    /** PUTs of keys matching this fail like an unreachable server. */
+    var failPuts: (String) -> Boolean = { false }
+
+    /** Keys a stale listing still shows after they were deleted. */
+    private val ghosts = mutableMapOf<String, HttpSyncKvKeyMeta>()
+
+    fun listGhost(key: String) {
+        ghosts[key] = HttpSyncKvKeyMeta(key, "2026-10-03T00:00:00Z", "sha256:" + "0".repeat(64), 10, "application/json")
+    }
+
     private class Stored(val body: ByteArray, val contentType: String, val lastModified: String, val etag: String)
 
     private val values = sortedMapOf<String, Stored>()
@@ -273,6 +426,8 @@ internal class ContentAddressedKv(override val cacheIdentity: String? = "test") 
     var gets = 0
         private set
     var puts = 0
+        private set
+    @Volatile var lists = 0
         private set
     val putKeys = mutableListOf<String>()
 
@@ -288,13 +443,14 @@ internal class ContentAddressedKv(override val cacheIdentity: String? = "test") 
 
     fun listing(): List<HttpSyncKvKeyMeta> = values.map { (key, stored) ->
         HttpSyncKvKeyMeta(key, stored.lastModified, stored.etag, stored.body.size, stored.contentType)
-    }
+    } + ghosts.values
 
     override suspend fun put(key: String, contentType: String, body: ByteArray): HttpSyncKvWriteResponse {
         puts += 1
         putKeys += key
+        if (failPuts(key)) throw HttpSyncException("Sync request timed out. Network is too slow or the server is hung.")
         clock += 1
-        val etag = "sha256:" + MessageDigest.getInstance("SHA-256").digest(body).joinToString("") { "%02x".format(it) }
+        val etag = if (opaqueEtags) "\"v$clock\"" else "sha256:" + MessageDigest.getInstance("SHA-256").digest(body).joinToString("") { "%02x".format(it) }
         val stamp = "2026-10-03T00:%02d:%02dZ".format(clock / 60, clock % 60)
         values[key] = Stored(body.copyOf(), contentType, stamp, etag)
         return HttpSyncKvWriteResponse(key, stamp, etag, body.size, contentType)
@@ -306,8 +462,10 @@ internal class ContentAddressedKv(override val cacheIdentity: String? = "test") 
         return HttpSyncKvFetched(stored.body.copyOf(), stored.contentType, stored.lastModified, stored.etag)
     }
 
-    override suspend fun list(prefix: String?, since: String?, cursor: String?, limit: Int?): HttpSyncKvList =
-        HttpSyncKvList(listing().filter { prefix == null || it.key.startsWith(prefix) })
+    override suspend fun list(prefix: String?, since: String?, cursor: String?, limit: Int?): HttpSyncKvList {
+        lists += 1
+        return HttpSyncKvList(listing().filter { prefix == null || it.key.startsWith(prefix) })
+    }
 
     override suspend fun delete(key: String) {
         values.remove(key)

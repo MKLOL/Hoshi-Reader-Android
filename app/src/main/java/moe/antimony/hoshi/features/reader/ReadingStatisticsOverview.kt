@@ -71,6 +71,10 @@ data class BookReadingSummary(
     val days: List<DailyReading>,
     /** This book's reading per device, longest first. */
     val devices: List<DeviceReadingSummary> = emptyList(),
+    /** False for a book only its reading history is kept for (not downloaded here, or deleted). */
+    val onDevice: Boolean = true,
+    /** False when this install never knew the position, so [progress] and [finished] mean nothing. */
+    val progressKnown: Boolean = true,
 ) {
     val daysRead: Int get() = days.count { it.seconds > 0.0 }
 }
@@ -102,6 +106,10 @@ data class BookStatisticsInput(
     val mangaTextStatistics: List<MangaTextStatistic> = emptyList(),
     val progress: Double = 0.0,
     val coverSource: BookCoverSource? = null,
+    /** False for a book only its reading history is kept for. */
+    val onDevice: Boolean = true,
+    /** False when [progress] is not known (a book this install never had). */
+    val progressKnown: Boolean = true,
 )
 
 /**
@@ -154,6 +162,8 @@ fun summarizeReadingStatistics(
             coverSource = input.coverSource,
             days = days,
             devices = summarizeDevices(input.contentType, statistics, mangaText, streakResetHour),
+            onDevice = input.onDevice,
+            progressKnown = input.progressKnown,
         )
     }.sortedWith(compareByDescending<BookReadingSummary> { it.totalSeconds }.thenBy { it.title })
     val daily = (dailySeconds.keys + dailyCharacters.keys).distinct()
@@ -280,6 +290,9 @@ suspend fun loadReadingStatisticsOverview(
                 ContentType.Epub -> emptyList()
                 ContentType.Mokuro -> bookRepository.loadMangaTextStatistics(kept.root)
             },
+            progress = kept.progress ?: 0.0,
+            onDevice = false,
+            progressKnown = kept.progress != null,
         )
     }
     summarizeReadingStatistics(installed + historyOnly, todayKey, streakResetHour)

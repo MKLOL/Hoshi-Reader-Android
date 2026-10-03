@@ -76,6 +76,7 @@ import java.time.Duration
 import java.time.LocalDate
 import java.time.ZonedDateTime
 import android.text.format.DateUtils
+import moe.antimony.hoshi.features.sync.http.StatisticsSyncProblem
 import moe.antimony.hoshi.features.sync.http.StatisticsSyncStatus
 
 /**
@@ -111,7 +112,9 @@ fun StatisticsScreen(
     // once instead of waiting for the next poll; what arrives reloads the screen.
     LaunchedEffect(resumeCount) { appContainer.httpSyncBookmarkScheduler.refreshStatistics() }
     LaunchedEffect(statisticsVersion, resumeCount, today, resetHour) {
-        overview = null
+        // Keep showing the last numbers while new ones load: a sync merging several books
+        // changes the files in a burst, and blanking each time would flash the whole screen.
+        if (overview != null) delay(RELOAD_COALESCE_MS)
         overview = loadReadingStatisticsOverview(
             appContainer.bookRepository, today.toString(), resetHour,
         )
@@ -136,10 +139,13 @@ fun StatisticsScreen(
         minimumMinutes = readerSettings.statisticsStreakMinimumMinutes,
         resetHour = resetHour,
         // A choice is stamped so sync can apply the newest one on every device.
+        // Only a real change is stamped: re-picking the current value must not outrank a newer
+        // choice another device made that has not arrived yet.
         onResetHourChange = { hour ->
             scope.launch {
                 appContainer.readerSettingsRepository.update {
-                    it.copy(statisticsDayResetHour = hour, statisticsSettingsUpdatedAt = System.currentTimeMillis())
+                    if (it.statisticsDayResetHour == hour) it
+                    else it.copy(statisticsDayResetHour = hour, statisticsSettingsUpdatedAt = System.currentTimeMillis())
                 }
                 appContainer.httpSyncBookmarkScheduler.refreshStatistics()
             }
@@ -147,7 +153,8 @@ fun StatisticsScreen(
         onMinimumMinutesChange = { minutes ->
             scope.launch {
                 appContainer.readerSettingsRepository.update {
-                    it.copy(statisticsStreakMinimumMinutes = minutes, statisticsSettingsUpdatedAt = System.currentTimeMillis())
+                    if (it.statisticsStreakMinimumMinutes == minutes) it
+                    else it.copy(statisticsStreakMinimumMinutes = minutes, statisticsSettingsUpdatedAt = System.currentTimeMillis())
                 }
                 appContainer.httpSyncBookmarkScheduler.refreshStatistics()
             }
@@ -597,7 +604,8 @@ internal fun bookReadingSubtitle(book: BookReadingSummary): String {
     val lastRead = book.lastReadDateKey?.let { dateKey ->
         stringResource(R.string.statistics_overview_last_read_format, formatStatisticsDate(dateKey))
     }
-    return listOfNotNull(pagesRead, charactersRead, lastRead).joinToString(" · ")
+    val elsewhere = stringResource(R.string.statistics_book_not_on_device).takeUnless { book.onDevice }
+    return listOfNotNull(pagesRead, charactersRead, lastRead, elsewhere).joinToString(" · ")
 }
 
 @Composable
@@ -626,21 +634,32 @@ internal fun StatisticsMessageRow(message: String) {
 /** Whether other devices' reading is in: when it was last checked, or why it could not be. */
 @Composable
 private fun StatisticsSyncStatusText(status: StatisticsSyncStatus, nowMillis: Long) {
-    val synced = status.lastSuccessAtMillis?.let {
-        DateUtils.getRelativeTimeSpanString(it.coerceAtMost(nowMillis), nowMillis, DateUtils.MINUTE_IN_MILLIS).toString()
-    }
-    val text = when {
-        status.lastError != null -> stringResource(R.string.statistics_sync_status_failed, status.lastError)
-        synced != null -> stringResource(R.string.statistics_sync_status_synced, synced)
-        else -> stringResource(R.string.statistics_sync_status_checking)
+    val checkedAt = status.lastSuccessAtMillis?.coerceAtMost(nowMillis)
+    val text = when (status.problem) {
+        StatisticsSyncProblem.Offline -> stringResource(R.string.statistics_sync_problem_offline)
+        StatisticsSyncProblem.Server -> stringResource(R.string.statistics_sync_problem_server)
+        StatisticsSyncProblem.Unreadable -> stringResource(R.string.statistics_sync_problem_unreadable)
+        null -> when {
+            checkedAt == null -> stringResource(R.string.statistics_sync_status_checking)
+            nowMillis - checkedAt < DateUtils.MINUTE_IN_MILLIS -> stringResource(R.string.statistics_sync_status_synced_now)
+            else -> stringResource(
+                R.string.statistics_sync_status_synced,
+                DateUtils.getRelativeTimeSpanString(checkedAt, nowMillis, DateUtils.MINUTE_IN_MILLIS).toString(),
+            )
+        }
     }
     Text(
         text = text,
         style = MaterialTheme.typography.bodySmall,
-        color = if (status.lastError != null) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+        color = if (status.problem != null) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+        maxLines = 3,
+        overflow = TextOverflow.Ellipsis,
         modifier = Modifier.padding(horizontal = 4.dp),
     )
 }
+
+/** How long a statistics change waits for the rest of its burst before the screen reloads. */
+private const val RELOAD_COALESCE_MS = 300L
 
 /** A goal is whole minutes, so show "10m" rather than "10m 0s". */
 internal fun formatGoalDuration(seconds: Double): String {

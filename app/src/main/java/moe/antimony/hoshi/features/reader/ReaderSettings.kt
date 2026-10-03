@@ -19,6 +19,12 @@ import moe.antimony.hoshi.R
 import moe.antimony.hoshi.features.sync.StatisticsSyncMode
 import java.util.Locale
 
+/** Streak goals the settings keep, in minutes. */
+val STATISTICS_STREAK_MINIMUM_MINUTES_RANGE: IntRange = 1..600
+
+/** Hours a reading day may start at. */
+val STATISTICS_DAY_RESET_HOUR_RANGE: IntRange = 0..23
+
 data class ReaderSettings(
     val theme: ReaderTheme = ReaderTheme.System,
     val eInkMode: Boolean = false,
@@ -434,8 +440,10 @@ class ReaderSettingsRepository(
             continuousMode = this[KEY_CONTINUOUS_MODE] ?: false,
             statisticsSyncEnabled = this[KEY_STATISTICS_SYNC_ENABLED] ?: false,
             statisticsSyncMode = StatisticsSyncMode.fromRawValue(this[KEY_STATISTICS_SYNC_MODE]),
-            statisticsStreakMinimumMinutes = (this[KEY_STATISTICS_STREAK_MINIMUM_MINUTES] ?: 10).coerceIn(1, 600),
-            statisticsDayResetHour = (this[KEY_STATISTICS_DAY_RESET_HOUR] ?: 3).coerceIn(0, 23),
+            statisticsStreakMinimumMinutes = (this[KEY_STATISTICS_STREAK_MINIMUM_MINUTES] ?: DEFAULTS.statisticsStreakMinimumMinutes)
+                .coerceIn(STATISTICS_STREAK_MINIMUM_MINUTES_RANGE),
+            statisticsDayResetHour = (this[KEY_STATISTICS_DAY_RESET_HOUR] ?: DEFAULTS.statisticsDayResetHour)
+                .coerceIn(STATISTICS_DAY_RESET_HOUR_RANGE),
             statisticsSettingsUpdatedAt = (this[KEY_STATISTICS_SETTINGS_UPDATED_AT] ?: 0L).coerceAtLeast(0L),
             showStatisticsToggle = this[KEY_SHOW_STATISTICS_TOGGLE] ?: false,
             showReadingSpeed = this[KEY_SHOW_READING_SPEED] ?: false,
@@ -497,7 +505,7 @@ class ReaderSettingsRepository(
         this[KEY_STATISTICS_SYNC_ENABLED] = settings.statisticsSyncEnabled
         this[KEY_STATISTICS_SYNC_MODE] = settings.statisticsSyncMode.rawValue
         this[KEY_STATISTICS_STREAK_MINIMUM_MINUTES] = settings.statisticsStreakMinimumMinutes
-        this[KEY_STATISTICS_DAY_RESET_HOUR] = settings.statisticsDayResetHour.coerceIn(0, 23)
+        this[KEY_STATISTICS_DAY_RESET_HOUR] = settings.statisticsDayResetHour.coerceIn(STATISTICS_DAY_RESET_HOUR_RANGE)
         this[KEY_STATISTICS_SETTINGS_UPDATED_AT] = settings.statisticsSettingsUpdatedAt.coerceAtLeast(0L)
         this[KEY_SHOW_STATISTICS_TOGGLE] = settings.showStatisticsToggle
         this[KEY_SHOW_READING_SPEED] = settings.showReadingSpeed
@@ -542,6 +550,7 @@ class ReaderSettingsRepository(
 
     companion object {
         const val DataStoreName = "reader-settings"
+        private val DEFAULTS = ReaderSettings()
 
         private val KEY_MIGRATED_FROM_SHARED_PREFERENCES =
             booleanPreferencesKey("readerSettingsMigratedFromSharedPreferences")

@@ -97,6 +97,110 @@ class StatisticsHistoryTest {
     }
 
     @Test
+    fun aReinstalledBookContinuesTodayInsteadOfStartingItAgain() = runBlocking {
+        val repository = repository()
+        val first = book(repository, "book", "Book")
+        repository.saveStatistics(first, listOf(day("2026-10-03", 1_800.0, phone, modified = 1)))
+        repository.deleteBook(first)
+        val again = book(repository, "book", "Book")
+
+        // The reader loads the reinstalled book's days before it starts counting.
+        val loaded = repository.loadStatistics(again)
+        assertEquals("the kept history is already back", listOf(1_800.0), loaded.map { it.readingTime })
+        // Ten more minutes, counted on top of what was loaded.
+        repository.saveStatistics(again, listOf(day("2026-10-03", 2_400.0, phone, modified = 2)))
+
+        assertEquals(listOf(2_400.0), repository.loadStatistics(again).map { it.readingTime })
+        assertTrue(repository.loadStatisticsHistory().isEmpty())
+        val overview = loadReadingStatisticsOverview(repository, "2026-10-03", streakResetHour = 0)
+        assertEquals(2_400.0, overview.todaySeconds, 0.0)
+    }
+
+    @Test
+    fun aSaveLandingAfterADeleteNeverBringsTheBookBack() = runBlocking {
+        val repository = repository()
+        val root = book(repository, "book", "Book")
+        repository.saveStatistics(root, listOf(day("2026-10-01", 600.0, phone)))
+        repository.deleteBook(root)
+
+        // A reader's or a sync's write that was already under way when the book was deleted.
+        repository.saveStatistics(root, listOf(day("2026-10-02", 300.0, phone)))
+        repository.saveMangaTextStatistics(root, listOf(MangaTextStatistic("2026-10-02", 10, 1, phone.id, phone.name)))
+
+        assertFalse("no untitled ghost folder", root.exists())
+        assertTrue(repository.loadBookEntries().isEmpty())
+        val kept = repository.loadStatisticsHistory().single()
+        assertEquals(setOf("2026-10-01", "2026-10-02"), repository.loadStatistics(kept.root).map { it.dateKey }.toSet())
+    }
+
+    @Test
+    fun aSaveForAFolderThatNeverExistedIsDropped() = runBlocking {
+        val repository = repository()
+        val missing = repository.booksDirectory.resolve("never")
+        repository.saveStatistics(missing, listOf(day("2026-10-01", 600.0, phone)))
+        assertFalse(missing.exists())
+        assertTrue(repository.loadStatisticsHistory().isEmpty())
+    }
+
+    @Test
+    fun aDeleteInterruptedByTheAppStoppingKeepsItsHistoryOnTheNextStart() = runBlocking {
+        val files = temporaryFolder.newFolder()
+        val first = BookRepository(files, deviceIdentity = phone)
+        val root = book(first, "book", "Book")
+        first.saveStatistics(root, listOf(day("2026-10-01", 600.0, phone)))
+        // The app stopped right after the folder was moved aside.
+        val leftover = first.booksDirectory.resolve(".deleting-crashed")
+        assertTrue(root.renameTo(leftover))
+
+        val restarted = BookRepository(files, deviceIdentity = phone)
+        val kept = restarted.loadStatisticsHistory().single()
+
+        assertEquals("book", kept.syncId)
+        assertEquals(listOf(600.0), restarted.loadStatistics(kept.root).map { it.readingTime })
+        assertFalse(leftover.exists())
+    }
+
+    @Test
+    fun anUnreadableStatisticsFileIsSetAsideNotOverwritten() = runBlocking {
+        val repository = repository()
+        val root = book(repository, "book", "Book")
+        root.resolve("statistics.json").writeText("{ this is not json")
+
+        repository.saveStatistics(root, listOf(day("2026-10-01", 600.0, phone)))
+
+        assertEquals(listOf(600.0), repository.loadStatistics(root).map { it.readingTime })
+        val aside = repository.booksDirectory.resolve(".unreadable").listFiles().orEmpty()
+        assertEquals(1, aside.size)
+        assertEquals("{ this is not json", aside.single().readText())
+    }
+
+    @Test
+    fun aHistoryWithOcrCountsIsAMangaUntilItsTypeIsKnown() = runBlocking {
+        val repository = repository()
+        val history = repository.statisticsHistoryRoot("unknown")!!
+        assertEquals(ContentType.Epub, repository.loadStatisticsHistory().single().contentType)
+        repository.saveMangaTextStatistics(history, listOf(MangaTextStatistic("2026-10-01", 10, 1, tablet.id, tablet.name)))
+        assertEquals(ContentType.Mokuro, repository.loadStatisticsHistory().single().contentType)
+        repository.statisticsHistoryRoot("unknown", contentType = ContentType.Mokuro)
+        assertEquals(ContentType.Mokuro, readStatisticsHistoryInfo(history)?.contentType)
+    }
+
+    @Test
+    fun aDeletedBookRemembersWhereItsReaderStopped() = runBlocking {
+        val repository = repository()
+        val root = book(repository, "book", "Book")
+        repository.saveStatistics(root, listOf(day("2026-10-01", 600.0, phone)))
+        repository.saveBookmark(root, Bookmark(chapterIndex = 9, progress = 1.0, characterCount = 100, lastModified = 1.0))
+        repository.deleteBook(root)
+
+        val overview = loadReadingStatisticsOverview(repository, "2026-10-01", streakResetHour = 0)
+        val book = overview.books.single()
+        assertFalse(book.onDevice)
+        assertTrue(book.progressKnown)
+        assertTrue(book.finished)
+    }
+
+    @Test
     fun todayAndTheStreakCountBooksThatAreNotInstalledWithoutDoubleCounting() = runBlocking {
         val repository = repository()
         val today = LocalDate.of(2026, 10, 3)

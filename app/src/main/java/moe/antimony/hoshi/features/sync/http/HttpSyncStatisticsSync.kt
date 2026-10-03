@@ -208,26 +208,35 @@ class HttpSyncStatisticsSync(
         return need
     }
 
-    /** Local days the last exchange did not carry, for either kind [contentType] keeps. */
+    /**
+     * Local days the last exchange did not carry, for either kind [contentType] keeps. Takes no
+     * exchange lock, so a poll never waits for an exchange's network round trip; the files are
+     * replaced atomically, and a read between an exchange's save and its state write only means
+     * one more (idempotent) exchange.
+     */
     private suspend fun localDiffers(
         bookRoot: File,
         syncId: String,
         contentType: ContentType,
         state: StatisticsSyncState,
     ): Boolean {
-        val reading = bookLocks.withKeyLock(statisticsKey(syncId)) {
-            val entries = bookRepository.loadStatistics(bookRoot)
-                .deduplicateReadingStatistics().sortedBy { dayDeviceKey(it.dateKey, it.deviceId) }
-            val previous = state.reading
+        val entries = bookRepository.loadStatistics(bookRoot)
+            .deduplicateReadingStatistics().sortedBy { dayDeviceKey(it.dateKey, it.deviceId) }
+        val reading = state.reading.let { previous ->
             if (previous == null) entries.isNotEmpty() else previous.localSha256 != sha256(readingBody(syncId, entries))
         }
         if (reading || contentType != ContentType.Mokuro) return reading
-        return bookLocks.withKeyLock(mangaStatisticsKey(syncId)) {
-            val entries = bookRepository.loadMangaTextStatistics(bookRoot)
-                .deduplicateMangaTextStatistics().sortedBy { dayDeviceKey(it.dateKey, it.deviceId) }
-            val previous = state.mangaText
-            if (previous == null) entries.isNotEmpty() else previous.localSha256 != sha256(mangaBody(syncId, entries))
-        }
+        val mangaText = bookRepository.loadMangaTextStatistics(bookRoot)
+            .deduplicateMangaTextStatistics().sortedBy { dayDeviceKey(it.dateKey, it.deviceId) }
+        val previous = state.mangaText
+        return if (previous == null) mangaText.isNotEmpty() else previous.localSha256 != sha256(mangaBody(syncId, mangaText))
+    }
+
+    /** Whether the listed [etag] of [kind]'s key is one [bookRoot] has not merged. */
+    fun remoteDiffers(bookRoot: File, kind: StatisticsSyncKind, etag: String): Boolean {
+        val state = loadState(bookRoot)
+        val entry = if (kind == StatisticsSyncKind.Reading) state.reading else state.mangaText
+        return entry?.remoteEtag != etag
     }
 
     suspend fun sync(
@@ -348,7 +357,14 @@ class HttpSyncStatisticsSync(
             StatisticsRemoteListing.Absent -> if (local.isEmpty()) return StatisticsSyncOutcome.NONE
         }
         val fetched = transport.getBounded(key, MAX_STATISTICS_BLOB_BYTES)
-            ?: return uploadWhole(transport, bookRoot, key, local, localBody, localSha, writeState)
+        if (fetched == null) {
+            // Listed but gone (deleted on the server, or the listing is out of date): with
+            // nothing here to put back, there is nothing to do until the key reappears.
+            if (remote is StatisticsRemoteListing.Listed && local.isEmpty()) {
+                throw StatisticsSkippedException("Statistics at $key are no longer on the server.")
+            }
+            return uploadWhole(transport, bookRoot, key, local, localBody, localSha, writeState)
+        }
         val remoteEntries = try {
             merge(decode(fetched.body.toString(Charsets.UTF_8))).sortedBy(entryKey)
         } catch (error: HttpSyncException) {

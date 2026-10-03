@@ -244,8 +244,12 @@
     <string name="bookshelf_statistics">Reading statistics</string>
     <string name="statistics_streak_start_format">Read %1$s today to start a streak</string>
     <string name="statistics_sync_status_synced">Includes reading from all your devices · checked %1$s</string>
+    <string name="statistics_sync_status_synced_now">Includes reading from all your devices · checked just now</string>
     <string name="statistics_sync_status_checking">Checking your other devices for reading…</string>
-    <string name="statistics_sync_status_failed">Couldn\'t sync reading history with your other devices: %1$s</string>
+    <string name="statistics_sync_problem_offline">Couldn\'t reach your sync server, so reading from your other devices may be missing.</string>
+    <string name="statistics_sync_problem_server">Your sync server returned an error, so reading from your other devices may be missing.</string>
+    <string name="statistics_sync_problem_unreadable">Some reading from your other devices couldn\'t be read. It will be tried again.</string>
+    <string name="statistics_book_not_on_device">Not on this device</string>
     <string name="statistics_streak_keep_format">%1$s more today keeps your streak</string>
     <string name="statistics_streak_new_record">new record</string>
     <plurals name="statistics_streak_longest_days">

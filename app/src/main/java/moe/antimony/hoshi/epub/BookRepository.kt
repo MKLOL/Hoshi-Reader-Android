@@ -31,6 +31,7 @@ import moe.antimony.hoshi.importing.validateImportFile
 import moe.antimony.hoshi.mokuro.MokuroImporter
 import moe.antimony.hoshi.storage.writeSidecarAtomically
 import java.io.File
+import java.io.IOException
 import java.time.Instant
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
@@ -133,16 +134,28 @@ class BookRepository(
         loadSasayakiPlayback(bookRoot)?.audioUri?.let { uri ->
             runCatching { releasePersistedSasayakiAudioUri(uri) }
         }
+        // A reader's last save of this book lands before the folder goes, so it is kept below.
+        awaitPendingStatisticsSaves(bookRoot)
         // The book goes, its reading history stays: Today, the streak and every total still
-        // count the days read in it, here and (through sync) on every other device. A failure
-        // to copy must not keep the user from deleting the book.
-        try {
-            keepStatisticsHistory(bookRoot, metadata)
-        } catch (cancelled: CancellationException) {
-            throw cancelled
-        } catch (_: Exception) {
+        // count the days read in it, here and (through sync) on every other device. The folder
+        // is first moved aside in one step, so a statistics save landing meanwhile either went
+        // into it (and is kept from the moved copy) or finds it gone and goes to the history.
+        // No book lock is taken: sync deletes inside its open-book gate, and re-imports take the
+        // book lock before that gate.
+        val syncId = metadata?.let(::syncIdForMetadata)?.takeIf(::isUsableStatisticsHistoryName)
+        if (syncId != null) retiredBookRoots[bookRoot.canonicalPath] = syncId
+        val retired = fileDataSource.retireBook(bookRoot)
+        if (retired != null) {
+            try {
+                if (syncId != null) keepStatisticsHistory(retired, syncId, metadata.displayTitle)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                // A failure to copy must not keep the user from deleting the book.
+            }
+            fileDataSource.deleteRetired(retired)
         }
-        fileDataSource.deleteBook(bookRoot)
+        invalidateHistoryNames()
         statisticsChangeCounter.update { it + 1 }
         val cleanedShelves = loadShelves().map { shelf ->
             shelf.copy(bookIds = shelf.bookIds.filterNot { it == removedId })
@@ -175,29 +188,33 @@ class BookRepository(
         sidecarDataSource.saveBookmark(bookRoot, bookmark)
     }
 
-    override suspend fun loadStatistics(bookRoot: File): List<ReadingStatistics> =
-        bookLocks.withBookLock(bookRoot) {
-            val onDisk = sidecarDataSource.loadStatistics(bookRoot).orEmpty()
+    override suspend fun loadStatistics(bookRoot: File): List<ReadingStatistics> {
+        foldStatisticsHistory(bookRoot)
+        return bookLocks.withBookLock(bookRoot) {
+            val onDisk = readStatisticsSidecar(bookRoot)
             val attributed = onDisk.legacyAttributed(bookRoot)
             // A file from before devices were tracked is rewritten once, so every reader of the
             // file (screens, sync uploads) sees the same attribution.
-            if (attributed != onDisk) sidecarDataSource.saveStatistics(bookRoot, attributed)
+            if (attributed != onDisk) runCatching { sidecarDataSource.saveStatistics(bookRoot, attributed) }
             attributed
         }
+    }
 
     /**
      * Merges [statistics] into the sidecar entry by entry (newest `lastStatisticModified` wins
      * per day and device) instead of overwriting it. A reader only knows the days it loaded
      * plus today, so a plain overwrite would drop days that a sync import added while the book
      * was open. Entries without a device are stored as they are (see [legacyAttributed]).
+     * A save never brings a deleted book's folder back: one for a book deleted meanwhile goes
+     * to its reading history, any other is dropped.
      */
     override suspend fun saveStatistics(bookRoot: File, statistics: List<ReadingStatistics>) {
         // Not cancellable: the manga reader cancels its debounced save when the next page turn
         // arrives, and a write that has already reached the file must still signal the change.
         withContext(NonCancellable) {
-            bookLocks.withBookLock(bookRoot) {
-                val onDisk = sidecarDataSource.loadStatistics(bookRoot).orEmpty().legacyAttributed(bookRoot)
-                sidecarDataSource.saveStatistics(bookRoot, (statistics + onDisk).deduplicateReadingStatistics())
+            writeStatistics(bookRoot) { target ->
+                val onDisk = readStatisticsSidecar(target).legacyAttributed(target)
+                sidecarDataSource.saveStatistics(target, (statistics + onDisk).deduplicateReadingStatistics())
             }
             statisticsChangeCounter.update { it + 1 }
         }
@@ -206,11 +223,60 @@ class BookRepository(
     /** Overwrites the sidecar wholesale; readers never call this. */
     suspend fun replaceStatistics(bookRoot: File, statistics: List<ReadingStatistics>) {
         withContext(NonCancellable) {
-            bookLocks.withBookLock(bookRoot) {
-                sidecarDataSource.saveStatistics(bookRoot, statistics)
-            }
+            writeStatistics(bookRoot) { target -> sidecarDataSource.saveStatistics(target, statistics) }
             statisticsChangeCounter.update { it + 1 }
         }
+    }
+
+    /** Deleted book folders -> their sync id, so a statistics save landing after the delete reaches the history. */
+    private val retiredBookRoots = ConcurrentHashMap<String, String>()
+
+    /**
+     * Runs a statistics write on [bookRoot] under its lock, only while the folder exists: the
+     * sidecar writes never create a folder, so a write racing a delete fails instead of bringing
+     * the deleted book back as an untitled one. A write for a book deleted meanwhile is redone
+     * on its history folder; any other write for a missing folder is dropped.
+     */
+    private suspend fun writeStatistics(bookRoot: File, write: suspend (File) -> Unit) {
+        val wrote = try {
+            bookLocks.withBookLock(bookRoot) {
+                if (!bookRoot.isDirectory) return@withBookLock false
+                write(bookRoot)
+                true
+            }
+        } catch (error: IOException) {
+            if (bookRoot.isDirectory) throw error
+            false
+        }
+        if (wrote) return
+        val syncId = retiredBookRoots[bookRoot.canonicalPath] ?: return
+        val history = statisticsHistoryRoot(syncId) ?: return
+        bookLocks.withBookLock(history) { write(history) }
+    }
+
+    /**
+     * A statistics sidecar's entries. An unreadable file is moved to `Books/.unreadable/` first:
+     * the next save then starts from the entries that are readable instead of overwriting the
+     * only copy of the rest.
+     */
+    private suspend fun readStatisticsSidecar(root: File): List<ReadingStatistics> {
+        val loaded = sidecarDataSource.loadStatistics(root)
+        if (loaded == null) preserveUnreadable(root.resolve(STATISTICS_FILE_NAME))
+        return loaded.orEmpty()
+    }
+
+    private suspend fun readMangaTextSidecar(root: File): List<MangaTextStatistic> {
+        val loaded = sidecarDataSource.loadMangaTextStatistics(root)
+        if (loaded == null) preserveUnreadable(root.resolve(MANGA_STATISTICS_FILE_NAME))
+        return loaded.orEmpty()
+    }
+
+    private fun preserveUnreadable(file: File) {
+        if (!file.isFile || file.length() == 0L) return
+        val aside = booksDirectory.resolve(UNREADABLE_DIRECTORY_NAME)
+        aside.mkdirs()
+        val target = aside.resolve("${file.parentFile?.name}-${file.name}-${System.currentTimeMillis()}")
+        if (!file.renameTo(target)) runCatching { file.copyTo(target, overwrite = true) }
     }
 
     /**
@@ -231,7 +297,8 @@ class BookRepository(
     ): Boolean = withContext(NonCancellable) {
         val device = deviceIdentity
         val changed = bookLocks.withBookLock(bookRoot) {
-            val next = sidecarDataSource.loadStatistics(bookRoot).orEmpty().legacyAttributed(bookRoot).toMutableList()
+            if (!bookRoot.isDirectory) return@withBookLock false
+            val next = readStatisticsSidecar(bookRoot).legacyAttributed(bookRoot).toMutableList()
             var changed = false
             val totals = dayTotals.collapsedByDay()
             for (total in totals) {
@@ -279,20 +346,22 @@ class BookRepository(
         changed
     }
 
-    suspend fun loadMangaTextStatistics(bookRoot: File): List<MangaTextStatistic> =
-        bookLocks.withBookLock(bookRoot) {
-            val onDisk = sidecarDataSource.loadMangaTextStatistics(bookRoot).orEmpty()
+    suspend fun loadMangaTextStatistics(bookRoot: File): List<MangaTextStatistic> {
+        foldStatisticsHistory(bookRoot)
+        return bookLocks.withBookLock(bookRoot) {
+            val onDisk = readMangaTextSidecar(bookRoot)
             val attributed = onDisk.legacyAttributed(bookRoot)
-            if (attributed != onDisk) sidecarDataSource.saveMangaTextStatistics(bookRoot, attributed)
+            if (attributed != onDisk) runCatching { sidecarDataSource.saveMangaTextStatistics(bookRoot, attributed) }
             attributed
         }
+    }
 
-    /** Same day-by-day merge as [saveStatistics]. */
+    /** Same day-by-day merge, and the same rule for deleted folders, as [saveStatistics]. */
     suspend fun saveMangaTextStatistics(bookRoot: File, statistics: List<MangaTextStatistic>) {
         withContext(NonCancellable) {
-            bookLocks.withBookLock(bookRoot) {
-                val onDisk = sidecarDataSource.loadMangaTextStatistics(bookRoot).orEmpty().legacyAttributed(bookRoot)
-                sidecarDataSource.saveMangaTextStatistics(bookRoot, (statistics + onDisk).deduplicateMangaTextStatistics())
+            writeStatistics(bookRoot) { target ->
+                val onDisk = readMangaTextSidecar(target).legacyAttributed(target)
+                sidecarDataSource.saveMangaTextStatistics(target, (statistics + onDisk).deduplicateMangaTextStatistics())
             }
             statisticsChangeCounter.update { it + 1 }
         }
@@ -308,6 +377,7 @@ class BookRepository(
 
     /** Every book whose reading history this install keeps without the book's folder. */
     suspend fun loadStatisticsHistory(): List<StatisticsHistoryEntry> = withContext(ioDispatcher) {
+        recoverRetiredBooks()
         statisticsHistoryDirectory.listFiles().orEmpty()
             .filter { it.isDirectory && isUsableStatisticsHistoryName(it.name) }
             .mapNotNull { root ->
@@ -316,7 +386,8 @@ class BookRepository(
                     syncId = info.syncId,
                     root = root,
                     title = info.title?.takeIf { it.isNotBlank() } ?: info.syncId,
-                    contentType = info.contentType ?: ContentType.Epub,
+                    contentType = statisticsContentType(root),
+                    progress = info.progress,
                 )
             }
             .sortedBy { it.syncId }
@@ -324,16 +395,18 @@ class BookRepository(
 
     /**
      * The history folder of [syncId], created on first use; null for a name that is not a
-     * usable folder name. A [title] or [contentType] fills in one the folder does not know yet.
-     * A new folder starts from [seedExchangeState] (the deleted book's HTTP exchange state) or
-     * else an empty one: its presence means device-less days in the folder came from other
-     * installs, so they are never claimed as this device's own (see [legacyAttributed]).
+     * usable folder name. A [title], [contentType] or [progress] fills in one the folder does
+     * not know yet. A new folder starts from [seedExchangeState] (the deleted book's HTTP
+     * exchange state) or else an empty one: its presence means device-less days in the folder
+     * came from other installs, so they are never claimed as this device's own (see
+     * [legacyAttributed]).
      */
     suspend fun statisticsHistoryRoot(
         syncId: String,
         title: String? = null,
         contentType: ContentType? = null,
         seedExchangeState: File? = null,
+        progress: Double? = null,
     ): File? = withContext(ioDispatcher) {
         if (!isUsableStatisticsHistoryName(syncId)) return@withContext null
         val root = statisticsHistoryDirectory.resolve(syncId)
@@ -343,6 +416,7 @@ class BookRepository(
                 syncId = syncId,
                 title = existing?.title?.takeIf { it.isNotBlank() } ?: title?.takeIf { it.isNotBlank() },
                 contentType = existing?.contentType ?: contentType,
+                progress = progress ?: existing?.progress,
             )
             val state = root.resolve(STATISTICS_SYNC_STATE_FILE_NAME)
             if (!state.isFile) {
@@ -352,50 +426,133 @@ class BookRepository(
             }
             if (info != existing) writeStatisticsHistoryInfo(root, info)
         }
+        invalidateHistoryNames()
         root
     }
 
     /**
      * Moves a history folder's days into [bookRoot] once that book is installed again, then
-     * removes the folder. The book's own pre-device days are claimed first and the book is
-     * marked as exchanged, so the device-less days of other installs that the history held are
-     * never claimed as this device's.
+     * removes the folder. Normally done by [loadStatistics] before anything reads the book's
+     * statistics, so a reader opening the reinstalled book continues today's count instead of
+     * starting it again at zero (which would replace it: the newest entry of a day wins).
      */
     suspend fun absorbStatisticsHistory(history: StatisticsHistoryEntry, bookRoot: File) {
-        val reading = loadStatistics(history.root)
-        val mangaText = loadMangaTextStatistics(history.root)
-        loadStatistics(bookRoot)
-        loadMangaTextStatistics(bookRoot)
-        withContext(ioDispatcher) {
-            bookLocks.withBookLock(bookRoot) {
-                val state = bookRoot.resolve(STATISTICS_SYNC_STATE_FILE_NAME)
-                if (bookRoot.isDirectory && !state.isFile) writeSidecarAtomically(state, "{}")
-            }
-        }
-        if (reading.isNotEmpty()) saveStatistics(bookRoot, reading)
-        if (mangaText.isNotEmpty()) saveMangaTextStatistics(bookRoot, mangaText)
-        withContext(ioDispatcher) {
-            bookLocks.withBookLock(history.root) { history.root.deleteRecursively() }
-        }
-        statisticsChangeCounter.update { it + 1 }
+        absorbStatisticsHistory(history.root, bookRoot)
     }
 
-    /** Copies a book's statistics into its history folder before the book's folder is deleted. */
-    private suspend fun keepStatisticsHistory(bookRoot: File, metadata: BookMetadata?) {
-        if (!bookRoot.isDirectory) return
-        val syncId = metadata?.let(::syncIdForMetadata) ?: return
-        val contentType = bookContentType(bookRoot)
-        val reading = loadStatistics(bookRoot)
-        val mangaText = if (contentType == ContentType.Mokuro) loadMangaTextStatistics(bookRoot) else emptyList()
+    private suspend fun absorbStatisticsHistory(history: File, bookRoot: File) {
+        withContext(NonCancellable + ioDispatcher) {
+            // No lock is held while waiting for another: sync deletes hold the open-book gate
+            // while they keep history, and re-imports hold the book lock before that gate.
+            val snapshot = bookLocks.withBookLock(history) {
+                if (readStatisticsHistoryInfo(history) == null) return@withBookLock null
+                Triple(readStatisticsSidecar(history), readMangaTextSidecar(history), historyStamp(history))
+            } ?: return@withContext
+            val (reading, mangaText, stamp) = snapshot
+            val merged = bookLocks.withBookLock(bookRoot) {
+                if (!bookRoot.isDirectory) return@withBookLock false
+                // Claim the book's own pre-device days first, then mark it exchanged, so the
+                // device-less days of other installs the history held are never claimed.
+                val ownReading = readStatisticsSidecar(bookRoot).legacyAttributed(bookRoot)
+                val ownMangaText = readMangaTextSidecar(bookRoot).legacyAttributed(bookRoot)
+                val state = bookRoot.resolve(STATISTICS_SYNC_STATE_FILE_NAME)
+                if (!state.isFile) writeSidecarAtomically(state, "{}")
+                if (reading.isNotEmpty() || ownReading.isNotEmpty()) {
+                    sidecarDataSource.saveStatistics(bookRoot, (reading + ownReading).deduplicateReadingStatistics())
+                }
+                if (mangaText.isNotEmpty() || ownMangaText.isNotEmpty()) {
+                    sidecarDataSource.saveMangaTextStatistics(bookRoot, (mangaText + ownMangaText).deduplicateMangaTextStatistics())
+                }
+                true
+            }
+            // The book vanished meanwhile (deleted): the history stays.
+            if (!merged) return@withContext
+            bookLocks.withBookLock(history) {
+                // Days that reached the history meanwhile stay for the next fold.
+                if (historyStamp(history) != stamp) return@withBookLock
+                // history.json first: a folder half removed by a crash is never taken for history.
+                history.resolve(STATISTICS_HISTORY_INFO_FILE_NAME).delete()
+                history.deleteRecursively()
+            }
+            invalidateHistoryNames()
+            statisticsChangeCounter.update { it + 1 }
+        }
+    }
+
+    private fun historyStamp(history: File): List<Long> =
+        listOf(STATISTICS_FILE_NAME, MANGA_STATISTICS_FILE_NAME).flatMap { name ->
+            history.resolve(name).let { listOf(it.lastModified(), it.length()) }
+        }
+
+    /** Folds the history kept for [bookRoot]'s book back into it (see [absorbStatisticsHistory]). */
+    private suspend fun foldStatisticsHistory(bookRoot: File) {
+        val directory = statisticsHistoryDirectory
+        if (bookRoot.parentFile?.name == STATISTICS_HISTORY_DIRECTORY_NAME) return
+        val names = historyNames()
+        if (names.isEmpty() || !bookRoot.isDirectory) return
+        val syncId = sidecarDataSource.loadMetadata(bookRoot)?.let(::syncIdForMetadata) ?: return
+        if (syncId !in names) return
+        absorbStatisticsHistory(directory.resolve(syncId), bookRoot)
+    }
+
+    @Volatile private var historyNamesCache: Set<String>? = null
+
+    /** Names of the history folders; recomputed after every change this repository makes to them. */
+    private suspend fun historyNames(): Set<String> = historyNamesCache ?: withContext(ioDispatcher) {
+        statisticsHistoryDirectory.list().orEmpty().filter(::isUsableStatisticsHistoryName).toSet()
+            .also { historyNamesCache = it }
+    }
+
+    private fun invalidateHistoryNames() {
+        historyNamesCache = null
+    }
+
+    /**
+     * Copies a deleted book's statistics into its history folder, from the folder [retired] the
+     * book was moved to. Reads without the book lock: the files are replaced atomically.
+     */
+    private suspend fun keepStatisticsHistory(retired: File, syncId: String, title: String) {
+        val reading = readStatisticsSidecar(retired).legacyAttributed(retired)
+        val contentType = bookContentType(retired)
+        val mangaText = if (contentType == ContentType.Mokuro) readMangaTextSidecar(retired).legacyAttributed(retired) else emptyList()
         if (reading.isEmpty() && mangaText.isEmpty()) return
         val history = statisticsHistoryRoot(
             syncId = syncId,
-            title = metadata.displayTitle.takeIf { it.isNotBlank() },
+            title = title.takeIf { it.isNotBlank() },
             contentType = contentType,
-            seedExchangeState = bookRoot.resolve(STATISTICS_SYNC_STATE_FILE_NAME),
+            seedExchangeState = retired.resolve(STATISTICS_SYNC_STATE_FILE_NAME),
+            progress = sidecarDataSource.loadBookmark(retired)?.progress?.takeIf { it.isFinite() },
         ) ?: return
-        if (reading.isNotEmpty()) saveStatistics(history, reading)
-        if (mangaText.isNotEmpty()) saveMangaTextStatistics(history, mangaText)
+        bookLocks.withBookLock(history) {
+            if (reading.isNotEmpty()) {
+                sidecarDataSource.saveStatistics(history, (reading + readStatisticsSidecar(history)).deduplicateReadingStatistics())
+            }
+            if (mangaText.isNotEmpty()) {
+                sidecarDataSource.saveMangaTextStatistics(history, (mangaText + readMangaTextSidecar(history)).deduplicateMangaTextStatistics())
+            }
+        }
+    }
+
+    private val retiredRecovered = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    /**
+     * A book whose deletion was interrupted (the app was stopped after the folder was moved
+     * aside) still holds the only copy of its statistics: keep them, then finish the deletion.
+     * Once per process, before anything lists the reading history.
+     */
+    private suspend fun recoverRetiredBooks() {
+        if (!retiredRecovered.compareAndSet(false, true)) return
+        for (retired in fileDataSource.leftoverRetiredBooks()) {
+            try {
+                val metadata = sidecarDataSource.loadMetadata(retired)
+                val syncId = metadata?.let(::syncIdForMetadata)?.takeIf(::isUsableStatisticsHistoryName)
+                if (syncId != null) keepStatisticsHistory(retired, syncId, metadata.displayTitle)
+                fileDataSource.deleteRetired(retired)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+            }
+        }
     }
 
     /** The device new statistics entries of this install are attributed to, when known. */
@@ -655,14 +812,44 @@ class BookFileDataSource(
     }
 
     suspend fun deleteBook(bookRoot: File) = withContext(ioDispatcher) {
+        val root = safeBookRoot(bookRoot)
+        if (root.exists()) {
+            root.deleteRecursively()
+        }
+    }
+
+    /**
+     * Moves a book's folder aside in one rename (`Books/.deleting-…`, hidden from the shelf), so
+     * nothing can write into it or recreate it while it is being taken apart. Null when there is
+     * no such folder; the folder itself when it cannot be moved.
+     */
+    suspend fun retireBook(bookRoot: File): File? = withContext(ioDispatcher) {
+        val root = safeBookRoot(bookRoot)
+        if (!root.exists()) return@withContext null
+        val retired = booksDirectory.resolve("$RETIRED_PREFIX${UUID.randomUUID()}")
+        if (root.renameTo(retired)) retired else root
+    }
+
+    suspend fun deleteRetired(retired: File) = withContext(ioDispatcher) {
+        if (retired.exists()) retired.deleteRecursively()
+    }
+
+    /** Folders [retireBook] moved aside that a stopped app never finished deleting. */
+    suspend fun leftoverRetiredBooks(): List<File> = withContext(ioDispatcher) {
+        booksDirectory.listFiles().orEmpty().filter { it.isDirectory && it.name.startsWith(RETIRED_PREFIX) }
+    }
+
+    private fun safeBookRoot(bookRoot: File): File {
         val root = bookRoot.canonicalFile
         val booksRoot = booksDirectory.canonicalFile
         require(root.path != booksRoot.path && root.path.startsWith(booksRoot.path + File.separator)) {
             "Unsafe book directory: ${bookRoot.path}"
         }
-        if (root.exists()) {
-            root.deleteRecursively()
-        }
+        return root
+    }
+
+    private companion object {
+        const val RETIRED_PREFIX = ".deleting-"
     }
 }
 
@@ -829,12 +1016,14 @@ class BookSidecarDataSource(
         loadJson(ListSerializer(ReadingStatistics.serializer()), bookRoot.resolve(STATISTICS_FILE_NAME))
             ?.deduplicateReadingStatistics()
 
+    /** Never creates [bookRoot]: a statistics write for a deleted book must fail, not recreate it. */
     suspend fun saveStatistics(bookRoot: File, statistics: List<ReadingStatistics>) {
         saveJson(
             bookRoot,
             STATISTICS_FILE_NAME,
             ListSerializer(ReadingStatistics.serializer()),
             statistics.deduplicateReadingStatistics(),
+            createDirectory = false,
         )
     }
 
@@ -848,6 +1037,7 @@ class BookSidecarDataSource(
             MANGA_STATISTICS_FILE_NAME,
             ListSerializer(MangaTextStatistic.serializer()),
             statistics.deduplicateMangaTextStatistics(),
+            createDirectory = false,
         )
     }
 
@@ -895,8 +1085,14 @@ class BookSidecarDataSource(
         runCatching { json.decodeFromString(serializer, file.readText()) }.getOrNull()
     }
 
-    private suspend fun <T> saveJson(bookRoot: File, fileName: String, serializer: KSerializer<T>, value: T) = withContext(ioDispatcher) {
-        bookRoot.mkdirs()
+    private suspend fun <T> saveJson(
+        bookRoot: File,
+        fileName: String,
+        serializer: KSerializer<T>,
+        value: T,
+        createDirectory: Boolean = true,
+    ) = withContext(ioDispatcher) {
+        if (createDirectory) bookRoot.mkdirs() else if (!bookRoot.isDirectory) throw java.io.FileNotFoundException(bookRoot.path)
         val target = bookRoot.resolve(fileName)
         val text = json.encodeToString(serializer, value)
         writeSidecarAtomically(target, text)

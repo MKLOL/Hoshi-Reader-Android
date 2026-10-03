@@ -180,7 +180,7 @@ class HttpSyncStatisticsSyncReviewTest {
     }
 
     @Test
-    fun aBookReimportedUnderTheSameSyncIdPullsTheServerDaysWithOneGet() = runBlocking {
+    fun aBookReimportedUnderTheSameSyncIdTakesItsDaysBackFromTheKeptHistory() = runBlocking {
         val fake = FakeKvTransport()
         val transport = CountingTransport(fake)
         val repository = BookRepository(temp.newFolder())
@@ -194,9 +194,12 @@ class HttpSyncStatisticsSyncReviewTest {
 
         val outcome = sync.sync(transport, again, syncId, StatisticsSyncKind.Reading, listed(fake))
 
-        assertEquals(StatisticsSyncOutcome(downloaded = true, uploaded = false), outcome)
+        // The days came back from the history kept at deletion, before any request: the one GET
+        // only confirms the server holds the same (this fake's ETag is not a content hash).
+        assertEquals(StatisticsSyncOutcome(downloaded = false, uploaded = false), outcome)
         assertEquals(listOf("GET" to key), transport.requests.drop(before))
         assertEquals(listOf("2026-09-10"), repository.loadStatistics(again).map { it.dateKey })
+        assertTrue("the kept history was folded into the book", repository.loadStatisticsHistory().isEmpty())
     }
 
     // ── Reader path (no listing) ────────────────────────────────────────────────────────

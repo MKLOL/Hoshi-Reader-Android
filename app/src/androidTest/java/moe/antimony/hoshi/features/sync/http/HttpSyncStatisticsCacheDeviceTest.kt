@@ -30,7 +30,7 @@ class HttpSyncStatisticsCacheDeviceTest {
             var validations = 0
             repeat(5) {
                 for (root in roots) {
-                    assertFalse(cache.hasChanges(root, root.name, ContentType.Epub, true, false) {
+                    assertFalse(cache.hasChanges(root, root.name, ContentType.Epub, "etag:listed", null) {
                         validations++
                         false
                     })
@@ -45,7 +45,7 @@ class HttpSyncStatisticsCacheDeviceTest {
             Files.setLastModifiedTime(history.toPath(), timestamp)
             assertEquals(6L, history.length())
             assertEquals(timestamp, Files.getLastModifiedTime(history.toPath()))
-            assertTrue(cache.hasChanges(root, root.name, ContentType.Epub, true, false) {
+            assertTrue(cache.hasChanges(root, root.name, ContentType.Epub, "etag:listed", null) {
                 validations++
                 true
             })

@@ -9,6 +9,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import moe.antimony.hoshi.dictionary.DictionaryRepository
 import moe.antimony.hoshi.epub.BookRepository
 import moe.antimony.hoshi.epub.DeviceIdentity
@@ -42,6 +43,9 @@ import moe.antimony.hoshi.features.dictionary.DictionarySearchRepository
 import moe.antimony.hoshi.features.dictionary.DictionaryViewModelRepository
 import moe.antimony.hoshi.features.dictionary.dictionarySettingsRepository
 import moe.antimony.hoshi.features.reader.ReaderFontManager
+import moe.antimony.hoshi.features.reader.ReaderSettings
+import moe.antimony.hoshi.features.reader.STATISTICS_DAY_RESET_HOUR_RANGE
+import moe.antimony.hoshi.features.reader.STATISTICS_STREAK_MINIMUM_MINUTES_RANGE
 import moe.antimony.hoshi.features.reader.ReaderSettingsRepository
 import moe.antimony.hoshi.features.reader.readerSettingsRepository
 import moe.antimony.hoshi.features.sasayaki.SasayakiSettingsRepository
@@ -145,6 +149,15 @@ internal class HoshiAppContainer(context: Context) {
     )
     /** The streak goal and day reset, which HTTP sync keeps the same on every device. */
     private val statisticsPreferencesStore = object : StatisticsPreferencesStore {
+        override val defaults: StatisticsPreferences = ReaderSettings().let {
+            StatisticsPreferences(it.statisticsStreakMinimumMinutes, it.statisticsDayResetHour, it.statisticsSettingsUpdatedAt)
+        }
+
+        override fun normalize(preferences: StatisticsPreferences) = preferences.copy(
+            streakMinimumMinutes = preferences.streakMinimumMinutes.coerceIn(STATISTICS_STREAK_MINIMUM_MINUTES_RANGE),
+            dayResetHour = preferences.dayResetHour.coerceIn(STATISTICS_DAY_RESET_HOUR_RANGE),
+        )
+
         override suspend fun load(): StatisticsPreferences = readerSettingsRepository.settings.first().let {
             StatisticsPreferences(it.statisticsStreakMinimumMinutes, it.statisticsDayResetHour, it.statisticsSettingsUpdatedAt)
         }
@@ -264,7 +277,11 @@ internal class HoshiAppContainer(context: Context) {
             currentSettings = { httpSyncSettingsRepository.settings.first() },
             // The statistics lane sends every book's unsent days and takes other devices' too.
             push = { _, _, _, _ -> httpSyncBookmarkScheduler.syncStatisticsNow() },
-            onFlush = { HttpSyncStatisticsFlushWorker.enqueue(appContext) },
+            onFlush = {
+                appScope.launch {
+                    if (httpSyncSettingsRepository.settings.first().isConfigured) HttpSyncStatisticsFlushWorker.enqueue(appContext)
+                }
+            },
         )
 
     fun readerRouteStateHolder(): ReaderRouteStateHolder =

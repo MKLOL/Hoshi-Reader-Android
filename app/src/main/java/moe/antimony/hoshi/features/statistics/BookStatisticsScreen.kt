@@ -131,8 +131,15 @@ private fun BookHeader(summary: BookReadingSummary) {
             )
             Spacer(Modifier.height(4.dp))
             Text(
-                text = stringResource(bookTypeLabelRes(summary.contentType)) + " · " +
-                    if (summary.finished) stringResource(R.string.statistics_book_finished) else bookshelfProgressText(summary.progress),
+                text = listOfNotNull(
+                    stringResource(bookTypeLabelRes(summary.contentType)),
+                    when {
+                        !summary.progressKnown -> null
+                        summary.finished -> stringResource(R.string.statistics_book_finished)
+                        else -> bookshelfProgressText(summary.progress)
+                    },
+                    stringResource(R.string.statistics_book_not_on_device).takeUnless { summary.onDevice },
+                ).joinToString(" · "),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -161,10 +168,10 @@ private fun DatesCard(summary: BookReadingSummary) {
         GroupDivider()
         StatisticsValueRow(
             label = stringResource(R.string.statistics_book_finished),
-            value = if (summary.finished) {
-                summary.lastReadDateKey?.let(::formatStatisticsDate) ?: "—"
-            } else {
-                stringResource(R.string.statistics_book_not_finished_format, bookshelfProgressText(summary.progress))
+            value = when {
+                !summary.progressKnown -> "—"
+                summary.finished -> summary.lastReadDateKey?.let(::formatStatisticsDate) ?: "—"
+                else -> stringResource(R.string.statistics_book_not_finished_format, bookshelfProgressText(summary.progress))
             },
         )
     }

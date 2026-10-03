@@ -333,20 +333,28 @@ book transfers:
   a shard or settings key against `.http_sync_statistics_lane.json`. A key is acknowledged only
   after its content was merged. Statistics keys and per-book bookmark keys are not part of the
   full reconcile's acknowledged snapshot, so a statistics write never starts a full reconcile.
-- **Pass.** Merge changed shards of other devices (and this device's own, when a reinstall or
-  restore left days on the server the install lost); exchange per-book keys for every book with
-  statistics here and every listed per-book key (creating a history folder, named from the
-  book's metadata, for a book without a folder); publish this device's changed months; apply
-  the newest settings. A key that fails is retried when its ETag changes or after ten minutes.
-- **Timing.** Local days go up at most every 30 s while reading and at once when the reader is
-  left (an Android WorkManager job repeats that flush if the app is stopped first), on a manual
-  sync, when Statistics opens, and when the app goes to the background. Remote changes are
-  merged on the next poll; polling runs every five seconds while the app is visible and
-  immediately when it becomes visible.
+- **Pass.** Merge changed shards of other devices, and this device's own and its settings key
+  when the server holds a version this install never merged (a reinstall or a restore): an own
+  key is never overwritten before it was read. Exchange per-book keys for every book with
+  statistics here and every listed per-book key (creating a history folder for a book without a
+  folder, named from its days and typed from the listing — OCR statistics or an EPUB manifest —
+  or else from its metadata); publish this device's changed months (skipped when the listed
+  ETag is the body's SHA-256, or the ETag this device wrote for the same body); apply the newest
+  settings. A key that fails is tried again when its ETag changes, or after a pause that starts
+  at 30 s and doubles up to ten minutes; only a manual sync retries at once. A body from a newer
+  version, or a key a stale listing still shows, is skipped quietly.
+- **Timing.** Local days go into this device's shard at most every 30 s while reading, and into
+  the per-book keys at most every three minutes (builds up to 0.11.21 run a full reconcile for
+  each change of such a key); both go at once when the reader is left (an Android WorkManager job
+  repeats that flush if the app is stopped first), on a manual sync, when Statistics opens, and
+  when the app goes to the background. Remote changes are merged on the next poll; polling runs
+  every five seconds while the app is visible and immediately when it becomes visible.
 
-Per-book bookmark keys (`books/{syncId}/bookmark`) are read and written only while bootstrapping
-an account that has no bookmark maps yet; every released build since 0.11.15 exchanges positions
-through the maps (page turns and "Mark read" alike).
+Per-book bookmark keys (`books/{syncId}/bookmark`) are read and written only during a bootstrap
+pass (an install's first map sync, or an account that has no bookmark maps yet); every released
+build since 0.11.15 exchanges positions through the maps (page turns and "Mark read" alike). A
+bookmark shard whose request fails is fetched again on the next poll; another device's shard that
+cannot be decoded is passed over until it changes.
 
 ### Upgrade and hash-cache safety
 

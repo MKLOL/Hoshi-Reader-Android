@@ -109,4 +109,57 @@ class HttpSyncBookmarkSchedulerTest {
         // must not inherit that budget.
         assertTrue(HttpSyncBookmarkScheduler.REFRESH_BEFORE_OPEN_TIMEOUT_MS in 500L..2_000L)
     }
+
+    private val configured = HttpSyncSettings(baseUrl = "https://example.invalid", bearerToken = "token")
+
+    private fun backgroundScheduler(state: HttpSyncBatchState, server: ContentAddressedKv) = HttpSyncBookmarkScheduler(
+        state = state,
+        currentSettings = { configured },
+        syncBooksNow = { _, _, _ ->
+            HttpSyncResult(
+                uploadedBookmarks = 0, uploadedChatEntries = 0, uploadedMetadata = 0,
+                downloadedBookmarks = 0, downloadedChatEntries = 0, remoteOnlyBooks = 0, errors = emptyList(),
+            )
+        },
+        fullCycleRunner = HttpSyncFullCycleRunner(scope),
+        scope = scope,
+        transportFactory = { server },
+        initiallyForeground = false,
+    )
+
+    @Test
+    fun aProcessStartedInTheBackgroundDoesNotPollUntilAScreenIsShown() = runBlocking<Unit> {
+        val server = ContentAddressedKv()
+        val scheduler = backgroundScheduler(HttpSyncBatchState(BookRepository(temporaryFolder.newFolder())), server)
+
+        scheduler.start()
+        kotlinx.coroutines.delay(300)
+        assertEquals("a background job's process must not start syncing books", 0, server.lists)
+
+        scheduler.setForeground(true)
+        withTimeout(5_000) { while (server.lists == 0) kotlinx.coroutines.delay(20) }
+    }
+
+    @Test
+    fun aPageTurnSavedAfterTheAppWasLeftIsPublishedRightAway() = runBlocking<Unit> {
+        val repository = BookRepository(temporaryFolder.newFolder())
+        val root = repository.createBookDirectory("book")
+        repository.saveMetadata(root, moe.antimony.hoshi.epub.BookMetadata(
+            id = "book", title = "Book", cover = null, folder = "book", lastAccess = 0.0, syncId = "book",
+        ))
+        val installation = "11111111-1111-1111-1111-111111111111"
+        val state = HttpSyncBatchState(repository, installationId = installation)
+        val server = ContentAddressedKv()
+        state.publishMaps(server)
+        val scheduler = backgroundScheduler(state, server)
+
+        // The app is in the background; the manga reader's debounced save lands now.
+        repository.saveBookmark(root, moe.antimony.hoshi.epub.Bookmark(3, 0.3, 30, 800_000_000.0))
+        scheduler.onBookmarkChanged(root, "Book", "book")
+
+        val shard = "sync/maps/bookmarks/$installation.json"
+        withTimeout(5_000) {
+            while (!server.body(shard).toString(Charsets.UTF_8).contains("\"chapterIndex\":3")) kotlinx.coroutines.delay(20)
+        }
+    }
 }
