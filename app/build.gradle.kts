@@ -9,7 +9,32 @@ val uniffiOutDir = layout.buildDirectory.dir("generated/source/uniffi/main/kotli
 val rustDebugJniLibsDir = layout.buildDirectory.dir("jniLibs/debug").get().asFile
 val rustReleaseJniLibsDir = layout.buildDirectory.dir("jniLibs/release").get().asFile
 val cargo = System.getenv("HOME") + "/.cargo/bin/cargo"
-val androidNdkHome = System.getenv("ANDROID_NDK_HOME") ?: "/opt/homebrew/share/android-ndk"
+// ANDROID_NDK_HOME wins; otherwise the newest NDK installed in the SDK (local.properties sdk.dir,
+// then ANDROID_HOME / ANDROID_SDK_ROOT), so a plain `./gradlew` builds without exporting it.
+val androidNdkHome: String = System.getenv("ANDROID_NDK_HOME")?.takeIf { file(it).isDirectory }
+    ?: run {
+        val localSdk = providers.fileContents(rootProject.layout.projectDirectory.file("local.properties"))
+            .asText.orNull
+            ?.lineSequence()
+            ?.map { it.trim() }
+            ?.firstOrNull { it.startsWith("sdk.dir=") }
+            ?.substringAfter("=")
+            ?.trim()
+        val versionParts = { name: String -> name.split('.').map { it.toIntOrNull() ?: 0 } }
+        val newestFirst = Comparator<File> { a, b ->
+            val left = versionParts(a.name)
+            val right = versionParts(b.name)
+            (0 until maxOf(left.size, right.size))
+                .map { (right.getOrElse(it) { 0 }).compareTo(left.getOrElse(it) { 0 }) }
+                .firstOrNull { it != 0 } ?: 0
+        }
+        listOfNotNull(localSdk, System.getenv("ANDROID_HOME"), System.getenv("ANDROID_SDK_ROOT"))
+            .asSequence()
+            .mapNotNull { sdk -> file("$sdk/ndk").listFiles()?.filter { it.isDirectory }?.sortedWith(newestFirst)?.firstOrNull() }
+            .firstOrNull()
+            ?.path
+    }
+    ?: "/opt/homebrew/share/android-ndk"
 val releaseKeystorePath = providers.environmentVariable("ANDROID_KEYSTORE_FILE").orNull
 val releaseKeystorePassword = providers.environmentVariable("ANDROID_KEYSTORE_PASSWORD").orNull
 val releaseKeyAlias = providers.environmentVariable("ANDROID_KEY_ALIAS").orNull

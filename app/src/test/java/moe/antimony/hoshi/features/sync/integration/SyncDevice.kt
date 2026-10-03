@@ -23,6 +23,7 @@ import moe.antimony.hoshi.features.sync.http.HttpSyncDeletedBookRecord
 import moe.antimony.hoshi.features.sync.http.HttpSyncDeletedBookStateStore
 import moe.antimony.hoshi.features.sync.http.HttpSyncEngineDispatcher
 import moe.antimony.hoshi.features.sync.http.HttpSyncFastSync
+import moe.antimony.hoshi.features.sync.http.StatisticsPreferencesStore
 import moe.antimony.hoshi.features.sync.http.HttpSyncFullCycleRunner
 import moe.antimony.hoshi.features.sync.http.HttpSyncKvClient
 import moe.antimony.hoshi.features.sync.http.HttpSyncKvTransport
@@ -72,6 +73,8 @@ class SyncDevice(
     installationId: String = UUID.randomUUID().toString(),
     deviceIdentity: DeviceIdentity? = null,
     decorateTransport: (HttpSyncKvTransport) -> HttpSyncKvTransport = { it },
+    /** The streak goal and day reset this install keeps, as the app's settings store would. */
+    statisticsPreferences: StatisticsPreferencesStore? = null,
 ) : AutoCloseable {
     private val bookLocks = HttpSyncBookLocks()
     val repo = BookRepository(filesDir, bookLocks = bookLocks, deviceIdentity = deviceIdentity)
@@ -125,6 +128,7 @@ class SyncDevice(
         bookRepository = repo,
         bookLocks = bookLocks,
         installationId = installationId,
+        statisticsPreferences = statisticsPreferences,
     )
     private val fastSync = HttpSyncFastSync(
         state = batchState,
@@ -233,6 +237,16 @@ class SyncDevice(
         repo.saveBookmark(root, bookmark)
         batchState.queueBookmark(root, title, repo.loadMetadata(root)?.syncId)
         batchState.syncMaps(transportFactory(settings))
+    }
+
+    /** What leaving a reader sends: this device's unsent reading, at once (the statistics lane's flush). */
+    suspend fun pushReaderStatistics() = batchState.syncStatisticsNow(transportFactory(settings), flush = true)
+
+    /** The five-second poll: the map exchange, then the statistics lane when it has work. */
+    suspend fun poll() {
+        val transport = transportFactory(settings)
+        val changes = batchState.syncMaps(transport)
+        if (changes.statisticsNeeded) batchState.runStatistics(transport, changes.listing)
     }
 
     /** The reader-open gate: one cheap map exchange before a book is displayed. */

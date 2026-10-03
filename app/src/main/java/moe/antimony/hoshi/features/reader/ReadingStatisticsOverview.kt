@@ -5,6 +5,7 @@ import kotlinx.coroutines.withContext
 import moe.antimony.hoshi.epub.BookRepository
 import moe.antimony.hoshi.epub.ContentType
 import moe.antimony.hoshi.epub.ReadingStatistics
+import moe.antimony.hoshi.epub.StatisticsHistoryEntry
 import moe.antimony.hoshi.epub.bookContentType
 import moe.antimony.hoshi.epub.deduplicateReadingStatistics
 import moe.antimony.hoshi.epub.readingTotals
@@ -16,6 +17,7 @@ import moe.antimony.hoshi.mokuro.deduplicateMangaTextStatistics
 import moe.antimony.hoshi.features.statistics.charactersByDate
 import moe.antimony.hoshi.features.statistics.readingDays
 import moe.antimony.hoshi.features.statistics.reconstructStreakHistory
+import moe.antimony.hoshi.features.sync.http.syncIdForMetadata
 
 /** One day of reading: seconds spent and the amount read (characters, or OCR characters for manga). */
 data class DailyReading(
@@ -231,30 +233,54 @@ fun List<DeviceReadingSummary>.mergeDevices(): List<DeviceReadingSummary> =
         }
         .sortedWith(compareByDescending<DeviceReadingSummary> { it.totalSeconds }.thenBy { it.deviceName ?: "" })
 
+/** Book id of a book listed only from its reading history (see [StatisticsHistoryEntry]). */
+const val STATISTICS_HISTORY_BOOK_ID_PREFIX: String = "history:"
+
 /**
- * Reads every book's statistics sidecars, bookmark progress and cover. Call it again whenever
- * [BookRepository.statisticsChanges] changes: the result is a snapshot of the files, never
- * cached across screens.
+ * Reads every book's statistics sidecars, bookmark progress and cover, plus the reading history
+ * of books this install has no folder for (not downloaded, deleted, or still downloading): what
+ * was read counts no matter which books are installed, so every device shows the same Today,
+ * streak and totals. Call it again whenever [BookRepository.statisticsChanges] changes: the
+ * result is a snapshot of the files, never cached across screens.
  */
 suspend fun loadReadingStatisticsOverview(
     bookRepository: BookRepository,
     todayKey: String,
     streakResetHour: Int = 0,
 ): ReadingStatisticsOverview = withContext(Dispatchers.IO) {
-    val inputs = bookRepository.loadBookEntries().map { entry ->
+    val history = bookRepository.loadStatisticsHistory().associateBy { it.syncId }
+    val joined = mutableSetOf<String>()
+    val installed = bookRepository.loadBookEntries().map { entry ->
         val contentType = bookContentType(entry.root)
+        // A history folder of an installed book (deleted earlier, then installed again before
+        // the next sync folded it in) adds its days; the merge keeps one entry per day and device.
+        val kept = syncIdForMetadata(entry.metadata)?.takeIf(joined::add)?.let(history::get)
         BookStatisticsInput(
             bookId = entry.metadata.id,
             title = entry.displayTitle,
             contentType = contentType,
-            statistics = bookRepository.loadStatistics(entry.root),
+            statistics = bookRepository.loadStatistics(entry.root) +
+                kept?.let { bookRepository.loadStatistics(it.root) }.orEmpty(),
             mangaTextStatistics = when (contentType) {
                 ContentType.Epub -> emptyList()
-                ContentType.Mokuro -> bookRepository.loadMangaTextStatistics(entry.root)
+                ContentType.Mokuro -> bookRepository.loadMangaTextStatistics(entry.root) +
+                    kept?.let { bookRepository.loadMangaTextStatistics(it.root) }.orEmpty()
             },
             progress = bookRepository.loadReadingProgress(entry.root),
             coverSource = bookRepository.coverFile(entry)?.toBookCoverSource(),
         )
     }
-    summarizeReadingStatistics(inputs, todayKey, streakResetHour)
+    val historyOnly = history.values.filter { it.syncId !in joined }.map { kept ->
+        BookStatisticsInput(
+            bookId = STATISTICS_HISTORY_BOOK_ID_PREFIX + kept.syncId,
+            title = kept.title,
+            contentType = kept.contentType,
+            statistics = bookRepository.loadStatistics(kept.root),
+            mangaTextStatistics = when (kept.contentType) {
+                ContentType.Epub -> emptyList()
+                ContentType.Mokuro -> bookRepository.loadMangaTextStatistics(kept.root)
+            },
+        )
+    }
+    summarizeReadingStatistics(installed + historyOnly, todayKey, streakResetHour)
 }

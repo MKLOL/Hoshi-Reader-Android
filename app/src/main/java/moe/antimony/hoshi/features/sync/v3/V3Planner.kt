@@ -31,7 +31,12 @@ import moe.antimony.hoshi.features.sync.http.shouldApplyRemoteShelfPlacement
  *  6. PushBookmark / PushChat / PushPayload / PushMetadata / PushAiSettings.
  */
 class V3Planner {
-    fun compute(local: V3LocalSnapshot, remote: V3RemoteSnapshot): V3Plan {
+    /**
+     * [legacyBookmarks] keeps the per-book `books/{id}/bookmark` keys in the plan. Only the
+     * bootstrap of an account without bookmark maps needs them; afterwards the maps carry every
+     * position (see `HttpSyncSettings.exchangeLegacyBookmarks`).
+     */
+    fun compute(local: V3LocalSnapshot, remote: V3RemoteSnapshot, legacyBookmarks: Boolean = true): V3Plan {
         // Bucketed actions; each bucket emits in syncId-sorted order.
         val pushTombstones = mutableListOf<V3Action.PushTombstone>()
         val applyRemoteMetadata = mutableListOf<V3Action.ApplyRemoteMetadata>()
@@ -116,7 +121,7 @@ class V3Planner {
                             ?: r.metadata?.let { r.metadataLastModified },
                     )
                     // After import, apply any remote bookmark / chat the server has too.
-                    if (r.bookmark != null) {
+                    if (legacyBookmarks && r.bookmark != null) {
                         // Use the post-import root via a placeholder; the executor patches it.
                         // We can't synthesize a File here, so the executor materializes it via
                         // its rootBySyncId map. We still emit the action with a sentinel root.
@@ -221,7 +226,9 @@ class V3Planner {
                 // corrupt remote bytes the user might still want to recover. The decode
                 // error is already in V3RemoteSnapshotResult.errors; surface a planner-
                 // level marker too so the cause is clear at this layer.
-                if (r?.bookmarkMalformed == true) {
+                if (!legacyBookmarks) {
+                    // The bookmark maps carry positions; the per-book key is left alone.
+                } else if (r?.bookmarkMalformed == true) {
                     plannerErrors += V3Error(
                         syncId = syncId,
                         action = "MalformedRemoteBookmark",

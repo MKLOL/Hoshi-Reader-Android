@@ -22,8 +22,9 @@ internal class HttpSyncStatisticsValidationCache(private val capacity: Int = 4_0
     private data class Inputs(
         val syncId: String,
         val contentType: ContentType,
-        val remoteReadingPresent: Boolean,
-        val remoteMangaPresent: Boolean,
+        /** What the caller knows of the remote keys (presence or ETag); part of the cached inputs. */
+        val remoteReading: String?,
+        val remoteManga: String?,
         val reading: Stamp,
         val manga: Stamp?,
         val exchange: Stamp,
@@ -37,14 +38,14 @@ internal class HttpSyncStatisticsValidationCache(private val capacity: Int = 4_0
         bookRoot: File,
         syncId: String,
         contentType: ContentType,
-        remoteReadingPresent: Boolean,
-        remoteMangaPresent: Boolean,
+        remoteReading: String?,
+        remoteManga: String?,
         validate: suspend () -> Boolean,
     ): Boolean {
         val path = bookRoot.absolutePath
         // Capture BEFORE validation: repository reads may migrate old statistics or wait for
         // another writer. Saving post-validation stamps could certify bytes we never read.
-        val inputs = capture(bookRoot, syncId, contentType, remoteReadingPresent, remoteMangaPresent)
+        val inputs = capture(bookRoot, syncId, contentType, remoteReading, remoteManga)
         if (inputs != null && synchronized(unchanged) { unchanged[path] == inputs }) return false
         val changed = validate()
         synchronized(unchanged) {
@@ -62,15 +63,15 @@ internal class HttpSyncStatisticsValidationCache(private val capacity: Int = 4_0
         root: File,
         syncId: String,
         contentType: ContentType,
-        remoteReadingPresent: Boolean,
-        remoteMangaPresent: Boolean,
+        remoteReading: String?,
+        remoteManga: String?,
     ): Inputs? {
         val reading = stamp(root.resolve("statistics.json")) ?: return null
         val manga = if (contentType == ContentType.Mokuro) {
             stamp(root.resolve("manga_statistics.json")) ?: return null
         } else null
         val exchange = stamp(root.resolve(STATISTICS_SYNC_STATE_FILENAME)) ?: return null
-        return Inputs(syncId, contentType, remoteReadingPresent, remoteMangaPresent, reading, manga, exchange)
+        return Inputs(syncId, contentType, remoteReading, remoteManga, reading, manga, exchange)
     }
 
     private fun stamp(file: File): Stamp? = try {

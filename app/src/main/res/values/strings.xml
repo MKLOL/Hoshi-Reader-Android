@@ -243,6 +243,9 @@
     <string name="statistics_overview_characters_total">Characters read</string>
     <string name="bookshelf_statistics">Reading statistics</string>
     <string name="statistics_streak_start_format">Read %1$s today to start a streak</string>
+    <string name="statistics_sync_status_synced">Includes reading from all your devices · checked %1$s</string>
+    <string name="statistics_sync_status_checking">Checking your other devices for reading…</string>
+    <string name="statistics_sync_status_failed">Couldn\'t sync reading history with your other devices: %1$s</string>
     <string name="statistics_streak_keep_format">%1$s more today keeps your streak</string>
     <string name="statistics_streak_new_record">new record</string>
     <plurals name="statistics_streak_longest_days">

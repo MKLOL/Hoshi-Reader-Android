@@ -1,6 +1,8 @@
 package moe.antimony.hoshi
 
+import android.app.Activity
 import android.app.Application
+import android.os.Bundle
 import moe.antimony.hoshi.features.sync.http.httpSyncSettingsRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -26,6 +28,29 @@ class HoshiApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         installCrashDiagnostics(this)
+        // HTTP sync polls only while a screen is visible, and pulls at once when one appears.
+        registerActivityLifecycleCallbacks(object : ActivityLifecycleCallbacks {
+            private var started = 0
+
+            override fun onActivityStarted(activity: Activity) {
+                started += 1
+                appContainer.httpSyncBookmarkScheduler.setForeground(true)
+            }
+
+            override fun onActivityStopped(activity: Activity) {
+                started = (started - 1).coerceAtLeast(0)
+                // A rotation stops and restarts the activity; that is not leaving the app.
+                if (started == 0 && !activity.isChangingConfigurations) {
+                    appContainer.httpSyncBookmarkScheduler.setForeground(false)
+                }
+            }
+
+            override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) = Unit
+            override fun onActivityResumed(activity: Activity) = Unit
+            override fun onActivityPaused(activity: Activity) = Unit
+            override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) = Unit
+            override fun onActivityDestroyed(activity: Activity) = Unit
+        })
         // Reclaim disk from models an older build downloaded into internal storage before the
         // model dir moved to external app-specific storage (one-time, in the background).
         CoroutineScope(Dispatchers.IO).launch {

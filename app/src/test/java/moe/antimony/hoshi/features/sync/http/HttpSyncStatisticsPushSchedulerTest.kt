@@ -147,7 +147,7 @@ class HttpSyncStatisticsPushSchedulerTest {
     }
 
     @Test
-    fun supersededPushesDoNotTripBackoffOrRemoveTheirReplacement() = runTest {
+    fun aChangeDuringARunningPushQueuesAFollowUpWithoutCancellingIt() = runTest {
         var started = 0
         var completed = 0
         val scheduler = HttpSyncStatisticsPushScheduler(
@@ -159,19 +159,38 @@ class HttpSyncStatisticsPushSchedulerTest {
         )
         scheduler.flushNow(root, "A", "a")
         runCurrent()
-        repeat(HttpSyncStatisticsPushScheduler.FAILURE_THRESHOLD) {
-            scheduler.flushNow(root, "A", "a")
-            runCurrent()
-            assertTrue("the cancelled predecessor cannot clear its replacement", scheduler.isPending(root))
-        }
-        assertEquals(4, started)
+        // The running push may have read the files before this change: it finishes, and a
+        // follow-up carries the change instead of the change waiting for the next poll.
+        scheduler.flushNow(root, "A", "a")
+        runCurrent()
+        assertEquals(2, started)
+        assertTrue(scheduler.isPending(root))
         advanceTimeBy(400)
         runCurrent()
-        assertEquals(1, completed)
+        assertEquals("a running push is never cancelled", 2, completed)
         assertFalse(scheduler.isPending(root))
         scheduler.flushNow(root, "A", "a")
         runCurrent()
-        assertEquals("cancellation must not suppress the next push", 5, started)
+        assertEquals(3, started)
+    }
+
+    @Test
+    fun aPushWaitingToRunCoversLaterChangesInsteadOfMovingBack() = runTest {
+        var pushes = 0
+        val scheduler = HttpSyncStatisticsPushScheduler(
+            scope = backgroundScope,
+            currentSettings = { configured },
+            push = { _, _, _, _ -> pushes++ },
+            delayMs = 30_000,
+            clock = { testScheduler.currentTime },
+        )
+        // A page turn every ten seconds: the push still goes out 30 s after the first one.
+        repeat(5) {
+            scheduler.onStatisticsChanged(root, "A", "a")
+            advanceTimeBy(10_000)
+            runCurrent()
+        }
+        assertEquals("continuous reading must not postpone the push forever", 1, pushes)
     }
 
     @Test

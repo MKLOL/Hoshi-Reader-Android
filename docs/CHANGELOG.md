@@ -7,6 +7,12 @@ Semantic Versioning.
 
 ## [Unreleased]
 
+### Fixed
+- **Every device shows the same reading statistics.** Today, the streak, the history and every total now include what you read on all your devices, including books a device never downloaded, books still downloading, and books deleted on any device: deleting a finished book no longer erases its days or breaks your streak. A device updated later picks up the whole history on its first sync, and devices still on an older version keep exchanging statistics with updated ones.
+- **Reading time reaches your other devices within seconds.** While you read, your time is sent at least every 30 seconds instead of only after you stop, and the session is delivered when you leave the reader even if Android stops the app right after. Opening Statistics or returning to the app pulls your other devices' reading at once, and Statistics shows when it last checked them or why it couldn't.
+- **The same streak goal and day reset on every device.** Changing the minimum minutes or the reset hour on one device applies it on your others, so they count the same streak.
+- **Sync reports the bookmarks it actually moved.** "Bookmarks down" now counts books whose reading position changed; a sync no longer re-downloads every book's old position, and reading on one device no longer makes your devices run full syncs at each other.
+
 ## [v0.12.1] - 2026-10-01
 
 ### Added

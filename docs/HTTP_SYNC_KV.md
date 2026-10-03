@@ -217,6 +217,8 @@ The Android client uses this layout under one shared root prefix `books/`:
 |---|---|---|---|---|
 | `sync/maps/books.json` | `application/json` | `{BookID: "sha256:..."}` | overwrite after book reconcile | O(number of books) |
 | `sync/maps/bookmarks/{deviceId}.json` | `application/json` | `{BookID: {etag, lastModified, value}}` | that installation's five-second batches | O(books read on device) |
+| `sync/maps/stats/{deviceId}/{yyyy-MM}.json` | `application/json` | `{version: 1, deviceId, month, books: {syncId: {title?, contentType?, reading: [ReadingStatistics…], mangaText: [MangaTextStatistic…]}}}` — that device's **own** entries whose `dateKey` falls in `month`, canonical (books and days sorted) so the ETag identifies the content | written only by `{deviceId}`: a plain PUT never loses another device's day; readers GET only shards whose ETag changed and accept only rows of that device and month; a `version` above 1 is skipped | ~250 B per book-day |
+| `sync/maps/stats/{deviceId}/settings.json` | `application/json` | `{version: 1, streakMinimumMinutes, dayResetHour, updatedAt}` (epoch ms; `1` marks a choice made before settings synced) | written only by `{deviceId}`; every device applies the newest `updatedAt`, the larger device id breaking a tie | ~90 B |
 | `books/{syncId}/metadata` | `application/json` | `{title, contentType, shelfName?, shelfUpdatedAt?, importedAt, deletedAt?}` | overwrite | ~250 B |
 | `books/{syncId}/bookmark` | `application/json` | legacy bookmark read during migration | old clients only | ~250 B |
 | `books/{syncId}/chat/{ts}-{nonce}` | `application/json` | `{bubbleText, prompt, model, response, timestampSeconds, screenshotImage?}` | **write-once** | ~500 B – 2 KB text-only; screenshot entries include the cropped PNG as base64 |
@@ -225,7 +227,7 @@ The Android client uses this layout under one shared root prefix `books/`:
 | `books/{syncId}/epub.zip` | `application/zip` | zip of an extracted EPUB directory | overwrite (rare; effectively immutable) | 1 MB – 200 MB |
 | `books/{syncId}/epub.manifest` | `application/json` | `{sha256, sizeBytes, originalName, format: "epub"}` | overwrite | ~150 B |
 | `books/{syncId}/sentences` | `application/json` | validated EPUB sentence translations | download-only | 1 MB – 5 MB typical |
-| `books/{syncId}/statistics` | `application/json` | `{version: 2, syncId, entries: [{title, dateKey, charactersRead, readingTime, minReadingSpeed, altMinReadingSpeed, lastReadingSpeed, maxReadingSpeed, lastStatisticModified, deviceId?, deviceName?}]}` | two-way, merged per (day, device): every device keeps its own entry per day (`deviceId` is the installation id also used for bookmark shards; `deviceName` is display-only and may change), union of (day, device) entries, newest `lastStatisticModified` wins within one device, equal stamps resolved by content so every device picks the same entry; a `version` above 2 is refused in both directions; union means a day is never deleted through sync; a converged book costs no request (per-device `.http_sync_statistics.json` remembers the last exchange's local sha, remote size, stamp and ETag) | ~250 B per day read |
+| `books/{syncId}/statistics` | `application/json` | `{version: 2, syncId, entries: [{title, dateKey, charactersRead, readingTime, minReadingSpeed, altMinReadingSpeed, lastReadingSpeed, maxReadingSpeed, lastStatisticModified, deviceId?, deviceName?}]}` | two-way, merged per (day, device): every device keeps its own entry per day (`deviceId` is the installation id also used for bookmark shards; `deviceName` is display-only and may change), union of (day, device) entries, newest `lastStatisticModified` wins within one device, equal stamps resolved by content so every device picks the same entry; a `version` above 2 is refused in both directions; union means a day is never deleted through sync; a converged book costs no request (per-device `.http_sync_statistics.json` remembers the last exchange's local sha, remote size, stamp and ETag). Kept as the channel every released build speaks: current builds exchange it for every book they hold statistics for — installed or only kept as reading history — and read it for books they never downloaded | ~250 B per day read |
 | `books/{syncId}/manga_statistics` | `application/json` | `{version: 2, syncId, entries: [{dateKey, charactersRead, lastModified, deviceId?, deviceName?}]}` | as above, manga only. Entries without `deviceId` (older clients) stay their own "unknown device" bucket through sync; only a local file that has never named a device and never been exchanged is claimed by the device it is on, once, on load. `deviceName` is the user's Android device name and is uploaded with the entries | ~80 B per day read |
 
 - `syncId` is persisted in `metadata.json`. New imports derive it from title plus a folder
@@ -244,6 +246,11 @@ The Android client uses this layout under one shared root prefix `books/`:
 - A book that's been deleted on one device writes `deletedAt: <ts>` into its `metadata`
   blob. Other devices, on the next poll, see the tombstone and remove the local copy.
   Real `DELETE` is only used when the user wants to scrub server storage.
+- Reading statistics never depend on which books a device holds. A device keeps the
+  statistics of a book it has no folder for (never downloaded, deleted locally or through a
+  tombstone, download pending) in `Books/.reading_history/{syncId}/`, laid out like a book
+  folder's statistics plus `history.json` (`{syncId, title?, contentType?}`), and counts them
+  in Today, the streak and every total. Installing the book again folds that folder back in.
 
 ## Sync algorithm (client-side, also informative)
 
@@ -315,6 +322,31 @@ On app resume, reader open, manual sync, and every five seconds while the app is
      normalized sentence addresses and hashes, then atomically install
      `sentence_translations.json`.
 5. Advance `lastSyncedAt` and publish the authoritative maps after the full reconcile succeeds.
+
+### Reading statistics lane
+
+Statistics are exchanged by their own lane, never by the full reconcile, and never wait behind
+book transfers:
+
+- **Detection, per key.** Every map poll compares each listed statistics key with what this
+  device last merged: a per-book key against that book's (or history folder's) exchange state,
+  a shard or settings key against `.http_sync_statistics_lane.json`. A key is acknowledged only
+  after its content was merged. Statistics keys and per-book bookmark keys are not part of the
+  full reconcile's acknowledged snapshot, so a statistics write never starts a full reconcile.
+- **Pass.** Merge changed shards of other devices (and this device's own, when a reinstall or
+  restore left days on the server the install lost); exchange per-book keys for every book with
+  statistics here and every listed per-book key (creating a history folder, named from the
+  book's metadata, for a book without a folder); publish this device's changed months; apply
+  the newest settings. A key that fails is retried when its ETag changes or after ten minutes.
+- **Timing.** Local days go up at most every 30 s while reading and at once when the reader is
+  left (an Android WorkManager job repeats that flush if the app is stopped first), on a manual
+  sync, when Statistics opens, and when the app goes to the background. Remote changes are
+  merged on the next poll; polling runs every five seconds while the app is visible and
+  immediately when it becomes visible.
+
+Per-book bookmark keys (`books/{syncId}/bookmark`) are read and written only while bootstrapping
+an account that has no bookmark maps yet; every released build since 0.11.15 exchanges positions
+through the maps (page turns and "Mark read" alike).
 
 ### Upgrade and hash-cache safety
 

@@ -54,6 +54,9 @@ import moe.antimony.hoshi.features.sync.SyncManager
 import moe.antimony.hoshi.features.sync.SyncSettingsRepository
 import moe.antimony.hoshi.features.sync.syncSettingsRepository
 import moe.antimony.hoshi.features.sync.http.HttpSyncStatisticsPushScheduler
+import moe.antimony.hoshi.features.sync.http.HttpSyncStatisticsFlushWorker
+import moe.antimony.hoshi.features.sync.http.StatisticsPreferences
+import moe.antimony.hoshi.features.sync.http.StatisticsPreferencesStore
 import moe.antimony.hoshi.features.sync.http.HttpSyncAutoPush
 import moe.antimony.hoshi.features.sync.http.HttpSyncBatchState
 import moe.antimony.hoshi.features.sync.http.HttpSyncBookmarkScheduler
@@ -140,10 +143,27 @@ internal class HoshiAppContainer(context: Context) {
         aiSettingsRepository = aiChatSettingsRepository,
         bookLocks = httpSyncBookLocks,
     )
+    /** The streak goal and day reset, which HTTP sync keeps the same on every device. */
+    private val statisticsPreferencesStore = object : StatisticsPreferencesStore {
+        override suspend fun load(): StatisticsPreferences = readerSettingsRepository.settings.first().let {
+            StatisticsPreferences(it.statisticsStreakMinimumMinutes, it.statisticsDayResetHour, it.statisticsSettingsUpdatedAt)
+        }
+
+        override suspend fun save(preferences: StatisticsPreferences) {
+            readerSettingsRepository.update {
+                it.copy(
+                    statisticsStreakMinimumMinutes = preferences.streakMinimumMinutes,
+                    statisticsDayResetHour = preferences.dayResetHour,
+                    statisticsSettingsUpdatedAt = preferences.updatedAt,
+                )
+            }
+        }
+    }
     val httpSyncBatchState: HttpSyncBatchState = HttpSyncBatchState(
         bookRepository = bookRepository,
         bookLocks = httpSyncBookLocks,
         installationId = installationId,
+        statisticsPreferences = statisticsPreferencesStore,
     )
     val httpSyncFullCycleRunner: HttpSyncFullCycleRunner = HttpSyncFullCycleRunner(appScope)
     val httpSyncFastSync: HttpSyncFastSync = HttpSyncFastSync(
@@ -198,6 +218,8 @@ internal class HoshiAppContainer(context: Context) {
         },
         fullCycleRunner = httpSyncFullCycleRunner,
         scope = appScope,
+        // HoshiApplication reports when a screen is visible; until then the poll waits.
+        initiallyForeground = false,
     )
     // Fire-and-forget metadata writes plus a map refresh for new/replaced/deleted books.
     val httpSyncAutoPush: HttpSyncAutoPush = HttpSyncAutoPush(
@@ -240,7 +262,9 @@ internal class HoshiAppContainer(context: Context) {
         HttpSyncStatisticsPushScheduler(
             scope = appScope,
             currentSettings = { httpSyncSettingsRepository.settings.first() },
-            push = httpSyncPusher::pushStatistics,
+            // The statistics lane sends every book's unsent days and takes other devices' too.
+            push = { _, _, _, _ -> httpSyncBookmarkScheduler.syncStatisticsNow() },
+            onFlush = { HttpSyncStatisticsFlushWorker.enqueue(appContext) },
         )
 
     fun readerRouteStateHolder(): ReaderRouteStateHolder =

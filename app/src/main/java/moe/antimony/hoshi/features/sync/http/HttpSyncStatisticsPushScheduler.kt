@@ -9,12 +9,14 @@ import kotlinx.coroutines.launch
 import java.io.File
 
 /**
- * Debounces statistics pushes from the readers: a session writes `statistics.json` on every
- * page turn, and pushing each write would be the chatter that once kept statistics out of the
- * sync entirely. One push per book runs [delayMs] after the last change (sooner on
- * [flushNow], when the reader is left), and a converged book costs the push no request at all
- * (see [HttpSyncStatisticsSync]). After a few consecutive failures pushes pause for a while,
- * like the reader hooks' circuit breaker, so an offline device does not retry every turn.
+ * Batches statistics pushes from the readers: a session writes `statistics.json` on every page
+ * turn, and pushing each write would be pure chatter. A push runs at most [delayMs] after the
+ * first change not yet sent — later changes join it instead of postponing it, so someone who
+ * reads without pausing still has their time on the server within [delayMs] — and
+ * [flushNow] (the reader is left or backgrounded) pushes within [flushDelayMs]. A converged
+ * book costs a push no request (see [HttpSyncStatisticsSync]). After a few consecutive
+ * failures pushes pause for a while, so an offline device does not retry every turn; the
+ * five-second poll and the flush worker still deliver what is left.
  */
 class HttpSyncStatisticsPushScheduler(
     private val scope: CoroutineScope,
@@ -23,9 +25,12 @@ class HttpSyncStatisticsPushScheduler(
     private val delayMs: Long = DEFAULT_DELAY_MS,
     private val flushDelayMs: Long = DEFAULT_FLUSH_DELAY_MS,
     private val clock: () -> Long = System::currentTimeMillis,
+    /** Told on every [flushNow], to queue work that delivers the session even if the app is stopped first. */
+    private val onFlush: () -> Unit = {},
 ) {
     private val lock = Any()
     private val pending = mutableMapOf<String, Job>()
+    private val dueAtMs = mutableMapOf<String, Long>()
     private var consecutiveFailures = 0
     private var suppressUntilMs = 0L
 
@@ -37,6 +42,7 @@ class HttpSyncStatisticsPushScheduler(
     /** The reader is being left: push soon, after its final local saves have landed. */
     fun flushNow(bookRoot: File, title: String, persistedSyncId: String?) {
         schedule(bookRoot, title, persistedSyncId, flushDelayMs)
+        onFlush()
     }
 
     /** True while a push is scheduled or running for [bookRoot]. */
@@ -45,7 +51,17 @@ class HttpSyncStatisticsPushScheduler(
     private fun schedule(bookRoot: File, title: String, persistedSyncId: String?, delay: Long) {
         val id = bookRoot.absolutePath
         val scheduled = synchronized(lock) {
-            pending.remove(id)?.cancel()
+            val now = clock()
+            val due = now + delay
+            val waiting = pending[id]?.takeIf { it.isActive }
+            val waitingDue = dueAtMs[id] ?: Long.MAX_VALUE
+            // A push still waiting and due no later covers this change too.
+            if (waiting != null && waitingDue > now && waitingDue <= due) return
+            // A later one gives way to this sooner one; one already running (it may have read
+            // the files before this change) finishes on its own, and this one follows it.
+            if (waiting != null && waitingDue > now) waiting.cancel()
+            pending.remove(id)
+            dueAtMs[id] = due
             scope.launch(start = CoroutineStart.LAZY) {
                 if (delay > 0) delay(delay)
                 pushNow(bookRoot, title, persistedSyncId)
@@ -56,7 +72,10 @@ class HttpSyncStatisticsPushScheduler(
                 // finish inline on Main.immediate or Unconfined.
                 job.invokeOnCompletion {
                     synchronized(lock) {
-                        if (pending[id] === job) pending.remove(id)
+                        if (pending[id] === job) {
+                            pending.remove(id)
+                            dueAtMs.remove(id)
+                        }
                     }
                 }
             }

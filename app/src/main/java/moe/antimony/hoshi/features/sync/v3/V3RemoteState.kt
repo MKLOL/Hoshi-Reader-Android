@@ -34,6 +34,8 @@ class V3RemoteState(cacheDirectory: File? = null) {
 
     suspend fun read(
         transport: HttpSyncKvTransport,
+        /** False once bookmark maps carry positions: per-book bookmark bodies are not needed. */
+        readBookmarks: Boolean = true,
         onProgress: suspend (V3Progress) -> Unit,
     ): V3RemoteSnapshotResult {
         val errors = mutableListOf<V3Error>()
@@ -147,7 +149,7 @@ class V3RemoteState(cacheDirectory: File? = null) {
                     }
                     BookKind.LegacyManifest -> legacyManifestKey = k
                     BookKind.EpubManifest -> epubManifestKey = k
-                    BookKind.Bookmark -> {
+                    BookKind.Bookmark -> if (readBookmarks) {
                         try {
                             val fetched = readBody(k)
                             if (fetched != null) {

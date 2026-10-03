@@ -227,10 +227,10 @@ class SyncReleaseRegressionTest(private val phoneEngine: SyncEngine, private val
         phone.repo.saveStatistics(root, phoneDays)
         val path = "/v1/kv/${statisticsKey(SyncCorpus.NOVEL_SYNC_ID)}"
         server.failNext(path, status = 500, method = "PUT")
-        val failedPush = runCatching {
-            phone.pusher.pushStatistics(root, SyncCorpus.NOVEL_TITLE, phone.settings, SyncCorpus.NOVEL_SYNC_ID)
-        }.exceptionOrNull()
-        assertNotNull("the reader's upload actually failed over HTTP", failedPush)
+        // Both channels fail: the per-book key and the phone's own monthly shard.
+        server.failNext("/v1/kv/sync/maps/stats/${PHONE.id}/", status = 500, method = "PUT")
+        val failedPush = phone.pushReaderStatistics()
+        assertTrue("the reader's upload actually failed over HTTP", failedPush.errors.isNotEmpty())
         assertPhoneHistory(history(phone))
         assertClean(tablet.sync())
         assertEquals(0.0, history(tablet).totalSeconds, 0.0)
@@ -329,6 +329,10 @@ class SyncReleaseRegressionTest(private val phoneEngine: SyncEngine, private val
             listOf(MangaTextStatistic(TODAY.toString(), 1_234, 1, PHONE.id, PHONE.name)))
         assertClean(phone.sync())
         assertClean(tablet.sync())
+        // The tablet kept the manga's reading history before its download finished; the next
+        // pass folds that history into the installed book.
+        assertClean(tablet.sync())
+        assertTrue("history of an installed book is folded into it", tablet.repo.loadStatisticsHistory().isEmpty())
         val installed = tablet.book(SyncCorpus.MANGA_SYNC_ID).root
         assertTrue(installed.resolve("statistics.json").delete())
         assertTrue(installed.resolve("manga_statistics.json").delete())

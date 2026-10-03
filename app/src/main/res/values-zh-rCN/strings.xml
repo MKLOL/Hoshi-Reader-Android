@@ -241,6 +241,9 @@
     <string name="statistics_overview_characters_total">已读字符</string>
     <string name="bookshelf_statistics">阅读统计</string>
     <string name="statistics_streak_start_format">今天阅读 %1$s 即可开始连续记录</string>
+    <string name="statistics_sync_status_synced">已包含所有设备上的阅读记录 · %1$s 检查</string>
+    <string name="statistics_sync_status_checking">正在检查其他设备的阅读记录…</string>
+    <string name="statistics_sync_status_failed">无法与其他设备同步阅读记录：%1$s</string>
     <string name="statistics_streak_keep_format">今天再读 %1$s 即可保持连续</string>
     <string name="statistics_streak_new_record">新纪录</string>
     <plurals name="statistics_streak_longest_days">

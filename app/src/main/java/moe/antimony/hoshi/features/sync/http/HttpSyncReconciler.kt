@@ -91,8 +91,8 @@ class HttpSyncReconciler(
         val transport = transportOverride ?: transportFactory(settings)
 
         onProgress(HttpSyncProgress(message = "Preparing sync", detail = "Connecting to the HTTP sync server."))
-        val inbound = pullChangedKeys(transport, settings.lastSyncedAt, onProgress)
-        val outbound = pushAllLocal(transport, onProgress)
+        val inbound = pullChangedKeys(transport, settings.lastSyncedAt, onProgress, settings.exchangeLegacyBookmarks)
+        val outbound = pushAllLocal(transport, onProgress, settings.exchangeLegacyBookmarks)
         val appSettings = syncAppSettings(transport, onProgress)
 
         val newCursor = safeNewCursor(currentCursor = settings.lastSyncedAt, inbound = inbound)
@@ -384,6 +384,7 @@ class HttpSyncReconciler(
         transport: HttpSyncKvTransport,
         sinceCursor: String?,
         onProgress: suspend (HttpSyncProgress) -> Unit,
+        legacyBookmarks: Boolean = true,
     ): InboundResult {
         var downloadedBookmarks = 0
         var downloadedChatEntries = 0
@@ -714,7 +715,7 @@ class HttpSyncReconciler(
             runCatching {
                 when (parsed.kind) {
                     BookKeyKind.Bookmark ->
-                        if (applyBookmarkFromRemote(transport, root, meta)) downloadedBookmarks += 1
+                        if (legacyBookmarks && applyBookmarkFromRemote(transport, root, meta)) downloadedBookmarks += 1
                     BookKeyKind.Chat ->
                         if (applyChatEntryFromRemote(transport, root, meta)) downloadedChatEntries += 1
                     BookKeyKind.Pretranslations ->
@@ -1187,6 +1188,7 @@ class HttpSyncReconciler(
     private suspend fun pushAllLocal(
         transport: HttpSyncKvTransport,
         onProgress: suspend (HttpSyncProgress) -> Unit,
+        legacyBookmarks: Boolean = true,
     ): OutboundResult {
         var uploadedBookmarks = 0
         var uploadedChatEntries = 0
@@ -1317,7 +1319,7 @@ class HttpSyncReconciler(
                         updatedAt = uploadShelfUpdatedAt,
                     )
                 }
-                val bookmark = bookRepository.loadBookmark(root)
+                val bookmark = if (legacyBookmarks) bookRepository.loadBookmark(root) else null
                 if (bookmark != null) {
                     // Don't overwrite a newer server bookmark — see the same guard in
                     // HttpSyncPusher.pushBookmark for the rationale. Inbound just ran (so in

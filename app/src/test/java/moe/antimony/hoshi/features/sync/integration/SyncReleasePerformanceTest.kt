@@ -156,7 +156,7 @@ class SyncReleasePerformanceTest {
     }
 
     @Test(timeout = 30_000)
-    fun manualSyncRechecksAfterJoiningAStaleBackgroundResponseEvenWhenItsOriginalWaiterCancels() = runBlocking {
+    fun manualSyncTakesNewStatisticsWithoutWaitingBehindAFrozenBackgroundPass() = runBlocking {
         val phone = device("phone")
         val tablet = device("tablet")
         val title = "Release delayed history"
@@ -171,15 +171,13 @@ class SyncReleasePerformanceTest {
         val tabletRoot = tablet.book(syncId).root
         val frozen = CompletableDeferred<Unit>()
         val release = CompletableDeferred<Unit>()
-        val joined = CompletableDeferred<Unit>()
         val gate = AtomicBoolean(true)
         val client = server.client()
         val delayed = object : HttpSyncKvTransport by client {
             override suspend fun list(prefix: String?, since: String?, cursor: String?, limit: Int?): HttpSyncKvList {
                 val response = client.list(prefix, since, cursor, limit)
                 if (prefix == ALL_BOOKS_PREFIX && gate.compareAndSet(true, false)) {
-                    // Freeze a real HTTP listing. Its old statistics validator will let this
-                    // background V3 pass keep the previously applied history unchanged.
+                    // Freeze a real HTTP listing of a background V3 pass (a long book download).
                     frozen.complete(Unit)
                     release.await()
                 }
@@ -200,23 +198,21 @@ class SyncReleasePerformanceTest {
                 readingTimeByHour = mapOf("01" to 300.0, "19" to 1_500.0))
             phone.repo.saveStatistics(root, listOf(newer))
             assertClean(phone.sync())
-            val fast = HttpSyncFastSync(tablet.batchState, runner) { delayed }
-            val manual = async {
-                fast.syncNow(tablet.settings, onProgress = {
-                    if (it.message == "Listing remote state" && it.detail != null) joined.complete(Unit)
-                }) { settings, transport, report ->
-                    HttpSyncEngineDispatcher.syncOnce(tablet.reconciler, tablet.v3, settings, transport, report)
-                }
+            // Reading history has its own lane: the frozen pass can neither hold the tap up nor
+            // stand in for it with its old snapshot.
+            val result = HttpSyncFastSync(tablet.batchState, runner) { delayed }.syncNow(tablet.settings) { settings, transport, report ->
+                HttpSyncEngineDispatcher.syncOnce(tablet.reconciler, tablet.v3, settings, transport, report)
             }
-            joined.await()
-            assertFalse("Manual sync must wait for the old pass and then check again", manual.isCompleted)
-            background.cancelAndJoin()
-            release.complete(Unit)
-            val result = manual.await()
             assertTrue(result.errors.toString(), result.errors.isEmpty())
-            assertEquals("The old background response cannot satisfy the manual tap", listOf(newer), tablet.repo.loadStatistics(tabletRoot))
+            assertEquals(listOf(newer), tablet.repo.loadStatistics(tabletRoot))
             assertEquals(1, result.downloadedStatistics)
+            assertFalse("the background pass is still frozen", background.isCompleted)
+            release.complete(Unit)
+            background.await()
             assertFalse("Delayed statistics cannot cause book transfers", server.requests().any { it.isPayloadDownload || it.isPayloadUpload })
+            // The released pass ran on its stale snapshot without publishing the maps; one
+            // sync settles that, after which a converged install costs one change check.
+            assertClean(tablet.sync())
             server.clearRequests()
             assertClean(tablet.sync())
             assertEquals(listOf(true), server.requests().map { it.isListing })

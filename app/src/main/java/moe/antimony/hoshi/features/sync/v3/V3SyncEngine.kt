@@ -83,10 +83,14 @@ class V3SyncEngine(
             val local = localState.read()
 
             onProgress(V3Progress(V3Phase.ListingRemote, "Listing remote state"))
-            val remoteResult = remoteState.read(transport) { progress -> onProgress(progress) }
+            val remoteResult = remoteState.read(
+                transport,
+                onProgress = { progress -> onProgress(progress) },
+                readBookmarks = settings.exchangeLegacyBookmarks,
+            )
 
             onProgress(V3Progress(V3Phase.Planning, "Computing plan"))
-            val plan = planner.compute(local, remoteResult.snapshot)
+            val plan = planner.compute(local, remoteResult.snapshot, legacyBookmarks = settings.exchangeLegacyBookmarks)
 
             // Per-key remote-listing errors (decoding failures, etc) and planner-level
             // conflicts (e.g. cross-content-type syncId collisions, Bug 6) accumulate

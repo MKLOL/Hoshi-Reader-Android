@@ -75,6 +75,8 @@ import moe.antimony.hoshi.ui.theme.LocalHoshiEInkMode
 import java.time.Duration
 import java.time.LocalDate
 import java.time.ZonedDateTime
+import android.text.format.DateUtils
+import moe.antimony.hoshi.features.sync.http.StatisticsSyncStatus
 
 /**
  * The Statistics screen: today, streak, totals, a reading heatmap, time by weekday and every
@@ -103,6 +105,11 @@ fun StatisticsScreen(
     // midnight, so Today, the streak, the history and the charts all change day together.
     val today = streakDate(now, resetHour)
     val resumeCount = rememberResumeCount()
+    val httpSync by appContainer.httpSyncSettingsRepository.settings.collectAsStateWithLifecycle(initialValue = null)
+    val syncStatus by appContainer.httpSyncBatchState.statisticsStatus.collectAsStateWithLifecycle()
+    // Opening Statistics, or coming back to it, takes every other device's latest reading at
+    // once instead of waiting for the next poll; what arrives reloads the screen.
+    LaunchedEffect(resumeCount) { appContainer.httpSyncBookmarkScheduler.refreshStatistics() }
     LaunchedEffect(statisticsVersion, resumeCount, today, resetHour) {
         overview = null
         overview = loadReadingStatisticsOverview(
@@ -128,14 +135,25 @@ fun StatisticsScreen(
         today = today,
         minimumMinutes = readerSettings.statisticsStreakMinimumMinutes,
         resetHour = resetHour,
+        // A choice is stamped so sync can apply the newest one on every device.
         onResetHourChange = { hour ->
-            scope.launch { appContainer.readerSettingsRepository.update { it.copy(statisticsDayResetHour = hour) } }
+            scope.launch {
+                appContainer.readerSettingsRepository.update {
+                    it.copy(statisticsDayResetHour = hour, statisticsSettingsUpdatedAt = System.currentTimeMillis())
+                }
+                appContainer.httpSyncBookmarkScheduler.refreshStatistics()
+            }
         },
         onMinimumMinutesChange = { minutes ->
             scope.launch {
-                appContainer.readerSettingsRepository.update { it.copy(statisticsStreakMinimumMinutes = minutes) }
+                appContainer.readerSettingsRepository.update {
+                    it.copy(statisticsStreakMinimumMinutes = minutes, statisticsSettingsUpdatedAt = System.currentTimeMillis())
+                }
+                appContainer.httpSyncBookmarkScheduler.refreshStatistics()
             }
         },
+        syncStatus = syncStatus.takeIf { httpSync?.isConfigured == true },
+        nowMillis = now.toInstant().toEpochMilli(),
         onOpenBook = onOpenBook,
         onClose = onClose,
         modifier = modifier,
@@ -176,6 +194,9 @@ fun StatisticsScreenContent(
     streakToday: LocalDate = today,
     resetHour: Int = 3,
     onResetHourChange: (Int) -> Unit = {},
+    /** How current other devices' reading is; null when HTTP sync is not set up. */
+    syncStatus: StatisticsSyncStatus? = null,
+    nowMillis: Long = System.currentTimeMillis(),
 ) {
     val colorScheme = MaterialTheme.colorScheme
     val streak = remember(overview, minimumMinutes, streakToday) {
@@ -239,6 +260,8 @@ fun StatisticsScreenContent(
                     driveSync = driveSync,
                     onDriveSyncChange = onDriveSyncChange,
                     localDeviceId = localDeviceId,
+                    syncStatus = syncStatus,
+                    nowMillis = nowMillis,
                 )
             }
         }
@@ -262,6 +285,8 @@ private fun StatisticsOverviewList(
     driveSync: DriveStatisticsSyncOptions?,
     onDriveSyncChange: (DriveStatisticsSyncOptions) -> Unit,
     localDeviceId: String?,
+    syncStatus: StatisticsSyncStatus?,
+    nowMillis: Long,
 ) {
     val colorScheme = MaterialTheme.colorScheme
     LazyColumn(
@@ -271,6 +296,12 @@ private fun StatisticsOverviewList(
         state = listState,
         contentPadding = PaddingValues(top = 12.dp, bottom = 24.dp),
     ) {
+        if (syncStatus != null) {
+            item {
+                StatisticsSyncStatusText(syncStatus, nowMillis)
+                Spacer(Modifier.height(8.dp))
+            }
+        }
         item {
             TodayCard(
                 today = today,
@@ -589,6 +620,25 @@ internal fun StatisticsMessageRow(message: String) {
     ListItem(
         colors = ListItemDefaults.colors(containerColor = Color.Transparent),
         headlineContent = { Text(text = message, color = MaterialTheme.colorScheme.onSurfaceVariant) },
+    )
+}
+
+/** Whether other devices' reading is in: when it was last checked, or why it could not be. */
+@Composable
+private fun StatisticsSyncStatusText(status: StatisticsSyncStatus, nowMillis: Long) {
+    val synced = status.lastSuccessAtMillis?.let {
+        DateUtils.getRelativeTimeSpanString(it.coerceAtMost(nowMillis), nowMillis, DateUtils.MINUTE_IN_MILLIS).toString()
+    }
+    val text = when {
+        status.lastError != null -> stringResource(R.string.statistics_sync_status_failed, status.lastError)
+        synced != null -> stringResource(R.string.statistics_sync_status_synced, synced)
+        else -> stringResource(R.string.statistics_sync_status_checking)
+    }
+    Text(
+        text = text,
+        style = MaterialTheme.typography.bodySmall,
+        color = if (status.lastError != null) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(horizontal = 4.dp),
     )
 }
 

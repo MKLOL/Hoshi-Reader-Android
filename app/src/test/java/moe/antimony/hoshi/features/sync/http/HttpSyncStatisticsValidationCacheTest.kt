@@ -24,7 +24,7 @@ class HttpSyncStatisticsValidationCacheTest {
         readingPresent: Boolean = true,
         mangaPresent: Boolean = true,
         validate: suspend () -> Boolean,
-    ) = hasChanges(root, syncId, contentType, readingPresent, mangaPresent, validate)
+    ) = hasChanges(root, syncId, contentType, "present:$readingPresent", "present:$mangaPresent", validate)
 
     @Test fun repeatedUnchangedPollsValidateEachHistoryOnlyOnce() = runBlocking {
         val cache = HttpSyncStatisticsValidationCache()

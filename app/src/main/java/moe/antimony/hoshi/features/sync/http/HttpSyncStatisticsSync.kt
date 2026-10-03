@@ -5,7 +5,7 @@ import kotlinx.serialization.json.Json
 import moe.antimony.hoshi.epub.BookRepository
 import moe.antimony.hoshi.epub.ContentType
 import moe.antimony.hoshi.epub.ReadingStatistics
-import moe.antimony.hoshi.epub.bookContentType
+import moe.antimony.hoshi.epub.statisticsContentType
 import moe.antimony.hoshi.epub.STATISTICS_SYNC_STATE_FILE_NAME
 import moe.antimony.hoshi.epub.dayDeviceKey
 import moe.antimony.hoshi.epub.deduplicateReadingStatistics
@@ -78,6 +78,17 @@ sealed interface StatisticsRemoteListing {
     data object Unknown : StatisticsRemoteListing
 }
 
+/** Why a book's statistics need an exchange (see [HttpSyncStatisticsSync.pendingExchange]). */
+enum class StatisticsExchangeNeed {
+    None,
+
+    /** Only this device has days the server lacks; safe to batch while reading. */
+    Local,
+
+    /** The server holds a version this device has not merged. */
+    Remote,
+}
+
 data class StatisticsSyncOutcome(val downloaded: Boolean, val uploaded: Boolean) {
     companion object {
         val NONE = StatisticsSyncOutcome(downloaded = false, uploaded = false)
@@ -138,9 +149,9 @@ class HttpSyncStatisticsSync(
         remoteMangaPresent: Boolean = false,
     ): Boolean {
         if (!bookRoot.isDirectory) return false
-        val contentType = bookContentType(bookRoot)
+        val contentType = statisticsContentType(bookRoot)
         return validationCache.hasChanges(
-            bookRoot, syncId, contentType, remoteReadingPresent, remoteMangaPresent,
+            bookRoot, syncId, contentType, "present:$remoteReadingPresent", "present:$remoteMangaPresent",
         ) {
             val readingChanged = bookLocks.withKeyLock(statisticsKey(syncId)) {
                 val entries = bookRepository.loadStatistics(bookRoot)
@@ -162,6 +173,63 @@ class HttpSyncStatisticsSync(
         }
     }
 
+    /**
+     * Whether [bookRoot]'s statistics need an exchange, judged per key against the listing: a
+     * listed ETag other than the one this root last applied is [StatisticsExchangeNeed.Remote]
+     * (another device wrote, or the root never exchanged that key), local days not yet sent are
+     * [StatisticsExchangeNeed.Local]. Nothing is acknowledged globally, so a change can never be
+     * marked seen without having been merged. [remoteReadingEtag] and [remoteMangaEtag] are the
+     * listed ETags, null when the key is not on the server. No network request.
+     */
+    suspend fun pendingExchange(
+        bookRoot: File,
+        syncId: String,
+        remoteReadingEtag: String?,
+        remoteMangaEtag: String?,
+    ): StatisticsExchangeNeed {
+        if (!bookRoot.isDirectory) return StatisticsExchangeNeed.None
+        val contentType = statisticsContentType(bookRoot)
+        var need = StatisticsExchangeNeed.None
+        validationCache.hasChanges(
+            bookRoot, syncId, contentType, "etag:$remoteReadingEtag", "etag:$remoteMangaEtag",
+        ) {
+            val state = loadState(bookRoot)
+            fun remoteDiffers(entry: StatisticsSyncStateEntry?, etag: String?) =
+                etag != null && entry?.remoteEtag != etag
+            need = when {
+                remoteDiffers(state.reading, remoteReadingEtag) -> StatisticsExchangeNeed.Remote
+                contentType == ContentType.Mokuro && remoteDiffers(state.mangaText, remoteMangaEtag) ->
+                    StatisticsExchangeNeed.Remote
+                localDiffers(bookRoot, syncId, contentType, state) -> StatisticsExchangeNeed.Local
+                else -> StatisticsExchangeNeed.None
+            }
+            need != StatisticsExchangeNeed.None
+        }
+        return need
+    }
+
+    /** Local days the last exchange did not carry, for either kind [contentType] keeps. */
+    private suspend fun localDiffers(
+        bookRoot: File,
+        syncId: String,
+        contentType: ContentType,
+        state: StatisticsSyncState,
+    ): Boolean {
+        val reading = bookLocks.withKeyLock(statisticsKey(syncId)) {
+            val entries = bookRepository.loadStatistics(bookRoot)
+                .deduplicateReadingStatistics().sortedBy { dayDeviceKey(it.dateKey, it.deviceId) }
+            val previous = state.reading
+            if (previous == null) entries.isNotEmpty() else previous.localSha256 != sha256(readingBody(syncId, entries))
+        }
+        if (reading || contentType != ContentType.Mokuro) return reading
+        return bookLocks.withKeyLock(mangaStatisticsKey(syncId)) {
+            val entries = bookRepository.loadMangaTextStatistics(bookRoot)
+                .deduplicateMangaTextStatistics().sortedBy { dayDeviceKey(it.dateKey, it.deviceId) }
+            val previous = state.mangaText
+            if (previous == null) entries.isNotEmpty() else previous.localSha256 != sha256(mangaBody(syncId, entries))
+        }
+    }
+
     suspend fun sync(
         transport: HttpSyncKvTransport,
         bookRoot: File,
@@ -170,7 +238,7 @@ class HttpSyncStatisticsSync(
         remote: StatisticsRemoteListing,
     ): StatisticsSyncOutcome {
         if (!bookRoot.isDirectory) return StatisticsSyncOutcome.NONE
-        if (kind == StatisticsSyncKind.MangaText && bookContentType(bookRoot) != ContentType.Mokuro) {
+        if (kind == StatisticsSyncKind.MangaText && statisticsContentType(bookRoot) != ContentType.Mokuro) {
             return StatisticsSyncOutcome.NONE
         }
         val key = kind.key(syncId)

@@ -14,8 +14,8 @@ import moe.antimony.hoshi.features.sync.v3.V3SyncResult
  *
  * Both engines write the same on-disk + remote state (shared `.http_sync_*.json`
  * sidecars and identical KV keys), so the flag can be flipped at any time without a
- * data migration. The flag defaults to `false` (v2), and the v2 path is bit-for-bit
- * the production code path that shipped before the dispatcher existed.
+ * data migration. The flag defaults to `true` (v3, the production engine); v2 is kept as a
+ * device-local rollback path.
  *
  * Reader-hook decision:
  *  Page-turn / chat-reply fire-and-forget pushes go through [HttpSyncPusher] from

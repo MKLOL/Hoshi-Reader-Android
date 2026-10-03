@@ -12,8 +12,11 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
@@ -59,13 +62,33 @@ private data class PendingBookmarkWrite(
 internal data class HttpSyncMapChanges(
     val needsBootstrap: Boolean = false,
     val booksChanged: Boolean = false,
+    /** Keys only the full reconcile handles changed (chat, metadata, payloads, settings). */
     val otherChanged: Boolean = false,
     val uploadedBookmarks: Int = 0,
     val downloadedBookmarks: Int = 0,
     val observedLegacyEtags: Map<String, String> = emptyMap(),
-    val statisticsOnly: Boolean = false,
-    val statisticsMetadata: Map<String, HttpSyncKvKeyMeta> = emptyMap(),
+    /** Statistics have work for [HttpSyncBatchState.runStatistics]; they never need the full reconcile. */
+    val statisticsNeeded: Boolean = false,
+    /** The metadata listing this pass judged by, for the statistics lane. */
+    val listing: List<HttpSyncKvKeyMeta> = emptyList(),
+    /** Bookmark keys whose queued local positions this pass published. */
+    val uploadedBookmarkKeys: Set<String> = emptySet(),
 )
+
+/** Per-book reading statistics keys; the statistics lane owns them (see [HttpSyncStatisticsLane]). */
+internal fun isStatisticsKey(key: String): Boolean = key.startsWith("books/") &&
+    (key.endsWith("/statistics") || key.endsWith("/manga_statistics"))
+
+/** Per-book bookmark keys of released clients; the bookmark maps carry positions now. */
+private fun isLegacyBookmarkKey(key: String): Boolean = key.startsWith("books/") && key.endsWith("/bookmark")
+
+/**
+ * Keys whose change calls for the full reconcile. Map keys, statistics and per-book bookmark
+ * keys each have their own exchange; letting their writes start full reconciles made two
+ * devices trigger each other's full passes for as long as someone was reading.
+ */
+internal fun isReconcileKey(key: String): Boolean =
+    !key.startsWith(SYNC_MAP_PREFIX) && !isStatisticsKey(key) && !isLegacyBookmarkKey(key)
 
 /** Tracks exact legacy-key mutations authored by one full reconcile. */
 private class HttpSyncWriteTrackingTransport(
@@ -113,7 +136,7 @@ private class HttpSyncWriteTrackingTransport(
     fun expectedLegacyEtags(after: Map<String, String>): Map<String, String> = synchronized(mutations) {
         after.toMutableMap().apply {
             for (mutation in mutations) {
-                if (mutation.key.startsWith(SYNC_MAP_PREFIX)) continue
+                if (!isReconcileKey(mutation.key)) continue
                 if (mutation.etag == null) remove(mutation.key) else this[mutation.key] = mutation.etag
             }
         }
@@ -138,14 +161,20 @@ class HttpSyncBatchState(
     private val json: Json = Json { ignoreUnknownKeys = true; encodeDefaults = true },
     private val installationId: String? = null,
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
+    /** The streak goal and day reset the statistics lane keeps equal on every device. */
+    statisticsPreferences: StatisticsPreferencesStore? = null,
 ) {
     internal val booksDirectory: java.io.File get() = bookRepository.booksDirectory
 
     private val revisionStore = HttpSyncRevisionStore(json)
     private val syncMutex = Mutex()
     private val metadataIndex = HttpSyncMetadataIndex(bookRepository.booksDirectory)
-    private val statisticsSync = HttpSyncStatisticsSync(bookRepository, bookLocks)
+    private val statisticsLane = HttpSyncStatisticsLane(bookRepository, bookLocks, statisticsPreferences)
+    private val statisticsMutex = Mutex()
     private val booksRoot: File get() = bookRepository.booksDirectory
+
+    /** How current other devices' reading history is here (see [HttpSyncStatisticsLane]). */
+    val statisticsStatus: StateFlow<StatisticsSyncStatus> get() = statisticsLane.status
     private val _remoteBookmarkUpdates = MutableSharedFlow<String>(extraBufferCapacity = 32)
     val remoteBookmarkUpdates: SharedFlow<String> = _remoteBookmarkUpdates.asSharedFlow()
 
@@ -210,8 +239,18 @@ class HttpSyncBatchState(
                 it.key == BOOKMARKS_MAP_KEY || it.key.startsWith(BOOKMARKS_MAP_PREFIX)
             }
             val legacyKeyEtags = listing.keys
-                .filterNot { it.key.startsWith(SYNC_MAP_PREFIX) }
+                .filter { isReconcileKey(it.key) }
                 .associate { it.key to it.etag }.toMutableMap()
+            // Reading statistics have their own lane, decided per key against this listing, so a
+            // statistics write never waits for (or starts) a full reconcile.
+            suspend fun statisticsNeeded(entries: List<BookEntry>?): Boolean = try {
+                statisticsLane.needsRun(transport, listing.keys, entries).also { if (!it) statisticsLane.markChecked() }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                statisticsLane.markFailed(error)
+                true
+            }
 
             // Old accounts have per-book keys but no maps. Never publish local state over them:
             // do the legacy bidirectional reconciliation once and then publishMaps().
@@ -219,6 +258,8 @@ class HttpSyncBatchState(
                 return@withLock HttpSyncMapChanges(
                     needsBootstrap = true,
                     observedLegacyEtags = legacyKeyEtags,
+                    statisticsNeeded = statisticsNeeded(entries = null),
+                    listing = listing.keys,
                 )
             }
 
@@ -230,15 +271,25 @@ class HttpSyncBatchState(
             val shardBodies = linkedMapOf<String, Map<String, HttpSyncBookmarkMapEntry>>()
             for (meta in bookmarkMetas) {
                 shardBodies[meta.key] = if (!before.initialized || before.bookmarkEtags[meta.key] != meta.etag) {
-                    decodeBookmarksMap(transport.get(meta.key))
+                    // One device's malformed or just-deleted shard must not stop every other
+                    // device's positions from applying: keep what was known of it and go on.
+                    try {
+                        decodeBookmarksMap(transport.get(meta.key))
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (_: HttpSyncException) {
+                        before.bookmarkShards[meta.key].orEmpty()
+                    }
                 } else {
                     before.bookmarkShards[meta.key].orEmpty()
                 }
             }
             val remoteBookmarks = mergeShards(shardBodies.values)
             val legacyFingerprint = legacyKeyEtags.toMap()
+            // Older builds acknowledged statistics and per-book bookmark keys too; they are not
+            // part of the comparison any more.
             val legacyChangedBeforeWrites = before.initialized &&
-                before.legacyEtags != legacyFingerprint
+                before.legacyEtags.filterKeys(::isReconcileKey) != legacyFingerprint
 
             val pendingSnapshot = synchronized(stateLock) { loadPendingLocked() }
             onProgress(HttpSyncProgress(messageResource = R.string.http_sync_reading_local))
@@ -259,7 +310,7 @@ class HttpSyncBatchState(
                     (owned[syncId] == null || compareBookmarkEntries(local, owned.getValue(syncId)) > 0)
                 ) owned[syncId] = local
             }
-            var uploaded = 0
+            var uploadedKeys = emptySet<String>()
             var ownEtag = bookmarkMetas.firstOrNull { it.key == deviceKey }?.etag
             if (owned != ownRemote) {
                 val body = json.encodeToString(
@@ -267,7 +318,7 @@ class HttpSyncBatchState(
                     owned.toSortedMap(),
                 ).toByteArray(Charsets.UTF_8)
                 ownEtag = transport.put(deviceKey, JSON_CONTENT_TYPE, body).etag
-                uploaded = pendingSnapshot.size
+                uploadedKeys = pendingSnapshot.mapTo(mutableSetOf()) { it.key }
                 shardBodies[deviceKey] = owned
             }
             // Remove only mutations captured by this pass. A page turn queued while the PUT was
@@ -307,72 +358,65 @@ class HttpSyncBatchState(
                 cachedLocalHashes.any { (id, sha) ->
                     !HttpSyncActiveBooks.contains(id) && remoteBooks[id] != sha
                 }
-            val statisticsChanged = localEntries.any { entry ->
-                val syncId = syncIdForMetadata(entry.metadata) ?: return@any false
-                statisticsSync.hasLocalChanges(
-                    entry.root, syncId,
-                    remoteReadingPresent = statisticsKey(syncId) in legacyKeyEtags,
-                    remoteMangaPresent = mangaStatisticsKey(syncId) in legacyKeyEtags,
-                )
-            }
-            val otherRemoteChanged = (before.legacyEtags.keys + legacyKeyEtags.keys).any { key ->
-                before.legacyEtags[key] != legacyKeyEtags[key] && !isStatisticsKey(key)
-            }
             HttpSyncMapChanges(
                 needsBootstrap = !before.initialized,
                 booksChanged = localBookMismatch,
-                otherChanged = legacyChangedBeforeWrites || statisticsChanged,
-                uploadedBookmarks = uploaded,
+                otherChanged = legacyChangedBeforeWrites,
+                uploadedBookmarks = uploadedKeys.size,
                 downloadedBookmarks = downloaded,
                 observedLegacyEtags = legacyKeyEtags,
-                statisticsOnly = before.initialized && !localBookMismatch && !otherRemoteChanged,
-                statisticsMetadata = listing.keys.filter { isStatisticsKey(it.key) }.associateBy { it.key },
+                statisticsNeeded = statisticsNeeded(localEntries),
+                listing = listing.keys,
+                uploadedBookmarkKeys = uploadedKeys,
             )
         }
     }
 
-    /** Reading history changes never require fetching every book's manifest/metadata first. */
-    internal suspend fun syncStatistics(
+    /**
+     * One pass of the statistics lane on [listing] (normally the listing [syncMaps] just took).
+     * Runs outside the map mutex, so a long first exchange never holds up page-turn uploads or a
+     * reader opening; passes queue behind each other. [flush] sends local days at once.
+     */
+    internal suspend fun runStatistics(
         transport: HttpSyncKvTransport,
-        changes: HttpSyncMapChanges,
-        onProgress: suspend (HttpSyncProgress) -> Unit,
-    ): HttpSyncResult = withContext(ioDispatcher) {
-        val entries = bookRepository.loadBookEntries()
-        var uploaded = 0
-        var downloaded = 0
-        val errors = mutableListOf<String>()
-        entries.forEachIndexed { index, entry ->
-            val syncId = syncIdForMetadata(entry.metadata) ?: return@forEachIndexed
-            onProgress(HttpSyncProgress(
-                messageResource = R.string.http_sync_reading_history,
-                detail = entry.metadata.title, completed = index, total = entries.size,
-            ))
-            val kinds = if (bookContentType(entry.root) == ContentType.Mokuro) StatisticsSyncKind.entries
-                else listOf(StatisticsSyncKind.Reading)
-            for (kind in kinds) {
-                try {
-                    val meta = changes.statisticsMetadata[kind.key(syncId)]
-                    val remote = meta?.let { StatisticsRemoteListing.Listed(it.size, it.lastModified, it.etag) }
-                        ?: StatisticsRemoteListing.Absent
-                    val result = statisticsSync.sync(transport, entry.root, syncId, kind, remote)
-                    if (result.uploaded) uploaded++
-                    if (result.downloaded) downloaded++
-                } catch (cancelled: CancellationException) {
-                    throw cancelled
-                } catch (error: Exception) {
-                    errors += "$syncId: ${error.message ?: error.javaClass.simpleName}"
-                }
+        listing: List<HttpSyncKvKeyMeta>,
+        flush: Boolean = false,
+    ): StatisticsLaneResult = withContext(ioDispatcher) {
+        statisticsMutex.withLock {
+            try {
+                statisticsLane.run(transport, listing, flush)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                statisticsLane.markFailed(error)
+                StatisticsLaneResult(errors = listOf("statistics: ${error.message ?: error.javaClass.simpleName}"))
             }
         }
-        HttpSyncResult(
-            uploadedBookmarks = 0, uploadedChatEntries = 0, uploadedMetadata = 0,
-            downloadedBookmarks = 0, downloadedChatEntries = 0, remoteOnlyBooks = 0,
-            uploadedStatistics = uploaded, downloadedStatistics = downloaded, errors = errors,
-        )
     }
 
-    private fun isStatisticsKey(key: String): Boolean = key.startsWith("books/") &&
-        (key.endsWith("/statistics") || key.endsWith("/manga_statistics"))
+    /** Lists the server and runs the statistics lane: leaving a reader, opening Statistics, the background flush. */
+    internal suspend fun syncStatisticsNow(transport: HttpSyncKvTransport, flush: Boolean = true): StatisticsLaneResult {
+        val listing = try {
+            withContext(ioDispatcher) { syncMutex.withLock { listAllMetadata(transport).keys } }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            statisticsLane.markFailed(error)
+            throw error
+        }
+        return runStatistics(transport, listing, flush)
+    }
+
+    /** Every installed book's reading position, to count the books a sync actually moved. */
+    internal suspend fun bookmarkPositions(): Map<String, Triple<Int, Double, Int>> = withContext(ioDispatcher) {
+        buildMap {
+            for (entry in bookRepository.loadBookEntries()) {
+                val syncId = syncIdForMetadata(entry.metadata) ?: continue
+                val bookmark = bookRepository.loadBookmark(entry.root) ?: continue
+                put(syncId, Triple(bookmark.chapterIndex, bookmark.progress, bookmark.characterCount))
+            }
+        }
+    }
 
     /** Publish maps only after the one-time/full book reconcile has succeeded. */
     internal suspend fun publishMaps(
@@ -445,7 +489,7 @@ class HttpSyncBatchState(
     internal suspend fun observeLegacyEtags(transport: HttpSyncKvTransport): Map<String, String> = withContext(ioDispatcher) {
         syncMutex.withLock {
             listAllMetadata(transport).keys
-                .filterNot { it.key.startsWith(SYNC_MAP_PREFIX) }
+                .filter { isReconcileKey(it.key) }
                 .associate { it.key to it.etag }
         }
     }
@@ -495,8 +539,14 @@ class HttpSyncBatchState(
                     ),
                 )
                 revisionStore.noteRemote(booksRoot, bookmarkKey(syncId), blob.rev, appliedLocally = true)
-                _remoteBookmarkUpdates.tryEmit(syncId)
-                applied += 1
+                // A newer stamp for the very same place only converges the stamps: the reader
+                // stays where it is and nothing was "downloaded".
+                val moved = current == null || current.chapterIndex != blob.chapterIndex ||
+                    current.progress != blob.progress || current.characterCount != blob.characterCount
+                if (moved) {
+                    _remoteBookmarkUpdates.tryEmit(syncId)
+                    applied += 1
+                }
             }
         }
         return applied
@@ -659,60 +709,68 @@ class HttpSyncFastSync(
         fullSync: suspend (HttpSyncSettings, HttpSyncKvTransport, suspend (HttpSyncProgress) -> Unit) -> HttpSyncResult,
     ): HttpSyncResult {
         val client = HttpSyncWriteTrackingTransport(transportFactory(settings))
+        // "N bookmarks down" means N books whose reading position this sync moved, however many
+        // passes touched them (the map preflight, the reconcile, the map publication).
+        val positionsBefore = state.bookmarkPositions()
         val maps = state.syncMaps(client, onProgress)
-        if (!maps.needsBootstrap && !maps.booksChanged && !maps.otherChanged) {
+        var uploadedKeys = maps.uploadedBookmarkKeys
+        // A tap sends this device's reading at once and takes every other device's, before and
+        // independently of any book transfer.
+        onProgress(HttpSyncProgress(messageResource = R.string.http_sync_reading_history))
+        val statistics = state.runStatistics(client, maps.listing, flush = true)
+        val result = if (!maps.needsBootstrap && !maps.booksChanged && !maps.otherChanged) {
             // Nothing left to download, so any remaining partial archive has no retry coming.
             HttpSyncDownloadSpool.pruneAfterSync(state.booksDirectory)
-            return emptyResult(
-                uploadedBookmarks = maps.uploadedBookmarks,
-                downloadedBookmarks = maps.downloadedBookmarks,
-            )
-        }
-
-        onProgress(HttpSyncProgress(messageResource = R.string.http_sync_waiting_for_sync))
-        // An existing flight may have snapshotted the server before this tap. Wait for it,
-        // then validate fresh state ourselves; joining an old result is not proof of sync.
-        val result = fullCycleRunner.run(onProgress, requireOwnPass = true) { report ->
-            val work = state.syncMaps(client, report)
-            if (!work.needsBootstrap && !work.booksChanged && !work.otherChanged) {
-                return@run emptyResult(work.uploadedBookmarks, work.downloadedBookmarks)
-            }
-            // A deferred payload can predate the old engine's incremental cursor.
-            val reconcileSettings = if (work.needsBootstrap || work.booksChanged) {
-                settings.copy(lastSyncedAt = null)
-            } else settings
-            val reconciled = if (work.statisticsOnly) state.syncStatistics(client, work, report)
-                else fullSync(reconcileSettings, client, report)
-            var publishedDownloads = 0
-            if (reconciled.errors.isEmpty()) {
-                report(HttpSyncProgress(messageResource = R.string.http_sync_finishing_maps))
-                val after = state.observeLegacyEtags(client)
-                val expected = client.expectedLegacyEtags(work.observedLegacyEtags)
-                if (after == expected) {
-                    publishedDownloads = state.publishMaps(client, expected).downloadedBookmarks
+            emptyResult()
+        } else {
+            onProgress(HttpSyncProgress(messageResource = R.string.http_sync_waiting_for_sync))
+            // An existing flight may have snapshotted the server before this tap. Wait for it,
+            // then validate fresh state ourselves; joining an old result is not proof of sync.
+            fullCycleRunner.run(onProgress, requireOwnPass = true) { report ->
+                val work = state.syncMaps(client, report)
+                uploadedKeys = uploadedKeys + work.uploadedBookmarkKeys
+                if (!work.needsBootstrap && !work.booksChanged && !work.otherChanged) {
+                    return@run emptyResult()
                 }
+                val reconciled = fullSync(work.reconcileSettings(settings), client, report)
+                if (reconciled.errors.isEmpty()) {
+                    report(HttpSyncProgress(messageResource = R.string.http_sync_finishing_maps))
+                    val after = state.observeLegacyEtags(client)
+                    val expected = client.expectedLegacyEtags(work.observedLegacyEtags)
+                    if (after == expected) state.publishMaps(client, expected)
+                }
+                reconciled
             }
-            reconciled.copy(
-                uploadedBookmarks = reconciled.uploadedBookmarks + work.uploadedBookmarks,
-                downloadedBookmarks = reconciled.downloadedBookmarks + work.downloadedBookmarks + publishedDownloads,
-            )
         }
+        val positionsAfter = state.bookmarkPositions()
         return result.copy(
-            uploadedBookmarks = result.uploadedBookmarks + maps.uploadedBookmarks,
-            downloadedBookmarks = result.downloadedBookmarks + maps.downloadedBookmarks,
+            uploadedBookmarks = uploadedKeys.size,
+            downloadedBookmarks = positionsAfter.count { (syncId, position) -> positionsBefore[syncId] != position },
+            uploadedStatistics = result.uploadedStatistics + statistics.uploadedBooks,
+            downloadedStatistics = result.downloadedStatistics + statistics.downloadedBooks,
+            errors = statistics.errors + result.errors,
         )
     }
 
-    private fun emptyResult(uploadedBookmarks: Int, downloadedBookmarks: Int) = HttpSyncResult(
-        uploadedBookmarks = uploadedBookmarks,
+    private fun emptyResult() = HttpSyncResult(
+        uploadedBookmarks = 0,
         uploadedChatEntries = 0,
         uploadedMetadata = 0,
-        downloadedBookmarks = downloadedBookmarks,
+        downloadedBookmarks = 0,
         downloadedChatEntries = 0,
         remoteOnlyBooks = 0,
         errors = emptyList(),
     )
 }
+
+/**
+ * The settings a full reconcile runs with: a deferred payload can predate the old engine's
+ * incremental cursor, and only an account's bootstrap still exchanges per-book bookmark keys.
+ */
+internal fun HttpSyncMapChanges.reconcileSettings(settings: HttpSyncSettings): HttpSyncSettings = settings.copy(
+    lastSyncedAt = if (needsBootstrap || booksChanged) null else settings.lastSyncedAt,
+    exchangeLegacyBookmarks = needsBootstrap,
+)
 
 /** Polls every five seconds; the durable outbox coalesces all intervening page turns. */
 class HttpSyncBookmarkScheduler(
@@ -721,13 +779,33 @@ class HttpSyncBookmarkScheduler(
     private val syncBooksNow: suspend (HttpSyncSettings, HttpSyncKvTransport, suspend (HttpSyncProgress) -> Unit) -> HttpSyncResult,
     private val fullCycleRunner: HttpSyncFullCycleRunner,
     private val scope: CoroutineScope,
+    private val transportFactory: (HttpSyncSettings) -> HttpSyncKvTransport = { settings ->
+        HttpSyncKvClient(settings.baseUrl, settings.bearerToken)
+    },
+    initiallyForeground: Boolean = true,
 ) {
     private val jobLock = Any()
     private var pollingJob: Job? = null
     private var mapFlight: Deferred<Unit>? = null
     private var backgroundFullJob: Job? = null
+    private var statisticsFlight: Job? = null
     private var fullRetryDeferredForReader = false
     private var fullRetryAfterMillis = 0L
+
+    /**
+     * Whether any of the app's screens is started. The five-second poll pauses in the background
+     * (a playing podcast keeps the process alive, not the need to poll); returning to the app
+     * polls at once, so another device's reading shows as soon as the app is looked at.
+     */
+    private val foreground = MutableStateFlow(initiallyForeground)
+
+    fun setForeground(visible: Boolean) {
+        if (foreground.value == visible) return
+        foreground.value = visible
+        // Arriving: pull now. Leaving: send what is queued (page turns, reading time) now.
+        refreshNow()
+        if (!visible) refreshStatistics()
+    }
 
     suspend fun onBookmarkChanged(bookRoot: File, title: String?, persistedSyncId: String? = null) {
         state.queueBookmark(bookRoot, title, persistedSyncId)
@@ -740,6 +818,7 @@ class HttpSyncBookmarkScheduler(
             runMaps()
             while (isActive) {
                 delay(BOOKMARK_SYNC_INTERVAL_MS)
+                foreground.first { it }
                 runMaps()
             }
         }
@@ -790,24 +869,64 @@ class HttpSyncBookmarkScheduler(
         flight.await()
     }
 
+    /**
+     * Sends this device's reading time at once and takes every other device's: leaving a
+     * reader, opening Statistics, the background flush worker. Null when sync is not set up.
+     */
+    suspend fun syncStatisticsNow(): StatisticsLaneResult? {
+        val settings = currentSettings() ?: return null
+        if (!settings.isConfigured) return null
+        return state.syncStatisticsNow(transportFactory(settings), flush = true)
+    }
+
+    /** [syncStatisticsNow] without waiting; a failure shows on the Statistics screen. */
+    fun refreshStatistics() {
+        scope.launch {
+            try {
+                syncStatisticsNow()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                // Recorded in HttpSyncBatchState.statisticsStatus.
+            }
+        }
+    }
+
     private suspend fun runMapsOnce() {
         val settings = currentSettings() ?: return
         if (!settings.isConfigured) return
-        val client = HttpSyncWriteTrackingTransport(
-            HttpSyncKvClient(settings.baseUrl, settings.bearerToken),
-        )
-        val changes = runCatching { state.syncMaps(client) }.getOrNull() ?: return
+        val client = HttpSyncWriteTrackingTransport(transportFactory(settings))
+        val changes = try {
+            state.syncMaps(client)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            // The bookmark maps could not be read. Reading statistics do not depend on them, so
+            // they still get their own pass (it lists the server again and reports a failure).
+            launchStatistics(client, listing = null)
+            return
+        }
+        if (changes.statisticsNeeded) launchStatistics(client, changes.listing)
         if (changes.needsBootstrap || changes.booksChanged || changes.otherChanged) {
-            val reconcileSettings = if (changes.needsBootstrap || changes.booksChanged) {
-                settings.copy(lastSyncedAt = null)
-            } else {
-                settings
-            }
-            scheduleFullReconcile(changes, reconcileSettings, client)
+            scheduleFullReconcile(changes, changes.reconcileSettings(settings), client)
         } else {
             synchronized(jobLock) {
                 fullRetryDeferredForReader = false
                 fullRetryAfterMillis = 0L
+            }
+        }
+    }
+
+    /** One statistics pass at a time, never queued behind book transfers or their retry pause. */
+    private fun launchStatistics(client: HttpSyncKvTransport, listing: List<HttpSyncKvKeyMeta>?) = synchronized(jobLock) {
+        if (statisticsFlight?.isActive == true) return
+        statisticsFlight = scope.launch {
+            try {
+                if (listing == null) state.syncStatisticsNow(client, flush = false) else state.runStatistics(client, listing)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                // Recorded in HttpSyncBatchState.statisticsStatus.
             }
         }
     }
@@ -823,9 +942,8 @@ class HttpSyncBookmarkScheduler(
 
         backgroundFullJob = scope.launch {
             val outcome = runCatching {
-                fullCycleRunner.run(statisticsOnly = changes.statisticsOnly) { report ->
-                    val result = if (changes.statisticsOnly) state.syncStatistics(client, changes, report)
-                        else syncBooksNow(settings, client, report)
+                fullCycleRunner.run { report ->
+                    val result = syncBooksNow(settings, client, report)
                     if (result.errors.isEmpty()) {
                         report(HttpSyncProgress(messageResource = R.string.http_sync_finishing_maps))
                         val after = state.observeLegacyEtags(client)

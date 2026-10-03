@@ -150,30 +150,52 @@ class HttpSyncBatchExchangeTest {
     }
 
     @Test
-    fun unchangedLegacyKeyIsAcknowledgedButOldClientEditTriggersReconcile() = runBlocking {
+    fun unchangedLegacyKeyIsAcknowledgedButAnotherDevicesMetadataEditTriggersReconcile() = runBlocking {
         val repository = BookRepository(temporaryFolder.newFolder())
         val state = HttpSyncBatchState(repository)
         val transport = CountingMapTransport()
         val root = createBook(repository, "Example", "example")
         repository.saveBookmark(root, Bookmark(0, 0.4, 40, 800_000_000.0))
+        transport.put(metadataKey("example"), "application/json; charset=utf-8", """{"title":"Example","contentType":"epub"}""".toByteArray())
+        val bootstrap = state.syncMaps(transport)
+        state.publishMaps(transport, bootstrap.observedLegacyEtags)
+        assertFalse(state.syncMaps(transport).otherChanged)
+
+        transport.put(metadataKey("example"), "application/json; charset=utf-8", """{"title":"Example","contentType":"epub","shelfName":"Done"}""".toByteArray())
+        assertTrue(state.syncMaps(transport).otherChanged)
+    }
+
+    @Test
+    fun perBookBookmarkAndStatisticsWritesNeverStartAFullReconcile() = runBlocking {
+        val repository = BookRepository(temporaryFolder.newFolder())
+        val state = HttpSyncBatchState(repository)
+        val transport = CountingMapTransport()
+        val root = createBook(repository, "Example", "example")
+        repository.saveBookmark(root, Bookmark(0, 0.4, 40, 800_000_000.0))
+        val bootstrap = state.syncMaps(transport)
+        state.publishMaps(transport, bootstrap.observedLegacyEtags)
+        assertFalse(state.syncMaps(transport).otherChanged)
+
+        // An older build's reconcile rewrites the per-book bookmark key; the maps carry positions.
         transport.put(
             bookmarkKey("example"),
             "application/json; charset=utf-8",
             json.encodeToString(
                 HttpSyncBookmarkBlob.serializer(),
-                HttpSyncBookmarkBlob(0, 0.4, 40, "2026-05-09T06:13:20Z", 0),
+                HttpSyncBookmarkBlob(0, 0.9, 90, "2026-08-26T12:30:00Z", 50),
             ).toByteArray(),
         )
-        val bootstrap = state.syncMaps(transport)
-        state.publishMaps(transport, bootstrap.observedLegacyEtags)
-        assertFalse(state.syncMaps(transport).otherChanged)
-
-        val oldClientEdit = json.encodeToString(
-            HttpSyncBookmarkBlob.serializer(),
-            HttpSyncBookmarkBlob(0, 0.9, 90, "2026-08-26T12:30:00Z", 50),
-        ).toByteArray()
-        transport.put(bookmarkKey("example"), "application/json; charset=utf-8", oldClientEdit)
-        assertTrue(state.syncMaps(transport).otherChanged)
+        // Another device's reading statistics have their own lane.
+        val history = ReadingStatistics("Example", "2026-09-29", readingTime = 600.0, deviceId = "tablet")
+        transport.put(statisticsKey("example"), "application/json", json.encodeToString(
+            HttpSyncStatisticsBlob.serializer(), HttpSyncStatisticsBlob(syncId = "example", entries = listOf(history)),
+        ).toByteArray())
+        val changes = state.syncMaps(transport)
+        assertFalse("per-book bookmark and statistics writes must not start full reconciles", changes.otherChanged)
+        assertTrue("the statistics lane picks the new reading up", changes.statisticsNeeded)
+        state.runStatistics(transport, changes.listing)
+        assertEquals(listOf(history), repository.loadStatistics(root))
+        assertFalse(state.syncMaps(transport).statisticsNeeded)
     }
 
     @Test
@@ -283,7 +305,7 @@ class HttpSyncBatchExchangeTest {
     }
 
     @Test(timeout = 5_000)
-    fun manualSyncRechecksStatisticsThatArrivedAfterTheJoinedBackgroundSnapshot() = runBlocking {
+    fun manualSyncTakesNewStatisticsWithoutWaitingForARunningBackgroundPass() = runBlocking {
         val server = CountingMapTransport()
         val repository = BookRepository(temporaryFolder.newFolder())
         val root = createBook(repository, "Book", "book")
@@ -292,7 +314,6 @@ class HttpSyncBatchExchangeTest {
         state.publishMaps(server)
         val runner = HttpSyncFullCycleRunner(this)
         val snapshotted = CompletableDeferred<Unit>()
-        val joined = CompletableDeferred<Unit>()
         val finishOldPass = CompletableDeferred<Unit>()
         val oldBackground = async {
             runner.run { report ->
@@ -310,20 +331,18 @@ class HttpSyncBatchExchangeTest {
         server.put(statisticsKey("book"), "application/json", json.encodeToString(
             HttpSyncStatisticsBlob.serializer(), HttpSyncStatisticsBlob(syncId = "book", entries = listOf(history)),
         ).toByteArray())
-        val manual = async {
-            HttpSyncFastSync(state, runner) { server }.syncNow(
-                HttpSyncSettings(baseUrl = "https://example.invalid", bearerToken = "test"),
-                onProgress = { if (it.message == "Old snapshot") joined.complete(Unit) },
-            ) { _, _, _ -> error("Only new reading history needs downloading") }
-        }
-        joined.await()
-        assertTrue(repository.loadStatistics(root).isEmpty())
+        // Reading history has its own lane: a long background pass (a book download) cannot
+        // hold it up, and an old snapshot cannot stand in for it.
+        val manual = HttpSyncFastSync(state, runner) { server }.syncNow(
+            HttpSyncSettings(baseUrl = "https://example.invalid", bearerToken = "test"),
+        ) { _, _, _ -> error("Only new reading history needs downloading") }
+        assertEquals(1, manual.downloadedStatistics)
+        assertEquals(listOf(history), repository.loadStatistics(root))
+        assertFalse("the background pass is still running", oldBackground.isCompleted)
         finishOldPass.complete(Unit)
         oldBackground.await()
-        assertEquals(1, manual.await().downloadedStatistics)
-        assertEquals(listOf(history), repository.loadStatistics(root))
+        Unit
     }
-
 
     @Test
     fun coldCacheNeverErasesItsExistingServerShard() = runBlocking {

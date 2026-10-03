@@ -172,11 +172,9 @@ class HttpSyncAutoPush(
 
     /**
      * Call after a bookmark-class edit made outside the reader (e.g. "Mark read" writing a
-     * fresh end-of-book bookmark). Routes through the exact same bump + fire-and-forget
-     * push path as the reader hooks: [HttpSyncPusher.pushBookmark] bumps the bookmark
-     * key's edit-depth rev (one edit batch = one bump) before the network round-trip, so
-     * the deliberate edit out-revisions stale remote bookmarks instead of relying on
-     * timestamps alone.
+     * fresh end-of-book bookmark). Queued like a page turn: the durable outbox bumps the
+     * bookmark's edit-depth rev and the next map exchange publishes it in this installation's
+     * bookmark shard.
      */
     suspend fun onBookmarkEdited(bookRoot: File, title: String?, persistedSyncId: String? = null) {
         queueBookmark(bookRoot, title, persistedSyncId)

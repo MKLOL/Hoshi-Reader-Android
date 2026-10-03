@@ -248,9 +248,9 @@ class SyncIntegrationTest(private val engineA: SyncEngine, private val engineB: 
         val rootA = a.book(SyncCorpus.MANGA_SYNC_ID).root
         val rootB = b.book(SyncCorpus.MANGA_SYNC_ID).root
 
-        // A marks progress outside the reader ("Mark read"): the direct-key push, no full sync.
-        a.repo.saveBookmark(rootA, SyncCorpus.bookmark(chapter = 5, appleSeconds = 800_000_100.0))
-        a.pusher.pushBookmark(rootA, SyncCorpus.MANGA_TITLE, a.settings)
+        // A marks progress outside the reader ("Mark read"): queued like a page turn into the
+        // bookmark map, the path every released build takes; no full sync.
+        a.turnPage(rootA, SyncCorpus.MANGA_TITLE, SyncCorpus.bookmark(chapter = 5, appleSeconds = 800_000_100.0))
         assertClean(b.sync())
         assertEquals(5, b.repo.loadBookmark(rootB)!!.chapterIndex)
 

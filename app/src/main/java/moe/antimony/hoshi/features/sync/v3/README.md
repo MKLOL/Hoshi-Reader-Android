@@ -1,8 +1,11 @@
 # `moe.antimony.hoshi.features.sync.v3`
 
-Next-generation HTTP sync engine. **Not hooked up** — production sync still runs
-through `..sync.http.HttpSyncReconciler`. v3 ships as parallel code with its own
-unit + instrumented tests until we deliberately flip the switch.
+The production full-reconcile engine: `HttpSyncSettings.useV3Sync` defaults to `true`, and
+`HttpSyncEngineDispatcher` runs this engine for every full reconcile. The older
+`..sync.http.HttpSyncReconciler` remains only as a device-local rollback path. Reading
+statistics are kept in line by `..sync.http.HttpSyncStatisticsLane` before and independently of
+a full reconcile; the engine's own statistics actions are a second, idempotent pass for books it
+just installed.
 
 For the design contract, see [`docs/SYNC_V3_SPEC.md`](../../../../../../../../../docs/SYNC_V3_SPEC.md).
 For the motivation, see [`docs/SYNC_REDESIGN.md`](../../../../../../../../../docs/SYNC_REDESIGN.md).
@@ -29,6 +32,6 @@ For the motivation, see [`docs/SYNC_REDESIGN.md`](../../../../../../../../../doc
 - exercises every code path under an in-process `StubKvServer` in instrumentation
   tests.
 
-The wire protocol (`docs/HTTP_SYNC_KV.md`) is unchanged. v3 reads and writes the
-same KV keys, same blob shapes, against the same v2 server. Migration is a single
-constructor swap in `HoshiAppContainer` when the user gives the word.
+The wire protocol is `docs/HTTP_SYNC_KV.md`. v3 reads and writes the same KV keys and blob
+shapes as v2, against the same server; per-book bookmark keys are only exchanged while
+bootstrapping an account without bookmark maps (`HttpSyncSettings.exchangeLegacyBookmarks`).

@@ -47,6 +47,14 @@ data class HttpSyncSettings(
      * and a TODO if/when we want page-turn pushes to honor the flag too.
      */
     val useV3Sync: Boolean = true,
+    /**
+     * Whether a full reconcile still reads and writes the per-book `books/{id}/bookmark` keys.
+     * Only the bootstrap of an account that has no bookmark maps yet needs them: afterwards the
+     * maps carry every position, and re-applying or re-writing the per-book keys only counted
+     * phantom bookmark downloads and made devices start full reconciles at each other.
+     * Decided per pass by the map preflight; never persisted.
+     */
+    val exchangeLegacyBookmarks: Boolean = true,
 ) {
     val isConfigured: Boolean
         get() = baseUrl.isNotBlank() && bearerToken.isNotBlank()

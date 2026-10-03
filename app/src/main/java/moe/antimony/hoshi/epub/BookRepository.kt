@@ -3,6 +3,7 @@ package moe.antimony.hoshi.epub
 import android.content.ContentResolver
 import android.net.Uri
 import androidx.documentfile.provider.DocumentFile
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -127,9 +128,19 @@ class BookRepository(
         bookRoot: File,
         releasePersistedSasayakiAudioUri: (String) -> Unit = {},
     ) {
-        val removedId = loadMetadata(bookRoot)?.id ?: bookRoot.name
+        val metadata = loadMetadata(bookRoot)
+        val removedId = metadata?.id ?: bookRoot.name
         loadSasayakiPlayback(bookRoot)?.audioUri?.let { uri ->
             runCatching { releasePersistedSasayakiAudioUri(uri) }
+        }
+        // The book goes, its reading history stays: Today, the streak and every total still
+        // count the days read in it, here and (through sync) on every other device. A failure
+        // to copy must not keep the user from deleting the book.
+        try {
+            keepStatisticsHistory(bookRoot, metadata)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
         }
         fileDataSource.deleteBook(bookRoot)
         statisticsChangeCounter.update { it + 1 }
@@ -290,6 +301,101 @@ class BookRepository(
     /** For paths that replace book directories wholesale (backup restore) and cannot go through a save. */
     fun notifyStatisticsChanged() {
         statisticsChangeCounter.update { it + 1 }
+    }
+
+    /** Where the [StatisticsHistoryEntry] folders live. */
+    val statisticsHistoryDirectory: File get() = booksDirectory.resolve(STATISTICS_HISTORY_DIRECTORY_NAME)
+
+    /** Every book whose reading history this install keeps without the book's folder. */
+    suspend fun loadStatisticsHistory(): List<StatisticsHistoryEntry> = withContext(ioDispatcher) {
+        statisticsHistoryDirectory.listFiles().orEmpty()
+            .filter { it.isDirectory && isUsableStatisticsHistoryName(it.name) }
+            .mapNotNull { root ->
+                val info = readStatisticsHistoryInfo(root) ?: return@mapNotNull null
+                StatisticsHistoryEntry(
+                    syncId = info.syncId,
+                    root = root,
+                    title = info.title?.takeIf { it.isNotBlank() } ?: info.syncId,
+                    contentType = info.contentType ?: ContentType.Epub,
+                )
+            }
+            .sortedBy { it.syncId }
+    }
+
+    /**
+     * The history folder of [syncId], created on first use; null for a name that is not a
+     * usable folder name. A [title] or [contentType] fills in one the folder does not know yet.
+     * A new folder starts from [seedExchangeState] (the deleted book's HTTP exchange state) or
+     * else an empty one: its presence means device-less days in the folder came from other
+     * installs, so they are never claimed as this device's own (see [legacyAttributed]).
+     */
+    suspend fun statisticsHistoryRoot(
+        syncId: String,
+        title: String? = null,
+        contentType: ContentType? = null,
+        seedExchangeState: File? = null,
+    ): File? = withContext(ioDispatcher) {
+        if (!isUsableStatisticsHistoryName(syncId)) return@withContext null
+        val root = statisticsHistoryDirectory.resolve(syncId)
+        bookLocks.withBookLock(root) {
+            val existing = readStatisticsHistoryInfo(root)
+            val info = StatisticsHistoryInfo(
+                syncId = syncId,
+                title = existing?.title?.takeIf { it.isNotBlank() } ?: title?.takeIf { it.isNotBlank() },
+                contentType = existing?.contentType ?: contentType,
+            )
+            val state = root.resolve(STATISTICS_SYNC_STATE_FILE_NAME)
+            if (!state.isFile) {
+                root.mkdirs()
+                val seed = seedExchangeState?.takeIf { it.isFile }?.let { runCatching { it.readText() }.getOrNull() }
+                writeSidecarAtomically(state, seed ?: "{}")
+            }
+            if (info != existing) writeStatisticsHistoryInfo(root, info)
+        }
+        root
+    }
+
+    /**
+     * Moves a history folder's days into [bookRoot] once that book is installed again, then
+     * removes the folder. The book's own pre-device days are claimed first and the book is
+     * marked as exchanged, so the device-less days of other installs that the history held are
+     * never claimed as this device's.
+     */
+    suspend fun absorbStatisticsHistory(history: StatisticsHistoryEntry, bookRoot: File) {
+        val reading = loadStatistics(history.root)
+        val mangaText = loadMangaTextStatistics(history.root)
+        loadStatistics(bookRoot)
+        loadMangaTextStatistics(bookRoot)
+        withContext(ioDispatcher) {
+            bookLocks.withBookLock(bookRoot) {
+                val state = bookRoot.resolve(STATISTICS_SYNC_STATE_FILE_NAME)
+                if (bookRoot.isDirectory && !state.isFile) writeSidecarAtomically(state, "{}")
+            }
+        }
+        if (reading.isNotEmpty()) saveStatistics(bookRoot, reading)
+        if (mangaText.isNotEmpty()) saveMangaTextStatistics(bookRoot, mangaText)
+        withContext(ioDispatcher) {
+            bookLocks.withBookLock(history.root) { history.root.deleteRecursively() }
+        }
+        statisticsChangeCounter.update { it + 1 }
+    }
+
+    /** Copies a book's statistics into its history folder before the book's folder is deleted. */
+    private suspend fun keepStatisticsHistory(bookRoot: File, metadata: BookMetadata?) {
+        if (!bookRoot.isDirectory) return
+        val syncId = metadata?.let(::syncIdForMetadata) ?: return
+        val contentType = bookContentType(bookRoot)
+        val reading = loadStatistics(bookRoot)
+        val mangaText = if (contentType == ContentType.Mokuro) loadMangaTextStatistics(bookRoot) else emptyList()
+        if (reading.isEmpty() && mangaText.isEmpty()) return
+        val history = statisticsHistoryRoot(
+            syncId = syncId,
+            title = metadata.displayTitle.takeIf { it.isNotBlank() },
+            contentType = contentType,
+            seedExchangeState = bookRoot.resolve(STATISTICS_SYNC_STATE_FILE_NAME),
+        ) ?: return
+        if (reading.isNotEmpty()) saveStatistics(history, reading)
+        if (mangaText.isNotEmpty()) saveMangaTextStatistics(history, mangaText)
     }
 
     /** The device new statistics entries of this install are attributed to, when known. */
