@@ -268,13 +268,18 @@ class HttpSyncStatisticsLane(
         val deviceId = ownDeviceId()
         val legacy = legacyKeys(listing)
         val roots = statisticsRoots(entries ?: bookRepository.loadBookEntries(), bookRepository.loadStatisticsHistory())
-        if (roots.absorb.isNotEmpty()) return true
+        if (roots.absorb.any { (history, _) -> !ownBlocked(absorbKey(history.syncId)) }) return true
         val localDue = flushDue()
+        val legacyDue = legacyDue()
         for (root in roots.all) {
             val remote = legacy[root.syncId]
             when (statisticsSync.pendingExchange(root.root, root.syncId, remote?.reading?.etag, remote?.manga?.etag)) {
                 StatisticsExchangeNeed.Remote -> if (remoteChanges(root, remote).any { !blocked(it) }) return true
-                StatisticsExchangeNeed.Local -> if (localDue && !ownBlocked(statisticsKey(root.syncId))) return true
+                // Local days wait for the per-book cadence, unless this device's shard has not
+                // seen them yet (then the shard cadence applies).
+                StatisticsExchangeNeed.Local -> if (!ownBlocked(statisticsKey(root.syncId)) &&
+                    (legacyDue || (localDue && ownEntriesStale(root)))
+                ) return true
                 StatisticsExchangeNeed.None -> Unit
             }
         }
@@ -311,7 +316,7 @@ class HttpSyncStatisticsLane(
         val downloaded = mutableSetOf<String>()
         val uploaded = mutableSetOf<String>()
         val localDue = flush || !index.bootstrapped || flushDue()
-        val legacyDue = flush || !index.bootstrapped || now() - lastLegacyPushAtMillis >= LEGACY_PUSH_INTERVAL_MS
+        val legacyDue = flush || !index.bootstrapped || legacyDue()
         var pushedLocal = false
         var pushedLegacy = false
         fun skipped(meta: HttpSyncKvKeyMeta?) = !retryFailed && blocked(meta)
@@ -321,12 +326,14 @@ class HttpSyncStatisticsLane(
         var roots = statisticsRoots(entries, bookRepository.loadStatisticsHistory())
         // A book installed again takes back the history kept while it was gone.
         for ((history, root) in roots.absorb) {
+            if (skippedOwn(absorbKey(history.syncId))) continue
             try {
                 bookRepository.absorbStatisticsHistory(history, root)
+                failures.remove(absorbKey(history.syncId))
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
-                fail(history.syncId, null, errors, error)
+                fail(absorbKey(history.syncId), null, errors, error)
             }
         }
         if (roots.absorb.isNotEmpty()) {
@@ -377,7 +384,10 @@ class HttpSyncStatisticsLane(
                     if (merge(root, reading, mangaText)) downloaded += syncId
                 }
                 index = if (own) {
-                    index.copy(published = index.published + (meta.key to fetched.etag))
+                    index.copy(
+                        published = index.published + (meta.key to fetched.etag),
+                        publishedSha = index.publishedSha + (meta.key to sha256(fetched.body)),
+                    )
                 } else {
                     index.copy(applied = index.applied + (meta.key to fetched.etag))
                 }
@@ -471,9 +481,10 @@ class HttpSyncStatisticsLane(
                     index = index.copy(published = index.published + (key to onServer.etag), publishedSha = index.publishedSha + (key to sha))
                     continue
                 }
-                // A server copy this install has not merged yet is never overwritten unread.
-                val unmerged = onServer != null && index.published[key] != onServer.etag
-                if (unmerged || !localDue || skippedOwn(key)) {
+                // A server copy this install has not merged yet is never overwritten unread; its
+                // listing brings the pass back once it can be read.
+                if (onServer != null && index.published[key] != onServer.etag) continue
+                if (!localDue || skippedOwn(key)) {
                     pending = true
                     continue
                 }
@@ -503,6 +514,7 @@ class HttpSyncStatisticsLane(
                 publishedSha = index.publishedSha.filterKeys(::keep),
                 ownPending = pending,
             )
+            if (!pending) failures.remove(OWN_SHARDS)
         }
 
         // 4. The streak goal and day reset: the newest choice of any device applies everywhere.
@@ -544,6 +556,17 @@ class HttpSyncStatisticsLane(
 
     private fun flushDue(): Boolean = now() - lastLocalPushAtMillis >= localPushIntervalMs
 
+    private fun legacyDue(): Boolean = now() - lastLegacyPushAtMillis >= LEGACY_PUSH_INTERVAL_MS
+
+    /** Whether [root]'s files changed since this device's shards were last built from them. */
+    private fun ownEntriesStale(root: StatisticsRoot): Boolean =
+        ownEntriesCache[root.root.absolutePath]?.stamp != ownFilesStamp(root.root)
+
+    private fun ownFilesStamp(root: File): List<Long> =
+        listOf("statistics.json", "manga_statistics.json").map { root.resolve(it) }.flatMap { listOf(it.lastModified(), it.length()) }
+
+    private fun absorbKey(syncId: String) = "absorb:$syncId"
+
     /** A remote key that failed with this very content is not fetched again before its pause ends. */
     private fun blocked(meta: HttpSyncKvKeyMeta?): Boolean {
         meta ?: return false
@@ -567,9 +590,8 @@ class HttpSyncStatisticsLane(
         is StatisticsSkippedException -> null
         is StatisticsDataException -> StatisticsSyncProblem.Unreadable
         is HttpSyncException -> when {
-            error.httpCode != null -> StatisticsSyncProblem.Server
-            error.message.orEmpty().contains("malformed", ignoreCase = true) ||
-                error.message.orEmpty().contains("unsupported version", ignoreCase = true) -> StatisticsSyncProblem.Unreadable
+            error.httpCode != null || HTTP_STATUS.containsMatchIn(error.message.orEmpty()) -> StatisticsSyncProblem.Server
+            error.message.orEmpty().contains("malformed", ignoreCase = true) -> StatisticsSyncProblem.Unreadable
             else -> StatisticsSyncProblem.Offline
         }
         is java.io.IOException -> StatisticsSyncProblem.Offline
@@ -715,9 +737,8 @@ class HttpSyncStatisticsLane(
     }
 
     private suspend fun ownEntries(root: StatisticsRoot, deviceId: String): OwnEntriesSnapshot {
-        val files = listOf("statistics.json", "manga_statistics.json").map { root.root.resolve(it) }
         // Stamped before reading: a save landing during the read is read again next time.
-        val stamp = files.flatMap { listOf(it.lastModified(), it.length()) }
+        val stamp = ownFilesStamp(root.root)
         val path = root.root.absolutePath
         ownEntriesCache[path]?.takeIf { it.stamp == stamp }?.let { return it }
         val reading = bookRepository.loadStatistics(root.root)
@@ -795,6 +816,7 @@ class HttpSyncStatisticsLane(
                     preferences = index.preferences + (meta.key to value),
                     applied = if (own) index.applied else index.applied + (meta.key to fetched.etag),
                     published = if (own) index.published + (meta.key to fetched.etag) else index.published,
+                    publishedSha = if (own) index.publishedSha + (meta.key to sha256(fetched.body)) else index.publishedSha,
                 )
                 failures.remove(meta.key)
             } catch (cancelled: CancellationException) {
@@ -908,5 +930,8 @@ class HttpSyncStatisticsLane(
 
         /** Failure slot for "some own month could not be published". */
         private const val OWN_SHARDS = "own-shards"
+
+        /** How the sync client words an answer with an HTTP error status. */
+        private val HTTP_STATUS = Regex("HTTP \\d{3}")
     }
 }

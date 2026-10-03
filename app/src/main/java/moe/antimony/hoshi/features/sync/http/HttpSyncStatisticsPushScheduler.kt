@@ -27,6 +27,8 @@ class HttpSyncStatisticsPushScheduler(
     private val clock: () -> Long = System::currentTimeMillis,
     /** Told on every [flushNow], to queue work that delivers the session even if the app is stopped first. */
     private val onFlush: () -> Unit = {},
+    /** What a [flushNow] push runs; [push] when not given. */
+    private val flushPush: (suspend (bookRoot: File, title: String, settings: HttpSyncSettings, persistedSyncId: String?) -> Unit)? = null,
 ) {
     private val lock = Any()
     private val pending = mutableMapOf<String, Job>()
@@ -36,19 +38,19 @@ class HttpSyncStatisticsPushScheduler(
 
     /** A statistics sidecar of [bookRoot] was written. */
     fun onStatisticsChanged(bookRoot: File, title: String, persistedSyncId: String?) {
-        schedule(bookRoot, title, persistedSyncId, delayMs)
+        schedule(bookRoot, title, persistedSyncId, delayMs, flush = false)
     }
 
     /** The reader is being left: push soon, after its final local saves have landed. */
     fun flushNow(bookRoot: File, title: String, persistedSyncId: String?) {
-        schedule(bookRoot, title, persistedSyncId, flushDelayMs)
+        schedule(bookRoot, title, persistedSyncId, flushDelayMs, flush = true)
         onFlush()
     }
 
     /** True while a push is scheduled or running for [bookRoot]. */
     fun isPending(bookRoot: File): Boolean = synchronized(lock) { pending.containsKey(bookRoot.absolutePath) }
 
-    private fun schedule(bookRoot: File, title: String, persistedSyncId: String?, delay: Long) {
+    private fun schedule(bookRoot: File, title: String, persistedSyncId: String?, delay: Long, flush: Boolean) {
         val id = bookRoot.absolutePath
         val scheduled = synchronized(lock) {
             val now = clock()
@@ -64,7 +66,7 @@ class HttpSyncStatisticsPushScheduler(
             dueAtMs[id] = due
             scope.launch(start = CoroutineStart.LAZY) {
                 if (delay > 0) delay(delay)
-                pushNow(bookRoot, title, persistedSyncId)
+                pushNow(bookRoot, title, persistedSyncId, flush)
             }.also { job ->
                 pending[id] = job
                 // Completion also runs if cancellation prevents the coroutine from starting
@@ -83,12 +85,12 @@ class HttpSyncStatisticsPushScheduler(
         scheduled.start()
     }
 
-    private suspend fun pushNow(bookRoot: File, title: String, persistedSyncId: String?) {
+    private suspend fun pushNow(bookRoot: File, title: String, persistedSyncId: String?, flush: Boolean) {
         if (synchronized(lock) { clock() < suppressUntilMs }) return
         try {
             val settings = currentSettings() ?: return
             if (!settings.isConfigured) return
-            push(bookRoot, title, settings, persistedSyncId)
+            (if (flush) flushPush ?: push else push)(bookRoot, title, settings, persistedSyncId)
             synchronized(lock) {
                 consecutiveFailures = 0
                 suppressUntilMs = 0L

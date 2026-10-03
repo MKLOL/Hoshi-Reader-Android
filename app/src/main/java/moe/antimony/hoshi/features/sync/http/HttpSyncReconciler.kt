@@ -728,7 +728,11 @@ class HttpSyncReconciler(
                         }
                     BookKeyKind.Statistics, BookKeyKind.MangaStatistics -> {
                         val kind = if (parsed.kind == BookKeyKind.Statistics) StatisticsSyncKind.Reading else StatisticsSyncKind.MangaText
-                        val outcome = statisticsSync.sync(transport, root, parsed.syncId, kind, StatisticsRemoteListing.Listed(meta.size, meta.lastModified, meta.etag))
+                        val outcome = try {
+                            statisticsSync.sync(transport, root, parsed.syncId, kind, StatisticsRemoteListing.Listed(meta.size, meta.lastModified, meta.etag))
+                        } catch (_: StatisticsSkippedException) {
+                            StatisticsSyncOutcome.NONE
+                        }
                         if (outcome.downloaded) downloadedStatistics += 1
                         if (outcome.uploaded) uploadedStatisticsWhilePulling += 1
                     }
@@ -1489,7 +1493,11 @@ class HttpSyncReconciler(
             if (!book.root.isDirectory || !File(book.root, "metadata.json").isFile) continue
             try {
                 for (kind in StatisticsSyncKind.entries) {
-                    val outcome = statisticsSync.sync(transport, book.root, book.syncId, kind, StatisticsRemoteListing.Unknown)
+                    val outcome = try {
+                        statisticsSync.sync(transport, book.root, book.syncId, kind, StatisticsRemoteListing.Unknown)
+                    } catch (_: StatisticsSkippedException) {
+                        StatisticsSyncOutcome.NONE
+                    }
                     if (outcome.uploaded) uploadedStatistics += 1
                     if (outcome.downloaded) downloadedStatistics += 1
                 }

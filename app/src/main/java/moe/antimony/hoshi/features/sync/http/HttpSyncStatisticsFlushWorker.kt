@@ -22,10 +22,10 @@ class HttpSyncStatisticsFlushWorker(context: Context, params: WorkerParameters) 
     override suspend fun doWork(): Result {
         val container = (applicationContext as? HoshiApplication)?.appContainer ?: return Result.success()
         return try {
-            // Per-key problems retry with their own pauses on later passes; only a pass that
-            // could not reach the server at all is worth WorkManager's retry.
-            container.httpSyncBookmarkScheduler.flushInBackground()
-            Result.success()
+            // Anything left unsent (a failed write, a queued position) is tried again later,
+            // a bounded number of times, while the app may not be opened for hours.
+            val result = container.httpSyncBookmarkScheduler.flushInBackground()
+            if (result == null || result.errors.isEmpty() || runAttemptCount >= MAX_ATTEMPTS) Result.success() else Result.retry()
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (_: Exception) {

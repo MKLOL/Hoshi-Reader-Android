@@ -299,7 +299,12 @@ class V3Executor(
                             action.remoteSize == null -> StatisticsRemoteListing.Unknown
                             else -> StatisticsRemoteListing.Listed(action.remoteSize, action.remoteLastModified, action.remoteEtag)
                         }
-                        val outcome = statisticsSync.sync(transport, targetRoot, action.syncId, action.kind, listing)
+                        // A newer version's body or a key gone since the listing: skipped, not an error.
+                        val outcome = try {
+                            statisticsSync.sync(transport, targetRoot, action.syncId, action.kind, listing)
+                        } catch (_: moe.antimony.hoshi.features.sync.http.StatisticsSkippedException) {
+                            moe.antimony.hoshi.features.sync.http.StatisticsSyncOutcome.NONE
+                        }
                         if (outcome.downloaded) appliedStatistics += 1
                         if (outcome.uploaded) pushedStatistics += 1
                     }

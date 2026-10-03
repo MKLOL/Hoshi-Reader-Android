@@ -267,7 +267,7 @@ class HttpSyncStatisticsSync(
                     decode = { body ->
                         val blob = json.decodeFromString(HttpSyncStatisticsBlob.serializer(), body)
                         if (blob.version > HttpSyncStatisticsBlob.SUPPORTED_VERSION) {
-                            throw HttpSyncException("Statistics at $key: unsupported version ${blob.version}.")
+                            throw StatisticsSkippedException("Statistics at $key: written by a newer version (${blob.version}).")
                         }
                         blob.entries
                     },
@@ -288,7 +288,7 @@ class HttpSyncStatisticsSync(
                     decode = { body ->
                         val blob = json.decodeFromString(HttpSyncMangaStatisticsBlob.serializer(), body)
                         if (blob.version > HttpSyncMangaStatisticsBlob.SUPPORTED_VERSION) {
-                            throw HttpSyncException("Manga statistics at $key: unsupported version ${blob.version}.")
+                            throw StatisticsSkippedException("Manga statistics at $key: written by a newer version (${blob.version}).")
                         }
                         blob.entries
                     },
@@ -368,6 +368,8 @@ class HttpSyncStatisticsSync(
         val remoteEntries = try {
             merge(decode(fetched.body.toString(Charsets.UTF_8))).sortedBy(entryKey)
         } catch (error: HttpSyncException) {
+            throw error
+        } catch (error: StatisticsSkippedException) {
             throw error
         } catch (error: Exception) {
             throw HttpSyncException("Statistics at $key: malformed JSON (${error.message ?: error.javaClass.simpleName})")

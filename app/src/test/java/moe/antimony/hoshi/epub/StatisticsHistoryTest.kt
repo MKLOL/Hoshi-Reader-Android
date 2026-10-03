@@ -186,18 +186,37 @@ class StatisticsHistoryTest {
     }
 
     @Test
-    fun aDeletedBookRemembersWhereItsReaderStopped() = runBlocking {
+    fun aDeletedBookRemembersHowMuchOfItWasRead() = runBlocking {
         val repository = repository()
-        val root = book(repository, "book", "Book")
-        repository.saveStatistics(root, listOf(day("2026-10-01", 600.0, phone)))
-        repository.saveBookmark(root, Bookmark(chapterIndex = 9, progress = 1.0, characterCount = 100, lastModified = 1.0))
-        repository.deleteBook(root)
+        // Read to the very end.
+        val finished = book(repository, "finished", "Finished")
+        repository.saveStatistics(finished, listOf(day("2026-10-01", 600.0, phone)))
+        repository.saveBookInfo(finished, BookInfo(characterCount = 1_000, chapterInfo = emptyMap()))
+        repository.saveBookmark(finished, Bookmark(chapterIndex = 9, progress = 1.0, characterCount = 1_000, lastModified = 1.0))
+        // The end of chapter 3 of 10: the bookmark's progress is within the chapter.
+        val partway = book(repository, "partway", "Partway")
+        repository.saveStatistics(partway, listOf(day("2026-10-01", 300.0, phone)))
+        repository.saveBookInfo(partway, BookInfo(characterCount = 1_000, chapterInfo = emptyMap()))
+        repository.saveBookmark(partway, Bookmark(chapterIndex = 2, progress = 1.0, characterCount = 300, lastModified = 1.0))
+        repository.deleteBook(finished)
+        repository.deleteBook(partway)
 
-        val overview = loadReadingStatisticsOverview(repository, "2026-10-01", streakResetHour = 0)
-        val book = overview.books.single()
-        assertFalse(book.onDevice)
-        assertTrue(book.progressKnown)
-        assertTrue(book.finished)
+        val books = loadReadingStatisticsOverview(repository, "2026-10-01", streakResetHour = 0).books.associateBy { it.title }
+        assertFalse(books.getValue("Finished").onDevice)
+        assertTrue(books.getValue("Finished").finished)
+        assertTrue(books.getValue("Partway").progressKnown)
+        assertEquals(0.3, books.getValue("Partway").progress, 1e-9)
+        assertFalse(books.getValue("Partway").finished)
+    }
+
+    @Test
+    fun aBookThisInstallNeverHadShowsNoPosition() = runBlocking {
+        val repository = repository()
+        val history = repository.statisticsHistoryRoot("elsewhere", "Elsewhere", ContentType.Epub)!!
+        repository.saveStatistics(history, listOf(day("2026-10-01", 600.0, tablet)))
+        val book = loadReadingStatisticsOverview(repository, "2026-10-01", streakResetHour = 0).books.single()
+        assertFalse(book.progressKnown)
+        assertFalse(book.finished)
     }
 
     @Test

@@ -132,8 +132,9 @@ class HttpSyncStatisticsSyncTest {
         try {
             sync.sync(transport, root, syncId, StatisticsSyncKind.Reading, StatisticsRemoteListing.Listed(2))
             fail("unsupported version must be rejected")
-        } catch (expected: HttpSyncException) {
-            assertTrue(expected.message.orEmpty().contains("unsupported version"))
+        } catch (expected: StatisticsSkippedException) {
+            // A newer version's body is skipped (quietly, by every caller), never merged.
+            assertTrue(expected.message.orEmpty().contains("newer version"))
         }
         assertEquals(local, repository.loadStatistics(root))
         assertFalse(root.resolve(STATISTICS_SYNC_STATE_FILENAME).exists())

@@ -345,6 +345,27 @@ class HttpSyncBatchExchangeTest {
     }
 
     @Test
+    fun thisInstallsOwnBookmarkShardDeletedOnTheServerIsPublishedAgainNotABlockingError() = runBlocking {
+        val repository = BookRepository(temporaryFolder.newFolder())
+        val installation = "11111111-1111-1111-1111-111111111111"
+        val state = HttpSyncBatchState(repository, installationId = installation)
+        val root = createBook(repository, "Example", "example")
+        repository.saveBookmark(root, Bookmark(0, 0.6, 60, 800_000_000.0))
+        val server = ContentAddressedKv()
+        state.publishMaps(server)
+        val ownShard = "sync/maps/bookmarks/$installation.json"
+        // Deleted on the server; a stale listing still shows it.
+        server.delete(ownShard)
+        server.listGhost(ownShard)
+        repository.saveBookmark(root, Bookmark(0, 0.7, 70, 800_000_100.0))
+        state.queueBookmark(root, "Example", "example")
+
+        state.syncMaps(server)
+
+        assertTrue(server.body(ownShard).toString(Charsets.UTF_8).contains("\"progress\":0.7"))
+    }
+
+    @Test
     fun coldCacheNeverErasesItsExistingServerShard() = runBlocking {
         val files = temporaryFolder.newFolder()
         val repository = BookRepository(files)

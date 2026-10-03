@@ -277,7 +277,9 @@ class HttpSyncBatchState(
                     // changes), so it cannot stop every other device's positions from applying.
                     val fetched = transport.get(meta.key)
                     try {
-                        decodeBookmarksMap(fetched)
+                        // This installation's own shard deleted on the server: its owned
+                        // positions are merged below and published again.
+                        if (fetched == null && meta.key == ownShardKey) emptyMap() else decodeBookmarksMap(fetched)
                     } catch (error: HttpSyncException) {
                         if (meta.key == ownShardKey) throw error
                         before.bookmarkShards[meta.key].orEmpty()
@@ -402,7 +404,12 @@ class HttpSyncBatchState(
      * Lists the server and runs the statistics lane: leaving a reader, opening Statistics, the
      * background flush ([flush]), or a poll whose bookmark maps failed (only when it has work).
      */
-    internal suspend fun syncStatisticsNow(transport: HttpSyncKvTransport, flush: Boolean = true): StatisticsLaneResult {
+    internal suspend fun syncStatisticsNow(
+        transport: HttpSyncKvTransport,
+        flush: Boolean = true,
+        retryFailed: Boolean = false,
+        onlyIfNeeded: Boolean = false,
+    ): StatisticsLaneResult {
         val listing = try {
             withContext(ioDispatcher) { syncMutex.withLock { listAllMetadata(transport).keys } }
         } catch (cancelled: CancellationException) {
@@ -411,11 +418,11 @@ class HttpSyncBatchState(
             statisticsLane.markFailed(error)
             throw error
         }
-        if (!flush && !withContext(ioDispatcher) { statisticsLane.needsRun(transport, listing) }) {
+        if (onlyIfNeeded && !withContext(ioDispatcher) { statisticsLane.needsRun(transport, listing) }) {
             statisticsLane.markChecked()
             return StatisticsLaneResult.NONE
         }
-        return runStatistics(transport, listing, flush)
+        return runStatistics(transport, listing, flush, retryFailed)
     }
 
     /** Whether page turns are queued for this installation's bookmark shard. */
@@ -826,7 +833,19 @@ class HttpSyncBookmarkScheduler(
         start()
         // The poll waits while the app is not visible; a position saved just after leaving it
         // (a debounced page turn, audio still playing) goes up now instead of at the next visit.
-        if (!foreground.value) refreshNow()
+        if (!foreground.value) publishInBackground()
+    }
+
+    /**
+     * Publishes queued positions while no screen is visible: a pass already running may have
+     * taken its snapshot before this page turn, so a second pass follows when one is left. No
+     * full reconcile starts from here; the process may be frozen at any moment.
+     */
+    private fun publishInBackground() {
+        scope.launch {
+            runMaps(allowFullReconcile = false)
+            if (state.hasPendingBookmarks()) runMaps(allowFullReconcile = false)
+        }
     }
 
     fun start() = synchronized(jobLock) {
@@ -873,10 +892,10 @@ class HttpSyncBookmarkScheduler(
 
     fun flushNow() = refreshNow()
 
-    private suspend fun runMaps() {
+    private suspend fun runMaps(allowFullReconcile: Boolean = true) {
         val flight = synchronized(jobLock) {
             mapFlight?.takeIf { it.isActive } ?: scope.async {
-                runMapsOnce()
+                runMapsOnce(allowFullReconcile)
             }.also { created ->
                 mapFlight = created
                 created.invokeOnCompletion {
@@ -890,13 +909,14 @@ class HttpSyncBookmarkScheduler(
     }
 
     /**
-     * Sends this device's reading time at once and takes every other device's: leaving a
-     * reader, opening Statistics, the background flush worker. Null when sync is not set up.
+     * Exchanges reading statistics with every other device. [flush] sends local days at once
+     * (leaving a reader, opening Statistics); without it local days follow their batching
+     * cadence (the reader's periodic push). Null when sync is not set up.
      */
-    suspend fun syncStatisticsNow(): StatisticsLaneResult? {
+    suspend fun syncStatisticsNow(flush: Boolean = true): StatisticsLaneResult? {
         val settings = currentSettings() ?: return null
         if (!settings.isConfigured) return null
-        return state.syncStatisticsNow(transportFactory(settings), flush = true)
+        return state.syncStatisticsNow(transportFactory(settings), flush = flush)
     }
 
     /**
@@ -907,8 +927,16 @@ class HttpSyncBookmarkScheduler(
         val settings = currentSettings() ?: return null
         if (!settings.isConfigured) return null
         val client = transportFactory(settings)
-        if (state.hasPendingBookmarks()) state.syncMaps(client)
-        return state.syncStatisticsNow(client, flush = true)
+        // Positions failing to go up must not keep the reading time from going up.
+        val bookmarks = runCatching { if (state.hasPendingBookmarks()) state.syncMaps(client) }.exceptionOrNull()
+        if (bookmarks is CancellationException) throw bookmarks
+        // This device's own writes are retried at once: the in-app flush may have just failed.
+        val statistics = state.syncStatisticsNow(client, flush = true, retryFailed = true)
+        return if (bookmarks != null || state.hasPendingBookmarks()) {
+            statistics.copy(errors = statistics.errors + "bookmarks: ${bookmarks?.message ?: "still queued"}")
+        } else {
+            statistics
+        }
     }
 
     /** [syncStatisticsNow] without waiting; a failure shows on the Statistics screen. */
@@ -924,7 +952,7 @@ class HttpSyncBookmarkScheduler(
         }
     }
 
-    private suspend fun runMapsOnce() {
+    private suspend fun runMapsOnce(allowFullReconcile: Boolean = true) {
         val settings = currentSettings() ?: return
         if (!settings.isConfigured) return
         val client = HttpSyncWriteTrackingTransport(transportFactory(settings))
@@ -939,6 +967,7 @@ class HttpSyncBookmarkScheduler(
             return
         }
         if (changes.statisticsNeeded) launchStatistics(client, changes.listing)
+        if (!allowFullReconcile) return
         if (changes.needsBootstrap || changes.booksChanged || changes.otherChanged) {
             scheduleFullReconcile(changes, changes.reconcileSettings(settings), client)
         } else {
@@ -954,7 +983,7 @@ class HttpSyncBookmarkScheduler(
         if (statisticsFlight?.isActive == true) return
         statisticsFlight = scope.launch {
             try {
-                if (listing == null) state.syncStatisticsNow(client, flush = false) else state.runStatistics(client, listing)
+                if (listing == null) state.syncStatisticsNow(client, flush = false, onlyIfNeeded = true) else state.runStatistics(client, listing)
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Exception) {

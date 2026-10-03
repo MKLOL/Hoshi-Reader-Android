@@ -212,4 +212,24 @@ class HttpSyncStatisticsPushSchedulerTest {
         runCurrent()
         assertTrue(pushed)
     }
+
+    @Test
+    fun leavingTheReaderFlushesWhileReadingPushesFollowTheirCadence() = runTest {
+        val calls = mutableListOf<String>()
+        val scheduler = HttpSyncStatisticsPushScheduler(
+            scope = backgroundScope,
+            currentSettings = { configured },
+            push = { _, _, _, _ -> calls += "batched" },
+            flushDelayMs = 0,
+            delayMs = 1_000,
+            clock = { testScheduler.currentTime },
+            flushPush = { _, _, _, _ -> calls += "flush" },
+        )
+        scheduler.onStatisticsChanged(root, "A", "a")
+        advanceTimeBy(1_001)
+        runCurrent()
+        scheduler.flushNow(root, "A", "a")
+        runCurrent()
+        assertEquals(listOf("batched", "flush"), calls)
+    }
 }

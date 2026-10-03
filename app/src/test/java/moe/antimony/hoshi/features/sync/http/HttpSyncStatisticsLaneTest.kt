@@ -381,6 +381,68 @@ class HttpSyncStatisticsLaneTest {
     }
 
     @Test
+    fun whileReadingThePerBookKeyFollowsItsOwnSlowerCadenceWithoutIdlePasses() = runBlocking {
+        val repository = repository()
+        val root = book(repository, "book")
+        repository.saveStatistics(root, listOf(day("2026-10-01", 60.0, phone)))
+        val server = ContentAddressedKv()
+        val lane = lane(repository)
+        lane.run(server, server.listing(), flush = true)
+
+        // Thirty-five seconds of reading later: the shard goes up, the per-book key waits.
+        nowMs += 35_000
+        repository.saveStatistics(root, listOf(day("2026-10-01", 95.0, phone, modified = 2)))
+        assertTrue(lane.needsRun(server, server.listing()))
+        server.resetCounts()
+        lane.run(server, server.listing())
+        assertEquals(listOf(statisticsShardKey("phone", "2026-10")), server.putKeys)
+        // Nothing new: no pass every five seconds while the per-book key waits its turn.
+        nowMs += 35_000
+        assertFalse(lane.needsRun(server, server.listing()))
+        nowMs += HttpSyncStatisticsLane.LEGACY_PUSH_INTERVAL_MS
+        assertTrue(lane.needsRun(server, server.listing()))
+        server.resetCounts()
+        lane.run(server, server.listing())
+        assertEquals(listOf(statisticsKey("book")), server.putKeys)
+    }
+
+    @Test
+    fun aDamagedCopyOfThisDevicesMonthDoesNotMakeEveryPollRunThePass() = runBlocking {
+        val server = ContentAddressedKv()
+        server.put(statisticsShardKey("phone", "2026-09"), "application/json", "{ damaged".toByteArray())
+        val repository = repository()
+        val root = book(repository, "book")
+        repository.saveStatistics(root, listOf(day("2026-09-21", 300.0, phone)))
+        val lane = lane(repository)
+        lane.run(server, server.listing(), flush = true)
+
+        // Retried on a doubling pause (30 s, then 60 s, ...), never on every five-second poll.
+        nowMs += 10_000
+        assertFalse(lane.needsRun(server, server.listing()))
+        nowMs += 20_000
+        assertTrue(lane.needsRun(server, server.listing()))
+        lane.run(server, server.listing())
+        nowMs += 40_000
+        assertFalse(lane.needsRun(server, server.listing()))
+    }
+
+    @Test
+    fun anAnswerWithAnHttpErrorIsAServerProblemNotAMissingConnection() = runBlocking {
+        val repository = repository()
+        val root = book(repository, "book")
+        repository.saveStatistics(root, listOf(day("2026-10-01", 600.0, phone)))
+        val server = ContentAddressedKv()
+        val failing = object : HttpSyncKvTransport by server {
+            override suspend fun put(key: String, contentType: String, body: ByteArray): HttpSyncKvWriteResponse =
+                throw HttpSyncException("Server is having trouble (HTTP 503). Try again in a moment.")
+        }
+        lane(repository).let { lane ->
+            lane.run(failing, server.listing(), flush = true)
+            assertEquals(StatisticsSyncProblem.Server, lane.status.value.problem)
+        }
+    }
+
+    @Test
     fun laneKeysParseOnlyWhatTheLaneWrites() {
         assertEquals(StatisticsLaneKey.Shard("phone", "2026-10"), parseStatisticsLaneKey("sync/maps/stats/phone/2026-10.json"))
         assertEquals(StatisticsLaneKey.Preferences("phone"), parseStatisticsLaneKey("sync/maps/stats/phone/settings.json"))

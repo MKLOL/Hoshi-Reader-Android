@@ -275,8 +275,10 @@ internal class HoshiAppContainer(context: Context) {
         HttpSyncStatisticsPushScheduler(
             scope = appScope,
             currentSettings = { httpSyncSettingsRepository.settings.first() },
-            // The statistics lane sends every book's unsent days and takes other devices' too.
-            push = { _, _, _, _ -> httpSyncBookmarkScheduler.syncStatisticsNow() },
+            // The statistics lane sends every book's unsent days and takes other devices' too:
+            // while reading on its batching cadence, at once when the reader is left.
+            push = { _, _, _, _ -> httpSyncBookmarkScheduler.syncStatisticsNow(flush = false) },
+            flushPush = { _, _, _, _ -> httpSyncBookmarkScheduler.syncStatisticsNow(flush = true) },
             onFlush = {
                 appScope.launch {
                     if (httpSyncSettingsRepository.settings.first().isConfigured) HttpSyncStatisticsFlushWorker.enqueue(appContext)
