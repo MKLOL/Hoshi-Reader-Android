@@ -34,6 +34,11 @@ import org.junit.rules.TemporaryFolder
 import moe.antimony.hoshi.features.reader.ReaderSettings
 import moe.antimony.hoshi.features.statistics.statisticsZone
 import moe.antimony.hoshi.features.statistics.streakDate
+import moe.antimony.hoshi.features.usage.UsageEventType
+import moe.antimony.hoshi.features.usage.UsageLog
+import moe.antimony.hoshi.features.usage.loadUsageStatistics
+import kotlinx.coroutines.asCoroutineDispatcher
+import java.util.concurrent.Executors
 import java.io.File
 import java.time.LocalDate
 import java.time.LocalDateTime
@@ -68,11 +73,44 @@ class CrossDeviceReadingHistoryTest {
         identity: DeviceIdentity,
         preferences: StatisticsPreferencesStore? = null,
         decorate: (HttpSyncKvTransport) -> HttpSyncKvTransport = { it },
+        usageLog: UsageLog? = null,
     ): SyncDevice = SyncDevice(
         identity.id, SyncEngine.V3, directories.getOrPut(identity.id) { temp.newFolder(identity.id) }, server,
         installationId = identity.id, deviceIdentity = identity, decorateTransport = decorate,
-        statisticsPreferences = preferences,
+        statisticsPreferences = preferences, usageLog = usageLog,
     ).also { devices += it }
+
+    @Test(timeout = 60_000)
+    fun lookupsAndBubblesFromEveryDeviceShowOnEveryDevice() = runBlocking {
+        val newYork = ZoneId.of("America/New_York")
+        fun log(name: String) = UsageLog(temp.newFolder("usage-$name"), zone = { newYork }, dispatcher = Executors.newSingleThreadExecutor().asCoroutineDispatcher())
+        val phoneLog = log("phone")
+        val tabletLog = log("tablet")
+        val phone = device(PHONE, usageLog = phoneLog)
+        val tablet = device(TABLET, usageLog = tabletLog)
+        fun event(log: UsageLog, type: UsageEventType, at: String, term: String? = null) =
+            log.newEvent(type).copy(at = LocalDateTime.parse(at).atZone(newYork).toInstant().toEpochMilli(), session = log.hashCode().toString(), term = term, outcome = term?.let { "found" })
+        phoneLog.append(event(phoneLog, UsageEventType.WordLookedUp, "2026-10-03T21:00", "天気"))
+        tabletLog.append(event(tabletLog, UsageEventType.WordLookedUp, "2026-10-03T22:00", "天気"))
+        tabletLog.append(event(tabletLog, UsageEventType.BubbleRevealed, "2026-10-03T22:01"))
+        tabletLog.append(event(tabletLog, UsageEventType.BubbleTranslated, "2026-10-03T22:02"))
+        phoneLog.eventsOn(LocalDate.parse("2026-10-03"))
+        tabletLog.eventsOn(LocalDate.parse("2026-10-03"))
+
+        // Leaving the reader / opening Statistics: each sends its own day and takes the other's.
+        phone.pushReaderStatistics()
+        tablet.pushReaderStatistics()
+        phone.pushReaderStatistics()
+
+        for (log in listOf(phoneLog, tabletLog)) {
+            val usage = loadUsageStatistics(log, LocalDate.parse("2026-10-03"), historyDays = 1, zone = newYork, resetHour = 3)
+            assertEquals(2, usage.today.wordLookups)
+            assertEquals(1, usage.today.bubblesRevealed)
+            assertEquals(1, usage.today.bubbleTranslations)
+        }
+        val usageKeys = server.client().list(prefix = "sync/maps/usage/").keys.map { it.key }.toSet()
+        assertEquals(setOf("sync/maps/usage/phone/2026-10-03.ndjson.gz", "sync/maps/usage/tablet/2026-10-03.ndjson.gz"), usageKeys)
+    }
 
     /** A phone whose book downloads keep failing: the book never gets installed there. */
     private val noBookDownloads: (HttpSyncKvTransport) -> HttpSyncKvTransport = { real ->

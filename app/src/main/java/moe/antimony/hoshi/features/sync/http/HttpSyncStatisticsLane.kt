@@ -185,6 +185,8 @@ class HttpSyncStatisticsLane(
     private val preferencesStore: StatisticsPreferencesStore? = null,
     private val now: () -> Long = System::currentTimeMillis,
     private val localPushIntervalMs: Long = LOCAL_PUSH_INTERVAL_MS,
+    /** Every device's usage log (lookups, bubbles, reading spans), exchanged in the same passes. */
+    private val usageLane: HttpSyncUsageLane? = null,
 ) {
     private val statisticsSync = HttpSyncStatisticsSync(bookRepository, bookLocks)
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
@@ -303,6 +305,7 @@ class HttpSyncStatisticsLane(
             if (known != meta.etag && !blocked(meta)) return true
         }
         if (index.published.keys.any { it !in listed && !ownBlocked(it) }) return true
+        if (deviceId != null && usageLane?.needsRun(transport, listing, deviceId) == true) return true
         return preferencesDirty(index, deviceId, listing)
     }
 
@@ -529,6 +532,17 @@ class HttpSyncStatisticsLane(
         // 4. The streak goal, day reset and zone: the newest choice of any device applies everywhere.
         if (deviceId != null && preferencesStore != null) {
             index = syncPreferences(transport, listing, index, deviceId, errors, retryFailed)
+        }
+
+        // 5. Every device's usage log: lookups, bubbles, translations and reading spans.
+        if (deviceId != null && usageLane != null) {
+            try {
+                errors += usageLane.run(transport, listing, deviceId, flush = flush || !index.bootstrapped, retryFailed = retryFailed)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                errors += "usage: ${error.message ?: error.javaClass.simpleName}"
+            }
         }
 
         if (pushedLocal) lastLocalPushAtMillis = now()

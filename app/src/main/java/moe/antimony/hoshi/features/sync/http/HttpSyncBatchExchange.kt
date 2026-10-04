@@ -163,13 +163,17 @@ class HttpSyncBatchState(
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
     /** The streak goal and day reset the statistics lane keeps equal on every device. */
     statisticsPreferences: StatisticsPreferencesStore? = null,
+    /** This device's usage log, exchanged with every other device's alongside the statistics. */
+    usageLog: moe.antimony.hoshi.features.usage.UsageLog? = null,
 ) {
     internal val booksDirectory: java.io.File get() = bookRepository.booksDirectory
 
     private val revisionStore = HttpSyncRevisionStore(json)
     private val syncMutex = Mutex()
     private val metadataIndex = HttpSyncMetadataIndex(bookRepository.booksDirectory)
-    private val statisticsLane = HttpSyncStatisticsLane(bookRepository, bookLocks, statisticsPreferences)
+    private val statisticsLane = HttpSyncStatisticsLane(
+        bookRepository, bookLocks, statisticsPreferences, usageLane = usageLog?.let { HttpSyncUsageLane(it) },
+    )
     private val statisticsMutex = Mutex()
     private val booksRoot: File get() = bookRepository.booksDirectory
 

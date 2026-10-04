@@ -5,6 +5,6 @@
     <exclude domain="sharedpref" path="google-drive-device-code-auth.xml" />
     <exclude domain="sharedpref" path="podcast-access.xml" />
     <exclude domain="sharedpref" path="podcast-positions.xml" />
-    <!-- The local usage log holds looked-up words and bubble text; it stays on this device. -->
+    <!-- The usage log holds looked-up words and bubble text; only HTTP sync (to the user's own server) carries it. -->
     <exclude domain="file" path="usage-log/" />
 </full-backup-content>

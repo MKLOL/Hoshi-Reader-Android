@@ -123,6 +123,8 @@ fun StatisticsScreen(
         )
     }
     LaunchedEffect(usageVersion, resumeCount, today, resetHour, zone) {
+        // Other devices' days arrive in bursts too.
+        if (usage != null) delay(RELOAD_COALESCE_MS)
         usage = loadUsageStatistics(
             appContainer.usageLog, today, historyDays = TrendRange.Quarter.days, zone = zone, resetHour = resetHour,
         )

@@ -43,19 +43,17 @@ suspend fun loadUsageStatistics(
     log: UsageLog,
     today: LocalDate,
     historyDays: Int,
-    /** The zone reading days are counted in; the log's files are this device's calendar days. */
+    /** The zone reading days are counted in; each device's files are named by its own calendar days. */
     zone: ZoneId = ZoneId.systemDefault(),
     averageWindow: Int = 3,
     resetHour: Int = 0,
 ): UsageStatistics = withContext(Dispatchers.Default) {
     val reset = resetHour.coerceIn(0, 23)
-    val firstLoggedDate = log.dayFiles().firstNotNullOfOrNull { file ->
-        runCatching { LocalDate.parse(file.name.substringBefore('.')) }.getOrNull()
-    }
-    // The reading day the first file's first moment belongs to.
-    val firstDay = firstLoggedDate?.let { first ->
-        streakDate(Instant.ofEpochMilli(log.startOf(first)).atZone(zone), reset)
-    }
+    val firstLoggedAt = log.firstLoggedAt()
+    // The reading day logging began on.
+    val firstDay = firstLoggedAt?.let { streakDate(Instant.ofEpochMilli(it).atZone(zone), reset) }
+    // Cached only if no day file changed while this load read them.
+    val generation = log.cacheGeneration
     val days = mutableMapOf<LocalDate, UsageDayCounts>()
     var todaySummary: UsageDaySummary? = null
     var date = today.minusDays(historyDays + averageWindow - 2L)
@@ -67,7 +65,8 @@ suspend fun loadUsageStatistics(
         val cached = if (date < today) log.finishedDayCounts[key] else null
         val counts = cached ?: run {
             // The calendar files holding this reading day's instants, and one more on each side
-            // for files written while this device was set to another zone.
+            // for files named by another zone's calendar (another device's, or this one's before
+            // it changed zone).
             val start = date.atTime(reset, 0).atZone(zone).toInstant().toEpochMilli()
             val end = date.plusDays(1).atTime(reset, 0).atZone(zone).toInstant().toEpochMilli()
             var file = log.dateOf(start).minusDays(1)
@@ -80,7 +79,7 @@ suspend fun loadUsageStatistics(
             files.keys.removeAll { it < log.dateOf(start).minusDays(1) }
             val summary = summarizeUsageDay(events, date, zone, resetHour = reset)
             if (date == today) todaySummary = summary
-            summary.toCounts().also { if (date < today) log.finishedDayCounts[key] = it }
+            summary.toCounts().also { if (date < today && log.cacheGeneration == generation) log.finishedDayCounts[key] = it }
         }
         if (!counts.isEmpty) days[date] = counts
         date = date.plusDays(1)

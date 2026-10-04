@@ -181,6 +181,7 @@ internal class HoshiAppContainer(context: Context) {
         bookLocks = httpSyncBookLocks,
         installationId = installationId,
         statisticsPreferences = statisticsPreferencesStore,
+        usageLog = usageLog,
     )
     val httpSyncFullCycleRunner: HttpSyncFullCycleRunner = HttpSyncFullCycleRunner(appScope)
     val httpSyncFastSync: HttpSyncFastSync = HttpSyncFastSync(

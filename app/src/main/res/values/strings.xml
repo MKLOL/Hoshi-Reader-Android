@@ -273,7 +273,7 @@
     <string name="statistics_today_title">Today</string>
     <string name="statistics_today_date_active_format">%1$s · Active %2$s–%3$s</string>
     <string name="statistics_today_timeline_description_format">Reading timeline from %1$s to %2$s</string>
-    <string name="statistics_today_device_note">Lookups, bubbles and the timeline count this device only.</string>
+    <string name="statistics_today_device_note">Lookups, bubbles and the timeline include your other devices once they sync over HTTP.</string>
     <string name="statistics_today_reading_time">Reading time</string>
     <string name="statistics_today_characters_format">%1$s characters read</string>
     <string name="statistics_today_words">Words looked up</string>
@@ -295,12 +295,12 @@
     <string name="statistics_trend_reading_time">Reading time</string>
     <string name="statistics_trend_characters">Characters read</string>
     <string name="statistics_trend_lookups">Words looked up</string>
-    <string name="statistics_trend_lookups_since_format">Recorded on this device since %1$s</string>
+    <string name="statistics_trend_lookups_since_format">Recorded since %1$s</string>
     <string name="statistics_tab_overview">Overview</string>
     <string name="statistics_trend_lookups_per_bubble">Words looked up per bubble</string>
     <string name="statistics_trend_translations">Translations pressed</string>
     <string name="statistics_trend_translations_per_bubble">Translations pressed per bubble</string>
-    <string name="statistics_trend_per_bubble_since_format">Per revealed manga bubble, on this device since %1$s</string>
+    <string name="statistics_trend_per_bubble_since_format">Per revealed manga bubble, since %1$s</string>
     <string name="statistics_trend_legend_daily">Daily</string>
     <string name="statistics_trend_legend_average">3-day average</string>
     <string name="statistics_trend_readout_format">%1$s · %2$s · 3-day average %3$s</string>
@@ -474,7 +474,7 @@
     <string name="advanced_ttu_sync">ッツ Sync</string>
     <string name="advanced_http_sync">HTTP Sync</string>
     <string name="advanced_http_sync_subtitle">Sync books, reading progress, shelves, and reader data to your own server</string>
-    <string name="http_sync_description">Sync book content, reading progress, shelves, and manga chat history to your own server over HTTPS. Sync may also download validated offline translations for EPUB sentences and manga bubbles.</string>
+    <string name="http_sync_description">Sync book content, reading progress, shelves, reading statistics, your usage log (lookups and manga bubbles) and manga chat history to your own server over HTTPS. Sync may also download validated offline translations for EPUB sentences and manga bubbles.</string>
     <string name="audio_sources">Sources</string>
     <string name="audio_add_source">Add Source</string>
     <string name="audio_name">Name</string>

@@ -75,6 +75,8 @@ class SyncDevice(
     decorateTransport: (HttpSyncKvTransport) -> HttpSyncKvTransport = { it },
     /** The streak goal and day reset this install keeps, as the app's settings store would. */
     statisticsPreferences: StatisticsPreferencesStore? = null,
+    /** This install's usage log, exchanged with the other devices' like the app's. */
+    val usageLog: moe.antimony.hoshi.features.usage.UsageLog? = null,
 ) : AutoCloseable {
     private val bookLocks = HttpSyncBookLocks()
     val repo = BookRepository(filesDir, bookLocks = bookLocks, deviceIdentity = deviceIdentity)
@@ -129,6 +131,7 @@ class SyncDevice(
         bookLocks = bookLocks,
         installationId = installationId,
         statisticsPreferences = statisticsPreferences,
+        usageLog = usageLog,
     )
     private val fastSync = HttpSyncFastSync(
         state = batchState,

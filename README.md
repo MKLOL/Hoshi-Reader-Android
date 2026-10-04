@@ -113,10 +113,11 @@ ChatGPT history, and settings **locally in app storage**. No telemetry, no analy
   [docs/HTTP_SYNC_KV.md](docs/HTTP_SYNC_KV.md).
 - **Update checks** read GitHub release metadata from `api.github.com` (with optional
   mirrors); no other network traffic happens by default.
-- **Reading statistics and the usage log** stay in app storage. The usage log (a
-  timestamped record of reading sessions, page turns, looked-up words and manga bubble
-  actions, which powers Statistics → Today and Trends) is never uploaded and is excluded
-  from Android backups; per-book reading statistics sync only when you turn on sync.
+- **Reading statistics and the usage log** stay in app storage unless you set up HTTP
+  sync. The usage log (a timestamped record of reading sessions, page turns, looked-up
+  words and manga bubble actions, which powers Statistics → Today and Trends) is excluded
+  from Android backups; with HTTP sync, each device sends its own reading statistics and
+  usage log to your server so Statistics counts every device.
 
 ## License
 
