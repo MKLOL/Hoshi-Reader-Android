@@ -2,6 +2,8 @@ package moe.antimony.hoshi.features.usage
 
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import moe.antimony.hoshi.features.statistics.streakDate
+import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
 
@@ -17,6 +19,9 @@ data class UsageDayCounts(
     val isEmpty: Boolean
         get() = wordLookups == 0 && bubblesRevealed == 0 && bubbleTranslations == 0 && screenshotTranslations == 0
 }
+
+/** A finished reading day's place in [UsageLog.finishedDayCounts]. */
+internal data class UsageDayKey(val date: LocalDate, val resetHour: Int, val zoneId: String)
 
 /** What the Statistics screen shows from the usage log. */
 data class UsageStatistics(
@@ -38,6 +43,7 @@ suspend fun loadUsageStatistics(
     log: UsageLog,
     today: LocalDate,
     historyDays: Int,
+    /** The zone reading days are counted in; the log's files are this device's calendar days. */
     zone: ZoneId = ZoneId.systemDefault(),
     averageWindow: Int = 3,
     resetHour: Int = 0,
@@ -46,25 +52,36 @@ suspend fun loadUsageStatistics(
     val firstLoggedDate = log.dayFiles().firstNotNullOfOrNull { file ->
         runCatching { LocalDate.parse(file.name.substringBefore('.')) }.getOrNull()
     }
-    // The first file's early morning belongs to the reading day before it.
-    val firstDay = firstLoggedDate?.let { if (reset > 0) it.minusDays(1) else it }
+    // The reading day the first file's first moment belongs to.
+    val firstDay = firstLoggedDate?.let { first ->
+        streakDate(Instant.ofEpochMilli(log.startOf(first)).atZone(zone), reset)
+    }
     val days = mutableMapOf<LocalDate, UsageDayCounts>()
     var todaySummary: UsageDaySummary? = null
     var date = today.minusDays(historyDays + averageWindow - 2L)
     if (firstDay != null && date < firstDay) date = firstDay
-    // Each calendar file is read once even though two reading days share it.
-    var events: List<UsageEvent>? = null
+    // Each calendar file is read once even though neighbouring reading days share it.
+    val files = mutableMapOf<LocalDate, List<UsageEvent>>()
     while (!date.isAfter(today)) {
-        val cached = if (date < today) log.finishedDayCounts[date to reset] else null
+        val key = UsageDayKey(date, reset, zone.id)
+        val cached = if (date < today) log.finishedDayCounts[key] else null
         val counts = cached ?: run {
-            val own = events ?: log.eventsOn(date)
-            val next = if (reset > 0) log.eventsOn(date.plusDays(1)) else emptyList()
-            events = next.takeIf { reset > 0 }
-            val summary = summarizeUsageDay(own + next, date, zone, resetHour = reset)
+            // The calendar files holding this reading day's instants, and one more on each side
+            // for files written while this device was set to another zone.
+            val start = date.atTime(reset, 0).atZone(zone).toInstant().toEpochMilli()
+            val end = date.plusDays(1).atTime(reset, 0).atZone(zone).toInstant().toEpochMilli()
+            var file = log.dateOf(start).minusDays(1)
+            val last = log.dateOf(end - 1).plusDays(1)
+            val events = mutableListOf<UsageEvent>()
+            while (!file.isAfter(last)) {
+                events += files.getOrPut(file) { log.eventsOn(file) }
+                file = file.plusDays(1)
+            }
+            files.keys.removeAll { it < log.dateOf(start).minusDays(1) }
+            val summary = summarizeUsageDay(events, date, zone, resetHour = reset)
             if (date == today) todaySummary = summary
-            summary.toCounts().also { if (date < today) log.finishedDayCounts[date to reset] = it }
+            summary.toCounts().also { if (date < today) log.finishedDayCounts[key] = it }
         }
-        if (cached != null) events = null
         if (!counts.isEmpty) days[date] = counts
         date = date.plusDays(1)
     }

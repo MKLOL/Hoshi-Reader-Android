@@ -11,4 +11,7 @@ data class DeviceIdentity(
 )
 
 /** Key that tells one device's entry for a day from another's; entries without a device share one bucket. */
-internal fun dayDeviceKey(dateKey: String, deviceId: String?): String = dateKey + "\u0000" + deviceId.orEmpty()
+internal fun dayDeviceKey(dateKey: String, deviceId: String?): String = dateKey + DAY_DEVICE_SEPARATOR + deviceId.orEmpty()
+
+/** Between the date and the device in a [dayDeviceKey]. */
+internal const val DAY_DEVICE_SEPARATOR: Char = '\u0000'

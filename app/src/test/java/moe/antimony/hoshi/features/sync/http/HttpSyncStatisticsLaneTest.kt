@@ -9,6 +9,7 @@ import moe.antimony.hoshi.epub.DeviceIdentity
 import moe.antimony.hoshi.epub.ReadingStatistics
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -233,6 +234,80 @@ class HttpSyncStatisticsLaneTest {
             HttpSyncStatisticsPreferences.serializer(), server.body(statisticsPreferencesKey("phone")).toString(Charsets.UTF_8),
         )
         assertEquals(HttpSyncStatisticsPreferences(streakMinimumMinutes = 40, dayResetHour = 2, updatedAt = 900), own)
+        assertFalse(lane.needsRun(server, server.listing()))
+    }
+
+    @Test
+    fun aChosenZoneReachesEveryDeviceAndOlderBuildsKeepIt() = runBlocking {
+        val server = ContentAddressedKv()
+        val phoneStore = MemoryPreferences(StatisticsPreferences(10, 3, 0))
+        val tabletStore = MemoryPreferences(StatisticsPreferences(10, 3, 0))
+        val phoneLane = lane(repository(phone), phoneStore)
+        val tabletLane = lane(repository(tablet), tabletStore)
+        phoneLane.run(server, server.listing())
+        tabletLane.run(server, server.listing())
+        assertNull("Eastern Time until chosen; nothing to publish", tabletStore.value.timeZone)
+        assertFalse(server.keys().any { it.endsWith("settings.json") })
+
+        // Moving to Romania: chosen on the phone, applied on the tablet.
+        phoneStore.value = StatisticsPreferences(10, 3, 900, "Europe/Bucharest")
+        phoneLane.run(server, server.listing())
+        assertTrue(tabletLane.needsRun(server, server.listing()))
+        tabletLane.run(server, server.listing())
+        assertEquals(StatisticsPreferences(10, 3, 900, "Europe/Bucharest"), tabletStore.value)
+
+        // A newer goal from a build that does not sync the zone keeps the chosen zone.
+        server.put(statisticsPreferencesKey("old-build"), "application/json", """{"version":1,"streakMinimumMinutes":20,"dayResetHour":3,"updatedAt":1000}""".toByteArray())
+        tabletLane.run(server, server.listing())
+        assertEquals(StatisticsPreferences(20, 3, 1000, "Europe/Bucharest"), tabletStore.value)
+    }
+
+    @Test
+    fun aChoiceRepublishedWithoutItsZoneByAnOlderBuildNeverUndoesIt() = runBlocking {
+        val server = ContentAddressedKv()
+        suspend fun put(device: String, body: String) = server.put(statisticsPreferencesKey(device), "application/json", body.toByteArray())
+        // "aaa" chose Shanghai at 900; "zzz" (larger id) still ran 0.12.2, applied the choice
+        // without the zone it did not know and republished it with the same stamp.
+        put("aaa", """{"version":1,"streakMinimumMinutes":10,"dayResetHour":3,"updatedAt":900,"timeZone":"Asia/Shanghai"}""")
+        put("zzz", """{"version":1,"streakMinimumMinutes":10,"dayResetHour":3,"updatedAt":900}""")
+        val updated = MemoryPreferences(StatisticsPreferences(10, 3, 900))
+        val laneOfUpdated = HttpSyncStatisticsLane(
+            BookRepository(temporaryFolder.newFolder(), deviceIdentity = DeviceIdentity("zzz", "Z")), HttpSyncBookLocks(), updated, now = { nowMs },
+        )
+
+        laneOfUpdated.run(server, server.listing())
+
+        assertEquals(StatisticsPreferences(10, 3, 900, "Asia/Shanghai"), updated.value)
+        val republished = json.decodeFromString(
+            HttpSyncStatisticsPreferences.serializer(), server.body(statisticsPreferencesKey("zzz")).toString(Charsets.UTF_8),
+        )
+        assertEquals("Asia/Shanghai", republished.timeZone)
+        assertFalse(laneOfUpdated.needsRun(server, server.listing()))
+    }
+
+    @Test
+    fun settingsCachedByABuildThatDroppedTheZoneAreFetchedAgainOnce() = runBlocking {
+        val server = ContentAddressedKv()
+        val repository = repository()
+        val store = MemoryPreferences(StatisticsPreferences(10, 3, 0))
+        // The phone chose Bucharest while this device still ran 0.12.2, which cached the
+        // settings without the zone field it did not know and marked them as merged.
+        server.put(statisticsPreferencesKey("other"), "application/json", json.encodeToString(
+            HttpSyncStatisticsPreferences.serializer(),
+            HttpSyncStatisticsPreferences(streakMinimumMinutes = 10, dayResetHour = 3, updatedAt = 900, timeZone = "Europe/Bucharest"),
+        ).toByteArray())
+        val etag = server.listing().single().etag
+        repository.booksDirectory.mkdirs()
+        repository.booksDirectory.resolve(".http_sync_statistics_lane.json").writeText(
+            """{"scope":"","applied":{"${statisticsPreferencesKey("other")}":"$etag"},""" +
+                """"preferences":{"${statisticsPreferencesKey("other")}":{"version":1,"streakMinimumMinutes":10,"dayResetHour":3,"updatedAt":900}},""" +
+                """"bootstrapped":true}""",
+        )
+        val lane = lane(repository, store)
+
+        assertTrue(lane.needsRun(server, server.listing()))
+        lane.run(server, server.listing())
+        assertEquals(StatisticsPreferences(10, 3, 900, "Europe/Bucharest"), store.value)
         assertFalse(lane.needsRun(server, server.listing()))
     }
 

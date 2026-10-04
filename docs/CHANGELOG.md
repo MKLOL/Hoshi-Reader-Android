@@ -7,6 +7,9 @@ Semantic Versioning.
 
 ## [Unreleased]
 
+### Fixed
+- **Every device counts the same days, whatever time zone it is set to.** A device left on another zone (for example a tablet on China time, 12 hours from New York, which a clock without AM/PM hides) recorded reading after midnight as noon, so another device counted it as today and both broke the streak. Statistics days are now Eastern Time days on every device, wherever you read, including reading recorded before this update; each day's characters follow the device that read them. The zone can be changed in the streak settings (to a device's own zone) and syncs like the goal and reset.
+
 ## [v0.12.2] - 2026-10-03
 
 ### Added

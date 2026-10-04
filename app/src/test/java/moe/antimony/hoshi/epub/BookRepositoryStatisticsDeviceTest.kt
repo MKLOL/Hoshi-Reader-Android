@@ -154,6 +154,24 @@ class BookRepositoryStatisticsDeviceTest {
     }
 
     @Test
+    fun anEntryRebuiltFromImportedTotalsNamesTheZoneOfItsOwnHours() = runBlocking {
+        val repository = repository(phone)
+        val root = repository.createBookDirectory("book")
+        // Read 01:00 in New York (stamped 05:30 UTC), before zones were recorded.
+        val night = day("2026-10-03", 1800.0, 100, modified = java.time.Instant.parse("2026-10-03T05:30:00Z").toEpochMilli(), device = phone)
+            .copy(readingTimeByHour = mapOf("2026-10-03T01:00" to 1800.0))
+        repository.saveStatistics(root, listOf(night))
+        // ッツ's total for the day is larger and stamped hours later, which tells nothing about the zone.
+        val later = java.time.Instant.parse("2026-10-03T14:20:00Z").toEpochMilli()
+        repository.applyDayTotals(root, listOf(day("2026-10-03", 3000.0, 160, modified = later)), replaceOtherDays = false)
+
+        val rebuilt = repository.loadStatistics(root).single()
+        assertEquals(mapOf("2026-10-03T01:00" to 1800.0), rebuilt.readingTimeByHour)
+        assertEquals(java.time.ZoneId.of("America/New_York"), rebuilt.recordedZone(java.time.ZoneId.of("America/New_York")))
+        assertEquals("America/New_York", rebuilt.timeZone)
+    }
+
+    @Test
     fun applyDayTotalsAdjustsOnlyThisDevicesShareOfADay() = runBlocking {
         val repository = repository(phone)
         val root = repository.createBookDirectory("book")

@@ -25,6 +25,9 @@ val STATISTICS_STREAK_MINIMUM_MINUTES_RANGE: IntRange = 1..600
 /** Hours a reading day may start at. */
 val STATISTICS_DAY_RESET_HOUR_RANGE: IntRange = 0..23
 
+/** Reading days are Eastern Time days unless another zone is chosen (also one this device does not know). */
+const val STATISTICS_DEFAULT_TIME_ZONE: String = "America/New_York"
+
 data class ReaderSettings(
     val theme: ReaderTheme = ReaderTheme.System,
     val eInkMode: Boolean = false,
@@ -53,6 +56,12 @@ data class ReaderSettings(
      * same streak and the same Today.
      */
     val statisticsSettingsUpdatedAt: Long = 0L,
+    /**
+     * The IANA zone every device counts reading days in, wherever it is and whatever zone its
+     * clock is set to; null until one is chosen ([STATISTICS_DEFAULT_TIME_ZONE] applies).
+     * Chosen like the goal and reset (stamped, synced newest-wins).
+     */
+    val statisticsTimeZone: String? = null,
     val showStatisticsToggle: Boolean = false,
     val showReadingSpeed: Boolean = false,
     val showReadingTime: Boolean = false,
@@ -445,6 +454,7 @@ class ReaderSettingsRepository(
             statisticsDayResetHour = (this[KEY_STATISTICS_DAY_RESET_HOUR] ?: DEFAULTS.statisticsDayResetHour)
                 .coerceIn(STATISTICS_DAY_RESET_HOUR_RANGE),
             statisticsSettingsUpdatedAt = (this[KEY_STATISTICS_SETTINGS_UPDATED_AT] ?: 0L).coerceAtLeast(0L),
+            statisticsTimeZone = this[KEY_STATISTICS_TIME_ZONE]?.takeIf { it.isNotBlank() },
             showStatisticsToggle = this[KEY_SHOW_STATISTICS_TOGGLE] ?: false,
             showReadingSpeed = this[KEY_SHOW_READING_SPEED] ?: false,
             showReadingTime = this[KEY_SHOW_READING_TIME] ?: false,
@@ -507,6 +517,7 @@ class ReaderSettingsRepository(
         this[KEY_STATISTICS_STREAK_MINIMUM_MINUTES] = settings.statisticsStreakMinimumMinutes
         this[KEY_STATISTICS_DAY_RESET_HOUR] = settings.statisticsDayResetHour.coerceIn(STATISTICS_DAY_RESET_HOUR_RANGE)
         this[KEY_STATISTICS_SETTINGS_UPDATED_AT] = settings.statisticsSettingsUpdatedAt.coerceAtLeast(0L)
+        settings.statisticsTimeZone?.let { this[KEY_STATISTICS_TIME_ZONE] = it } ?: remove(KEY_STATISTICS_TIME_ZONE)
         this[KEY_SHOW_STATISTICS_TOGGLE] = settings.showStatisticsToggle
         this[KEY_SHOW_READING_SPEED] = settings.showReadingSpeed
         this[KEY_SHOW_READING_TIME] = settings.showReadingTime
@@ -575,6 +586,7 @@ class ReaderSettingsRepository(
         private val KEY_STATISTICS_STREAK_MINIMUM_MINUTES = intPreferencesKey("statisticsStreakMinimumMinutes")
         private val KEY_STATISTICS_DAY_RESET_HOUR = intPreferencesKey("statisticsDayResetHour")
         private val KEY_STATISTICS_SETTINGS_UPDATED_AT = longPreferencesKey("statisticsSettingsUpdatedAt")
+        private val KEY_STATISTICS_TIME_ZONE = stringPreferencesKey("statisticsTimeZone")
         private val KEY_SHOW_STATISTICS_TOGGLE = booleanPreferencesKey("readerShowStatisticsToggle")
         private val KEY_SHOW_READING_SPEED = booleanPreferencesKey("readerShowReadingSpeed")
         private val KEY_SHOW_READING_TIME = booleanPreferencesKey("readerShowReadingTime")

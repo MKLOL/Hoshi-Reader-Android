@@ -49,10 +49,10 @@ class UsageLog(
     val changes: StateFlow<Long> = writes.asStateFlow()
 
     /**
-     * Totals of reading days that are over, keyed by day and reset hour: their files no longer
-     * change, so they are read once per reset hour.
+     * Totals of reading days that are over, keyed by day, reset hour and zone: their files no
+     * longer change, so they are read once per reset hour and zone.
      */
-    internal val finishedDayCounts: MutableMap<Pair<LocalDate, Int>, UsageDayCounts> = ConcurrentHashMap()
+    internal val finishedDayCounts: MutableMap<UsageDayKey, UsageDayCounts> = ConcurrentHashMap()
 
     /** A new event of [type] stamped with the current time and UTC offset. */
     fun newEvent(type: UsageEventType): UsageEvent {
@@ -108,6 +108,9 @@ class UsageLog(
 
     /** The local calendar day an epoch-millisecond instant falls on. */
     fun dateOf(epochMillis: Long): LocalDate = Instant.ofEpochMilli(epochMillis).atZone(zone()).toLocalDate()
+
+    /** The first instant of the local calendar day [date], whose events [eventsOn] reads. */
+    fun startOf(date: LocalDate): Long = date.atStartOfDay(zone()).toInstant().toEpochMilli()
 
     private fun fileFor(date: LocalDate): File =
         File(directory, DateTimeFormatter.ISO_LOCAL_DATE.format(date) + FILE_SUFFIX)

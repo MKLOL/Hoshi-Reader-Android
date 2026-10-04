@@ -56,12 +56,14 @@ fun BookStatisticsScreen(
     val readerSettings by appContainer.readerSettingsRepository.settings.collectAsStateWithLifecycle(initialValue = null)
     // The same reading days as the Statistics screen: they start at the configured reset hour.
     val resetHour = readerSettings?.statisticsDayResetHour
-    LaunchedEffect(statisticsVersion, resumeCount, resetHour) {
+    val zone = readerSettings?.statisticsZone()
+    LaunchedEffect(statisticsVersion, resumeCount, resetHour, zone) {
         val hour = resetHour ?: return@LaunchedEffect
         overview = loadReadingStatisticsOverview(
             appContainer.bookRepository,
-            streakDate(ZonedDateTime.now(), hour).toString(),
+            streakDate(ZonedDateTime.now(zone), hour).toString(),
             hour,
+            zone,
         )
     }
     BookStatisticsContent(

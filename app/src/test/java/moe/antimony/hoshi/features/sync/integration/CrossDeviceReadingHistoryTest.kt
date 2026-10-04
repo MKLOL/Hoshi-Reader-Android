@@ -31,8 +31,13 @@ import org.junit.ClassRule
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
+import moe.antimony.hoshi.features.reader.ReaderSettings
+import moe.antimony.hoshi.features.statistics.statisticsZone
+import moe.antimony.hoshi.features.statistics.streakDate
 import java.io.File
 import java.time.LocalDate
+import java.time.LocalDateTime
+import java.time.ZoneId
 
 /**
  * The reading history every device shows must be the same, whichever books each device has
@@ -94,10 +99,54 @@ class CrossDeviceReadingHistoryTest {
 
     private data class Visible(val todaySeconds: Double, val totalSeconds: Double, val streak: Int, val longest: Int)
 
-    private suspend fun visible(device: SyncDevice): Visible {
-        val overview = loadReadingStatisticsOverview(device.repo, TODAY.toString(), RESET_HOUR)
-        val streak = computeReadingStreak(overview.streakDaily, GOAL_SECONDS, TODAY)
+    private suspend fun visible(device: SyncDevice, zone: ZoneId? = null, today: LocalDate = TODAY): Visible {
+        val overview = loadReadingStatisticsOverview(device.repo, today.toString(), RESET_HOUR, zone)
+        val streak = computeReadingStreak(overview.streakDaily, GOAL_SECONDS, today)
         return Visible(overview.todaySeconds, overview.totalSeconds, streak.currentDays, streak.longestDays)
+    }
+
+    @Test(timeout = 60_000)
+    fun devicesWithClocksInDifferentZonesShowTheSameTodayAndStreak() = runBlocking {
+        val newYork = ZoneId.of("America/New_York")
+        val shanghai = ZoneId.of("Asia/Shanghai")
+        val phonePreferences = MemoryPreferences()
+        val tabletPreferences = MemoryPreferences()
+        val phone = device(PHONE, phonePreferences)
+        val root = phone.importNovel()
+        // 21 evenings in New York, as builds before zones were recorded wrote them.
+        phone.repo.saveStatistics(root, (1L..21L).map { back ->
+            val date = TODAY.minusDays(back + 1)
+            val evening = date.atTime(20, 20).atZone(newYork).toInstant().toEpochMilli()
+            day(date, 1_200.0, PHONE, modified = evening)
+        })
+        assertClean(phone.sync())
+        val tablet = device(TABLET, tabletPreferences)
+        assertClean(tablet.sync())
+        // Then 20 minutes on the tablet just after midnight in New York, recorded at noon by its clock.
+        val tabletRoot = tablet.book(SyncCorpus.NOVEL_SYNC_ID).root
+        val stamp = LocalDateTime.parse("2026-10-03T00:29").atZone(newYork).toInstant().toEpochMilli()
+        tablet.repo.saveStatistics(tabletRoot, listOf(ReadingStatistics(
+            title = SyncCorpus.NOVEL_TITLE, dateKey = "2026-10-03", readingTime = 1_162.0, charactersRead = 39,
+            lastStatisticModified = stamp, deviceId = TABLET.id, deviceName = TABLET.name,
+            readingTimeByHour = mapOf("2026-10-03T12:00" to 1_162.0),
+        )))
+        assertClean(tablet.sync())
+        assertClean(phone.sync())
+        assertClean(tablet.sync())
+
+        // Both count Eastern Time days: 23:23 in New York, already 11:23 on Oct 4 by the tablet's clock.
+        assertNull("no zone was chosen", phonePreferences.value.timeZone)
+        assertNull("no zone was chosen", tabletPreferences.value.timeZone)
+        val phoneZone = ReaderSettings(statisticsTimeZone = phonePreferences.value.timeZone).statisticsZone()
+        val tabletZone = ReaderSettings(statisticsTimeZone = tabletPreferences.value.timeZone).statisticsZone()
+        assertEquals(newYork, phoneZone)
+        assertEquals(newYork, tabletZone)
+        val now = LocalDateTime.parse("2026-10-03T23:23").atZone(newYork).toInstant()
+        val expected = Visible(todaySeconds = 0.0, totalSeconds = 21 * 1_200.0 + 1_162.0, streak = 22, longest = 22)
+        assertEquals(expected, visible(phone, phoneZone, streakDate(now.atZone(phoneZone), RESET_HOUR)))
+        assertEquals("the tablet shows what the phone shows", expected,
+            visible(tablet, tabletZone, streakDate(now.atZone(tabletZone), RESET_HOUR)))
+        assertEquals("its clock says Oct 4", LocalDate.parse("2026-10-04"), now.atZone(shanghai).toLocalDate())
     }
 
     private fun assertClean(outcome: SyncOutcome) =

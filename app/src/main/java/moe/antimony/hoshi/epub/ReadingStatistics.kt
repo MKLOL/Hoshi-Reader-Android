@@ -34,6 +34,13 @@ data class ReadingStatistics(
      */
     @EncodeDefault(EncodeDefault.Mode.NEVER)
     val readingTimeByHour: Map<String, Double> = emptyMap(),
+    /**
+     * The IANA zone [dateKey] and [readingTimeByHour] are wall-clock time of: the recording
+     * device's zone. Devices set to different zones still agree on which day an hour belongs
+     * to (see [recordedZone]). `null` in entries written before zones were recorded.
+     */
+    @EncodeDefault(EncodeDefault.Mode.NEVER)
+    val timeZone: String? = null,
 )
 
 /** Entries recorded before devices were tracked belong to [device], the device that wrote them. */
@@ -61,6 +68,8 @@ fun List<ReadingStatistics>.collapsedByDay(): List<ReadingStatistics> =
                 deviceId = null,
                 deviceName = null,
                 readingTimeByHour = entries.map { it.readingTimeByHour }.sumReadingHours(),
+                // Hours added up from several zones would be no single zone's wall clock.
+                timeZone = entries.map { it.timeZone }.distinct().singleOrNull(),
             )
         }
 
@@ -95,10 +104,13 @@ fun List<ReadingStatistics>.deduplicateReadingStatistics(): List<ReadingStatisti
         val key = dayDeviceKey(statistic.dateKey, statistic.deviceId)
         val existing = grouped[key]
         // Older sync clients strip fields they do not understand. On an otherwise identical
-        // equal-stamp entry, retain the more complete timing evidence instead of erasing it.
+        // equal-stamp entry, retain the more complete timing evidence instead of erasing it:
+        // more located hours, or the same hours with the zone they were recorded in.
         val richerTiming = existing != null && statistic.lastStatisticModified == existing.lastStatisticModified &&
-            statistic.copy(readingTimeByHour = emptyMap()) == existing.copy(readingTimeByHour = emptyMap()) &&
-            statistic.readingTimeByHour.values.sum() > existing.readingTimeByHour.values.sum()
+            statistic.copy(readingTimeByHour = emptyMap(), timeZone = null) ==
+            existing.copy(readingTimeByHour = emptyMap(), timeZone = null) &&
+            (statistic.readingTimeByHour.values.sum() > existing.readingTimeByHour.values.sum() ||
+                (statistic.readingTimeByHour == existing.readingTimeByHour && statistic.timeZone != null && existing.timeZone == null))
         if (existing == null || statistic.lastStatisticModified > existing.lastStatisticModified || richerTiming) {
             grouped[key] = statistic
         }

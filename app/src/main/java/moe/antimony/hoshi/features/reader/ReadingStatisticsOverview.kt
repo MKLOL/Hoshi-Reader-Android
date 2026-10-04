@@ -18,6 +18,7 @@ import moe.antimony.hoshi.features.statistics.charactersByDate
 import moe.antimony.hoshi.features.statistics.readingDays
 import moe.antimony.hoshi.features.statistics.reconstructStreakHistory
 import moe.antimony.hoshi.features.sync.http.syncIdForMetadata
+import java.time.ZoneId
 
 /** One day of reading: seconds spent and the amount read (characters, or OCR characters for manga). */
 data class DailyReading(
@@ -122,6 +123,8 @@ fun summarizeReadingStatistics(
     inputs: List<BookStatisticsInput>,
     todayKey: String,
     streakResetHour: Int = 0,
+    /** The zone days are counted in (see `statisticsZone`); null reads every record as recorded here. */
+    zone: ZoneId? = null,
 ): ReadingStatisticsOverview {
     val dailySeconds = mutableMapOf<String, Double>()
     val dailyCharacters = mutableMapOf<String, Int>()
@@ -129,7 +132,7 @@ fun summarizeReadingStatistics(
         val statistics = input.statistics.deduplicateReadingStatistics()
         val mangaText = input.mangaTextStatistics.deduplicateMangaTextStatistics()
         // Every device's entries for a day add up, regrouped into reading days.
-        val days = readingDays(statistics, input.charactersByDate(), streakResetHour)
+        val days = readingDays(statistics, input.charactersByDate(), streakResetHour, zone)
         // The same totals the reader's Statistics sheet shows as "All Time".
         val totals = statistics.readingTotals()
         val charactersRead = when (input.contentType) {
@@ -161,7 +164,7 @@ fun summarizeReadingStatistics(
             finished = isBookCompleted(input.progress),
             coverSource = input.coverSource,
             days = days,
-            devices = summarizeDevices(input.contentType, statistics, mangaText, streakResetHour),
+            devices = summarizeDevices(input.contentType, statistics, mangaText, streakResetHour, zone),
             onDevice = input.onDevice,
             progressKnown = input.progressKnown,
         )
@@ -169,7 +172,7 @@ fun summarizeReadingStatistics(
     val daily = (dailySeconds.keys + dailyCharacters.keys).distinct()
         .map { DailyReading(it, dailySeconds[it] ?: 0.0, dailyCharacters[it] ?: 0) }
         .sortedByDescending { it.dateKey }
-    val streak = reconstructStreakHistory(inputs, streakResetHour)
+    val streak = reconstructStreakHistory(inputs, streakResetHour, zone)
     return ReadingStatisticsOverview(
         totalSeconds = books.sumOf { it.totalSeconds },
         todaySeconds = dailySeconds[todayKey] ?: 0.0,
@@ -192,6 +195,7 @@ private fun summarizeDevices(
     statistics: List<ReadingStatistics>,
     mangaText: List<MangaTextStatistic>,
     resetHour: Int,
+    zone: ZoneId?,
 ): List<DeviceReadingSummary> {
     val deviceIds = (statistics.map { it.deviceId } + mangaText.map { it.deviceId }).distinct()
     return deviceIds.mapNotNull { deviceId ->
@@ -216,7 +220,7 @@ private fun summarizeDevices(
             totalSeconds = totalSeconds,
             charactersRead = charactersRead,
             pagesRead = pagesRead,
-            lastReadDateKey = readingDays(own, emptyMap(), resetHour).firstOrNull { it.seconds > 0.0 }?.dateKey,
+            lastReadDateKey = readingDays(own, emptyMap(), resetHour, zone).firstOrNull { it.seconds > 0.0 }?.dateKey,
             bookCount = 1,
             newestStamp = newest?.first ?: stamped.maxOfOrNull { it.first } ?: 0L,
         )
@@ -257,6 +261,7 @@ suspend fun loadReadingStatisticsOverview(
     bookRepository: BookRepository,
     todayKey: String,
     streakResetHour: Int = 0,
+    zone: ZoneId? = null,
 ): ReadingStatisticsOverview = withContext(Dispatchers.IO) {
     val history = bookRepository.loadStatisticsHistory().associateBy { it.syncId }
     val joined = mutableSetOf<String>()
@@ -295,5 +300,5 @@ suspend fun loadReadingStatisticsOverview(
             progressKnown = kept.progress != null,
         )
     }
-    summarizeReadingStatistics(installed + historyOnly, todayKey, streakResetHour)
+    summarizeReadingStatistics(installed + historyOnly, todayKey, streakResetHour, zone)
 }

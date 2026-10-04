@@ -1,6 +1,7 @@
 package moe.antimony.hoshi.features.mangareader
 
 import moe.antimony.hoshi.epub.DeviceIdentity
+import moe.antimony.hoshi.epub.dayDeviceKey
 import moe.antimony.hoshi.features.reader.ReaderStatisticsClock
 import moe.antimony.hoshi.features.reader.SystemReaderStatisticsClock
 import moe.antimony.hoshi.mokuro.MangaTextStatistic
@@ -39,9 +40,9 @@ class MangaTextReadCounter(
             )
         }
 
-    /** Every device's characters per calendar date, for counting them by reading day. */
+    /** Every device's characters per calendar date and device (`dayDeviceKey`), for counting them by reading day. */
     fun charactersByDate(): Map<String, Int> =
-        statistics.groupBy { it.dateKey }.mapValues { (_, entries) -> entries.sumOf { it.charactersRead } }
+        statistics.groupBy { dayDeviceKey(it.dateKey, it.deviceId) }.mapValues { (_, entries) -> entries.sumOf { it.charactersRead } }
 
     fun add(characters: Int) {
         if (characters <= 0) return

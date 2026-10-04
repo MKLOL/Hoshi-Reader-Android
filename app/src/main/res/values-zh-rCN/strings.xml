@@ -264,6 +264,8 @@
     <string name="statistics_streak_goal_minutes_format">%1$d 分钟</string>
     <string name="statistics_streak_reset">连续阅读日重置时间</string>
     <string name="statistics_streak_reset_help">此时间之前的阅读在所有统计中都计入前一天：连续阅读、“今天”、历史记录和图表。更改任一设置都会重新计算。</string>
+    <string name="statistics_streak_zone_format">每台设备都按%1$s（%2$s）计算每天，无论你身在何处、设备设置为哪个时区。</string>
+    <string name="statistics_streak_use_device_zone_format">改为按本设备的时区计算（%1$s）</string>
     <string name="statistics_streak_history_credit">缺少准确时间的旧阅读记录，会为两个可能的日期都保留连续阅读计数。</string>
     <string name="statistics_heatmap_title">最近 16 周</string>
     <string name="statistics_today_title">今天</string>

@@ -266,6 +266,8 @@
     <string name="statistics_streak_goal_minutes_format">%1$d min</string>
     <string name="statistics_streak_reset">Streak day resets at</string>
     <string name="statistics_streak_reset_help">Reading before this time counts toward the previous day everywhere in your statistics: the streak, Today, history and charts. Changing either setting recalculates them.</string>
+    <string name="statistics_streak_zone_format">Days are counted in %1$s (%2$s) on every device, wherever you are and whatever time zone a device is set to.</string>
+    <string name="statistics_streak_use_device_zone_format">Count days in this device\'s time zone (%1$s)</string>
     <string name="statistics_streak_history_credit">Older reading without an exact time gets streak credit on either possible day.</string>
     <string name="statistics_heatmap_title">Last 16 weeks</string>
     <string name="statistics_today_title">Today</string>

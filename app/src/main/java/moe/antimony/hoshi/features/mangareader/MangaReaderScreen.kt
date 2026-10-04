@@ -149,6 +149,7 @@ import java.io.File
 import kotlin.coroutines.resume
 import kotlin.math.roundToInt
 import kotlin.math.sqrt
+import moe.antimony.hoshi.features.statistics.statisticsZone
 
 private const val BOOKMARK_SAVE_DEBOUNCE_MS = 400L
 private const val MANGA_SCREENSHOT_TRANSLATION_LABEL = "Screenshot translation"
@@ -282,6 +283,7 @@ internal fun MangaReaderScreen(
     }
     val currentUsageSession = rememberUpdatedState(usageSession)
     val currentResetHour = rememberUpdatedState(readerSettings.statisticsDayResetHour)
+    val currentStatisticsZone = rememberUpdatedState(readerSettings.statisticsZone())
     val statisticsTracker = remember(bookRoot, book.title, persistedStatistics) {
         persistedStatistics?.let { statistics ->
             ReaderStatisticsTracker(
@@ -291,6 +293,7 @@ internal fun MangaReaderScreen(
                 device = statisticsDevice,
                 onTrackingChanged = { reading -> currentUsageSession.value?.readingChanged(reading, pageIndex + 1) },
                 resetHour = { currentResetHour.value },
+                statisticsZone = { currentStatisticsZone.value },
             )
         }
     }

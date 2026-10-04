@@ -94,6 +94,8 @@ data class HttpSyncStatisticsPreferences(
     val dayResetHour: Int,
     /** Epoch milliseconds of the choice; 1 marks a value chosen before choices were synced. */
     val updatedAt: Long,
+    /** The IANA zone reading days are counted in; absent from builds before it was chosen. */
+    val timeZone: String? = null,
 )
 
 /** The statistics settings as the app stores them, with when they were last chosen. */
@@ -102,6 +104,8 @@ data class StatisticsPreferences(
     val dayResetHour: Int,
     /** Epoch milliseconds of the user's last change; 0 when never changed. */
     val updatedAt: Long,
+    /** The IANA zone every device counts reading days in; null until one is chosen (Eastern Time). */
+    val timeZone: String? = null,
 )
 
 /** Where [HttpSyncStatisticsLane] reads and applies the synced statistics settings. */
@@ -223,6 +227,11 @@ class HttpSyncStatisticsLane(
         val bootstrapped: Boolean = false,
         /** Own months a pass could not publish yet (batched, unmerged or failed). */
         val ownPending: Boolean = false,
+        /**
+         * Set once settings cached by builds that did not know the chosen zone (0.12.2 dropped
+         * the field it did not know) have been fetched again.
+         */
+        val zonesRead: Boolean = false,
     )
 
     private data class StatisticsRoot(
@@ -517,7 +526,7 @@ class HttpSyncStatisticsLane(
             if (!pending) failures.remove(OWN_SHARDS)
         }
 
-        // 4. The streak goal and day reset: the newest choice of any device applies everywhere.
+        // 4. The streak goal, day reset and zone: the newest choice of any device applies everywhere.
         if (deviceId != null && preferencesStore != null) {
             index = syncPreferences(transport, listing, index, deviceId, errors, retryFailed)
         }
@@ -780,8 +789,9 @@ class HttpSyncStatisticsLane(
         if (local.updatedAt > 0L && !ownBlocked(ownKey) &&
             !ownPreferencesCurrent(index, listing.firstOrNull { it.key == ownKey }, local)
         ) return true
+        namedZone(index, local, deviceId)?.let { if (it != local.timeZone) return true }
         val newest = newestPreferences(index) ?: return false
-        return wins(store.normalize(newest.second.toPreferences()), newest.first, local, deviceId)
+        return wins(store.normalize(newest.second.toPreferences(local)), newest.first, local, deviceId)
     }
 
     private suspend fun syncPreferences(
@@ -829,10 +839,18 @@ class HttpSyncStatisticsLane(
         var local = effectiveLocalPreferences(stored, store)
         if (local != stored) store.save(local)
         newestPreferences(index)?.let { (device, remote) ->
-            val candidate = store.normalize(remote.toPreferences())
+            val candidate = store.normalize(remote.toPreferences(local))
             if (wins(candidate, device, local, deviceId)) {
                 store.save(candidate)
                 local = candidate
+            }
+        }
+        // Builds before the zone was synced republish a choice without it; the zone comes from
+        // the newest choice that names one, so they never undo it.
+        namedZone(index, local, deviceId)?.let { zone ->
+            if (zone != local.timeZone) {
+                local = store.normalize(local.copy(timeZone = zone))
+                store.save(local)
             }
         }
         val ownKey = statisticsPreferencesKey(deviceId)
@@ -872,7 +890,8 @@ class HttpSyncStatisticsLane(
     /** A goal or reset changed before choices were synced counts as chosen, older than any synced choice. */
     private fun effectiveLocalPreferences(local: StatisticsPreferences, store: StatisticsPreferencesStore): StatisticsPreferences {
         val defaults = store.defaults
-        val unchosen = local.streakMinimumMinutes == defaults.streakMinimumMinutes && local.dayResetHour == defaults.dayResetHour
+        val unchosen = local.streakMinimumMinutes == defaults.streakMinimumMinutes &&
+            local.dayResetHour == defaults.dayResetHour && local.timeZone == defaults.timeZone
         return if (local.updatedAt == 0L && !unchosen) local.copy(updatedAt = LEGACY_CHOICE_STAMP) else local
     }
 
@@ -890,18 +909,41 @@ class HttpSyncStatisticsLane(
             (candidate.updatedAt == local.updatedAt && candidateDevice > deviceId)
     }
 
-    private fun HttpSyncStatisticsPreferences.toPreferences() = StatisticsPreferences(streakMinimumMinutes, dayResetHour, updatedAt)
+    /**
+     * The zone of the newest choice that names one, this device's own included (the larger
+     * device id breaks a tie); null while none does.
+     */
+    private fun namedZone(index: LaneIndex, local: StatisticsPreferences, deviceId: String): String? {
+        val remote = index.preferences.mapNotNull { (key, value) ->
+            val device = (parseStatisticsLaneKey(key) as? StatisticsLaneKey.Preferences)?.deviceId ?: return@mapNotNull null
+            val zone = value.timeZone?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+            Triple(value.updatedAt, device, zone)
+        }
+        val own = local.timeZone?.let { Triple(local.updatedAt, deviceId, it) }
+        return (remote + listOfNotNull(own))
+            .maxWithOrNull(compareBy<Triple<Long, String, String>>({ it.first }, { it.second }))?.third
+    }
+
+    /** A choice from a build that did not sync the zone keeps [local]'s zone. */
+    private fun HttpSyncStatisticsPreferences.toPreferences(local: StatisticsPreferences) =
+        StatisticsPreferences(streakMinimumMinutes, dayResetHour, updatedAt, timeZone ?: local.timeZone)
 
     private fun StatisticsPreferences.toBlob() = HttpSyncStatisticsPreferences(
         streakMinimumMinutes = streakMinimumMinutes,
         dayResetHour = dayResetHour,
         updatedAt = updatedAt,
+        timeZone = timeZone,
     )
 
     private fun loadIndex(transport: HttpSyncKvTransport): LaneIndex {
         val scope = transport.cacheIdentity.orEmpty()
         val stored = runCatching { json.decodeFromString(LaneIndex.serializer(), indexFile.readText()) }.getOrNull()
-        return stored?.takeIf { it.scope == scope } ?: LaneIndex(scope = scope)
+        val index = stored?.takeIf { it.scope == scope } ?: LaneIndex(scope = scope)
+        if (index.zonesRead) return index
+        // Another device's settings cached without a zone may have had one an older build
+        // dropped: fetch those once more (the next save records that this happened).
+        val zoneless = index.preferences.filterValues { it.timeZone == null }.keys
+        return index.copy(applied = index.applied - zoneless, zonesRead = true)
     }
 
     private fun saveIndex(index: LaneIndex) {

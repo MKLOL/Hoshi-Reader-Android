@@ -149,18 +149,17 @@ internal class HoshiAppContainer(context: Context) {
     )
     /** The streak goal and day reset, which HTTP sync keeps the same on every device. */
     private val statisticsPreferencesStore = object : StatisticsPreferencesStore {
-        override val defaults: StatisticsPreferences = ReaderSettings().let {
-            StatisticsPreferences(it.statisticsStreakMinimumMinutes, it.statisticsDayResetHour, it.statisticsSettingsUpdatedAt)
-        }
+        override val defaults: StatisticsPreferences = ReaderSettings().toStatisticsPreferences()
 
         override fun normalize(preferences: StatisticsPreferences) = preferences.copy(
             streakMinimumMinutes = preferences.streakMinimumMinutes.coerceIn(STATISTICS_STREAK_MINIMUM_MINUTES_RANGE),
             dayResetHour = preferences.dayResetHour.coerceIn(STATISTICS_DAY_RESET_HOUR_RANGE),
+            // Kept even when this device's time zone database lacks it (it then counts the
+            // default's days), so it never republishes a different zone.
+            timeZone = preferences.timeZone?.takeIf { it.isNotBlank() },
         )
 
-        override suspend fun load(): StatisticsPreferences = readerSettingsRepository.settings.first().let {
-            StatisticsPreferences(it.statisticsStreakMinimumMinutes, it.statisticsDayResetHour, it.statisticsSettingsUpdatedAt)
-        }
+        override suspend fun load(): StatisticsPreferences = readerSettingsRepository.settings.first().toStatisticsPreferences()
 
         override suspend fun save(preferences: StatisticsPreferences) {
             readerSettingsRepository.update {
@@ -168,9 +167,14 @@ internal class HoshiAppContainer(context: Context) {
                     statisticsStreakMinimumMinutes = preferences.streakMinimumMinutes,
                     statisticsDayResetHour = preferences.dayResetHour,
                     statisticsSettingsUpdatedAt = preferences.updatedAt,
+                    statisticsTimeZone = preferences.timeZone,
                 )
             }
         }
+
+        private fun ReaderSettings.toStatisticsPreferences() = StatisticsPreferences(
+            statisticsStreakMinimumMinutes, statisticsDayResetHour, statisticsSettingsUpdatedAt, statisticsTimeZone,
+        )
     }
     val httpSyncBatchState: HttpSyncBatchState = HttpSyncBatchState(
         bookRepository = bookRepository,

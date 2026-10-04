@@ -11,8 +11,14 @@ import java.time.ZoneId
 import kotlin.math.abs
 import java.time.Instant
 import java.time.LocalDateTime
+import java.time.temporal.ChronoUnit
+import moe.antimony.hoshi.epub.convertWallClock
+import moe.antimony.hoshi.epub.dayDeviceKey
+import moe.antimony.hoshi.epub.recordedZone
+import moe.antimony.hoshi.epub.zoneOrNull
 import moe.antimony.hoshi.features.statistics.readingDayOf
 import moe.antimony.hoshi.features.statistics.readingDays
+import moe.antimony.hoshi.features.statistics.streakDate
 
 data class ReaderStatisticsState(
     val isTracking: Boolean,
@@ -56,6 +62,12 @@ class ReaderStatisticsTracker(
      * use, so changing the setting applies without reopening the book.
      */
     private val resetHour: () -> Int = { 0 },
+    /**
+     * The zone reading days are counted in on every device (see `statisticsZone`), read on
+     * every use; null counts them on [clock]'s own wall clock. Entries are still recorded on
+     * [clock]'s wall clock, named by [ReadingStatistics.timeZone].
+     */
+    private val statisticsZone: () -> ZoneId? = { null },
 ) {
     private var statistics = initialStatistics.deduplicateReadingStatistics()
     private var lastTimestampMillis: Long = clock.currentTimeMillis()
@@ -92,7 +104,7 @@ class ReaderStatisticsTracker(
     fun readingDayCharacters(charactersByDate: Map<String, Int>): Int {
         rollTodayIfNeeded()
         val day = readingDay().toString()
-        return readingDays(recordsWithRunningToday(), charactersByDate, resetHour())
+        return readingDays(recordsWithRunningToday(), charactersByDate, resetHour(), statisticsZone())
             .firstOrNull { it.dateKey == day }?.characters ?: 0
     }
 
@@ -142,10 +154,11 @@ class ReaderStatisticsTracker(
             charDiff
         }
         val modified = clock.currentTimeMillis()
-        val hours = readingHoursBetween(lastTimestampMillis, now, clock.zoneId())
-        todayOnThisDevice = todayOnThisDevice.updated(timeDiff, finalCharDiff, modified, hours)
+        val zone = clock.zoneId()
+        val hours = readingHoursBetween(lastTimestampMillis, now, zone)
+        todayOnThisDevice = todayOnThisDevice.recordedIn(zone).updated(timeDiff, finalCharDiff, modified, hours)
         currentState = currentState.copy(
-            session = currentState.session.updated(timeDiff, finalCharDiff, modified, hours),
+            session = currentState.session.recordedIn(zone).updated(timeDiff, finalCharDiff, modified, hours),
             today = todayAcrossDevices(),
             allTime = currentState.allTime.updated(timeDiff, finalCharDiff, modified),
         )
@@ -198,6 +211,9 @@ class ReaderStatisticsTracker(
 
     /** The reading day the clock is in: before the reset hour it is still the previous date. */
     private fun readingDay(): LocalDate {
+        statisticsZone()?.let { zone ->
+            return streakDate(Instant.ofEpochMilli(clock.currentTimeMillis()).atZone(zone), resetHour())
+        }
         val date = clock.currentDate()
         val reset = resetHour().coerceIn(0, 23)
         if (reset == 0) return date
@@ -219,9 +235,11 @@ class ReaderStatisticsTracker(
     private fun todayAcrossDevices(): ReadingStatistics {
         val records = recordsWithRunningToday()
         val reset = resetHour()
+        val zone = statisticsZone()
         val day = readingDay().toString()
-        val characters = records.groupBy { it.dateKey }.mapValues { (_, entries) -> entries.sumOf { it.charactersRead } }
-        val total = readingDays(records, characters, reset).firstOrNull { it.dateKey == day }
+        val characters = records.groupBy { dayDeviceKey(it.dateKey, it.deviceId) }
+            .mapValues { (_, entries) -> entries.sumOf { it.charactersRead } }
+        val total = readingDays(records, characters, reset, zone).firstOrNull { it.dateKey == day }
         val readingTime = total?.seconds ?: 0.0
         val charactersRead = total?.characters ?: 0
         return todayOnThisDevice.copy(
@@ -229,13 +247,14 @@ class ReaderStatisticsTracker(
             readingTime = readingTime,
             charactersRead = charactersRead,
             // The hours that make up the day: its own records' with a midnight reset, as before.
-            readingTimeByHour = if (reset <= 0) {
+            readingTimeByHour = if (reset <= 0 && zone == null) {
                 records.filter { it.dateKey == day }.map { it.readingTimeByHour }.sumReadingHours()
             } else {
-                records.map { it.readingTimeByHour }.sumReadingHours().filterKeys { key ->
+                records.map { it.hoursOn(zone) }.sumReadingHours().filterKeys { key ->
                     runCatching { readingDayOf(LocalDateTime.parse(key), reset).toString() == day }.getOrDefault(false)
                 }
             },
+            timeZone = zone?.id ?: todayOnThisDevice.timeZone,
             lastReadingSpeed = if (readingTime > 0.0) (charactersRead / readingTime * 3600.0).toInt() else 0,
         )
     }
@@ -252,6 +271,35 @@ class ReaderStatisticsTracker(
             lastReadingSpeed = totals.readingSpeed,
         )
     }
+}
+
+/**
+ * This entry recorded on [zone]'s wall clock. Hours recorded in another zone move to [zone]'s:
+ * the zone the entry names, or for an entry from before zones were recorded the one its stamp
+ * tells (a device whose clock was on another zone and has since been set right).
+ */
+private fun ReadingStatistics.recordedIn(zone: ZoneId): ReadingStatistics {
+    if (timeZone == zone.id) return this
+    val from = zoneOrNull(timeZone) ?: recordedZone(zone)
+    if (from == null || from == zone) return copy(timeZone = zone.id)
+    return copy(timeZone = zone.id, readingTimeByHour = readingTimeByHour.rekeyed(from, zone))
+}
+
+/** [ReadingStatistics.readingTimeByHour] on [zone]'s wall clock (as recorded when null). */
+private fun ReadingStatistics.hoursOn(zone: ZoneId?): Map<String, Double> {
+    zone ?: return readingTimeByHour
+    val from = recordedZone(zone)?.takeIf { it != zone } ?: return readingTimeByHour
+    return readingTimeByHour.rekeyed(from, zone)
+}
+
+private fun Map<String, Double>.rekeyed(from: ZoneId, to: ZoneId): Map<String, Double> {
+    val result = mutableMapOf<String, Double>()
+    forEach { (key, seconds) ->
+        val hour = runCatching { LocalDateTime.parse(key) }.getOrNull()
+        val moved = hour?.let { convertWallClock(it, from, to).truncatedTo(ChronoUnit.HOURS).toString() } ?: key
+        result[moved] = (result[moved] ?: 0.0) + seconds
+    }
+    return result
 }
 
 private fun ReadingStatistics.updated(
