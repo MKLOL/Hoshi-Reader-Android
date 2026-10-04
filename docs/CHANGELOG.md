@@ -7,6 +7,8 @@ Semantic Versioning.
 
 ## [Unreleased]
 
+## [v0.12.4] - 2026-10-04
+
 ### Changed
 - **Lookups, bubbles and translations from all your devices.** With HTTP sync set up, Today's lookups, repeated words, bubbles, translations and reading timeline, and the lookup and bubble trends, include what you did on every device, not just this one. Each device sends only its own log, compressed; history from before this update goes up once.
 
