@@ -1841,8 +1841,13 @@ data class HttpSyncResult(
      * [HttpSyncSettingsView] for the canonical wiring.
      */
     val newLastSyncedAt: String? = null,
+    /** Manga newly listed in the cloud catalogue; they download when tapped on the shelf. */
+    val newCloudBooks: Int = 0,
 ) {
-    fun summary(): String {
+    fun summary(): String = summaryParts().ifEmpty { listOf("nothing to sync") }.joinToString(", ")
+
+    /** What this sync moved, one phrase each; empty when nothing changed. */
+    fun summaryParts(): List<String> {
         val parts = mutableListOf<String>()
         if (uploadedBookmarks > 0) parts += "$uploadedBookmarks bookmark${plural(uploadedBookmarks)} up"
         if (uploadedChatEntries > 0) parts += "$uploadedChatEntries chat${plural(uploadedChatEntries)} up"
@@ -1861,11 +1866,31 @@ data class HttpSyncResult(
         if (downloadedStatistics > 0) parts += "$downloadedStatistics statistics down"
         if (downloadedAppSettings) parts += "ChatGPT settings down"
         if (remoteOnlyBooks > 0) parts += "$remoteOnlyBooks remote-only book${plural(remoteOnlyBooks)}"
-        if (parts.isEmpty()) parts += "nothing to sync"
-        return parts.joinToString(", ")
+        return parts
     }
 
     private fun plural(n: Int): String = if (n == 1) "" else "s"
 }
+
+/** One result for two passes run back to back by the same manual sync. */
+internal fun HttpSyncResult.followedBy(next: HttpSyncResult): HttpSyncResult = HttpSyncResult(
+    uploadedBookmarks = uploadedBookmarks + next.uploadedBookmarks,
+    uploadedChatEntries = uploadedChatEntries + next.uploadedChatEntries,
+    uploadedMetadata = uploadedMetadata + next.uploadedMetadata,
+    uploadedPayloads = uploadedPayloads + next.uploadedPayloads,
+    uploadedAppSettings = uploadedAppSettings || next.uploadedAppSettings,
+    downloadedBookmarks = downloadedBookmarks + next.downloadedBookmarks,
+    downloadedChatEntries = downloadedChatEntries + next.downloadedChatEntries,
+    downloadedPayloads = downloadedPayloads + next.downloadedPayloads,
+    downloadedPretranslations = downloadedPretranslations + next.downloadedPretranslations,
+    downloadedSentenceTranslations = downloadedSentenceTranslations + next.downloadedSentenceTranslations,
+    uploadedStatistics = uploadedStatistics + next.uploadedStatistics,
+    downloadedStatistics = downloadedStatistics + next.downloadedStatistics,
+    downloadedAppSettings = downloadedAppSettings || next.downloadedAppSettings,
+    remoteOnlyBooks = next.remoteOnlyBooks,
+    errors = (errors + next.errors).distinct(),
+    newLastSyncedAt = next.newLastSyncedAt ?: newLastSyncedAt,
+    newCloudBooks = newCloudBooks + next.newCloudBooks,
+)
 
 private fun plural(n: Int): String = if (n == 1) "" else "s"

@@ -32,6 +32,12 @@ data class V3LocalSnapshot(
     val books: List<V3LocalBook>,
     val aiSettings: AiChatSettings?,
     val readAt: Instant,
+    /**
+     * Non-null when remote-only manga go to the cloud catalogue instead of being downloaded:
+     * the syncIds the user tapped, mapped to their request stamps. Only those are downloaded.
+     * Null keeps the original behavior of downloading every remote-only book.
+     */
+    val cloudDownloadRequests: Map<String, String>? = null,
 )
 
 /**
@@ -231,6 +237,23 @@ data class V3Plan(
      * surfaces these alongside remote-listing and executor errors in [V3SyncResult.errors].
      */
     val errors: List<V3Error> = emptyList(),
+    /**
+     * Every remote-only manga, requested or not, when the snapshot enabled the cloud catalogue
+     * ([V3LocalSnapshot.cloudDownloadRequests]); null otherwise. The executor makes the
+     * catalogue match this list.
+     */
+    val cloudBooks: List<V3CloudBook>? = null,
+)
+
+/** A remote-only manga kept in the cloud catalogue until the user downloads it. */
+data class V3CloudBook(
+    val syncId: String,
+    val title: String,
+    val manifest: HttpSyncPayloadManifest,
+    val payloadKeys: HttpSyncPayloadKeys,
+    val shelfName: String?,
+    /** The request stamp when the user asked for this book; it is imported in the same plan. */
+    val requestedAt: String?,
 )
 
 // ─── Result ──────────────────────────────────────────────────────────────────────
@@ -240,6 +263,8 @@ data class V3SyncResult(
     val pushed: V3PushedCounts,
     val remoteOnlyBooks: Int,
     val errors: List<V3Error>,
+    /** Manga this pass added to the cloud catalogue. */
+    val newCloudBooks: Int = 0,
 ) {
     val totalActions: Int
         get() = applied.total + pushed.total

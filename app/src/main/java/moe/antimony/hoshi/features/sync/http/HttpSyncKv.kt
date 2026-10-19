@@ -72,6 +72,15 @@ data class HttpSyncKvFetched(
     override fun hashCode(): Int = System.identityHashCode(this)
 }
 
+/** One byte range of a stored value, returned with `206 Partial Content`. */
+class HttpSyncKvRange(
+    val body: ByteArray,
+    /** Offset of [body]'s first byte within the stored value. */
+    val start: Long,
+    /** Size of the whole stored value. */
+    val totalSize: Long,
+)
+
 /** Headers from a successful `GET /v1/kv/{key}` streamed directly to disk. */
 data class HttpSyncKvFileFetched(
     val contentType: String,
@@ -121,6 +130,24 @@ class HttpSyncException(message: String, val httpCode: Int? = null) : Exception(
     constructor(@androidx.annotation.StringRes messageResource: Int) : this("") {
         this.messageResource = messageResource
     }
+
+    /** Shown localized through [messageResource]; [message] is the detail sync error lists keep. */
+    constructor(@androidx.annotation.StringRes messageResource: Int, message: String, httpCode: Int? = null) :
+        this(message, httpCode) {
+        this.messageResource = messageResource
+    }
+}
+
+/** Reads exactly [size] bytes into one array, or null when the stream ends sooner. */
+private fun InputStream.readExactly(size: Int): ByteArray? {
+    val body = ByteArray(size)
+    var filled = 0
+    while (filled < size) {
+        val read = read(body, filled, size - filled)
+        if (read < 0) return null
+        filled += read
+    }
+    return body
 }
 
 private fun InputStream.readBytesBounded(key: String, maxBytes: Int): ByteArray {
@@ -212,6 +239,14 @@ interface HttpSyncKvTransport {
 
     /** `204` and `404` both succeed silently — the post-condition is "this key is gone." */
     suspend fun delete(key: String)
+
+    /**
+     * Reads at most [length] bytes of [key] from [start], or its last [length] bytes when [start]
+     * is null. Returns null when the key is missing, the range lies past its end, or the server
+     * does not honour byte ranges — never the whole value, which may be a multi-GB archive.
+     * The default suits transports without range support.
+     */
+    suspend fun getRange(key: String, start: Long?, length: Int): HttpSyncKvRange? = null
 }
 
 // ----- HttpURLConnection client ----------------------------------------------------------
@@ -574,6 +609,59 @@ class HttpSyncKvClient(
             }
         }
 
+    override suspend fun getRange(key: String, start: Long?, length: Int): HttpSyncKvRange? = withContext(ioDispatcher) {
+        require(length > 0) { "Range length must be positive." }
+        require(start == null || start >= 0) { "Range start must not be negative." }
+        val connection = openConnection("GET", "/v1/kv/${encodeKey(key)}", contentType = null)
+        // Byte offsets refer to the stored bytes; a compressed representation would shift them.
+        connection.setRequestProperty("Accept-Encoding", "identity")
+        connection.setRequestProperty(
+            "Range",
+            if (start == null) "bytes=-$length" else "bytes=$start-${start + length - 1}",
+        )
+        try {
+            val code = connection.runCancellable { connection.responseCode }
+            // 200 means the range was ignored: closing here never reads the whole value.
+            if (code == 404 || code == 416 || code == 200) return@withContext null
+            if (code != 206) {
+                val raw = (connection.errorStream ?: connection.inputStream)
+                    ?.bufferedReader()?.use { it.readText() }
+                    .orEmpty()
+                throw HttpSyncException(parseError(code, raw))
+            }
+            val range = connection.getHeaderField("Content-Range")
+                ?.let { CONTENT_RANGE.matchEntire(it.trim()) }
+                ?: throw HttpSyncException("Invalid partial response for $key.")
+            val first = range.groupValues[1].toLong()
+            val last = range.groupValues[2].toLong()
+            val total = range.groupValues[3].toLong()
+            // Exactly the bytes asked for: a suffix ends the value, and a range is cut short only
+            // by the value's end. A server may answer less for now; that is retried, not trusted.
+            val expectedFirst = start ?: maxOf(0L, total - length)
+            val expectedLast = minOf(expectedFirst + length, total) - 1
+            if (first != expectedFirst || last != expectedLast || last >= total) {
+                throw HttpSyncException("Invalid partial response for $key.")
+            }
+            val expected = (last - first + 1).toInt()
+            val declared = connection.contentLengthLong
+            if (declared >= 0 && declared != expected.toLong()) {
+                throw HttpSyncException("Invalid partial response for $key.")
+            }
+            val body = connection.runCancellable {
+                connection.inputStream.use { input -> input.readExactly(expected) }
+            } ?: throw HttpSyncException("Incomplete partial response for $key.")
+            HttpSyncKvRange(body = body, start = first, totalSize = total)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: HttpSyncException) {
+            throw e
+        } catch (e: Exception) {
+            throw HttpSyncException(friendlyMessage(e))
+        } finally {
+            connection.disconnect()
+        }
+    }
+
     override suspend fun list(
         prefix: String?,
         since: String?,
@@ -720,6 +808,7 @@ class HttpSyncKvClient(
         URLEncoder.encode(value, Charsets.UTF_8.name()).replace("+", "%20")
 }
 
+private val CONTENT_RANGE = Regex("bytes (\\d+)-(\\d+)/(\\d+)")
 private const val DEFAULT_STREAM_BUFFER_SIZE = 64 * 1024
 private const val MAX_MULTIPART_PART_SIZE_BYTES = 64L * 1024L * 1024L
 private const val DEFAULT_MULTIPART_PART_SIZE_BYTES = MAX_MULTIPART_PART_SIZE_BYTES

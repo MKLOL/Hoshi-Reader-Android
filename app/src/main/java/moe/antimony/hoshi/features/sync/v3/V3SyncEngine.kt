@@ -9,6 +9,7 @@ import moe.antimony.hoshi.epub.BookRepository
 import moe.antimony.hoshi.features.ai.AiChatHistoryStore
 import moe.antimony.hoshi.features.ai.AiChatSettingsRepository
 import moe.antimony.hoshi.features.sync.http.HttpSyncBookLocks
+import moe.antimony.hoshi.features.sync.http.HttpSyncCloudBooks
 import moe.antimony.hoshi.features.sync.http.HttpSyncKvClient
 import moe.antimony.hoshi.features.sync.http.HttpSyncKvTransport
 import moe.antimony.hoshi.features.sync.http.HttpSyncPayloadCodec
@@ -36,6 +37,13 @@ class V3SyncEngine(
         HttpSyncKvClient(settings.baseUrl, settings.bearerToken)
     },
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
+    /**
+     * When set, remote-only manga are listed in this cloud catalogue instead of downloaded, and
+     * only the ones the user tapped are downloaded. Null downloads every remote-only book.
+     */
+    private val cloudBooks: HttpSyncCloudBooks? = null,
+    /** Runs on downloaded cloud manga before they leave the catalogue (see [V3Executor]). */
+    beforeCloudBooksShown: suspend (List<java.io.File>) -> Unit = {},
 ) {
     private val localState = V3LocalState(
         bookRepository = bookRepository,
@@ -56,6 +64,8 @@ class V3SyncEngine(
         payloadCodec = payloadCodec,
         pushOps = pushOps,
         bookLocks = bookLocks,
+        cloudBooks = cloudBooks,
+        beforeCloudBooksShown = beforeCloudBooksShown,
     )
 
     // Serialize syncOnce calls. The shelf-state and deleted-book sidecars are written
@@ -90,7 +100,9 @@ class V3SyncEngine(
             )
 
             onProgress(V3Progress(V3Phase.Planning, "Computing plan"))
-            val plan = planner.compute(local, remoteResult.snapshot, legacyBookmarks = settings.exchangeLegacyBookmarks)
+            // Taps after this point are left for the next pass (see hasUnplannedRequests).
+            val planned = local.copy(cloudDownloadRequests = cloudBooks?.takeRequestsForPlan())
+            val plan = planner.compute(planned, remoteResult.snapshot, legacyBookmarks = settings.exchangeLegacyBookmarks)
 
             // Per-key remote-listing errors (decoding failures, etc) and planner-level
             // conflicts (e.g. cross-content-type syncId collisions, Bug 6) accumulate

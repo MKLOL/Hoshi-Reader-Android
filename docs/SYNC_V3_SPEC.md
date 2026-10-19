@@ -251,6 +251,14 @@ Planner rules (deterministic):
 - **Import remote-only books.** If `remote.manifest != null` and no local root for
   that syncId, action is `ImportRemoteBook`. Subsequent actions referencing the
   same syncId are deferred until executor materializes the local root.
+- **Cloud manga.** When the engine has a cloud catalogue (`V3LocalSnapshot.cloudDownloadRequests`
+  non-null), a remote-only Mokuro book with a manifest goes to `V3Plan.cloudBooks` instead.
+  Only the syncIds the user tapped also get the import above, plus its follow-up actions. The
+  executor records the list first. After the actions, it gives each imported book its newest
+  position from the bookmark maps, and only then removes it from the catalogue (the shelf shows
+  it from that moment). It then reads missing covers with byte ranges, stopping at the first
+  network error. Books neither listed nor pending (manifest unreadable this time) are dropped.
+  Failed requests are cleared with their reason. EPUBs are always imported.
 - **Bookmark LWW.** Compare `remote.bookmark.lastModified` to local
   `bookmark.lastModified` (via `compareRfc3339`). Newer wins. Tie → no action.
 - **Metadata shelf merge.** Uses the existing `shouldApplyRemoteShelfPlacement`

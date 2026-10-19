@@ -107,6 +107,13 @@
     <string name="bookshelf_title_label" comment="Text-field label for renaming a book, distinct from the sort option.">Title</string>
     <string name="bookshelf_section_reading">Reading</string>
     <string name="bookshelf_section_unshelved">Unshelved</string>
+    <string name="bookshelf_section_cloud">Not downloaded</string>
+    <string name="bookshelf_cloud_size_format">In the cloud · %1$s</string>
+    <string name="bookshelf_cloud_waiting">Waiting to download…</string>
+    <string name="bookshelf_cloud_downloading_format">Downloading %1$d%%</string>
+    <string name="bookshelf_cloud_finishing">Finishing…</string>
+    <string name="bookshelf_cloud_failed">Download failed · tap to retry</string>
+    <string name="bookshelf_cloud_download">Download</string>
     <string name="bookshelf_selected_count_format">%1$d Selected</string>
     <string name="bookshelf_sort_books">Sort books</string>
     <string name="bookshelf_sorting_by">Sorting by...</string>
@@ -809,6 +816,10 @@
     <string name="http_sync_finishing_maps">Finishing sync</string>
     <string name="http_sync_errors">Sync errors:</string>
     <string name="http_sync_complete_format">Sync complete: %1$s</string>
+    <plurals name="http_sync_new_cloud_books">
+        <item quantity="one">%1$d new manga is on the shelf under Not downloaded. Tap it to download.</item>
+        <item quantity="other">%1$d new manga are on the shelf under Not downloaded. Tap one to download it.</item>
+    </plurals>
     <string name="http_sync_failed_format">Sync failed: %1$s</string>
     <string name="http_sync_unknown_error">Unable to complete sync.</string>
     <string name="main_tab_podcasts">Podcasts</string>

@@ -134,6 +134,10 @@ stored representation and its hash (`Content-Encoding: identity`, `Cache-Control
 Android retains partial archives across interruption, checks response offset/size/ETag,
 and verifies the manifest SHA before extraction; it safely accepts legacy servers' 200
 responses, but saving transfer bandwidth across retries requires server range support.
+Android also reads a manga's cover from its `payload.zip` with byte ranges and no `If-Range`:
+the archive tail (ZIP end records), the central directory, then the first page entry. A
+server that answers 200 instead of 206 is disconnected before the body is read, and the
+manga is listed without a cover.
 
 ### `DELETE /v1/kv/{key}`
 

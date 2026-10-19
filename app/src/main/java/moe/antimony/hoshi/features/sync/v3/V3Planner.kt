@@ -57,6 +57,8 @@ class V3Planner {
         val plannerErrors = mutableListOf<V3Error>()
 
         val pendingRemoteOnly = mutableSetOf<String>()
+        val cloudRequests = local.cloudDownloadRequests
+        val cloudBooks = mutableListOf<V3CloudBook>()
 
         val localBySyncId: Map<String, V3LocalBook> = local.books.associateBy { it.syncId }
         val allSyncIds = (localBySyncId.keys + remote.books.keys).toSortedSet()
@@ -103,6 +105,19 @@ class V3Planner {
             // pending-remote-only when no manifest is available.
             if (l == null && r != null) {
                 if (r.manifest != null) {
+                    // Manga are large: with the cloud catalogue on, sync only lists them, and
+                    // only the ones the user tapped are downloaded (with everything below).
+                    if (cloudRequests != null && r.manifest.format == HttpSyncContentType.Mokuro) {
+                        cloudBooks += V3CloudBook(
+                            syncId = syncId,
+                            title = r.metadata?.title?.takeIf { it.isNotBlank() } ?: r.manifest.originalName,
+                            manifest = r.manifest,
+                            payloadKeys = r.payloadKeys ?: HttpSyncPayloadKeys.forFormat(r.manifest.format, syncId),
+                            shelfName = r.metadata?.shelfName,
+                            requestedAt = cloudRequests[syncId],
+                        )
+                        if (syncId !in cloudRequests) continue
+                    }
                     // Bug 2: thread shelf placement (when remote metadata has one) into the
                     // import action itself so the executor can apply it in the same step
                     // the directory is created. Emitting a separate ApplyRemoteMetadata
@@ -536,6 +551,7 @@ class V3Planner {
             actions = actions,
             pendingRemoteOnlyBooks = pendingRemoteOnly,
             errors = plannerErrors.toList(),
+            cloudBooks = cloudRequests?.let { cloudBooks.toList() },
         )
     }
 

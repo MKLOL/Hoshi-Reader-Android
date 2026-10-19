@@ -28,6 +28,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
@@ -187,7 +188,17 @@ internal fun HttpSyncStatusLine(status: SyncStatus) {
         is SyncStatus.Done -> {
             val errorTail = if (status.result.errors.isEmpty()) "" else
                 "\n" + stringResource(R.string.http_sync_errors) + "\n" + status.result.errors.joinToString("\n") { " • $it" }
-            stringResource(R.string.http_sync_complete_format, status.result.summary()) + errorTail to MaterialTheme.colorScheme.onSurface
+            val cloudLine = status.result.newCloudBooks.takeIf { it > 0 }?.let { count ->
+                pluralStringResource(R.plurals.http_sync_new_cloud_books, count, count)
+            }
+            // New manga are the news when nothing else moved ("nothing to sync" would contradict it).
+            val headline = if (cloudLine != null && status.result.summaryParts().isEmpty()) {
+                cloudLine
+            } else {
+                stringResource(R.string.http_sync_complete_format, status.result.summary()) +
+                    cloudLine?.let { "\n" + it }.orEmpty()
+            }
+            headline + errorTail to MaterialTheme.colorScheme.onSurface
         }
         is SyncStatus.Failed -> stringResource(
             R.string.http_sync_failed_format,

@@ -105,6 +105,13 @@
     <string name="bookshelf_title_label" comment="Text-field label for renaming a book, distinct from the sort option.">标题</string>
     <string name="bookshelf_section_reading">正在阅读</string>
     <string name="bookshelf_section_unshelved">未归类</string>
+    <string name="bookshelf_section_cloud">未下载</string>
+    <string name="bookshelf_cloud_size_format">云端 · %1$s</string>
+    <string name="bookshelf_cloud_waiting">等待下载…</string>
+    <string name="bookshelf_cloud_downloading_format">正在下载 %1$d%%</string>
+    <string name="bookshelf_cloud_finishing">即将完成…</string>
+    <string name="bookshelf_cloud_failed">下载失败 · 点按重试</string>
+    <string name="bookshelf_cloud_download">下载</string>
     <string name="bookshelf_selected_count_format">已选择 %1$d 本</string>
     <string name="bookshelf_sort_books">排序书籍</string>
     <string name="bookshelf_sorting_by">排序方式...</string>
@@ -807,6 +814,10 @@
     <string name="http_sync_finishing_maps">正在完成同步</string>
     <string name="http_sync_errors">同步错误：</string>
     <string name="http_sync_complete_format">同步完成：%1$s</string>
+    <plurals name="http_sync_new_cloud_books">
+        <item quantity="one">书架的“未下载”中有 %1$d 部新漫画，点按即可下载。</item>
+        <item quantity="other">书架的“未下载”中有 %1$d 部新漫画，点按即可下载。</item>
+    </plurals>
     <string name="http_sync_failed_format">同步失败：%1$s</string>
     <string name="http_sync_unknown_error">无法完成同步。</string>
     <string name="main_tab_podcasts">播客</string>

@@ -7,6 +7,9 @@ Semantic Versioning.
 
 ## [Unreleased]
 
+### Added
+- **New manga wait in the cloud until you want them.** With HTTP sync, a manga added on another device no longer downloads during sync. It appears on the shelf under **Not downloaded** with its cover and a cloud badge, and the sync result says how many arrived. Tap one to download it: the cover fades and a ring fills as it downloads, and the book arrives with its reading position, chats, translations and statistics. A failed download stays in the folder so you can tap it again. Stopping the sync cancels the download, and one interrupted by closing the app resumes when you reopen it. EPUBs still download as before.
+
 ## [v0.12.4] - 2026-10-04
 
 ### Changed

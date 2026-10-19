@@ -124,6 +124,11 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import moe.antimony.hoshi.LocalHoshiAppContainer
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
+import moe.antimony.hoshi.features.sync.http.HttpSyncStatusDialog
+import moe.antimony.hoshi.features.sync.http.syncIdForMetadata
 import moe.antimony.hoshi.R
 import moe.antimony.hoshi.epub.BookEntry
 import moe.antimony.hoshi.epub.BookRepository
@@ -196,6 +201,28 @@ fun BookshelfView(
         },
     )
     val uiState by booksViewModel.uiState.collectAsState()
+    val cloudStore = appContainer.httpSyncCloudBooks
+    val httpSyncSettings by appContainer.httpSyncSettingsRepository.settings.collectAsStateWithLifecycle(initialValue = null)
+    val cloudRecords by cloudStore.books.collectAsStateWithLifecycle()
+    val cloudDownloads by cloudStore.downloads.collectAsStateWithLifecycle()
+    val installedSyncIds = remember(uiState.bookEntries) {
+        uiState.bookEntries.mapNotNullTo(mutableSetOf()) { syncIdForMetadata(it.metadata) }
+    }
+    val syncRunning = httpSyncStatus is SyncStatus.Running
+    val cloudBooks = remember(cloudRecords, cloudDownloads, installedSyncIds, syncRunning, uiState.sortOption, httpSyncSettings) {
+        // Without a server there is nothing to download them from; the v2 rollback engine
+        // downloads every book itself and keeps no catalogue.
+        if (httpSyncSettings?.isConfigured != true || httpSyncSettings?.useV3Sync != true) {
+            emptyList()
+        } else {
+            cloudBookItems(cloudRecords, cloudDownloads, installedSyncIds, syncRunning, uiState.sortOption, cloudStore::coverFile)
+        }
+    }
+    val cloudScope = rememberCoroutineScope()
+    // Manga tapped since the last sync ended, and whether one was tapped while a sync ran.
+    var tappedCloudSyncIds by remember { mutableStateOf(emptySet<String>()) }
+    var cloudTappedDuringSync by remember { mutableStateOf(false) }
+    var cloudSyncProblem by remember { mutableStateOf<SyncStatus?>(null) }
     val epubFolderScanner = remember(context) { SafImportDirectoryScanner(context.contentResolver) }
     var sortMenuExpanded by remember { mutableStateOf(false) }
     var contextMenuTarget by remember { mutableStateOf<BookContextMenuTarget?>(null) }
@@ -274,10 +301,53 @@ fun BookshelfView(
     }
 
     LaunchedEffect(httpSyncStatus) {
-        if (httpSyncStatus is SyncStatus.Done || httpSyncStatus is SyncStatus.Failed) {
+        val status = httpSyncStatus
+        if (status is SyncStatus.Done || status is SyncStatus.Failed) {
             // A partial sync may still have imported books or updated reading positions.
             booksViewModel.reloadBookEntries()
         }
+        if (status is SyncStatus.Running || tappedCloudSyncIds.isEmpty()) return@LaunchedEffect
+        // The sync carrying the shelf's taps ended: say why when a tapped manga did not arrive.
+        val tapped = tappedCloudSyncIds
+        val failedDownload = status is SyncStatus.Done && cloudStore.books.value.any {
+            it.syncId in tapped && it.downloadError != null
+        }
+        if (status is SyncStatus.Failed || failedDownload) cloudSyncProblem = status
+        // A sync that failed outright (the server refused it) downloads nothing later either.
+        if (status is SyncStatus.Failed) tapped.forEach { cloudStore.cancelRequest(it) }
+        // A tap that landed after the sync's last pass was planned gets its own sync.
+        val restart = status is SyncStatus.Done && cloudTappedDuringSync && cloudStore.hasUnplannedRequests()
+        cloudTappedDuringSync = false
+        if (restart) {
+            appContainer.httpSyncManualSync.start()
+        } else {
+            tappedCloudSyncIds = emptySet()
+        }
+    }
+
+    LaunchedEffect(cloudStore) {
+        cloudStore.reload()
+        // A download the app was closed during (Stop withdraws taps, so a saved one was
+        // interrupted) picks up where it stopped, like Android resuming the transfer job.
+        val settings = appContainer.httpSyncSettingsRepository.settings.first()
+        val manualSync = appContainer.httpSyncManualSync
+        if (cloudStore.claimInterruptedDownloads() && settings.isConfigured && settings.useV3Sync &&
+            manualSync.status.value is SyncStatus.Idle && cloudStore.hasRequestedDownloads()
+        ) {
+            tappedCloudSyncIds = cloudStore.books.value.filter { it.downloadRequestedAt != null }.mapTo(mutableSetOf()) { it.syncId }
+            manualSync.start()
+            if (manualSync.status.value is SyncStatus.Failed) tappedCloudSyncIds = emptySet()
+        }
+    }
+
+    // A downloaded manga leaves the catalogue the moment it is installed, while its sync may
+    // still be running: show the book right away instead of when the sync ends.
+    val cloudSyncIds = remember(cloudRecords) { cloudRecords.mapTo(mutableSetOf()) { it.syncId } }
+    var previousCloudSyncIds by remember { mutableStateOf<Set<String>?>(null) }
+    LaunchedEffect(cloudSyncIds) {
+        val previous = previousCloudSyncIds
+        previousCloudSyncIds = cloudSyncIds
+        if (previous != null && !cloudSyncIds.containsAll(previous)) booksViewModel.reloadBookEntries()
     }
 
     LaunchedEffect(Unit) {
@@ -357,7 +427,38 @@ fun BookshelfView(
                 syncAudioBook = sasayakiSettings.enabled && sasayakiSettings.syncEnabled,
             )
         },
+        cloudBooks = cloudBooks,
+        onDownloadCloudBook = { item ->
+            cloudScope.launch {
+                // The download runs inside a full sync, which also brings the book's bookmark,
+                // chats and statistics. A sync already running takes the tap in another pass.
+                if (!cloudStore.requestDownload(item.syncId)) return@launch
+                tappedCloudSyncIds = tappedCloudSyncIds + item.syncId
+                val manualSync = appContainer.httpSyncManualSync
+                if (manualSync.status.value is SyncStatus.Running) {
+                    cloudTappedDuringSync = true
+                    return@launch
+                }
+                manualSync.start()
+                // Offline, start() fails at once, and the same failure twice is no status change.
+                // Nothing will download the book, so it is not left waiting either.
+                val failed = manualSync.status.value as? SyncStatus.Failed
+                if (failed != null) {
+                    cloudStore.cancelRequest(item.syncId)
+                    cloudSyncProblem = failed
+                    tappedCloudSyncIds = emptySet()
+                }
+            }
+        },
     )
+
+    cloudSyncProblem?.let { status ->
+        HttpSyncStatusDialog(
+            status = status,
+            onDismiss = { cloudSyncProblem = null },
+            onStop = { cloudSyncProblem = null },
+        )
+    }
 
     uiState.statusMessage?.let { message ->
         AlertDialog(
@@ -631,14 +732,14 @@ private fun MainShellLayoutSpec.toNavigationSuiteType(): NavigationSuiteType =
     }
 
 @Composable
-private fun MainShellTextStyle.toTextStyle(): TextStyle =
+internal fun MainShellTextStyle.toTextStyle(): TextStyle =
     when (this) {
         MainShellTextStyle.BodyLarge -> MaterialTheme.typography.bodyLarge
         MainShellTextStyle.TitleMedium -> MaterialTheme.typography.titleMedium
         MainShellTextStyle.TitleLarge -> MaterialTheme.typography.titleLarge
     }
 
-private fun MainShellFontWeight.toFontWeight(): FontWeight =
+internal fun MainShellFontWeight.toFontWeight(): FontWeight =
     when (this) {
         MainShellFontWeight.Normal -> FontWeight.Normal
         MainShellFontWeight.Medium -> FontWeight.Medium
@@ -708,6 +809,8 @@ private fun BooksTab(
     onMatchSasayaki: (BookEntry) -> Unit,
     syncSettings: SyncSettings,
     onSyncBook: (BookEntry, SyncDirection?) -> Unit,
+    cloudBooks: List<CloudBookItem>,
+    onDownloadCloudBook: (CloudBookItem) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val fileTaskBlocked = blockingProgressMessage != null
@@ -760,7 +863,7 @@ private fun BooksTab(
                     CircularProgressIndicator()
                 }
                 !hasLoadedBooks -> Box(Modifier.fillMaxSize())
-                hasLoadedBooks && bookEntries.isEmpty() -> EmptyBooksView(
+                hasLoadedBooks && bookEntries.isEmpty() && cloudBooks.isEmpty() -> EmptyBooksView(
                     enabled = !fileTaskBlocked,
                     onImport = onImport,
                     onImportMangaFolder = onImportMangaFolder,
@@ -874,6 +977,60 @@ private fun BooksTab(
                                                 hasPretranslations = entry.metadata.id in pretranslatedBookIds,
                                                 modifier = Modifier.width(collapsedCoverWidthDp.dp),
                                             )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        if (cloudBooks.isNotEmpty()) {
+                            // Manga on the sync server only, kept apart from the library like a shelf.
+                            // Open when it is all there is to show.
+                            val isCloudExpanded = shelfExpansionState[CLOUD_SECTION_KEY] ?: bookEntries.isEmpty()
+                            item(
+                                key = "header:$CLOUD_SECTION_KEY",
+                                contentType = "sectionHeader",
+                                span = { androidx.compose.foundation.lazy.grid.GridItemSpan(maxLineSpan) },
+                            ) {
+                                BookshelfSectionHeader(
+                                    title = stringResource(R.string.bookshelf_section_cloud),
+                                    count = cloudBooks.size,
+                                    layoutSpec = layoutSpec,
+                                    isCollapsible = true,
+                                    isExpanded = isCloudExpanded,
+                                    onToggle = { onShelfExpandedChange(CLOUD_SECTION_KEY, !isCloudExpanded) },
+                                )
+                            }
+                            if (isCloudExpanded) {
+                                items(
+                                    items = cloudBooks,
+                                    key = { "$CLOUD_SECTION_KEY:${it.syncId}" },
+                                    contentType = { "cloudBook" },
+                                ) { item ->
+                                    CloudBookGridCell(
+                                        item = item,
+                                        layoutSpec = layoutSpec,
+                                        enabled = !fileTaskBlocked && !isSelecting,
+                                        onDownload = { onDownloadCloudBook(item) },
+                                    )
+                                }
+                            } else {
+                                item(
+                                    key = "preview:$CLOUD_SECTION_KEY",
+                                    contentType = "collapsedPreview",
+                                    span = { androidx.compose.foundation.lazy.grid.GridItemSpan(maxLineSpan) },
+                                ) {
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clickable(enabled = !fileTaskBlocked) {
+                                                onShelfExpandedChange(CLOUD_SECTION_KEY, true)
+                                            },
+                                        horizontalArrangement = Arrangement.spacedBy(CollapsedShelfCoverSpacingDp.dp),
+                                    ) {
+                                        val collapsedCoverWidthDp =
+                                            layoutSpec.collapsedShelfPreviewCoverWidthDp(contentWidthDp)
+                                        cloudBooks.take(layoutSpec.collapsedShelfPreviewColumns(contentWidthDp)).forEach { item ->
+                                            CloudBookCover(item, Modifier.width(collapsedCoverWidthDp.dp))
                                         }
                                     }
                                 }

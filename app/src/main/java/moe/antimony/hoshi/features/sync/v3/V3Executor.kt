@@ -17,6 +17,10 @@ import moe.antimony.hoshi.features.sync.http.StatisticsRemoteListing
 import moe.antimony.hoshi.features.sync.http.HttpSyncActiveBooks
 import moe.antimony.hoshi.features.sync.http.HttpSyncBookLocks
 import moe.antimony.hoshi.features.sync.http.HttpSyncBookmarkBlob
+import moe.antimony.hoshi.features.sync.http.FailedCloudRequest
+import moe.antimony.hoshi.features.sync.http.HttpSyncCloudBookListing
+import moe.antimony.hoshi.features.sync.http.HttpSyncCloudBooks
+import moe.antimony.hoshi.features.sync.http.fetchRemoteMangaCover
 import moe.antimony.hoshi.features.sync.http.HttpSyncChatEntryBlob
 import moe.antimony.hoshi.features.sync.http.PretranslationsBlob
 import moe.antimony.hoshi.features.sync.http.HttpSyncDeletedBookStateStore
@@ -57,6 +61,10 @@ class V3Executor(
     private val payloadCodec: HttpSyncPayloadCodec,
     private val pushOps: V3PushOps,
     private val bookLocks: HttpSyncBookLocks = HttpSyncBookLocks(),
+    /** Receives [V3Plan.cloudBooks], their covers and the tapped downloads' progress. */
+    private val cloudBooks: HttpSyncCloudBooks? = null,
+    /** Brings downloaded cloud manga up to date (reading position) before the shelf shows them. */
+    private val beforeCloudBooksShown: suspend (List<File>) -> Unit = {},
 ) {
     private val json = Json {
         ignoreUnknownKeys = true
@@ -103,6 +111,19 @@ class V3Executor(
         // concurrent user delete recorded mid-sync. Instead, mutate via the
         // atomic per-key helpers (`recordDeletedBook` / `removeDeletedBook`),
         // which re-read the latest disk state under a process-wide lock.
+
+        // Cloud manga are listed first, so the shelf shows them while any longer transfer below
+        // is still running. Their covers come after the actions, so a tapped download never
+        // waits for a new library's covers.
+        val cloudListed = plan.cloudBooks?.takeIf { cloudBooks != null }
+        var newCloudBooks = 0
+        val cloudRequests = cloudListed.orEmpty()
+            .mapNotNull { book -> book.requestedAt?.let { book.syncId to it } }
+            .toMap()
+        val failedCloudRequests = mutableMapOf<String, FailedCloudRequest>()
+        if (cloudBooks != null && cloudListed != null) {
+            newCloudBooks = cloudBooks.recordListed(cloudListed.map { it.toListing() })
+        }
 
         val actions = plan.actions
         for ((index, action) in actions.withIndex()) {
@@ -174,7 +195,13 @@ class V3Executor(
                         }
                     }
                     is V3Action.ImportRemoteBook -> {
-                        val newRoot = importRemoteBook(transport, action.syncId, action, onProgress)
+                        val cloudDownload = cloudBooks?.takeIf { action.syncId in cloudRequests }
+                        val newRoot = try {
+                            importRemoteBook(transport, action.syncId, action, onProgress, cloudDownload)
+                        } catch (e: Throwable) {
+                            cloudDownload?.clearProgress(action.syncId)
+                            throw e
+                        }
                         if (newRoot != null) {
                             rootBySyncId[action.syncId] = newRoot
                             appliedPayloads += 1
@@ -193,6 +220,8 @@ class V3Executor(
                                     appliedShelfPlacements += 1
                                 }
                             }
+                            // The shelf shows it once everything below has been applied to it.
+                            cloudDownload?.reportProgress(action.syncId, 1f)
                         }
                     }
                     is V3Action.ReplaceRemotePayload -> {
@@ -407,14 +436,47 @@ class V3Executor(
                 // Never swallow cancellation: structured concurrency requires the
                 // CancellationException to flow back to the caller so the parent job
                 // sees the sync as cancelled rather than as a normal `Done`.
+                cloudRequests.keys.forEach { cloudBooks?.clearProgress(it) }
                 throw e
             } catch (e: Exception) {
+                val message = e.message ?: e.javaClass.simpleName
                 errors += V3Error(
                     syncId = action.syncId,
                     action = action::class.simpleName ?: "Unknown",
-                    message = e.message ?: e.javaClass.simpleName,
+                    message = message,
                 )
+                if (action is V3Action.ImportRemoteBook) {
+                    cloudRequests[action.syncId]?.let { requestedAt ->
+                        failedCloudRequests[action.syncId] = FailedCloudRequest(
+                            requestedAt,
+                            message.ifBlank { e.javaClass.simpleName },
+                        )
+                    }
+                }
             }
+        }
+
+        val cloudStore = cloudBooks
+        if (cloudStore != null && cloudListed != null) {
+            // A downloaded manga leaves the catalogue (and appears on the shelf) only now, with its
+            // chats, translations and statistics applied, and its position from the maps.
+            val installed = cloudRequests.keys.mapNotNull { syncId -> rootBySyncId[syncId]?.let { syncId to it } }
+            if (installed.isNotEmpty()) {
+                try {
+                    beforeCloudBooksShown(installed.map { it.second })
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    installed.forEach { (syncId, _) -> cloudStore.clearProgress(syncId) }
+                    throw e
+                } catch (e: Exception) {
+                    // The end-of-sync map publication applies the position instead.
+                }
+                for ((syncId, _) in installed) cloudStore.markDownloaded(syncId)
+            }
+            fetchCloudCovers(transport, cloudStore, cloudListed, onProgress)
+            // A book whose manifest could not be read this time is still on the server: keep
+            // its entry, cover and request for the next pass.
+            val stillRemote = cloudListed.mapTo(mutableSetOf()) { it.syncId } + plan.pendingRemoteOnlyBooks
+            runCatching { cloudStore.finishPass(stillRemote, failedCloudRequests) }
         }
 
         if (shelfStateDirty) {
@@ -450,7 +512,45 @@ class V3Executor(
             ),
             remoteOnlyBooks = plan.pendingRemoteOnlyBooks.size,
             errors = errors,
+            newCloudBooks = newCloudBooks,
         )
+    }
+
+    /**
+     * Reads each cloud manga's cover from its remote archive once per archive version. Covers are
+     * best effort: a server without byte ranges or an unusual archive just leaves the
+     * placeholder. A network failure ends the covers for this pass (an unreachable server would
+     * otherwise time out once per manga) and the next sync retries them; neither is a sync error.
+     */
+    private suspend fun fetchCloudCovers(
+        transport: HttpSyncKvTransport,
+        store: HttpSyncCloudBooks,
+        listed: List<V3CloudBook>,
+        onProgress: suspend (V3Progress) -> Unit,
+    ) {
+        // A tapped manga is about to be downloaded with its real cover.
+        val missing = listed.filter { book ->
+            book.requestedAt == null && store.needsCover(book.syncId, book.manifest.sha256)
+        }
+        for ((index, book) in missing.withIndex()) {
+            onProgress(
+                V3Progress(
+                    phase = V3Phase.ListingRemote,
+                    message = "Fetching covers",
+                    detail = book.title,
+                    completed = index,
+                    total = missing.size,
+                ),
+            )
+            try {
+                val image = fetchRemoteMangaCover(transport, book.payloadKeys.zip, book.manifest.sizeBytes)
+                store.saveCover(book.syncId, book.manifest.sha256, image)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                return
+            }
+        }
     }
 
     /**
@@ -462,7 +562,10 @@ class V3Executor(
         syncId: String,
         action: V3Action.ImportRemoteBook,
         onProgress: suspend (V3Progress) -> Unit = {},
+        /** Set for a tapped cloud manga, whose cover shows the download's progress. */
+        cloudDownload: HttpSyncCloudBooks? = null,
     ): File? {
+        cloudDownload?.reportProgress(syncId, null)
         val stagingRoot = createSyncImportStagingDirectory(bookRepository.booksDirectory)
         var publishedRoot: File? = null
         return try {
@@ -480,7 +583,14 @@ class V3Executor(
                     transport = transport,
                     syncId = syncId,
                     targetDir = stagingRoot,
-                    onByteProgress = onByteProgress,
+                    onByteProgress = if (cloudDownload == null) {
+                        onByteProgress
+                    } else {
+                        { transferred, total ->
+                            onByteProgress(transferred, total)
+                            if (total > 0) cloudDownload.reportProgress(syncId, transferred.toFloat() / total)
+                        }
+                    },
                     keys = action.payloadKeys,
                     expectedFormat = action.manifest.format,
                 )
@@ -679,3 +789,13 @@ class V3Executor(
         is V3Action.PushAiSettings -> V3Phase.SyncingAppSettings
     }
 }
+
+private fun V3CloudBook.toListing() = HttpSyncCloudBookListing(
+    syncId = syncId,
+    title = title,
+    format = manifest.format,
+    sizeBytes = manifest.sizeBytes,
+    archiveSha256 = manifest.sha256,
+    contentSha256 = manifest.contentSha256,
+    shelfName = shelfName,
+)

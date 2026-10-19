@@ -19,6 +19,8 @@ import moe.antimony.hoshi.features.sync.http.HttpSyncAutoPush
 import moe.antimony.hoshi.features.sync.http.HttpSyncBatchState
 import moe.antimony.hoshi.features.sync.http.HttpSyncContentType
 import moe.antimony.hoshi.features.sync.http.HttpSyncBookLocks
+import moe.antimony.hoshi.features.sync.http.HttpSyncCloudBooks
+import moe.antimony.hoshi.features.sync.http.HttpSyncResult
 import moe.antimony.hoshi.features.sync.http.HttpSyncDeletedBookRecord
 import moe.antimony.hoshi.features.sync.http.HttpSyncDeletedBookStateStore
 import moe.antimony.hoshi.features.sync.http.HttpSyncEngineDispatcher
@@ -77,13 +79,24 @@ class SyncDevice(
     statisticsPreferences: StatisticsPreferencesStore? = null,
     /** This install's usage log, exchanged with the other devices' like the app's. */
     val usageLog: moe.antimony.hoshi.features.usage.UsageLog? = null,
+    /** Lists remote-only manga in a cloud catalogue (as the app does) instead of downloading them. */
+    cloudCatalogue: Boolean = false,
 ) : AutoCloseable {
     private val bookLocks = HttpSyncBookLocks()
     val repo = BookRepository(filesDir, bookLocks = bookLocks, deviceIdentity = deviceIdentity)
+    /** The app's catalogue; covers are stored as read, since JVM tests cannot decode images. */
+    val cloudBooks: HttpSyncCloudBooks? = if (cloudCatalogue) {
+        HttpSyncCloudBooks(repo.booksDirectory, coverThumbnail = { it }, ioDispatcher = Dispatchers.IO)
+    } else {
+        null
+    }
     val history = AiChatHistoryStore()
     val codec = HttpSyncPayloadCodec()
     val settings = HttpSyncSettings(server.baseUrl, server.token, useV3Sync = engine == SyncEngine.V3)
     private var cursor: String? = null
+    /** The full result of the latest [sync]. */
+    var lastResult: HttpSyncResult? = null
+        private set
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
     private val deletedBooks = HttpSyncDeletedBookStateStore(json)
 
@@ -111,6 +124,8 @@ class SyncDevice(
         payloadCodec = codec,
         transportFactory = transportFactory,
         ioDispatcher = Dispatchers.IO,
+        cloudBooks = cloudBooks,
+        beforeCloudBooksShown = { roots -> batchState.applyKnownBookmarks(roots) },
     )
     /** The reader's fire-and-forget push path (page turns, chat replies). */
     val pusher = HttpSyncPusher(bookRepository = repo, bookLocks = bookLocks, transportFactory = transportFactory, ioDispatcher = Dispatchers.IO)
@@ -132,6 +147,7 @@ class SyncDevice(
         installationId = installationId,
         statisticsPreferences = statisticsPreferences,
         usageLog = usageLog,
+        cloudBooks = cloudBooks,
     )
     private val fastSync = HttpSyncFastSync(
         state = batchState,
@@ -145,7 +161,10 @@ class SyncDevice(
      * including cursor persistence for v2.
      */
     suspend fun sync(): SyncOutcome {
-        val result = fastSync.syncNow(settings.copy(lastSyncedAt = cursor)) { reconcileSettings, transport, report ->
+        lastResult = fastSync.syncNow(
+            settings.copy(lastSyncedAt = cursor),
+            forceFullSync = settings.useV3Sync && cloudBooks?.hasRequestedDownloads() == true,
+        ) { reconcileSettings, transport, report ->
             HttpSyncEngineDispatcher.syncOnce(
                 reconciler = reconciler,
                 v3Engine = v3,
@@ -154,6 +173,7 @@ class SyncDevice(
                 onProgress = report,
             )
         }
+        val result = lastResult!!
         result.newLastSyncedAt?.let { cursor = it }
         return SyncOutcome(
             uploadedPayloads = result.uploadedPayloads,

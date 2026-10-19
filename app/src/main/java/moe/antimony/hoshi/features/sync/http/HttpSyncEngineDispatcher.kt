@@ -115,6 +115,7 @@ internal fun V3SyncResult.toHttpSyncResult(): HttpSyncResult = HttpSyncResult(
     downloadedStatistics = applied.statistics,
     downloadedAppSettings = applied.aiSettings > 0,
     remoteOnlyBooks = remoteOnlyBooks,
+    newCloudBooks = newCloudBooks,
     errors = errors.map { e ->
         val prefix = listOfNotNull(e.syncId, e.action).joinToString(":")
         if (prefix.isEmpty()) e.message else "$prefix: ${e.message}"

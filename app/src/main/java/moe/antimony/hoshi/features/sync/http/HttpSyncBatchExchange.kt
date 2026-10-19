@@ -133,6 +133,9 @@ private class HttpSyncWriteTrackingTransport(
         record(key, null)
     }
 
+    override suspend fun getRange(key: String, start: Long?, length: Int): HttpSyncKvRange? =
+        delegate.getRange(key, start, length)
+
     fun expectedLegacyEtags(after: Map<String, String>): Map<String, String> = synchronized(mutations) {
         after.toMutableMap().apply {
             for (mutation in mutations) {
@@ -165,6 +168,12 @@ class HttpSyncBatchState(
     statisticsPreferences: StatisticsPreferencesStore? = null,
     /** This device's usage log, exchanged with every other device's alongside the statistics. */
     usageLog: moe.antimony.hoshi.features.usage.UsageLog? = null,
+    /**
+     * Manga listed but not downloaded. They belong to the library as much as installed books:
+     * they count as present when the server's book map is compared, and are kept in the map
+     * this device publishes.
+     */
+    private val cloudBooks: HttpSyncCloudBooks? = null,
 ) {
     internal val booksDirectory: java.io.File get() = bookRepository.booksDirectory
 
@@ -360,7 +369,10 @@ class HttpSyncBatchState(
 
             val localBookIds = localEntries.mapNotNull { syncIdForMetadata(it.metadata) }.toSet()
             val cachedLocalHashes = readCachedLocalBookHashes(localEntries)
-            val localBookMismatch = localBookIds != remoteBooks.keys ||
+            // A cloud manga still in the map counts as present; its archive changing is noticed
+            // by the next full sync, which reads its manifest.
+            val knownBookIds = localBookIds + cloudBookHashes(localBookIds, remoteBooks).keys
+            val localBookMismatch = knownBookIds != remoteBooks.keys ||
                 (localBookIds - cachedLocalHashes.keys).any { !HttpSyncActiveBooks.contains(it) } ||
                 hasDirtyLocalPayload(localEntries) ||
                 cachedLocalHashes.any { (id, sha) ->
@@ -471,6 +483,8 @@ class HttpSyncBatchState(
                 for ((id, remoteSha) in before.books) {
                     if (HttpSyncActiveBooks.contains(id) && id in this) this[id] = remoteSha
                 }
+                val localIds = localEntries.mapNotNullTo(mutableSetOf()) { syncIdForMetadata(it.metadata) }
+                for ((id, sha) in cloudBookHashes(localIds, before.books)) putIfAbsent(id, sha)
             }
 
             val booksResponse = transport.put(
@@ -507,6 +521,21 @@ class HttpSyncBatchState(
                 savePendingLocked(pending.filterNot { completed[it.key] == it.mutationId }, pending)
             }
             HttpSyncMapChanges(uploadedBookmarks = localBookmarks.size, downloadedBookmarks = applied)
+        }
+    }
+
+    /**
+     * Gives books a full sync just installed the newest position the maps already hold.
+     * [publishMaps] applies it too, but only after the whole pass. A downloaded cloud manga
+     * shows on the shelf before that, and opening it at the first page would publish that page.
+     */
+    internal suspend fun applyKnownBookmarks(roots: Collection<File>): Int = withContext(ioDispatcher) {
+        if (roots.isEmpty()) return@withContext 0
+        syncMutex.withLock {
+            val state = synchronized(stateLock) { loadStateLocked() }
+            val wanted = roots.mapTo(mutableSetOf()) { it.canonicalPath }
+            val entries = bookRepository.loadBookEntries().filter { it.root.canonicalPath in wanted }
+            applyRemoteWinners(mergeShards(state.bookmarkShards.values), readLocalBookmarks(entries), entries)
         }
     }
 
@@ -608,6 +637,20 @@ class HttpSyncBatchState(
             if (raw != null && SHA256_ETAG.matches(raw)) hashes[syncId] = raw
         }
         return hashes
+    }
+
+    /**
+     * The cloud manga not installed here that the server's map still lists, with the map's own
+     * values. A device that only lists a book never adds it to the map or changes its value:
+     * a catalogue entry left behind (a book deleted elsewhere, a rollback to the v2 engine,
+     * which keeps no catalogue) must not put the book back, or devices would trade the map
+     * every poll.
+     */
+    private fun cloudBookHashes(localIds: Set<String>, remoteBooks: Map<String, String>): Map<String, String> {
+        val records = cloudBooks?.records() ?: return emptyMap()
+        return records.filter { it.syncId !in localIds }
+            .mapNotNull { record -> remoteBooks[record.syncId]?.let { record.syncId to it } }
+            .toMap()
     }
 
     private fun hasDirtyLocalPayload(entries: List<BookEntry>): Boolean = entries.any { entry ->
@@ -731,6 +774,8 @@ class HttpSyncFastSync(
     suspend fun syncNow(
         settings: HttpSyncSettings,
         onProgress: suspend (HttpSyncProgress) -> Unit = {},
+        /** Runs the full reconcile even when the maps show no change (a tapped cloud manga). */
+        forceFullSync: Boolean = false,
         fullSync: suspend (HttpSyncSettings, HttpSyncKvTransport, suspend (HttpSyncProgress) -> Unit) -> HttpSyncResult,
     ): HttpSyncResult {
         val client = HttpSyncWriteTrackingTransport(transportFactory(settings))
@@ -743,7 +788,7 @@ class HttpSyncFastSync(
         // independently of any book transfer.
         onProgress(HttpSyncProgress(messageResource = R.string.http_sync_reading_history))
         val statistics = state.runStatistics(client, maps.listing, flush = true, retryFailed = true, onProgress = onProgress)
-        val result = if (!maps.needsBootstrap && !maps.booksChanged && !maps.otherChanged) {
+        val result = if (!forceFullSync && !maps.needsBootstrap && !maps.booksChanged && !maps.otherChanged) {
             // Nothing left to download, so any remaining partial archive has no retry coming.
             HttpSyncDownloadSpool.pruneAfterSync(state.booksDirectory)
             emptyResult()
@@ -754,7 +799,7 @@ class HttpSyncFastSync(
             fullCycleRunner.run(onProgress, requireOwnPass = true) { report ->
                 val work = state.syncMaps(client, report)
                 uploadedKeys = uploadedKeys + work.uploadedBookmarkKeys
-                if (!work.needsBootstrap && !work.booksChanged && !work.otherChanged) {
+                if (!forceFullSync && !work.needsBootstrap && !work.booksChanged && !work.otherChanged) {
                     return@run emptyResult()
                 }
                 val reconciled = fullSync(work.reconcileSettings(settings), client, report)

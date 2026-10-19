@@ -65,7 +65,11 @@ internal suspend fun downloadHttpSyncFile(
                     }
                     if (code != 200 && code != 206) {
                         if (code in 500..599 || code == 408 || code == 429) throw IOException("HTTP $code")
-                        throw HttpSyncException(moe.antimony.hoshi.R.string.http_sync_download_failed)
+                        throw HttpSyncException(
+                            moe.antimony.hoshi.R.string.http_sync_download_failed,
+                            "Download failed (HTTP $code).",
+                            code,
+                        )
                     }
                     val etag = connection.getHeaderField("ETag").orEmpty()
                     val range = connection.getHeaderField("Content-Range")

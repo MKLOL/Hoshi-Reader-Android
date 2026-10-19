@@ -25,6 +25,8 @@ class HttpSyncManualSync(
     private val schedule: (suspend () -> HttpSyncStartRoute)? = null,
     private val unschedule: () -> Unit = {},
     private val onCancelled: () -> Unit = {},
+    /** The user pressed Stop (not Android stopping the job, which reschedules it). */
+    private val onStopped: () -> Unit = {},
     private val sync: suspend (onProgress: suspend (HttpSyncProgress) -> Unit) -> HttpSyncResult,
 ) {
     private val execution = Mutex()
@@ -90,6 +92,7 @@ class HttpSyncManualSync(
         unschedule()
         if (execution.isLocked) onCancelled()
         mutableStatus.value = SyncStatus.Idle
+        onStopped()
     }
 
     /** Called by Android's transfer job/worker, including after process recreation. */

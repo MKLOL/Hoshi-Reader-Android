@@ -70,6 +70,7 @@ import moe.antimony.hoshi.features.sync.http.HttpSyncFullCycleRunner
 import moe.antimony.hoshi.features.sync.http.HttpSyncPusher
 import moe.antimony.hoshi.features.sync.http.HttpSyncReconciler
 import moe.antimony.hoshi.features.sync.http.HttpSyncSettingsRepository
+import moe.antimony.hoshi.features.sync.http.followedBy
 import moe.antimony.hoshi.features.sync.http.httpSyncSettingsRepository
 import moe.antimony.hoshi.features.sync.v3.V3SyncEngine
 import moe.antimony.hoshi.features.update.AndroidUpdateDownloadManager
@@ -176,12 +177,16 @@ internal class HoshiAppContainer(context: Context) {
             statisticsStreakMinimumMinutes, statisticsDayResetHour, statisticsSettingsUpdatedAt, statisticsTimeZone,
         )
     }
+    /** Manga on the sync server that are listed on the shelf but downloaded only when tapped. */
+    val httpSyncCloudBooks: moe.antimony.hoshi.features.sync.http.HttpSyncCloudBooks =
+        moe.antimony.hoshi.features.sync.http.HttpSyncCloudBooks(bookRepository.booksDirectory)
     val httpSyncBatchState: HttpSyncBatchState = HttpSyncBatchState(
         bookRepository = bookRepository,
         bookLocks = httpSyncBookLocks,
         installationId = installationId,
         statisticsPreferences = statisticsPreferencesStore,
         usageLog = usageLog,
+        cloudBooks = httpSyncCloudBooks,
     )
     val httpSyncFullCycleRunner: HttpSyncFullCycleRunner = HttpSyncFullCycleRunner(appScope)
     val httpSyncFastSync: HttpSyncFastSync = HttpSyncFastSync(
@@ -196,16 +201,27 @@ internal class HoshiAppContainer(context: Context) {
         bookRepository = bookRepository,
         aiSettingsRepository = aiChatSettingsRepository,
         bookLocks = httpSyncBookLocks,
+        cloudBooks = httpSyncCloudBooks,
+        beforeCloudBooksShown = { roots -> httpSyncBatchState.applyKnownBookmarks(roots) },
     )
+    /** Manga listed since then (by the manual or the five-second sync) are announced by the next manual sync. */
+    @Volatile private var cloudBooksAnnouncedUntil: java.time.Instant = java.time.Instant.now()
     val httpSyncManualSync = moe.antimony.hoshi.features.sync.http.HttpSyncManualSync(
         appScope,
         schedule = { moe.antimony.hoshi.features.sync.http.HttpSyncBackgroundSync.schedule(appContext) },
         unschedule = { moe.antimony.hoshi.features.sync.http.HttpSyncBackgroundSync.unschedule(appContext) },
         onCancelled = { httpSyncFullCycleRunner.cancelActive() },
+        // A stopped download stays stopped: its manga goes back to waiting for a tap.
+        onStopped = { appScope.launch { httpSyncCloudBooks.withdrawRequests() } },
     ) { onProgress ->
         val settings = httpSyncSettingsRepository.settings.first()
         require(settings.isConfigured) { appContext.getString(R.string.http_sync_not_configured) }
-        val result = httpSyncFastSync.syncNow(settings, onProgress) { reconcileSettings, transport, report ->
+        // Only the v3 engine keeps the cloud catalogue; a tapped manga needs its full reconcile.
+        suspend fun pass() = httpSyncFastSync.syncNow(
+            settings,
+            onProgress,
+            forceFullSync = settings.useV3Sync && httpSyncCloudBooks.hasRequestedDownloads(),
+        ) { reconcileSettings, transport, report ->
             HttpSyncEngineDispatcher.syncOnce(
                 reconciler = httpSyncReconciler,
                 v3Engine = v3SyncEngine,
@@ -214,6 +230,24 @@ internal class HoshiAppContainer(context: Context) {
                 onProgress = report,
             )
         }
+        var result = pass()
+        // A manga tapped after this pass was planned is downloaded by another pass right away.
+        var passes = 1
+        while (settings.useV3Sync && passes < MAX_CLOUD_DOWNLOAD_PASSES && httpSyncCloudBooks.hasUnplannedRequests()) {
+            passes += 1
+            try {
+                result = result.followedBy(pass())
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                // What the earlier pass did still happened; the failed one says why.
+                result = result.copy(errors = result.errors + (error.message ?: error.javaClass.simpleName))
+                break
+            }
+        }
+        val announceFrom = cloudBooksAnnouncedUntil
+        cloudBooksAnnouncedUntil = java.time.Instant.now()
+        result = result.copy(newCloudBooks = httpSyncCloudBooks.countDiscoveredSince(announceFrom))
         result.newLastSyncedAt?.let { cursor ->
             httpSyncSettingsRepository.recordSyncCursor(settings, cursor)
         }
@@ -359,6 +393,9 @@ private fun deviceDisplayName(context: Context): String =
         ?.trim()
         ?.takeIf { it.isNotEmpty() }
         ?: Build.MODEL.orEmpty().ifBlank { "Android" }
+
+/** Passes one manual sync runs at most, so taps during a download cannot keep it going forever. */
+private const val MAX_CLOUD_DOWNLOAD_PASSES = 4
 
 private fun httpSyncInstallationId(context: Context): String {
     val androidId = Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID)
