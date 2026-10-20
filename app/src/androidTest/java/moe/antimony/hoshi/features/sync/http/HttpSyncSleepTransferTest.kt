@@ -87,6 +87,12 @@ class HttpSyncSleepTransferTest {
                 container.httpSyncSettingsRepository.update {
                     it.copy(baseUrl = server.baseUrl, bearerToken = server.token, lastSyncedAt = null)
                 }
+                // A manga only on the server is listed until tapped; tap it, as the shelf would.
+                val syncId = requireNotNull(deriveSyncId(title))
+                container.httpSyncCloudBooks.recordListed(listOf(HttpSyncCloudBookListing(
+                    syncId, title, HttpSyncContentType.Mokuro, bytes.size.toLong(), "sha256:" + "0".repeat(64), null, null,
+                )))
+                assertTrue(container.httpSyncCloudBooks.requestDownload(syncId))
                 if (useWorker) {
                     // The API 28–33 scheduling code, including its unique-work policy and constraint.
                     assertEquals(HttpSyncStartRoute.AndroidTransfer,
@@ -157,6 +163,7 @@ class HttpSyncSleepTransferTest {
                 withTimeout(10_000) {
                     while (container.httpSyncManualSync.status.value is SyncStatus.Running) delay(50)
                 }
+                container.httpSyncCloudBooks.withdrawRequests()
                 container.httpSyncSettingsRepository.update { it.copy(bearerToken = "") }
                 container.bookRepository.loadBookEntries().filter { it.metadata.title == title }.forEach {
                     container.bookRepository.deleteBook(it.root)

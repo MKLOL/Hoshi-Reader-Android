@@ -80,29 +80,8 @@ class V3Executor(
         transport: HttpSyncKvTransport,
         onProgress: suspend (V3Progress) -> Unit,
     ): V3SyncResult {
-        var appliedBookmarks = 0
-        var appliedChatEntries = 0
-        var appliedPretranslations = 0
-        var appliedSentenceTranslations = 0
-        var appliedStatistics = 0
-        var pushedStatistics = 0
-        var appliedPayloads = 0
-        var appliedMetadataDeletes = 0
-        var appliedShelfPlacements = 0
-        var appliedAiSettings = 0
-
-        var pushedBookmarks = 0
-        var pushedChatEntries = 0
-        var pushedMetadata = 0
-        var pushedPayloads = 0
-        var pushedTombstones = 0
-        var pushedAiSettings = 0
-
-        val errors = mutableListOf<V3Error>()
-        val rootBySyncId = mutableMapOf<String, File>()
-        // Tracks any shelf-state mutations so we save the sidecar exactly once.
-        val existingShelfState = shelfStateStore.load(bookRepository.booksDirectory).toMutableMap()
-        var shelfStateDirty = false
+        // Shelf-state mutations are tracked so the sidecar is saved exactly once.
+        val state = RunState(shelfStateStore.load(bookRepository.booksDirectory).toMutableMap())
         // Bug 3: the deleted-book sidecar must NOT be mutated through a
         // snapshot + dirty-flag + final-save pattern. The same file is also
         // written by `BookshelfRepository.recordHttpSyncTombstone` on
@@ -120,6 +99,7 @@ class V3Executor(
         val cloudRequests = cloudListed.orEmpty()
             .mapNotNull { book -> book.requestedAt?.let { book.syncId to it } }
             .toMap()
+        state.cloudRequests = cloudRequests
         val failedCloudRequests = mutableMapOf<String, FailedCloudRequest>()
         if (cloudBooks != null && cloudListed != null) {
             newCloudBooks = cloudBooks.recordListed(cloudListed.map { it.toListing() })
@@ -138,300 +118,7 @@ class V3Executor(
                 ),
             )
             try {
-                when (action) {
-                    is V3Action.PushTombstone -> {
-                        pushOps.pushTombstone(transport, action.syncId, action.record)
-                        pushedTombstones += 1
-                        // Atomic per-key clear: re-reads disk under the store's
-                        // lock so a concurrent recordDeletedBook for a different
-                        // key (Bug 3) survives.
-                        deletedBookStateStore.removeDeletedBook(
-                            bookRepository.booksDirectory,
-                            action.syncId,
-                        )
-                        existingShelfState.remove(action.syncId)
-                        shelfStateDirty = true
-                    }
-                    is V3Action.ApplyRemoteMetadata -> {
-                        val targetRoot = action.root ?: rootBySyncId[action.syncId]
-                        if (action.blob.deletedAt != null) {
-                            if (targetRoot != null) {
-                                val removed = HttpSyncActiveBooks.runIfInactive(action.syncId) {
-                                    bookRepository.deleteBook(targetRoot)
-                                }
-                                if (!removed) {
-                                    throw IllegalStateException("Deletion deferred while this book is open.")
-                                }
-                                rootBySyncId.remove(action.syncId)
-                            }
-                            existingShelfState.remove(action.syncId)
-                            shelfStateDirty = true
-                            appliedMetadataDeletes += 1
-                        } else if (targetRoot != null) {
-                            val applied = applyShelfPlacement(targetRoot, action.blob.shelfName)
-                            if (applied) {
-                                existingShelfState[action.syncId] = HttpSyncShelfPlacementRecord(
-                                    shelfName = action.blob.shelfName,
-                                    updatedAt = action.blob.shelfUpdatedAt ?: java.time.Instant.now().toString(),
-                                )
-                                shelfStateDirty = true
-                                appliedShelfPlacements += 1
-                            }
-                        }
-                    }
-                    is V3Action.DeleteLocalBook -> {
-                        val targetRoot = if (action.root.exists()) action.root else rootBySyncId[action.syncId]
-                        if (targetRoot != null && targetRoot.exists()) {
-                            val removed = HttpSyncActiveBooks.runIfInactive(action.syncId) {
-                                bookRepository.deleteBook(targetRoot)
-                            }
-                            if (!removed) {
-                                throw IllegalStateException("Deletion deferred while this book is open.")
-                            }
-                            rootBySyncId.remove(action.syncId)
-                            existingShelfState.remove(action.syncId)
-                            shelfStateDirty = true
-                            appliedMetadataDeletes += 1
-                        }
-                    }
-                    is V3Action.ImportRemoteBook -> {
-                        val cloudDownload = cloudBooks?.takeIf { action.syncId in cloudRequests }
-                        val newRoot = try {
-                            importRemoteBook(transport, action.syncId, action, onProgress, cloudDownload)
-                        } catch (e: Throwable) {
-                            cloudDownload?.clearProgress(action.syncId)
-                            throw e
-                        }
-                        if (newRoot != null) {
-                            rootBySyncId[action.syncId] = newRoot
-                            appliedPayloads += 1
-                            // Bug 2: apply shelf placement carried inline on the import
-                            // action. We can't rely on a separate ApplyRemoteMetadata
-                            // because bucket ordering puts metadata-apply BEFORE import,
-                            // so the executor would have no root for this syncId yet.
-                            if (action.shelfName != null || action.shelfUpdatedAt != null) {
-                                val applied = applyShelfPlacement(newRoot, action.shelfName)
-                                if (applied) {
-                                    existingShelfState[action.syncId] = HttpSyncShelfPlacementRecord(
-                                        shelfName = action.shelfName,
-                                        updatedAt = action.shelfUpdatedAt ?: java.time.Instant.now().toString(),
-                                    )
-                                    shelfStateDirty = true
-                                    appliedShelfPlacements += 1
-                                }
-                            }
-                            // The shelf shows it once everything below has been applied to it.
-                            cloudDownload?.reportProgress(action.syncId, 1f)
-                        }
-                    }
-                    is V3Action.ReplaceRemotePayload -> {
-                        if (replaceRemotePayload(transport, action, onProgress)) {
-                            appliedPayloads += 1
-                        }
-                    }
-                    is V3Action.ApplyRemoteBookmark -> {
-                        val targetRoot = resolveRoot(action.root, action.syncId, rootBySyncId)
-                            ?: continue
-                        // Hold the per-book lock and re-read local before overwriting.
-                        // The planner's snapshot was taken at the start of sync; if the
-                        // user (or the reader-hook pusher) advanced the bookmark in the
-                        // meantime, blindly applying the remote blob from the plan would
-                        // clobber the newer local with an older remote. Mirrors the
-                        // recheck-under-lock pattern in V3PushOps.pushBookmarkConditional.
-                        val applied = bookLocks.withBookLock(targetRoot) {
-                            val key = bookmarkKey(action.syncId)
-                            val booksRoot = bookRepository.booksDirectory
-                            val currentLocal = runCatching { bookRepository.loadBookmark(targetRoot) }
-                                .getOrNull()
-                            val localStamp = currentLocal?.lastModified?.let(::appleSecondsToRfc3339)
-                            // Event time first (re-read under the lock so a reader-hook push
-                            // cannot be lost); revision only breaks exact timestamp ties.
-                            val localRev = revisionStore.current(booksRoot, key).localRev
-                            if (compareRevisioned(
-                                    localRev = localRev,
-                                    remoteRev = action.blob.rev,
-                                    localStamp = localStamp,
-                                    remoteStamp = action.blob.lastModified,
-                                ) == SyncComparison.REMOTE_WINS
-                            ) {
-                                bookRepository.saveBookmark(
-                                    targetRoot,
-                                    Bookmark(
-                                        chapterIndex = action.blob.chapterIndex,
-                                        progress = action.blob.progress,
-                                        characterCount = action.blob.characterCount,
-                                        lastModified = rfc3339ToAppleSeconds(action.blob.lastModified),
-                                    ),
-                                )
-                                revisionStore.noteRemote(booksRoot, key, action.blob.rev, appliedLocally = true)
-                                true
-                            } else {
-                                // Local out-revisions (or ties) the remote blob this plan
-                                // was computed against — drop the apply. The next sync's
-                                // push phase will reconcile via pushBookmarkConditional.
-                                revisionStore.noteRemote(booksRoot, key, action.blob.rev, appliedLocally = false)
-                                false
-                            }
-                        }
-                        if (applied) appliedBookmarks += 1
-                    }
-                    is V3Action.ImportPretranslations -> {
-                        val targetRoot = resolveRoot(action.root, action.syncId, rootBySyncId)
-                            ?: continue
-                        val fetched = transport.get(action.key)
-                            ?: throw IllegalStateException("Listed offline translations are missing at ${action.key}.")
-                        val body = fetched.body.toString(Charsets.UTF_8)
-                        val blob = json.decodeFromString(
-                            PretranslationsBlob.serializer(),
-                            body,
-                        )
-                        // Every field decodes leniently, so "valid JSON" alone is too weak a
-                        // check: an empty object or a proxy error page would wipe a good cache.
-                        if (blob.version > PretranslationStore.SUPPORTED_BLOB_VERSION ||
-                            blob.entries.isEmpty()
-                        ) {
-                            continue
-                        }
-                        // Temp + rename: a truncated write would silently lose every offline
-                        // translation for this book.
-                        val target = File(targetRoot, PRETRANSLATIONS_FILENAME)
-                        writeSidecarAtomically(target, body)
-                        PretranslationStore.invalidate(targetRoot)
-                        appliedPretranslations += 1
-                    }
-                    is V3Action.ImportSentences -> {
-                        val targetRoot = resolveRoot(action.root, action.syncId, rootBySyncId)
-                            ?: continue
-                        val fetched = transport.getBounded(action.key, MAX_EPUB_SENTENCES_BLOB_BYTES)
-                            ?: throw IllegalStateException("Listed sentence translations are missing at ${action.key}.")
-                        val target = File(targetRoot, EPUB_TRANSLATIONS_FILENAME)
-                        val alreadyInstalled = target.isFile &&
-                            target.length() == fetched.body.size.toLong() &&
-                            target.length() <= MAX_EPUB_SENTENCES_BLOB_BYTES &&
-                            target.readBytes().contentEquals(fetched.body)
-                        val body = fetched.body.toString(Charsets.UTF_8)
-                        val spineCount = EpubBookParser().parse(
-                            root = targetRoot,
-                            cachedBookInfo = bookRepository.loadBookInfo(targetRoot),
-                        ).spineCount
-                        EpubTranslationStore.decodeAndValidate(body, action.syncId, spineCount)
-                        if (alreadyInstalled) continue
-                        writeSidecarAtomically(target, body)
-                        EpubTranslationStore.invalidate(targetRoot)
-                        appliedSentenceTranslations += 1
-                    }
-                    is V3Action.SyncStatistics -> {
-                        val targetRoot = resolveRoot(action.root, action.syncId, rootBySyncId)
-                            ?: continue
-                        val listing = when {
-                            action.remoteKey == null -> StatisticsRemoteListing.Absent
-                            action.remoteSize == null -> StatisticsRemoteListing.Unknown
-                            else -> StatisticsRemoteListing.Listed(action.remoteSize, action.remoteLastModified, action.remoteEtag)
-                        }
-                        // A newer version's body or a key gone since the listing: skipped, not an error.
-                        val outcome = try {
-                            statisticsSync.sync(transport, targetRoot, action.syncId, action.kind, listing)
-                        } catch (_: moe.antimony.hoshi.features.sync.http.StatisticsSkippedException) {
-                            moe.antimony.hoshi.features.sync.http.StatisticsSyncOutcome.NONE
-                        }
-                        if (outcome.downloaded) appliedStatistics += 1
-                        if (outcome.uploaded) pushedStatistics += 1
-                    }
-                    is V3Action.ImportChat -> {
-                        val targetRoot = resolveRoot(action.root, action.syncId, rootBySyncId)
-                            ?: continue
-                        val fetched = transport.get(action.key) ?: continue
-                        val blob = json.decodeFromString(
-                            HttpSyncChatEntryBlob.serializer(),
-                            fetched.body.toString(Charsets.UTF_8),
-                        )
-                        val incoming = AiChatEntry(
-                            bubbleText = blob.bubbleText,
-                            prompt = blob.prompt,
-                            model = blob.model,
-                            response = blob.response,
-                            timestampSeconds = blob.timestampSeconds,
-                            screenshotImage = blob.screenshotImage,
-                            dictionaryLookup = blob.dictionaryLookup,
-                        )
-                        val existing = runCatching { aiHistoryStore.load(targetRoot).entries }
-                            .getOrDefault(emptyList())
-                        val collides = existing.any {
-                            it.bubbleText == incoming.bubbleText &&
-                                it.timestampSeconds == incoming.timestampSeconds &&
-                                it.response == incoming.response
-                        }
-                        if (!collides) {
-                            aiHistoryStore.append(targetRoot, incoming)
-                            appliedChatEntries += 1
-                        }
-                    }
-                    is V3Action.PushBookmark -> {
-                        when (pushOps.pushBookmarkConditional(
-                            transport = transport,
-                            bookRoot = action.root,
-                            syncId = action.syncId,
-                            localBookmark = action.bookmark,
-                        )) {
-                            PushBookmarkOutcome.Pushed -> pushedBookmarks += 1
-                            PushBookmarkOutcome.AppliedRemote -> appliedBookmarks += 1
-                            PushBookmarkOutcome.NoOp -> Unit
-                        }
-                    }
-                    is V3Action.PushMetadata -> {
-                        // SkippedIdentical = content matched the server's copy ignoring rev
-                        // (revision store still advanced); SkippedStale = a deliberate local
-                        // edit / deeper remote write superseded the plan-time blob mid-sync.
-                        val outcome = pushOps.pushMetadata(
-                            transport, action.syncId, action.blob, action.expectedRemote,
-                        )
-                        if (outcome is PushMetadataOutcome.Pushed) pushedMetadata += 1
-                        if (action.blob.shelfUpdatedAt != null) {
-                            existingShelfState[action.syncId] = HttpSyncShelfPlacementRecord(
-                                shelfName = action.blob.shelfName,
-                                updatedAt = action.blob.shelfUpdatedAt,
-                            )
-                            shelfStateDirty = true
-                        }
-                    }
-                    is V3Action.PushChat -> {
-                        pushOps.pushChat(transport, action.entry, action.key)
-                        pushedChatEntries += 1
-                    }
-                    is V3Action.PushPayload -> {
-                        val targetRoot = resolveRoot(action.root, action.syncId, rootBySyncId)
-                            ?: continue
-                        val uploaded = withHttpSyncTransferProgress(
-                            onProgress = onProgress,
-                            makeProgress = { transfer ->
-                                V3Progress(
-                                    phase = V3Phase.PushingLocalState,
-                                    message = "Uploading ${action.title}",
-                                    transfer = transfer,
-                                )
-                            },
-                        ) { onByteProgress ->
-                            pushOps.pushPayload(
-                                transport = transport,
-                                bookRoot = targetRoot,
-                                syncId = action.syncId,
-                                title = action.title,
-                                format = action.format,
-                                onByteProgress = onByteProgress,
-                            )
-                        }
-                        if (uploaded) pushedPayloads += 1
-                    }
-                    is V3Action.PushAiSettings -> {
-                        pushOps.pushAiSettings(transport, action.local)
-                        pushedAiSettings += 1
-                    }
-                    is V3Action.ApplyAiSettings -> {
-                        if (pushOps.applyAiSettings(action.remote)) {
-                            appliedAiSettings += 1
-                        }
-                    }
-                }
+                runAction(action, state, transport, onProgress)
             } catch (e: kotlinx.coroutines.CancellationException) {
                 // Never swallow cancellation: structured concurrency requires the
                 // CancellationException to flow back to the caller so the parent job
@@ -440,7 +127,7 @@ class V3Executor(
                 throw e
             } catch (e: Exception) {
                 val message = e.message ?: e.javaClass.simpleName
-                errors += V3Error(
+                state.errors += V3Error(
                     syncId = action.syncId,
                     action = action::class.simpleName ?: "Unknown",
                     message = message,
@@ -461,7 +148,7 @@ class V3Executor(
         if (cloudStore != null && cloudListed != null) {
             // A downloaded manga leaves the catalogue (and appears on the shelf) only now, with its
             // chats, translations and statistics applied, and its position from the maps.
-            val installed = cloudRequests.keys.mapNotNull { syncId -> rootBySyncId[syncId]?.let { syncId to it } }
+            val installed = cloudRequests.keys.mapNotNull { syncId -> state.rootBySyncId[syncId]?.let { syncId to it } }
             if (installed.isNotEmpty()) {
                 try {
                     beforeCloudBooksShown(installed.map { it.second })
@@ -480,9 +167,9 @@ class V3Executor(
             runCatching { cloudStore.finishPass(stillRemote, failedCloudRequests) }
         }
 
-        if (shelfStateDirty) {
+        if (state.shelfStateDirty) {
             runCatching {
-                shelfStateStore.save(bookRepository.booksDirectory, existingShelfState)
+                shelfStateStore.save(bookRepository.booksDirectory, state.existingShelfState)
             }
         }
         // Bug 3: no final `save(pendingDeletions)` here — every mutation has
@@ -493,28 +180,331 @@ class V3Executor(
         onProgress(V3Progress(V3Phase.Done, "Sync complete"))
         return V3SyncResult(
             applied = V3AppliedCounts(
-                bookmarks = appliedBookmarks,
-                chatEntries = appliedChatEntries,
-                payloads = appliedPayloads,
-                sentenceTranslations = appliedSentenceTranslations,
-                statistics = appliedStatistics,
-                metadataDeletes = appliedMetadataDeletes,
-                shelfPlacements = appliedShelfPlacements,
-                aiSettings = appliedAiSettings,
+                bookmarks = state.appliedBookmarks,
+                chatEntries = state.appliedChatEntries,
+                payloads = state.appliedPayloads,
+                sentenceTranslations = state.appliedSentenceTranslations,
+                statistics = state.appliedStatistics,
+                metadataDeletes = state.appliedMetadataDeletes,
+                shelfPlacements = state.appliedShelfPlacements,
+                aiSettings = state.appliedAiSettings,
             ),
             pushed = V3PushedCounts(
-                bookmarks = pushedBookmarks,
-                chatEntries = pushedChatEntries,
-                statistics = pushedStatistics,
-                metadata = pushedMetadata,
-                payloads = pushedPayloads,
-                tombstones = pushedTombstones,
-                aiSettings = pushedAiSettings,
+                bookmarks = state.pushedBookmarks,
+                chatEntries = state.pushedChatEntries,
+                statistics = state.pushedStatistics,
+                metadata = state.pushedMetadata,
+                payloads = state.pushedPayloads,
+                tombstones = state.pushedTombstones,
+                aiSettings = state.pushedAiSettings,
             ),
             remoteOnlyBooks = plan.pendingRemoteOnlyBooks.size,
-            errors = errors,
+            errors = state.errors,
             newCloudBooks = newCloudBooks,
         )
+    }
+
+    /** Runs one planned action, counting what it did in [state]; a failure is the caller's. */
+    private suspend fun runAction(
+        action: V3Action,
+        state: RunState,
+        transport: HttpSyncKvTransport,
+        onProgress: suspend (V3Progress) -> Unit,
+    ) {
+        when (action) {
+            is V3Action.PushTombstone -> {
+                pushOps.pushTombstone(transport, action.syncId, action.record)
+                state.pushedTombstones += 1
+                // Atomic per-key clear: re-reads disk under the store's
+                // lock so a concurrent recordDeletedBook for a different
+                // key (Bug 3) survives.
+                deletedBookStateStore.removeDeletedBook(
+                    bookRepository.booksDirectory,
+                    action.syncId,
+                )
+                state.existingShelfState.remove(action.syncId)
+                state.shelfStateDirty = true
+            }
+            is V3Action.ApplyRemoteMetadata -> {
+                val targetRoot = action.root ?: state.rootBySyncId[action.syncId]
+                if (action.blob.deletedAt != null) {
+                    if (targetRoot != null) {
+                        val removed = HttpSyncActiveBooks.runIfInactive(action.syncId) {
+                            bookRepository.deleteBook(targetRoot)
+                        }
+                        if (!removed) {
+                            throw IllegalStateException("Deletion deferred while this book is open.")
+                        }
+                        state.rootBySyncId.remove(action.syncId)
+                    }
+                    state.existingShelfState.remove(action.syncId)
+                    state.shelfStateDirty = true
+                    state.appliedMetadataDeletes += 1
+                } else if (targetRoot != null) {
+                    val applied = applyShelfPlacement(targetRoot, action.blob.shelfName)
+                    if (applied) {
+                        state.existingShelfState[action.syncId] = HttpSyncShelfPlacementRecord(
+                            shelfName = action.blob.shelfName,
+                            updatedAt = action.blob.shelfUpdatedAt ?: java.time.Instant.now().toString(),
+                        )
+                        state.shelfStateDirty = true
+                        state.appliedShelfPlacements += 1
+                    }
+                }
+            }
+            is V3Action.DeleteLocalBook -> {
+                val targetRoot = if (action.root.exists()) action.root else state.rootBySyncId[action.syncId]
+                if (targetRoot != null && targetRoot.exists()) {
+                    val removed = HttpSyncActiveBooks.runIfInactive(action.syncId) {
+                        bookRepository.deleteBook(targetRoot)
+                    }
+                    if (!removed) {
+                        throw IllegalStateException("Deletion deferred while this book is open.")
+                    }
+                    state.rootBySyncId.remove(action.syncId)
+                    state.existingShelfState.remove(action.syncId)
+                    state.shelfStateDirty = true
+                    state.appliedMetadataDeletes += 1
+                }
+            }
+            is V3Action.ImportRemoteBook -> {
+                val cloudDownload = cloudBooks?.takeIf { action.syncId in state.cloudRequests }
+                val newRoot = try {
+                    importRemoteBook(transport, action.syncId, action, onProgress, cloudDownload)
+                } catch (e: Throwable) {
+                    cloudDownload?.clearProgress(action.syncId)
+                    throw e
+                }
+                if (newRoot != null) {
+                    state.rootBySyncId[action.syncId] = newRoot
+                    state.appliedPayloads += 1
+                    // Bug 2: apply shelf placement carried inline on the import
+                    // action. We can't rely on a separate ApplyRemoteMetadata
+                    // because bucket ordering puts metadata-apply BEFORE import,
+                    // so the executor would have no root for this syncId yet.
+                    if (action.shelfName != null || action.shelfUpdatedAt != null) {
+                        val applied = applyShelfPlacement(newRoot, action.shelfName)
+                        if (applied) {
+                            state.existingShelfState[action.syncId] = HttpSyncShelfPlacementRecord(
+                                shelfName = action.shelfName,
+                                updatedAt = action.shelfUpdatedAt ?: java.time.Instant.now().toString(),
+                            )
+                            state.shelfStateDirty = true
+                            state.appliedShelfPlacements += 1
+                        }
+                    }
+                    // The shelf shows it once everything below has been applied to it.
+                    cloudDownload?.reportProgress(action.syncId, 1f)
+                }
+            }
+            is V3Action.ReplaceRemotePayload -> {
+                if (replaceRemotePayload(transport, action, onProgress)) {
+                    state.appliedPayloads += 1
+                }
+            }
+            is V3Action.ApplyRemoteBookmark -> {
+                val targetRoot = resolveRoot(action.root, action.syncId, state.rootBySyncId)
+                    ?: return
+                // Hold the per-book lock and re-read local before overwriting.
+                // The planner's snapshot was taken at the start of sync; if the
+                // user (or the reader-hook pusher) advanced the bookmark in the
+                // meantime, blindly applying the remote blob from the plan would
+                // clobber the newer local with an older remote. Mirrors the
+                // recheck-under-lock pattern in V3PushOps.pushBookmarkConditional.
+                val applied = bookLocks.withBookLock(targetRoot) {
+                    val key = bookmarkKey(action.syncId)
+                    val booksRoot = bookRepository.booksDirectory
+                    val currentLocal = runCatching { bookRepository.loadBookmark(targetRoot) }
+                        .getOrNull()
+                    val localStamp = currentLocal?.lastModified?.let(::appleSecondsToRfc3339)
+                    // Event time first (re-read under the lock so a reader-hook push
+                    // cannot be lost); revision only breaks exact timestamp ties.
+                    val localRev = revisionStore.current(booksRoot, key).localRev
+                    if (compareRevisioned(
+                            localRev = localRev,
+                            remoteRev = action.blob.rev,
+                            localStamp = localStamp,
+                            remoteStamp = action.blob.lastModified,
+                        ) == SyncComparison.REMOTE_WINS
+                    ) {
+                        bookRepository.saveBookmark(
+                            targetRoot,
+                            Bookmark(
+                                chapterIndex = action.blob.chapterIndex,
+                                progress = action.blob.progress,
+                                characterCount = action.blob.characterCount,
+                                lastModified = rfc3339ToAppleSeconds(action.blob.lastModified),
+                            ),
+                        )
+                        revisionStore.noteRemote(booksRoot, key, action.blob.rev, appliedLocally = true)
+                        true
+                    } else {
+                        // Local out-revisions (or ties) the remote blob this plan
+                        // was computed against — drop the apply. The next sync's
+                        // push phase will reconcile via pushBookmarkConditional.
+                        revisionStore.noteRemote(booksRoot, key, action.blob.rev, appliedLocally = false)
+                        false
+                    }
+                }
+                if (applied) state.appliedBookmarks += 1
+            }
+            is V3Action.ImportPretranslations -> {
+                val targetRoot = resolveRoot(action.root, action.syncId, state.rootBySyncId)
+                    ?: return
+                val fetched = transport.get(action.key)
+                    ?: throw IllegalStateException("Listed offline translations are missing at ${action.key}.")
+                val body = fetched.body.toString(Charsets.UTF_8)
+                val blob = json.decodeFromString(
+                    PretranslationsBlob.serializer(),
+                    body,
+                )
+                // Every field decodes leniently, so "valid JSON" alone is too weak a
+                // check: an empty object or a proxy error page would wipe a good cache.
+                if (blob.version > PretranslationStore.SUPPORTED_BLOB_VERSION ||
+                    blob.entries.isEmpty()
+                ) {
+                    return
+                }
+                // Temp + rename: a truncated write would silently lose every offline
+                // translation for this book.
+                val target = File(targetRoot, PRETRANSLATIONS_FILENAME)
+                writeSidecarAtomically(target, body)
+                PretranslationStore.invalidate(targetRoot)
+                state.appliedPretranslations += 1
+            }
+            is V3Action.ImportSentences -> {
+                val targetRoot = resolveRoot(action.root, action.syncId, state.rootBySyncId)
+                    ?: return
+                val fetched = transport.getBounded(action.key, MAX_EPUB_SENTENCES_BLOB_BYTES)
+                    ?: throw IllegalStateException("Listed sentence translations are missing at ${action.key}.")
+                val target = File(targetRoot, EPUB_TRANSLATIONS_FILENAME)
+                val alreadyInstalled = target.isFile &&
+                    target.length() == fetched.body.size.toLong() &&
+                    target.length() <= MAX_EPUB_SENTENCES_BLOB_BYTES &&
+                    target.readBytes().contentEquals(fetched.body)
+                val body = fetched.body.toString(Charsets.UTF_8)
+                val spineCount = EpubBookParser().parse(
+                    root = targetRoot,
+                    cachedBookInfo = bookRepository.loadBookInfo(targetRoot),
+                ).spineCount
+                EpubTranslationStore.decodeAndValidate(body, action.syncId, spineCount)
+                if (alreadyInstalled) return
+                writeSidecarAtomically(target, body)
+                EpubTranslationStore.invalidate(targetRoot)
+                state.appliedSentenceTranslations += 1
+            }
+            is V3Action.SyncStatistics -> {
+                val targetRoot = resolveRoot(action.root, action.syncId, state.rootBySyncId)
+                    ?: return
+                val listing = when {
+                    action.remoteKey == null -> StatisticsRemoteListing.Absent
+                    action.remoteSize == null -> StatisticsRemoteListing.Unknown
+                    else -> StatisticsRemoteListing.Listed(action.remoteSize, action.remoteLastModified, action.remoteEtag)
+                }
+                // A newer version's body or a key gone since the listing: skipped, not an error.
+                val outcome = try {
+                    statisticsSync.sync(transport, targetRoot, action.syncId, action.kind, listing)
+                } catch (_: moe.antimony.hoshi.features.sync.http.StatisticsSkippedException) {
+                    moe.antimony.hoshi.features.sync.http.StatisticsSyncOutcome.NONE
+                }
+                if (outcome.downloaded) state.appliedStatistics += 1
+                if (outcome.uploaded) state.pushedStatistics += 1
+            }
+            is V3Action.ImportChat -> {
+                val targetRoot = resolveRoot(action.root, action.syncId, state.rootBySyncId)
+                    ?: return
+                val fetched = transport.get(action.key) ?: return
+                val blob = json.decodeFromString(
+                    HttpSyncChatEntryBlob.serializer(),
+                    fetched.body.toString(Charsets.UTF_8),
+                )
+                val incoming = AiChatEntry(
+                    bubbleText = blob.bubbleText,
+                    prompt = blob.prompt,
+                    model = blob.model,
+                    response = blob.response,
+                    timestampSeconds = blob.timestampSeconds,
+                    screenshotImage = blob.screenshotImage,
+                    dictionaryLookup = blob.dictionaryLookup,
+                )
+                val existing = runCatching { aiHistoryStore.load(targetRoot).entries }
+                    .getOrDefault(emptyList())
+                val collides = existing.any {
+                    it.bubbleText == incoming.bubbleText &&
+                        it.timestampSeconds == incoming.timestampSeconds &&
+                        it.response == incoming.response
+                }
+                if (!collides) {
+                    aiHistoryStore.append(targetRoot, incoming)
+                    state.appliedChatEntries += 1
+                }
+            }
+            is V3Action.PushBookmark -> {
+                when (pushOps.pushBookmarkConditional(
+                    transport = transport,
+                    bookRoot = action.root,
+                    syncId = action.syncId,
+                    localBookmark = action.bookmark,
+                )) {
+                    PushBookmarkOutcome.Pushed -> state.pushedBookmarks += 1
+                    PushBookmarkOutcome.AppliedRemote -> state.appliedBookmarks += 1
+                    PushBookmarkOutcome.NoOp -> Unit
+                }
+            }
+            is V3Action.PushMetadata -> {
+                // SkippedIdentical = content matched the server's copy ignoring rev
+                // (revision store still advanced); SkippedStale = a deliberate local
+                // edit / deeper remote write superseded the plan-time blob mid-sync.
+                val outcome = pushOps.pushMetadata(
+                    transport, action.syncId, action.blob, action.expectedRemote,
+                )
+                if (outcome is PushMetadataOutcome.Pushed) state.pushedMetadata += 1
+                if (action.blob.shelfUpdatedAt != null) {
+                    state.existingShelfState[action.syncId] = HttpSyncShelfPlacementRecord(
+                        shelfName = action.blob.shelfName,
+                        updatedAt = action.blob.shelfUpdatedAt,
+                    )
+                    state.shelfStateDirty = true
+                }
+            }
+            is V3Action.PushChat -> {
+                pushOps.pushChat(transport, action.entry, action.key)
+                state.pushedChatEntries += 1
+            }
+            is V3Action.PushPayload -> {
+                val targetRoot = resolveRoot(action.root, action.syncId, state.rootBySyncId)
+                    ?: return
+                val uploaded = withHttpSyncTransferProgress(
+                    onProgress = onProgress,
+                    makeProgress = { transfer ->
+                        V3Progress(
+                            phase = V3Phase.PushingLocalState,
+                            message = "Uploading ${action.title}",
+                            transfer = transfer,
+                        )
+                    },
+                ) { onByteProgress ->
+                    pushOps.pushPayload(
+                        transport = transport,
+                        bookRoot = targetRoot,
+                        syncId = action.syncId,
+                        title = action.title,
+                        format = action.format,
+                        onByteProgress = onByteProgress,
+                    )
+                }
+                if (uploaded) state.pushedPayloads += 1
+            }
+            is V3Action.PushAiSettings -> {
+                pushOps.pushAiSettings(transport, action.local)
+                state.pushedAiSettings += 1
+            }
+            is V3Action.ApplyAiSettings -> {
+                if (pushOps.applyAiSettings(action.remote)) {
+                    state.appliedAiSettings += 1
+                }
+            }
+        }
     }
 
     /**
@@ -801,3 +791,35 @@ private fun V3CloudBook.toListing() = HttpSyncCloudBookListing(
     contentSha256 = manifest.contentSha256,
     shelfName = shelfName,
 )
+
+/**
+ * What one [V3Executor.run] accumulates. Each action runs in its own method
+ * ([V3Executor.runAction]): a single method holding every action grew past the 65,535 DEX code
+ * units Android's runtime executes reliably, which crashed or mis-routed exceptions on a device.
+ */
+private class RunState(val existingShelfState: MutableMap<String, HttpSyncShelfPlacementRecord>) {
+    var appliedBookmarks = 0
+    var appliedChatEntries = 0
+    var appliedPretranslations = 0
+    var appliedSentenceTranslations = 0
+    var appliedStatistics = 0
+    var pushedStatistics = 0
+    var appliedPayloads = 0
+    var appliedMetadataDeletes = 0
+    var appliedShelfPlacements = 0
+    var appliedAiSettings = 0
+
+    var pushedBookmarks = 0
+    var pushedChatEntries = 0
+    var pushedMetadata = 0
+    var pushedPayloads = 0
+    var pushedTombstones = 0
+    var pushedAiSettings = 0
+
+    val errors = mutableListOf<V3Error>()
+    val rootBySyncId = mutableMapOf<String, File>()
+    var shelfStateDirty = false
+
+    /** The tapped cloud manga this pass downloads, with their request stamps. */
+    var cloudRequests: Map<String, String> = emptyMap()
+}
