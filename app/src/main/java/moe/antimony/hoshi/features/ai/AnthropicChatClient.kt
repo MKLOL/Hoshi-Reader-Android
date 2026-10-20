@@ -70,8 +70,12 @@ object AnthropicChatClient {
             setRequestProperty("Content-Type", "application/json")
             setRequestProperty("Accept", "application/json")
         }
+        val body = requestBody.toByteArray(Charsets.UTF_8)
+        // A streamed body cannot be replayed, so a connection lost mid-request fails instead of
+        // being sent (and paid for) a second time behind the caller's back.
+        connection.setFixedLengthStreamingMode(body.size)
         return try {
-            connection.outputStream.use { it.write(requestBody.toByteArray(Charsets.UTF_8)) }
+            connection.outputStream.use { it.write(body) }
             val code = connection.responseCode
             val stream = if (code in 200..299) connection.inputStream else connection.errorStream
             val raw = stream?.bufferedReader()?.use { it.readText() }.orEmpty()

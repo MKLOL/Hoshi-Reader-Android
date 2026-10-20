@@ -465,7 +465,8 @@ without aborting the whole sync.
 
 The test files MUST cover at minimum these scenarios. Reviewers verify each:
 
-1. **Fresh-device cold start.** Empty local. Server has N books. Sync → all books local.
+1. **Fresh-device cold start.** Empty local. Server has N books. Sync → every EPUB local and
+   every manga listed in the cloud catalogue; a tapped manga is local after its sync.
 2. **Reverse cold start.** Empty server. Local has N books. Sync → all on server.
 3. **Bidirectional new content.** Each side has books the other doesn't. Sync → both converge.
 4. **Bookmark LWW symmetric.** A pushes bookmark at T1, B pushes at T2 > T1.
@@ -520,8 +521,8 @@ class SimDevice(val name: String, val repo: BookRepository, val history: AiChatH
 Scenarios:
 
 1. **Three-device fanout.** Device A imports 5 books. A syncs. Devices B and C
-   sync. Both B and C end up with all 5 books. Then C imports a 6th, syncs. A and
-   B sync. All three devices have 6 identical libraries.
+   sync. Both B and C end up with all 5 books (manga listed until tapped, then installed).
+   Then C imports a 6th, syncs. A and B sync. All three devices have the same 6 books.
 
 2. **Read-the-same-book race.** A and B both have book X. A turns pages 1→2→3,
    syncs. B turns pages 1→2, syncs (its bookmark older). Final: B picks up A's
@@ -534,7 +535,7 @@ Scenarios:
 4. **Tombstone + reimport.** A imports X, syncs. B imports X via sync. A deletes
    X (tombstone goes to server), syncs. B syncs — B's X is removed. Then A
    re-imports X with the same title. A syncs. B syncs. Both have X back with no
-   tombstone.
+   tombstone (on B, a manga X is back in the cloud catalogue until tapped).
 
 5. **Shelf reorganization across three devices.** All three have 10 books on the
    default shelf. A puts {1, 3, 5} on "Reading". B puts {2, 4} on "Done". A and

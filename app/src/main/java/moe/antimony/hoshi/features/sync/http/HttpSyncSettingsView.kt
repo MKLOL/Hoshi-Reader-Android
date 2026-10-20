@@ -186,19 +186,26 @@ internal fun HttpSyncStatusLine(status: SyncStatus) {
         SyncStatus.Idle -> "" to MaterialTheme.colorScheme.onSurfaceVariant
         is SyncStatus.Running -> "" to MaterialTheme.colorScheme.onSurfaceVariant
         is SyncStatus.Done -> {
-            val errorTail = if (status.result.errors.isEmpty()) "" else
-                "\n" + stringResource(R.string.http_sync_errors) + "\n" + status.result.errors.joinToString("\n") { " • $it" }
+            val errors = status.result.errors
+            val errorBullets = errors.joinToString("\n") { " • $it" }
             val cloudLine = status.result.newCloudBooks.takeIf { it > 0 }?.let { count ->
                 pluralStringResource(R.plurals.http_sync_new_cloud_books, count, count)
             }
-            // New manga are the news when nothing else moved ("nothing to sync" would contradict it).
-            val headline = if (cloudLine != null && status.result.summaryParts().isEmpty()) {
-                cloudLine
-            } else {
-                stringResource(R.string.http_sync_complete_format, status.result.summary()) +
+            val nothingMoved = status.result.summaryParts().isEmpty()
+            // New manga, or the errors, are the news when nothing else moved: "nothing to sync"
+            // would contradict them.
+            val text = when {
+                cloudLine != null && nothingMoved -> cloudLine
+                nothingMoved && errors.isNotEmpty() -> null
+                else -> stringResource(R.string.http_sync_complete_format, status.result.summary()) +
                     cloudLine?.let { "\n" + it }.orEmpty()
             }
-            headline + errorTail to MaterialTheme.colorScheme.onSurface
+            val errorText = when {
+                errors.isEmpty() -> ""
+                text == null -> stringResource(R.string.http_sync_finished_with_errors) + "\n" + errorBullets
+                else -> "\n" + stringResource(R.string.http_sync_errors) + "\n" + errorBullets
+            }
+            text.orEmpty() + errorText to MaterialTheme.colorScheme.onSurface
         }
         is SyncStatus.Failed -> stringResource(
             R.string.http_sync_failed_format,

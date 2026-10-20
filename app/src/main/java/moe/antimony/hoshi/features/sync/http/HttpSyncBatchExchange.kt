@@ -174,6 +174,11 @@ class HttpSyncBatchState(
      * this device publishes.
      */
     private val cloudBooks: HttpSyncCloudBooks? = null,
+    /**
+     * Whether the selected engine keeps the catalogue (v3). The v2 engine downloads every book,
+     * so under it a listed manga is missing like any other and must start a full sync.
+     */
+    private val cloudCatalogueActive: suspend () -> Boolean = { true },
 ) {
     internal val booksDirectory: java.io.File get() = bookRepository.booksDirectory
 
@@ -241,6 +246,7 @@ class HttpSyncBatchState(
         onProgress: suspend (HttpSyncProgress) -> Unit = {},
     ): HttpSyncMapChanges = withContext(ioDispatcher) {
         onProgress(HttpSyncProgress(messageResource = R.string.http_sync_checking_changes))
+        val catalogueActive = cloudCatalogueActive()
         syncMutex.withLock {
             val before = synchronized(stateLock) { loadStateLocked() }
             // The cached metadata index fetches only changed keys on routine checks. It also
@@ -371,7 +377,7 @@ class HttpSyncBatchState(
             val cachedLocalHashes = readCachedLocalBookHashes(localEntries)
             // A cloud manga still in the map counts as present; its archive changing is noticed
             // by the next full sync, which reads its manifest.
-            val knownBookIds = localBookIds + cloudBookHashes(localBookIds, remoteBooks).keys
+            val knownBookIds = localBookIds + cloudBookHashes(localBookIds, remoteBooks, catalogueActive).keys
             val localBookMismatch = knownBookIds != remoteBooks.keys ||
                 (localBookIds - cachedLocalHashes.keys).any { !HttpSyncActiveBooks.contains(it) } ||
                 hasDirtyLocalPayload(localEntries) ||
@@ -460,6 +466,7 @@ class HttpSyncBatchState(
         transport: HttpSyncKvTransport,
         acknowledgedLegacyEtags: Map<String, String> = emptyMap(),
     ): HttpSyncMapChanges = withContext(ioDispatcher) {
+        val catalogueActive = cloudCatalogueActive()
         syncMutex.withLock {
             val before = synchronized(stateLock) { loadStateLocked() }
             val pendingSnapshot = synchronized(stateLock) { loadPendingLocked() }
@@ -484,7 +491,7 @@ class HttpSyncBatchState(
                     if (HttpSyncActiveBooks.contains(id) && id in this) this[id] = remoteSha
                 }
                 val localIds = localEntries.mapNotNullTo(mutableSetOf()) { syncIdForMetadata(it.metadata) }
-                for ((id, sha) in cloudBookHashes(localIds, before.books)) putIfAbsent(id, sha)
+                for ((id, sha) in cloudBookHashes(localIds, before.books, catalogueActive)) putIfAbsent(id, sha)
             }
 
             val booksResponse = transport.put(
@@ -646,7 +653,12 @@ class HttpSyncBatchState(
      * which keeps no catalogue) must not put the book back, or devices would trade the map
      * every poll.
      */
-    private fun cloudBookHashes(localIds: Set<String>, remoteBooks: Map<String, String>): Map<String, String> {
+    private fun cloudBookHashes(
+        localIds: Set<String>,
+        remoteBooks: Map<String, String>,
+        catalogueActive: Boolean,
+    ): Map<String, String> {
+        if (!catalogueActive) return emptyMap()
         val records = cloudBooks?.records() ?: return emptyMap()
         return records.filter { it.syncId !in localIds }
             .mapNotNull { record -> remoteBooks[record.syncId]?.let { record.syncId to it } }

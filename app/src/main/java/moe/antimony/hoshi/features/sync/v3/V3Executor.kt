@@ -444,6 +444,7 @@ class V3Executor(
                     syncId = action.syncId,
                     action = action::class.simpleName ?: "Unknown",
                     message = message,
+                    title = (action as? V3Action.ImportRemoteBook)?.manifest?.originalName?.takeIf { it.isNotBlank() },
                 )
                 if (action is V3Action.ImportRemoteBook) {
                     cloudRequests[action.syncId]?.let { requestedAt ->
@@ -537,6 +538,7 @@ class V3Executor(
                 V3Progress(
                     phase = V3Phase.ListingRemote,
                     message = "Fetching covers",
+                    messageResource = moe.antimony.hoshi.R.string.http_sync_fetching_covers,
                     detail = book.title,
                     completed = index,
                     total = missing.size,
@@ -574,7 +576,7 @@ class V3Executor(
                 makeProgress = { transfer ->
                     V3Progress(
                         phase = V3Phase.ImportingPayloads,
-                        message = "Downloading $syncId",
+                        message = "Downloading ${action.manifest.originalName.ifBlank { syncId }}",
                         transfer = transfer,
                     )
                 },

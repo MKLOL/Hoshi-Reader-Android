@@ -7,6 +7,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
+import moe.antimony.hoshi.features.sync.http.HttpSyncCloudBooks
 import java.io.File
 import java.io.InputStream
 import java.io.OutputStream
@@ -73,6 +74,9 @@ class HoshiBackupRepository(
                 val root = filesDir.resolve(target.folderName)
                 if (!root.isDirectory) return@use
                 root.walkTopDown()
+                    // The cloud catalogue only mirrors the server, and the next sync rebuilds it.
+                    // Restored, its taps would start downloads on a fresh install.
+                    .onEnter { it == root || target != BackupTarget.Books || it.name != HttpSyncCloudBooks.DIRECTORY_NAME }
                     .filter { it != root }
                     .sortedBy { it.relativeTo(root).invariantSeparatorsPath }
                     .forEach { file ->

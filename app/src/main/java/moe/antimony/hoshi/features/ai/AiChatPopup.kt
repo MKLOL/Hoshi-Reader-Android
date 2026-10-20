@@ -2,9 +2,11 @@ package moe.antimony.hoshi.features.ai
 
 import moe.antimony.hoshi.ui.theme.AdaptiveUi
 import moe.antimony.hoshi.ui.theme.currentPopupReadability
+import moe.antimony.hoshi.ui.theme.LocalHoshiEInkMode
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -13,6 +15,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
@@ -22,6 +25,7 @@ import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.HourglassTop
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -45,6 +49,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.res.pluralStringResource
@@ -343,33 +348,137 @@ internal fun AiChatHistoryView(
     lookupOptions: LookupPopupOptions,
     onClose: () -> Unit,
     modifier: Modifier = Modifier,
+    /** Requests still running, or failed out of sight, listed above the replies. */
+    requests: List<AiChatRequest> = emptyList(),
+    onRetryRequest: (Long) -> Unit = {},
+    onDismissRequest: (Long) -> Unit = {},
 ) {
     moe.antimony.hoshi.features.settings.SettingsDetailScaffold(
         title = stringResource(R.string.ai_chat_history_title),
         onClose = onClose,
         modifier = modifier,
     ) { innerPadding ->
-        if (entries.isEmpty()) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(innerPadding),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(
-                    text = stringResource(R.string.ai_chat_history_empty),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(innerPadding),
+        ) {
+            if (requests.isNotEmpty()) {
+                AiChatRequestRows(
+                    requests = requests,
+                    onRetry = onRetryRequest,
+                    onDismiss = onDismissRequest,
+                    // A long queue scrolls on its own, so the replies below stay reachable.
+                    modifier = Modifier
+                        .heightIn(max = 280.dp)
+                        .verticalScroll(rememberScrollState()),
                 )
             }
-        } else {
-            AiChatHistoryWebViewWithLookup(
-                entries = entries,
-                lookupOptions = lookupOptions,
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(innerPadding),
-            )
+            if (entries.isEmpty()) {
+                if (requests.isEmpty()) {
+                    Box(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            text = stringResource(R.string.ai_chat_history_empty),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            } else {
+                AiChatHistoryWebViewWithLookup(
+                    entries = entries,
+                    lookupOptions = lookupOptions,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f),
+                )
+            }
+        }
+    }
+}
+
+/** One row per request: a spinner while it runs, or its error with Retry and Dismiss. */
+@Composable
+private fun AiChatRequestRows(
+    requests: List<AiChatRequest>,
+    onRetry: (Long) -> Unit,
+    onDismiss: (Long) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val eInk = LocalHoshiEInkMode.current
+    Column(
+        modifier = modifier.padding(start = 16.dp, end = 16.dp, top = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        // Newest first, like the replies below.
+        requests.sortedByDescending { it.id }.forEach { request ->
+            val failure = (request.status as? AiChatRequest.Status.Failed)?.message
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = MaterialTheme.colorScheme.surface,
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Column(modifier = Modifier.padding(start = 16.dp, end = 8.dp, top = 12.dp, bottom = 8.dp)) {
+                    Text(
+                        // A screenshot request (no key) carries an untranslated label.
+                        text = if (request.key == null) {
+                            stringResource(R.string.ai_chat_screenshot_translation)
+                        } else {
+                            request.bubbleText
+                        },
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(end = 8.dp),
+                    )
+                    Spacer(Modifier.size(6.dp))
+                    if (failure == null) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(bottom = 6.dp),
+                        ) {
+                            if (eInk) {
+                                // A still glyph: an endless spinner keeps refreshing an E-ink panel.
+                                Icon(Icons.Rounded.HourglassTop, contentDescription = null, modifier = Modifier.size(18.dp))
+                            } else {
+                                CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                            }
+                            Spacer(Modifier.size(10.dp))
+                            Text(
+                                text = stringResource(
+                                    if (request.onDevice) {
+                                        R.string.ai_chat_status_translating_on_device
+                                    } else {
+                                        R.string.ai_chat_status_asking_chatgpt
+                                    },
+                                ),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    } else {
+                        Text(
+                            text = failure,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.padding(end = 8.dp),
+                        )
+                        Row(modifier = Modifier.align(Alignment.End)) {
+                            TextButton(onClick = { onDismiss(request.id) }) {
+                                Text(stringResource(R.string.action_dismiss))
+                            }
+                            TextButton(onClick = { onRetry(request.id) }) {
+                                Text(stringResource(R.string.action_retry))
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 }

@@ -148,6 +148,7 @@ class SyncDevice(
         statisticsPreferences = statisticsPreferences,
         usageLog = usageLog,
         cloudBooks = cloudBooks,
+        cloudCatalogueActive = { settings.useV3Sync },
     )
     private val fastSync = HttpSyncFastSync(
         state = batchState,

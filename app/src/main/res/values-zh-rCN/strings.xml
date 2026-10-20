@@ -65,6 +65,13 @@
     </plurals>
     <string name="ai_chat_history_title">ChatGPT 记录</string>
     <string name="ai_chat_history_empty">这本漫画还没有 ChatGPT 对话。</string>
+    <string name="ai_chat_history_in_progress">翻译进行中，打开 ChatGPT 记录</string>
+    <string name="ai_chat_history_failed_badge">有翻译失败，打开 ChatGPT 记录</string>
+    <string name="ai_chat_history_new_reply">有新的翻译，打开 ChatGPT 记录</string>
+    <string name="ai_chat_screenshot_translation">截图翻译</string>
+    <string name="ai_chat_request_channel_name">ChatGPT 翻译</string>
+    <string name="ai_chat_request_notification_title">正在完成翻译</string>
+    <string name="ai_chat_request_notification_text">回复将保存到 ChatGPT 记录。</string>
     <string name="ai_translation_settings_loading">翻译功能仍在加载，请稍后再点一次。</string>
     <string name="ai_translation_configuration_missing">请在“设置 → ChatGPT”中设置 OpenAI API 密钥，或开启设备端翻译以离线使用。</string>
     <string name="ai_translation_failed">翻译失败。</string>
@@ -807,6 +814,7 @@
     <string name="http_sync_starting">开始同步</string>
     <string name="http_sync_checking_changes">正在检查同步更改</string>
     <string name="http_sync_reading_history">正在同步阅读历史</string>
+    <string name="http_sync_fetching_covers">正在获取封面</string>
     <string name="http_sync_invalid_pagination">同步服务器返回的更改列表不完整。请重试。</string>
     <string name="http_sync_reading_local">正在读取本地同步状态</string>
     <string name="http_sync_updating_positions">正在更新阅读位置</string>
@@ -814,6 +822,7 @@
     <string name="http_sync_finishing_maps">正在完成同步</string>
     <string name="http_sync_errors">同步错误：</string>
     <string name="http_sync_complete_format">同步完成：%1$s</string>
+    <string name="http_sync_finished_with_errors">同步已完成，但出现错误：</string>
     <plurals name="http_sync_new_cloud_books">
         <item quantity="one">书架的“未下载”中有 %1$d 部新漫画，点按即可下载。</item>
         <item quantity="other">书架的“未下载”中有 %1$d 部新漫画，点按即可下载。</item>

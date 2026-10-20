@@ -297,8 +297,11 @@ data class V3PushedCounts(
 
 data class V3Error(
     val syncId: String?,
+    /** For logs and tests only: R8 renames the action classes in a release build. */
     val action: String,
     val message: String,
+    /** The book's title, which a user-facing error names instead of its sync id. */
+    val title: String? = null,
 )
 
 // ─── Progress ────────────────────────────────────────────────────────────────────
@@ -310,6 +313,8 @@ data class V3Progress(
     val completed: Int? = null,
     val total: Int? = null,
     val transfer: moe.antimony.hoshi.features.sync.http.HttpSyncTransferProgress? = null,
+    /** Localized status shown instead of [message], which then only serves logs and tests. */
+    @param:androidx.annotation.StringRes val messageResource: Int? = null,
 )
 
 enum class V3Phase {

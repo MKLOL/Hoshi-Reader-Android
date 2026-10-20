@@ -135,6 +135,12 @@ internal class HoshiAppContainer(context: Context) {
         moe.antimony.hoshi.features.podcasts.PodcastRepository.getInstance(appContext)
     }
     val aiChatSettingsRepository: AiChatSettingsRepository = appContext.aiChatSettingsRepository()
+    /** Translation requests keep running after their popup closes, even outside the reader. */
+    val aiChatRequests: moe.antimony.hoshi.features.ai.AiChatRequests =
+        moe.antimony.hoshi.features.ai.AiChatRequests(
+            appScope,
+            onRunning = { moe.antimony.hoshi.features.ai.AiChatRequestService.start(appContext) },
+        )
     // Wallclock of the most recent successful manual Sync now. The reader hooks read it
     // to clear their circuit breaker on the next page turn after a successful manual sync.
     val httpSyncManualSyncSuccessAt: kotlinx.coroutines.flow.MutableStateFlow<Long> =
@@ -187,6 +193,7 @@ internal class HoshiAppContainer(context: Context) {
         statisticsPreferences = statisticsPreferencesStore,
         usageLog = usageLog,
         cloudBooks = httpSyncCloudBooks,
+        cloudCatalogueActive = { httpSyncSettingsRepository.settings.first().useV3Sync },
     )
     val httpSyncFullCycleRunner: HttpSyncFullCycleRunner = HttpSyncFullCycleRunner(appScope)
     val httpSyncFastSync: HttpSyncFastSync = HttpSyncFastSync(

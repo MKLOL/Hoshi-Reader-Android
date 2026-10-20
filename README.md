@@ -58,7 +58,9 @@ to **Manhhao** for the original Hoshi Reader. Both are GPLv3, as is this fork.
 - **E-ink mode.** Pure black-and-white rendering, immersive system bars, no
   page-turn animation, high-contrast matched-word highlight via the CSS Custom Highlight API.
 - **HTTP sync.** Optional self-hosted key/value blob server keeps books, reading progress,
-  shelves, reader data, and manga ChatGPT history in sync across devices. See
+  shelves, reader data, and manga ChatGPT history in sync across devices. A manga that is
+  only on the server is listed under **Not downloaded** with its cover and downloads when
+  tapped. See
   [docs/HTTP_SYNC.md](docs/HTTP_SYNC.md).
 - **Right-to-left manga reading**, configurable single-tap-to-lookup, optional Noto Sans
   JP font for the OCR overlay, and a "Go to page…" jump dialog under the overflow menu.

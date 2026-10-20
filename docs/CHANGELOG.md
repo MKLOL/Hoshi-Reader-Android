@@ -8,7 +8,10 @@ Semantic Versioning.
 ## [Unreleased]
 
 ### Added
-- **New manga wait in the cloud until you want them.** With HTTP sync, a manga added on another device no longer downloads during sync. It appears on the shelf under **Not downloaded** with its cover and a cloud badge, and the sync result says how many arrived. Tap one to download it: the cover fades and a ring fills as it downloads, and the book arrives with its reading position, chats, translations and statistics. A failed download stays in the folder so you can tap it again. Stopping the sync cancels the download, and one interrupted by closing the app resumes when you reopen it. EPUBs still download as before.
+- **New manga wait in the cloud until you want them.** With HTTP sync, a manga that is on the server but not on this device (one added on another device, or your whole manga library on a new install) no longer downloads during sync. It appears on the shelf under **Not downloaded** with its cover and a cloud badge, and the sync result says how many arrived. Tap one to download it: the cover fades and a ring fills as it downloads, and the book arrives with its reading position, chats, translations and statistics. A failed download stays in the folder so you can tap it again. Stopping the sync cancels the download, and one interrupted by closing the app resumes when you reopen it. EPUBs still download as before.
+
+### Changed
+- **Closing a translation no longer throws it away.** A tap outside the ChatGPT popup used to cancel the request you had already paid for. Now it keeps running in the background and the reply is saved to the ChatGPT history, even if you leave the manga or switch to another app. While it runs, a spinner next to the ⋯ button and at the top of the history shows it is still loading, and a dot tells you when the reply has arrived. A request that fails stays in the history with Retry. Tapping the same bubble again picks up the running request or its reply instead of asking again.
 
 ## [v0.12.4] - 2026-10-04
 

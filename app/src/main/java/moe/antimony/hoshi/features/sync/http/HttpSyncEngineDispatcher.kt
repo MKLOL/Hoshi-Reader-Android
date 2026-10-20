@@ -92,6 +92,7 @@ internal fun V3Progress.toHttpSyncProgress(): HttpSyncProgress = HttpSyncProgres
     detail = detail,
     completed = completed,
     total = total,
+    messageResource = messageResource,
     transfer = transfer,
 )
 
@@ -116,9 +117,10 @@ internal fun V3SyncResult.toHttpSyncResult(): HttpSyncResult = HttpSyncResult(
     downloadedAppSettings = applied.aiSettings > 0,
     remoteOnlyBooks = remoteOnlyBooks,
     newCloudBooks = newCloudBooks,
+    // A user reads these: name the book, not the action (whose class name R8 renames).
     errors = errors.map { e ->
-        val prefix = listOfNotNull(e.syncId, e.action).joinToString(":")
-        if (prefix.isEmpty()) e.message else "$prefix: ${e.message}"
+        val prefix = e.title ?: e.syncId
+        if (prefix.isNullOrEmpty()) e.message else "$prefix: ${e.message}"
     },
     newLastSyncedAt = null,
 )

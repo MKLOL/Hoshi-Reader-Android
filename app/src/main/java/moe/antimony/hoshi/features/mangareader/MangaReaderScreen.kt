@@ -35,6 +35,13 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
+import androidx.compose.material.icons.rounded.ErrorOutline
+import androidx.compose.material.icons.rounded.History
+import androidx.compose.material.icons.rounded.HourglassTop
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.foundation.border
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.Screenshot
@@ -88,10 +95,14 @@ import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.findViewTreeLifecycleOwner
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -110,6 +121,9 @@ import moe.antimony.hoshi.R
 import moe.antimony.hoshi.epub.BookRepository
 import moe.antimony.hoshi.epub.ReadingStatistics
 import moe.antimony.hoshi.features.ai.AiChatEntry
+import moe.antimony.hoshi.features.ai.AiChatRequest
+import moe.antimony.hoshi.features.ai.followInPopup
+import moe.antimony.hoshi.ui.theme.LocalHoshiEInkMode
 import moe.antimony.hoshi.features.ai.NetworkReachability
 import moe.antimony.hoshi.features.ai.PretranslationStore
 import moe.antimony.hoshi.features.ai.AiChatHistoryStore
@@ -122,7 +136,6 @@ import moe.antimony.hoshi.features.ai.ChatModelCatalog
 import moe.antimony.hoshi.features.ai.CloudChat
 import moe.antimony.hoshi.features.ai.aiChatSettingsRepository
 import moe.antimony.hoshi.features.ai.offline.OfflineLlmManager
-import moe.antimony.hoshi.features.ai.offline.OfflineTranslationResult
 import moe.antimony.hoshi.features.ai.offline.offlineTranslationSettingsRepository
 import moe.antimony.hoshi.features.ai.buildAiChatDictionaryLookup
 import moe.antimony.hoshi.features.dictionary.DictionarySettings
@@ -223,6 +236,11 @@ internal fun MangaReaderScreen(
     // The ChatGPT popup state (null = no popup), the in-flight request, this manga's chat
     // history, and whether the history / settings overlays are open.
     var aiChatState by remember(book) { mutableStateOf<AiChatUiState?>(null) }
+    // Requests outlive the popup (see AiChatRequests); this is the one the popup shows.
+    val aiRequests = LocalHoshiAppContainer.current.aiChatRequests
+    val aiRequestList by aiRequests.requests.collectAsStateWithLifecycle()
+    var aiChatRequestId by remember(book) { mutableStateOf<Long?>(null) }
+    // Only a screenshot capture, before anything is sent: closing the popup cancels it.
     var aiRequestJob by remember(book) { mutableStateOf<Job?>(null) }
     var aiRetryAction by remember(book) { mutableStateOf<(() -> Unit)?>(null) }
     /// Re-asks the live model for the bubble on screen, bypassing the pre-translation cache.
@@ -442,8 +460,20 @@ internal fun MangaReaderScreen(
         return true
     }
 
+    /** The popup stops showing its request, which carries on in the background. */
+    fun detachAiRequest() {
+        aiChatRequestId?.let(aiRequests::hide)
+        aiChatRequestId = null
+    }
+
+    fun showAiRequest(id: Long) {
+        if (aiChatRequestId != id) detachAiRequest()
+        aiChatRequestId = id
+    }
+
     fun dismissAiChat() {
         aiRequestJob?.cancel()
+        detachAiRequest()
         aiRetryAction = null
         aiChatState = null
     }
@@ -461,6 +491,7 @@ internal fun MangaReaderScreen(
     fun serveOfflinePretranslation(bubbleText: String, blockId: String?): Boolean {
         val cached = PretranslationStore.lookup(bookRoot, blockId, bubbleText) ?: return false
         aiRequestJob?.cancel()
+        detachAiRequest()
         aiShowingPretranslation = true
         aiChatState = AiChatUiState.Loaded(
             AiChatEntry(
@@ -481,9 +512,9 @@ internal fun MangaReaderScreen(
     }
 
     /**
-     * Sends a tapped speech bubble to ChatGPT, shows the popup, and on success appends the
-     * exchange to this manga's history. Dismissing the popup cancels an in-flight request,
-     * and the coroutine bails without touching state once cancelled.
+     * Sends a tapped speech bubble to ChatGPT and shows the popup. The request belongs to
+     * [aiRequests], not to the popup: closing the popup leaves it running, and its reply is
+     * appended to this manga's history either way.
      */
     fun askAi(bubbleText: String, blockId: String? = null, forceLive: Boolean = false) {
         aiRetryAction = { askAi(bubbleText, blockId, forceLive) }
@@ -498,6 +529,7 @@ internal fun MangaReaderScreen(
         if (settings == null) {
             // DataStore's first emission is async; a tap in that brief window would otherwise
             // do nothing at all. Tell the user to retry instead of leaving a dead button.
+            detachAiRequest()
             aiChatState = AiChatUiState.Failed(
                 bubbleText,
                 "Translation is still loading — tap again in a moment.",
@@ -508,6 +540,7 @@ internal fun MangaReaderScreen(
         val useOnDevice = offlineTranslationSettings?.useOnDeviceTranslation == true
 
         if (!useOnDevice && !settings.isConfigured) {
+            detachAiRequest()
             aiChatState = AiChatUiState.Failed(
                 bubbleText,
                 "Set your OpenAI API key first in Settings → ChatGPT, or turn on on-device " +
@@ -515,91 +548,108 @@ internal fun MangaReaderScreen(
             )
             return
         }
-        aiRequestJob?.cancel()
         aiShowingPretranslation = false
         aiChatState = AiChatUiState.Loading(bubbleText, onDevice = useOnDevice)
-        aiRequestJob = scope.launch {
-            val dictionaryLookup = async(Dispatchers.IO) {
-                buildAiChatDictionaryLookup(bubbleText, dictionarySettings)
-            }
-            // Both engines satisfy the same popup: produce a reply string (+ an optional debug
-            // line for the on-device path). The offline manager runs the LLM on its own
-            // background dispatcher; the OpenAI path hits the network as before.
-            val result = runCatching {
+        val appContext = context.applicationContext
+        val lookupSettings = dictionarySettings
+        val hooks = httpSyncHooks
+        val requestId = aiRequests.start(
+            bookRoot = bookRoot,
+            // The same bubble asked of the same model joins the request already under way.
+            key = "${if (useOnDevice) "on-device" else settings.model}\n$bubbleText",
+            bubbleText = bubbleText,
+            onDevice = useOnDevice,
+            failureMessage = { error -> error.message ?: "Translation failed." },
+            // FORK ADDITION: push this one chat entry to the v2 KV sync server.
+            onSaved = hooks::onChatEntryPersisted,
+        ) {
+            // Read when it runs, so a Retry from the history uses a key or model fixed since.
+            val settings = aiSettingsRepository.settings.first()
+            coroutineScope {
+                val dictionaryLookup = async(Dispatchers.IO) {
+                    buildAiChatDictionaryLookup(bubbleText, lookupSettings)
+                }
+                // Both engines satisfy the same popup: produce a reply string (+ an optional
+                // debug line for the on-device path). The offline manager runs the LLM on its
+                // own background dispatcher; the OpenAI path hits the network as before.
+                val response: String
+                val modelLabel: String
+                val debugInfo: String?
                 if (useOnDevice) {
-                    OfflineLlmManager.translate(
-                        appContext = context.applicationContext,
+                    val value = OfflineLlmManager.translate(
+                        appContext = appContext,
                         instruction = settings.promptText,
                         japaneseText = bubbleText,
                     )
+                    response = value.text
+                    modelLabel = value.modelId
+                    debugInfo = value.debugLine()
                 } else {
-                    CloudChat.complete(
+                    response = CloudChat.complete(
                         provider = ChatModelCatalog.providerForModelId(settings.model),
                         apiKey = settings.apiKey,
                         model = settings.model,
                         prompt = settings.promptText,
                         bubbleText = bubbleText,
                     )
+                    modelLabel = settings.model
+                    debugInfo = null
                 }
+                AiChatEntry(
+                    bubbleText = bubbleText,
+                    prompt = settings.promptText,
+                    model = modelLabel,
+                    response = response,
+                    timestampSeconds = repository.currentAppleReferenceDateSeconds(),
+                    dictionaryLookup = dictionaryLookup.await(),
+                    debugInfo = debugInfo,
+                )
             }
-            // Bail without touching state if the popup was dismissed mid-request.
-            if (!isActive) return@launch
-            result.fold(
-                onSuccess = { value ->
-                    val response: String
-                    val modelLabel: String
-                    val debugInfo: String?
-                    if (value is OfflineTranslationResult) {
-                        response = value.text
-                        modelLabel = value.modelId
-                        debugInfo = value.debugLine()
-                    } else {
-                        response = value as String
-                        modelLabel = settings.model
-                        debugInfo = null
-                    }
-                    val entry = AiChatEntry(
-                        bubbleText = bubbleText,
-                        prompt = settings.promptText,
-                        model = modelLabel,
-                        response = response,
-                        timestampSeconds = repository.currentAppleReferenceDateSeconds(),
-                        dictionaryLookup = dictionaryLookup.await(),
-                        debugInfo = debugInfo,
-                    )
-                    aiChatState = AiChatUiState.Loaded(entry, onDevice = useOnDevice)
-                    // Persist into this manga's history. A disk failure here must not crash
-                    // the reader — the reply is already shown — so keep the existing history
-                    // on failure, while still letting cancellation propagate normally.
-                    val appended = runCatching { aiHistoryStore.append(bookRoot, entry).entries }
-                        .getOrElse { error ->
-                            if (error is CancellationException) throw error
-                            null
-                        }
-                    if (appended != null) {
-                        aiHistory = appended
-                        // FORK ADDITION: push this one chat entry to the v2 KV sync server.
-                        httpSyncHooks.onChatEntryPersisted(entry)
-                    }
-                },
-                onFailure = { error ->
-                    dictionaryLookup.cancel()
-                    // A reachability check can say "online" and the request still fail because
-                    // the uplink is dead or behind a captive portal. Treat that like being
-                    // offline rather than showing an error over a perfectly good cached answer.
-                    aiChatState = AiChatUiState.Failed(
-                        bubbleText,
-                        error.message ?: "Translation failed.",
-                        onDevice = useOnDevice,
-                    )
-                },
+        }
+        showAiRequest(requestId)
+    }
+
+    /** Sends a captured screenshot to ChatGPT; like [askAi], the request outlives the popup. */
+    fun startScreenshotRequest(imageBase64: String, prompt: String) {
+        aiChatState = AiChatUiState.Loading(MANGA_SCREENSHOT_TRANSLATION_LABEL)
+        val hooks = httpSyncHooks
+        val requestId = aiRequests.start(
+            bookRoot = bookRoot,
+            key = null,
+            bubbleText = MANGA_SCREENSHOT_TRANSLATION_LABEL,
+            onDevice = false,
+            failureMessage = { error -> error.message ?: "ChatGPT request failed." },
+            onSaved = hooks::onChatEntryPersisted,
+        ) {
+            // Read when it runs, so a Retry from the history uses a key or model fixed since.
+            val settings = aiSettingsRepository.settings.first()
+            val response = CloudChat.completeImage(
+                provider = ChatModelCatalog.providerForModelId(settings.model),
+                apiKey = settings.apiKey,
+                model = settings.model,
+                prompt = prompt,
+                imageBase64 = imageBase64,
+                imageMimeType = MANGA_SCREENSHOT_IMAGE_MIME_TYPE,
+            )
+            AiChatEntry(
+                bubbleText = MANGA_SCREENSHOT_TRANSLATION_LABEL,
+                prompt = prompt,
+                model = settings.model,
+                response = response,
+                timestampSeconds = repository.currentAppleReferenceDateSeconds(),
+                screenshotImage = AiChatImage(
+                    mimeType = MANGA_SCREENSHOT_IMAGE_MIME_TYPE,
+                    base64Data = imageBase64,
+                ),
             )
         }
+        showAiRequest(requestId)
     }
 
     fun retryScreenshotTranslation(imageBase64: String, prompt: String) {
         val retrySettings = aiSettings
         if (retrySettings == null) {
+            detachAiRequest()
             aiChatState = AiChatUiState.Failed(
                 MANGA_SCREENSHOT_TRANSLATION_LABEL,
                 "ChatGPT is still loading — tap again in a moment.",
@@ -607,6 +657,7 @@ internal fun MangaReaderScreen(
             return
         }
         if (!retrySettings.isConfigured) {
+            detachAiRequest()
             aiChatState = AiChatUiState.Failed(
                 MANGA_SCREENSHOT_TRANSLATION_LABEL,
                 "Set your OpenAI API key first in Settings → ChatGPT.",
@@ -615,55 +666,12 @@ internal fun MangaReaderScreen(
         }
         aiRetryAction = { retryScreenshotTranslation(imageBase64, prompt) }
         aiRequestJob?.cancel()
-        aiChatState = AiChatUiState.Loading(MANGA_SCREENSHOT_TRANSLATION_LABEL)
-        aiRequestJob = scope.launch {
-            val result = runCatching {
-                CloudChat.completeImage(
-                    provider = ChatModelCatalog.providerForModelId(retrySettings.model),
-                    apiKey = retrySettings.apiKey,
-                    model = retrySettings.model,
-                    prompt = prompt,
-                    imageBase64 = imageBase64,
-                    imageMimeType = MANGA_SCREENSHOT_IMAGE_MIME_TYPE,
-                )
-            }
-            if (!isActive) return@launch
-            result.fold(
-                onSuccess = { response ->
-                    val entry = AiChatEntry(
-                        bubbleText = MANGA_SCREENSHOT_TRANSLATION_LABEL,
-                        prompt = prompt,
-                        model = retrySettings.model,
-                        response = response,
-                        timestampSeconds = repository.currentAppleReferenceDateSeconds(),
-                        screenshotImage = AiChatImage(
-                            mimeType = MANGA_SCREENSHOT_IMAGE_MIME_TYPE,
-                            base64Data = imageBase64,
-                        ),
-                    )
-                    aiChatState = AiChatUiState.Loaded(entry)
-                    val appended = runCatching { aiHistoryStore.append(bookRoot, entry).entries }
-                        .getOrElse { error ->
-                            if (error is CancellationException) throw error
-                            null
-                        }
-                    if (appended != null) {
-                        aiHistory = appended
-                        httpSyncHooks.onChatEntryPersisted(entry)
-                    }
-                },
-                onFailure = { error ->
-                    aiChatState = AiChatUiState.Failed(
-                        MANGA_SCREENSHOT_TRANSLATION_LABEL,
-                        error.message ?: "ChatGPT request failed.",
-                    )
-                },
-            )
-        }
+        startScreenshotRequest(imageBase64, prompt)
     }
 
     fun translateScreenshotCrop(rect: MangaScreenshotCropRect) {
         aiRetryAction = { translateScreenshotCrop(rect) }
+        detachAiRequest()
         val settings = aiSettings
         if (settings == null) {
             aiChatState = AiChatUiState.Failed(
@@ -725,50 +733,9 @@ internal fun MangaReaderScreen(
                 )
                 return@launch
             }
+            // Captured: from here on the request outlives the popup.
             aiRetryAction = { retryScreenshotTranslation(imageBase64, prompt) }
-            aiChatState = AiChatUiState.Loading(MANGA_SCREENSHOT_TRANSLATION_LABEL)
-            val result = runCatching {
-                CloudChat.completeImage(
-                    provider = ChatModelCatalog.providerForModelId(settings.model),
-                    apiKey = settings.apiKey,
-                    model = settings.model,
-                    prompt = prompt,
-                    imageBase64 = imageBase64,
-                    imageMimeType = MANGA_SCREENSHOT_IMAGE_MIME_TYPE,
-                )
-            }
-            if (!isActive) return@launch
-            result.fold(
-                onSuccess = { response ->
-                    val entry = AiChatEntry(
-                        bubbleText = MANGA_SCREENSHOT_TRANSLATION_LABEL,
-                        prompt = prompt,
-                        model = settings.model,
-                        response = response,
-                        timestampSeconds = repository.currentAppleReferenceDateSeconds(),
-                        screenshotImage = AiChatImage(
-                            mimeType = MANGA_SCREENSHOT_IMAGE_MIME_TYPE,
-                            base64Data = imageBase64,
-                        ),
-                    )
-                    aiChatState = AiChatUiState.Loaded(entry)
-                    val appended = runCatching { aiHistoryStore.append(bookRoot, entry).entries }
-                        .getOrElse { error ->
-                            if (error is CancellationException) throw error
-                            null
-                        }
-                    if (appended != null) {
-                        aiHistory = appended
-                        httpSyncHooks.onChatEntryPersisted(entry)
-                    }
-                },
-                onFailure = { error ->
-                    aiChatState = AiChatUiState.Failed(
-                        MANGA_SCREENSHOT_TRANSLATION_LABEL,
-                        error.message ?: "ChatGPT request failed.",
-                    )
-                },
-            )
+            startScreenshotRequest(imageBase64, prompt)
         }
     }
 
@@ -942,8 +909,42 @@ internal fun MangaReaderScreen(
         }
     }
     LaunchedEffect(book, bookRoot) {
-        // Load this manga's ChatGPT history so the ⋯ menu can show it.
-        aiHistory = aiHistoryStore.load(bookRoot).entries
+        // Load this manga's ChatGPT history so the ⋯ menu can show it, and again whenever a
+        // reply is appended to it, including one that arrived after its popup was closed.
+        aiRequests.historyRevisions
+            .map { revisions -> revisions[bookRoot.path] }
+            .distinctUntilChanged()
+            .collectLatest { aiHistory = aiHistoryStore.load(bookRoot).entries }
+    }
+    // The popup follows the request it shows, and takes its reply or error when it ends.
+    LaunchedEffect(aiChatRequestId) {
+        val id = aiChatRequestId ?: return@LaunchedEffect
+        aiRequests.followInPopup(id, isShown = { aiChatRequestId == id }) { state, ended ->
+            if (ended) aiChatRequestId = null
+            if (state != null) {
+                aiChatState = state
+            } else if (aiChatState is AiChatUiState.Loading) {
+                aiChatState = null
+            }
+        }
+    }
+    // Leaving the reader with the popup open sends its request to the background too.
+    DisposableEffect(book) {
+        onDispose { aiChatRequestId?.let(aiRequests::hide) }
+    }
+    // This manga's requests running or failed out of sight, and replies in its history not seen yet.
+    val backgroundAiRequests = aiRequestList.filter { request ->
+        val status = request.status
+        request.bookRoot?.path == bookRoot.path && !request.visible &&
+            (status !is AiChatRequest.Status.Done || status.saved)
+    }
+    val historyAiRequests = aiRequestList.filter {
+        it.bookRoot?.path == bookRoot.path && it.status !is AiChatRequest.Status.Done
+    }
+    // Replies that arrived out of sight are in the history: opening it shows them.
+    val hasUnseenAiReplies = backgroundAiRequests.any { it.status is AiChatRequest.Status.Done }
+    LaunchedEffect(showAiHistory, hasUnseenAiReplies) {
+        if (showAiHistory && hasUnseenAiReplies) aiRequests.markHistorySeen(bookRoot)
     }
     // Drive the page-turn slide: snap to the start, adopt the transition (which lets the
     // offset modifiers start reading the live progress), animate to settled, then drop the
@@ -1147,6 +1148,13 @@ internal fun MangaReaderScreen(
                     horizontalArrangement = Arrangement.spacedBy(4.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
+                    if (backgroundAiRequests.isNotEmpty()) {
+                        MangaReaderAiHistoryButton(
+                            darkInterface = readerSettings.usesDarkInterface(systemDark),
+                            requests = backgroundAiRequests,
+                            onClick = { showAiHistory = true },
+                        )
+                    }
                     if (aiConfigured) {
                         MangaReaderScreenshotButton(
                             darkInterface = readerSettings.usesDarkInterface(systemDark),
@@ -1160,6 +1168,7 @@ internal fun MangaReaderScreen(
                         takeScreenshotEnabled = canTakeScreenshot,
                         onTakeScreenshot = startScreenshotCrop,
                         onShowAiHistory = { showAiHistory = true },
+                        aiRequestRunning = backgroundAiRequests.any { it.status == AiChatRequest.Status.Running },
                         onShowStatistics = { showStatistics = true },
                         onShowGoToPage = { showGoToPageDialog = true },
                     )
@@ -1246,6 +1255,9 @@ internal fun MangaReaderScreen(
             if (showAiHistory) {
                 AiChatHistoryView(
                     entries = aiHistory,
+                    requests = historyAiRequests,
+                    onRetryRequest = aiRequests::retry,
+                    onDismissRequest = aiRequests::dismiss,
                     lookupOptions = lookupOptions,
                     onClose = { showAiHistory = false },
                     modifier = Modifier
@@ -1362,6 +1374,7 @@ private fun MangaReaderOverflowMenu(
     takeScreenshotEnabled: Boolean,
     onTakeScreenshot: () -> Unit,
     onShowAiHistory: () -> Unit,
+    aiRequestRunning: Boolean,
     onShowStatistics: () -> Unit,
     onShowGoToPage: () -> Unit,
     modifier: Modifier = Modifier,
@@ -1409,11 +1422,82 @@ private fun MangaReaderOverflowMenu(
             )
             DropdownMenuItem(
                 text = { Text(stringResource(R.string.ai_chat_history_title)) },
+                trailingIcon = if (aiRequestRunning) {
+                    { CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp) }
+                } else {
+                    null
+                },
                 onClick = {
                     menuExpanded = false
                     onShowAiHistory()
                 },
             )
+        }
+    }
+}
+
+/**
+ * Shown next to the ⋯ menu while this manga has translations out of sight: a spinner while one
+ * still runs after its popup was closed, then a dot for a reply (or an error) waiting in the
+ * history. Tapping it opens the history.
+ */
+@Composable
+private fun MangaReaderAiHistoryButton(
+    darkInterface: Boolean,
+    requests: List<AiChatRequest>,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val contentColor = if (darkInterface) Color.White else Color.Black
+    val running = requests.any { it.status == AiChatRequest.Status.Running }
+    val failed = requests.any { it.status is AiChatRequest.Status.Failed }
+    val description = stringResource(
+        when {
+            running -> R.string.ai_chat_history_in_progress
+            failed -> R.string.ai_chat_history_failed_badge
+            else -> R.string.ai_chat_history_new_reply
+        },
+    )
+    // An endless spinner would keep refreshing an E-ink panel: a still hourglass says the same.
+    val eInk = LocalHoshiEInkMode.current
+    IconButton(
+        onClick = onClick,
+        modifier = modifier
+            .background(mangaFloatingControlBackground(darkInterface), CircleShape)
+            .semantics { contentDescription = description },
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            Icon(
+                imageVector = when {
+                    running && eInk -> Icons.Rounded.HourglassTop
+                    // Both dots are black on E-ink: a failure gets its own glyph.
+                    !running && failed && eInk -> Icons.Rounded.ErrorOutline
+                    else -> Icons.Rounded.History
+                },
+                contentDescription = null,
+                tint = contentColor,
+                modifier = Modifier.size(20.dp),
+            )
+            if (running) {
+                if (!eInk) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(32.dp),
+                        color = contentColor,
+                        strokeWidth = 2.dp,
+                    )
+                }
+            } else if (!(failed && eInk)) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .size(9.dp)
+                        .background(
+                            if (failed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
+                            CircleShape,
+                        )
+                        .border(1.dp, contentColor, CircleShape),
+                )
+            }
         }
     }
 }

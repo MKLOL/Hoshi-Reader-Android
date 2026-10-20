@@ -51,8 +51,9 @@ import androidx.lifecycle.findViewTreeLifecycleOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
 import java.io.File
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -73,7 +74,7 @@ import moe.antimony.hoshi.features.audio.AudioSettings
 import moe.antimony.hoshi.features.audio.LocalAudioRepository
 import moe.antimony.hoshi.features.audio.WordAudioPlayer
 import moe.antimony.hoshi.features.ai.AiChatEntry
-import moe.antimony.hoshi.features.ai.AiChatHistoryStore
+import moe.antimony.hoshi.features.ai.followInPopup
 import moe.antimony.hoshi.features.ai.AiChatPopupView
 import moe.antimony.hoshi.features.ai.AiChatUiState
 import moe.antimony.hoshi.features.ai.ChatModelCatalog
@@ -82,7 +83,6 @@ import moe.antimony.hoshi.features.ai.EpubTranslationStore
 import moe.antimony.hoshi.features.ai.aiChatSettingsRepository
 import moe.antimony.hoshi.features.ai.buildAiChatDictionaryLookup
 import moe.antimony.hoshi.features.ai.offline.OfflineLlmManager
-import moe.antimony.hoshi.features.ai.offline.OfflineTranslationResult
 import moe.antimony.hoshi.features.ai.offline.offlineTranslationSettingsRepository
 import moe.antimony.hoshi.features.anki.AnkiViewModel
 import moe.antimony.hoshi.features.dictionary.DictionaryImageRequestHandler
@@ -153,7 +153,6 @@ fun ReaderWebView(
         context.applicationContext.offlineTranslationSettingsRepository()
     }
     val offlineTranslationSettings by offlineTranslationRepository.settings.collectAsState(initial = null)
-    val aiHistoryStore = remember { AiChatHistoryStore() }
     var sasayakiSettings by remember { mutableStateOf(SasayakiSettings()) }
     var sasayakiMatchData by remember(bookRoot) { mutableStateOf<SasayakiMatchData?>(null) }
     LaunchedEffect(bookRoot, bookRepository) {
@@ -162,7 +161,9 @@ fun ReaderWebView(
     var sentenceTranslationSyncId by remember(bookRoot) { mutableStateOf<String?>(null) }
     var sentenceTranslationPopup by remember(bookRoot) { mutableStateOf<AiChatUiState?>(null) }
     var sentenceTranslationRequest by remember(bookRoot) { mutableStateOf<String?>(null) }
-    var sentenceTranslationJob by remember(bookRoot) { mutableStateOf<Job?>(null) }
+    // Requests outlive the popup (see AiChatRequests); this is the one the popup shows.
+    val aiRequests = appContainer.aiChatRequests
+    var sentenceTranslationRequestId by remember(bookRoot) { mutableStateOf<Long?>(null) }
     var sentenceTranslationRetry by remember(bookRoot) { mutableStateOf<(() -> Unit)?>(null) }
     val translationSettingsLoading = stringResource(R.string.ai_translation_settings_loading)
     val translationConfigurationMissing = stringResource(R.string.ai_translation_configuration_missing)
@@ -243,80 +244,95 @@ fun ReaderWebView(
             sasayakiSettings = settings
         }
     }
+    /** The popup stops showing its request, which carries on in the background. */
+    fun detachSentenceTranslationRequest() {
+        sentenceTranslationRequestId?.let(aiRequests::hide)
+        sentenceTranslationRequestId = null
+    }
     fun askLiveSentenceTranslation(sentence: String) {
         sentenceTranslationRequest = sentence
         sentenceTranslationRetry = { askLiveSentenceTranslation(sentence) }
         val settings = aiSettings
         val offlineSettings = offlineTranslationSettings
         if (settings == null || offlineSettings == null) {
+            detachSentenceTranslationRequest()
             sentenceTranslationPopup = AiChatUiState.Failed(sentence, translationSettingsLoading)
             return
         }
         val useOnDevice = offlineSettings.useOnDeviceTranslation
         if (!useOnDevice && !settings.isConfigured) {
+            detachSentenceTranslationRequest()
             sentenceTranslationPopup = AiChatUiState.Failed(sentence, translationConfigurationMissing)
             return
         }
-        sentenceTranslationJob?.cancel()
         sentenceTranslationPopup = AiChatUiState.Loading(sentence, onDevice = useOnDevice)
-        sentenceTranslationJob = scope.launch {
-            val dictionaryLookup = async(Dispatchers.IO) {
-                buildAiChatDictionaryLookup(sentence, dictionarySettings)
-            }
-            val result = runCatching {
+        val appContext = context.applicationContext
+        val lookupSettings = dictionarySettings
+        // Closing the popup leaves the request running; its reply still reaches the history.
+        val requestId = aiRequests.start(
+            bookRoot = bookRoot,
+            key = "${if (useOnDevice) "on-device" else settings.model}\n$sentence",
+            bubbleText = sentence,
+            onDevice = useOnDevice,
+            failureMessage = { translationFailed },
+        ) {
+            val settings = aiSettingsRepository.settings.first()
+            coroutineScope {
+                val dictionaryLookup = async(Dispatchers.IO) {
+                    buildAiChatDictionaryLookup(sentence, lookupSettings)
+                }
+                val response: String
+                val model: String
+                val debugInfo: String?
                 if (useOnDevice) {
-                    OfflineLlmManager.translate(
-                        appContext = context.applicationContext,
+                    val value = OfflineLlmManager.translate(
+                        appContext = appContext,
                         instruction = settings.promptText,
                         japaneseText = sentence,
                     )
+                    response = value.text
+                    model = value.modelId
+                    debugInfo = value.debugLine()
                 } else {
-                    CloudChat.complete(
+                    response = CloudChat.complete(
                         provider = ChatModelCatalog.providerForModelId(settings.model),
                         apiKey = settings.apiKey,
                         model = settings.model,
                         prompt = settings.promptText,
                         bubbleText = sentence,
                     )
+                    model = settings.model
+                    debugInfo = null
                 }
+                AiChatEntry(
+                    bubbleText = sentence,
+                    prompt = settings.promptText,
+                    model = model,
+                    response = response,
+                    timestampSeconds = bookRepository.currentAppleReferenceDateSeconds(),
+                    dictionaryLookup = dictionaryLookup.await(),
+                    debugInfo = debugInfo,
+                )
             }
-            if (!isActive) return@launch
-            result.fold(
-                onSuccess = { value ->
-                    val response: String
-                    val model: String
-                    val debugInfo: String?
-                    if (value is OfflineTranslationResult) {
-                        response = value.text
-                        model = value.modelId
-                        debugInfo = value.debugLine()
-                    } else {
-                        response = value as String
-                        model = settings.model
-                        debugInfo = null
-                    }
-                    val entry = AiChatEntry(
-                        bubbleText = sentence,
-                        prompt = settings.promptText,
-                        model = model,
-                        response = response,
-                        timestampSeconds = bookRepository.currentAppleReferenceDateSeconds(),
-                        dictionaryLookup = dictionaryLookup.await(),
-                        debugInfo = debugInfo,
-                    )
-                    sentenceTranslationPopup = AiChatUiState.Loaded(entry, onDevice = useOnDevice)
-                    bookRoot?.let { root -> runCatching { aiHistoryStore.append(root, entry) } }
-                },
-                onFailure = {
-                    dictionaryLookup.cancel()
-                    sentenceTranslationPopup = AiChatUiState.Failed(
-                        sentence,
-                        translationFailed,
-                        onDevice = useOnDevice,
-                    )
-                },
-            )
         }
+        if (sentenceTranslationRequestId != requestId) detachSentenceTranslationRequest()
+        sentenceTranslationRequestId = requestId
+    }
+    // The popup follows the request it shows, and takes its reply or error when it ends.
+    LaunchedEffect(sentenceTranslationRequestId) {
+        val id = sentenceTranslationRequestId ?: return@LaunchedEffect
+        aiRequests.followInPopup(id, isShown = { sentenceTranslationRequestId == id }) { state, ended ->
+            if (ended) sentenceTranslationRequestId = null
+            if (state != null) {
+                sentenceTranslationPopup = state
+            } else if (sentenceTranslationPopup is AiChatUiState.Loading) {
+                sentenceTranslationPopup = null
+            }
+        }
+    }
+    // Leaving the reader with the popup open sends its request to the background too.
+    DisposableEffect(bookRoot) {
+        onDispose { sentenceTranslationRequestId?.let(aiRequests::hide) }
     }
     val effectiveSettings = stateHolder.effectiveSettings
     val readerPosition = stateHolder.readerPosition
@@ -1561,6 +1577,7 @@ fun ReaderWebView(
                             }
                             if (cached != null) {
                                 closeLookupPopupsAndSelection()
+                                detachSentenceTranslationRequest()
                                 sentenceTranslationRequest = cached.sentenceText
                                 sentenceTranslationRetry = null
                                 sentenceTranslationPopup = AiChatUiState.Loaded(
@@ -1766,7 +1783,7 @@ fun ReaderWebView(
                 cardStyle = effectiveSettings.translationCard,
                 state = popup,
                 onDismiss = {
-                    sentenceTranslationJob?.cancel()
+                    detachSentenceTranslationRequest()
                     sentenceTranslationPopup = null
                 },
                 onRetry = { sentenceTranslationRetry?.invoke() },

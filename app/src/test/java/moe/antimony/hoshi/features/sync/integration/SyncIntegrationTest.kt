@@ -592,7 +592,9 @@ class SyncIntegrationTest(private val engineA: SyncEngine, private val engineB: 
 
         val c = device("C", engineB)
         val broken = c.sync()
-        assertTrue("the failure is reported: ${broken.errors}", broken.errors.any { SyncCorpus.MANGA_SYNC_ID in it })
+        // v3 names the book by its title, which is what the user reads; v2 by its sync id.
+        val named = if (engineB == SyncEngine.V3) SyncCorpus.MANGA_TITLE + ":" else SyncCorpus.MANGA_SYNC_ID
+        assertTrue("the failure is reported: ${broken.errors}", broken.errors.any { named in it })
         assertEquals("A failing transfer has a bounded retry budget", 3,
             server.requests().count { it.method == "GET" && it.path == zipPath })
         assertNull("no half-imported book", c.bookOrNull(SyncCorpus.MANGA_SYNC_ID))
