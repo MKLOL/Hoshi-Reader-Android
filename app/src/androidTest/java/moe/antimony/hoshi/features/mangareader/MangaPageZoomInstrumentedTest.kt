@@ -55,7 +55,7 @@ class MangaPageZoomInstrumentedTest {
             MokuroPage(1, "page.png", 1600, 900, boxes),
             MokuroPage(2, "page.png", 400, 1200, emptyList()),
         ), null)
-        val cache = MangaPageRenderCache()
+        val cache = MangaPageRenderCache(imageLoader = MangaImageLoaderBackend(root, book))
         val ready = AtomicInteger(-1)
         var page by mutableIntStateOf(0)
         var visible by mutableStateOf(true)

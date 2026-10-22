@@ -10,6 +10,8 @@ import android.view.ViewGroup
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.ComponentActivity
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.test.core.app.ActivityScenario
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -450,8 +452,17 @@ class MangaScreenshotCaptureInstrumentedTest {
         toY: Float,
     ) {
         val location = IntArray(2)
+        var touchOffsetX = 0f
+        var touchOffsetY = 0f
         scenario.onActivity {
             webView.getLocationOnScreen(location)
+            // This test Activity draws edge to edge. Keep the injected drag out of system
+            // bars, whose height can exceed the fixed test coordinates on tablets.
+            val bars = ViewCompat.getRootWindowInsets(webView)?.getInsets(WindowInsetsCompat.Type.systemBars())
+            if (bars != null) {
+                touchOffsetX = maxOf(0f, bars.left + 1f - location[0] - minOf(fromX, toX))
+                touchOffsetY = maxOf(0f, bars.top + 1f - location[1] - minOf(fromY, toY))
+            }
         }
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val downTime = SystemClock.uptimeMillis()
@@ -460,8 +471,8 @@ class MangaScreenshotCaptureInstrumentedTest {
                 downTime,
                 downTime + timeOffset,
                 action,
-                location[0] + x,
-                location[1] + y,
+                location[0] + x + touchOffsetX,
+                location[1] + y + touchOffsetY,
                 0,
             )
             instrumentation.sendPointerSync(event)

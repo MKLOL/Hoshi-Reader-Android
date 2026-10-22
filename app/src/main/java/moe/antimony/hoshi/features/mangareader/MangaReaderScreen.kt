@@ -268,7 +268,11 @@ internal fun MangaReaderScreen(
     // merges don't have to reason about it.
     val httpSyncHooks = rememberHttpSyncReaderHooks(bookRoot, book.title, persistenceScope)
     val mangaImageResolver = remember(book, bookRoot) { MangaWebResourceBridge(bookRoot, book) }
-    val pageRenderCache = remember(book) { MangaPageRenderCache() }
+    val imageLoader = remember(book, bookRoot) { MangaImageLoaderBackend(bookRoot, book) }
+    val pageRenderCache = remember(book, imageLoader) { MangaPageRenderCache(imageLoader = imageLoader) }
+    DisposableEffect(imageLoader) {
+        onDispose { imageLoader.close() }
+    }
 
     var persistedStatistics by remember(bookRoot) { mutableStateOf<List<ReadingStatistics>?>(null) }
     var persistedTextStatistics by remember(bookRoot) { mutableStateOf<List<MangaTextStatistic>?>(null) }
@@ -1021,12 +1025,11 @@ internal fun MangaReaderScreen(
                     enlargeSmallText = readerSettings.mangaEnlargeSmallText,
                 )
             }
-            LaunchedEffect(book, pageIndex, renderConfig, mangaImageResolver) {
+            LaunchedEffect(book, pageIndex, renderConfig) {
                 pageRenderCache.preloadAdjacentPages(
                     book = book,
                     pageIndexes = mangaAdjacentPreloadIndexes(pageIndex, pageCount),
                     config = renderConfig,
-                    imageResolver = mangaImageResolver,
                 )
             }
             // Slide direction for a right-to-left manga, modelled as a filmstrip with page 1 at

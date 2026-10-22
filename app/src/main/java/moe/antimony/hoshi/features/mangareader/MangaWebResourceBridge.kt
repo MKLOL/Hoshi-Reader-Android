@@ -25,6 +25,7 @@ import java.net.URI
 internal class MangaWebResourceBridge(
     bookRoot: File,
     book: MokuroBook,
+    private val imageLoader: MangaImageLoaderBackend? = null,
 ) {
     private val canonicalRoot: File = bookRoot.canonicalFile
 
@@ -63,8 +64,10 @@ internal class MangaWebResourceBridge(
         // The file existed when resolveImageFile() checked it, but opening it can still
         // fail (TOCTOU, a permission change); never let that escape onto the WebView's
         // resource thread — fall back to letting the request 404.
-        val stream = runCatching { file.inputStream() }.getOrNull() ?: return null
-        return WebResourceResponse(file.imageMediaType(), null, stream)
+        val stream = runCatching { imageLoader?.get(file) ?: file.inputStream() }.getOrNull() ?: return null
+        return WebResourceResponse(file.imageMediaType(), null, stream).apply {
+            imageLoader?.let { responseHeaders = it.responseHeaders(url) }
+        }
     }
 
     private fun File.isWithin(root: File): Boolean {

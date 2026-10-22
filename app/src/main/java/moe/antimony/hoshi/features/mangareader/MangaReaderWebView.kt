@@ -78,7 +78,8 @@ internal fun MangaReaderWebView(
     val currentOnBubbleCopied = rememberUpdatedState(onBubbleCopied)
     val currentOnPageReady = rememberUpdatedState(onPageReady)
 
-    val resourceBridge = remember(book, bookRoot) { MangaWebResourceBridge(bookRoot, book) }
+    val imageLoader = pageRenderCache.imageLoader
+    val resourceBridge = remember(book, bookRoot, imageLoader) { MangaWebResourceBridge(bookRoot, book, imageLoader) }
 
     val page = book.pages[pageIndex.coerceIn(0, book.pages.lastIndex)]
     // Re-keyed on the viewport size so a real viewport change (rotation) reloads the page
@@ -146,7 +147,7 @@ internal fun MangaReaderWebView(
                     ),
                     "HoshiMangaTap",
                 )
-                webViewClient = MangaWebViewClient(resourceBridge) { readyPageIndex ->
+                webViewClient = MangaWebViewClient(resourceBridge, imageLoader) { readyPageIndex ->
                     currentOnPageReady.value(readyPageIndex)
                 }
                 attachMangaTouchListener(currentOnNavigate)
@@ -168,6 +169,7 @@ internal fun MangaReaderWebView(
                 htmlHash = html.hashCode(),
             )
             if (webView.tag != loadToken) {
+                imageLoader?.onPageRequested(page.index)
                 webView.tag = loadToken
                 // Keep WebView's default initial scale. Rounding density to a whole percent
                 // can slightly magnify a fitted page and make it horizontally pannable.
@@ -308,6 +310,7 @@ internal fun WebView.clearMangaRevealedBubbles() {
 
 private class MangaWebViewClient(
     private val resourceBridge: MangaWebResourceBridge,
+    private val imageLoader: MangaImageLoaderBackend?,
     private val onPageReady: (Int) -> Unit,
 ) : WebViewClient() {
     override fun shouldInterceptRequest(
@@ -343,6 +346,7 @@ private class MangaWebViewClient(
                         view.scrollTo(0, 0)
                         view.syncMangaHostScale()
                         onPageReady(loadToken.pageIndex)
+                        imageLoader?.let { view.evaluateJavascript(it.preloadScript(loadToken.pageIndex), null) }
                     }
                 }
             },

@@ -91,6 +91,7 @@ internal object MangaPageHtml {
          */
         showCopyButton: Boolean = false,
         enlargeSmallText: Boolean = true,
+        imageUrl: String = encodeImagePath(page.imagePath),
     ): String {
         val imageWidth = page.imageWidth.coerceAtLeast(1)
         val imageHeight = page.imageHeight.coerceAtLeast(1)
@@ -122,7 +123,7 @@ internal object MangaPageHtml {
             <body>
             <div class="page">
               <div class="frame" data-page-index="${page.index}" data-image-width="$imageWidth" data-image-height="$imageHeight">
-                <img class="page-image" src="${escapeAttribute(encodeImagePath(page.imagePath))}" alt="">
+                <img class="page-image" src="${escapeAttribute(imageUrl)}" alt="">
                 <div class="ocr-layer">
             $boxes
                 </div>
@@ -872,7 +873,7 @@ internal object MangaPageHtml {
      * [MangaWebResourceBridge] resolves the request back through `URI.path`, which
      * percent-decodes, so the encoded form round-trips to the original on-disk path.
      */
-    private fun encodeImagePath(path: String): String =
+    internal fun encodeImagePath(path: String): String =
         path.split('/').joinToString("/") { segment ->
             buildString {
                 for (byte in segment.toByteArray(Charsets.UTF_8)) {

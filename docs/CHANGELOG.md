@@ -7,6 +7,9 @@ Semantic Versioning.
 
 ## [Unreleased]
 
+### Changed
+- **Large manga pages prepare ahead of your next turn.** The reader prepares up to three upcoming and two previous page images in the background, caching original image bytes and asking WebView to decode nearby pages ahead of time. Preparation uses memory limits and cancels obsolete work during fast navigation; very large scans still receive file preparation when they cannot fit the decode budget.
+
 ## [v0.12.5] - 2026-10-19
 
 ### Added
