@@ -508,7 +508,8 @@ class V3Executor(
     }
 
     /**
-     * Reads each cloud manga's cover from its remote archive once per archive version. Covers are
+     * Fetches each cloud manga's small KV thumbnail once per archive version, falling back to
+     * archive byte ranges on servers without one. Covers are
      * best effort: a server without byte ranges or an unusual archive just leaves the
      * placeholder. A network failure ends the covers for this pass (an unreachable server would
      * otherwise time out once per manga) and the next sync retries them; neither is a sync error.
@@ -535,6 +536,13 @@ class V3Executor(
                 ),
             )
             try {
+                // Binding the key to the archive's hash avoids showing a cover from a newer
+                // upload when the catalogue and its manifest are read at different times.
+                val hash = book.manifest.sha256.removePrefix("sha256:")
+                val stored = if (hash.matches(Regex("[0-9a-f]{64}"))) {
+                    transport.get("books/${book.syncId}/cover/$hash")?.body?.takeIf { it.isNotEmpty() }
+                } else null
+                if (stored != null && store.trySaveCover(book.syncId, book.manifest.sha256, stored)) continue
                 val image = fetchRemoteMangaCover(transport, book.payloadKeys.zip, book.manifest.sizeBytes)
                 store.saveCover(book.syncId, book.manifest.sha256, image)
             } catch (e: kotlinx.coroutines.CancellationException) {

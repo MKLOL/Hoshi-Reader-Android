@@ -14,7 +14,8 @@ store. All schema is client-side.
 
 ## Goals
 
-- **Server is dumb storage.** It learns nothing about bookmarks, chat, manga, EPUB.
+- **KV values round-trip unchanged.** Bookmarks, chat and other client records stay opaque.
+  Book Sync additionally derives optional small cover thumbnails from recognized book archives.
   New client features need zero server changes.
 - **Batched bookmark writes.** Every dirty EPUB/manga position is merged into one small
   per-install bookmark-shard PUT at most five seconds after local persistence.
@@ -134,7 +135,13 @@ stored representation and its hash (`Content-Encoding: identity`, `Cache-Control
 Android retains partial archives across interruption, checks response offset/size/ETag,
 and verifies the manifest SHA before extraction; it safely accepts legacy servers' 200
 responses, but saving transfer bandwidth across retries requires server range support.
-Android also reads a manga's cover from its `payload.zip` with byte ranges and no `If-Range`:
+Android first GETs `books/{syncId}/cover/{archiveSha256Hex}`: a small JPEG bound to
+the manifest's archive `sha256` (strip `sha256:`, not `contentSha256`). The Book Sync
+server creates thumbnails on archive PUT/multipart completion and backfills old archives
+in upgrade 1.8.0; uploaders need no extra request. The key uses normal bearer auth.
+A readable thumbnail is cached per archive version and avoids every ZIP range request.
+If the key is absent, empty or unreadable, Android reads the cover from `payload.zip`
+with byte ranges and no `If-Range`:
 the archive tail (ZIP end records), the central directory, then the first page entry. A
 server that answers 200 instead of 206 is disconnected before the body is read, and the
 manga is listed without a cover.

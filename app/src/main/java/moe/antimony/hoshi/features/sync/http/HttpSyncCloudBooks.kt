@@ -206,10 +206,24 @@ class HttpSyncCloudBooks(
      * archive has no readable cover, so it is not fetched again until the archive changes.
      */
     internal fun saveCover(syncId: String, archiveSha256: String, image: ByteArray?) {
+        persistCover(syncId, archiveSha256, image, recordUnreadable = true)
+    }
+
+    /** An invalid optional KV thumbnail must still allow archive fallback and network retries. */
+    internal fun trySaveCover(syncId: String, archiveSha256: String, image: ByteArray): Boolean =
+        persistCover(syncId, archiveSha256, image, recordUnreadable = false)
+
+    private fun persistCover(
+        syncId: String,
+        archiveSha256: String,
+        image: ByteArray?,
+        recordUnreadable: Boolean,
+    ): Boolean {
         val thumbnail = image?.let { runCatching { coverThumbnail(it) }.getOrNull() }
+        if (thumbnail == null && !recordUnreadable) return false
         synchronized(lock) {
             val records = loadLocked()
-            val record = records.firstOrNull { it.syncId == syncId } ?: return
+            val record = records.firstOrNull { it.syncId == syncId } ?: return false
             val coverName = thumbnail?.let {
                 val name = "${hashPrefix(syncId)}-${hashPrefix(archiveSha256)}.jpg"
                 coversDirectory.mkdirs()
@@ -218,7 +232,7 @@ class HttpSyncCloudBooks(
                 staged.writeBytes(it)
                 if (!staged.renameTo(target)) {
                     staged.delete()
-                    return
+                    return false
                 }
                 name
             }
@@ -232,6 +246,7 @@ class HttpSyncCloudBooks(
             }
             saveLocked(records.map { if (it.syncId == syncId) updated else it })
         }
+        return thumbnail != null
     }
 
     /** The book is installed: it leaves the catalogue at once so the shelf shows the real book. */

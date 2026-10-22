@@ -39,8 +39,16 @@ class V3CloudCoverPassTest {
     private class Flaky(val fake: RangeFakeKvTransport = RangeFakeKvTransport()) : HttpSyncKvTransport by fake {
         var failRanges = false
         var rangeCalls = 0
+        val getKeys = mutableListOf<String>()
+        val requests = mutableListOf<String>()
+        override suspend fun get(key: String): moe.antimony.hoshi.features.sync.http.HttpSyncKvFetched? {
+            getKeys += key
+            requests += "GET $key"
+            return fake.get(key)
+        }
         override suspend fun getRange(key: String, start: Long?, length: Int): HttpSyncKvRange? {
             rangeCalls += 1
+            requests += "RANGE $key"
             if (failRanges) throw HttpSyncException("Sync request timed out. Network is too slow or the server is hung.")
             // The production client's own preconditions.
             require(start == null || start >= 0) { "Range start must not be negative." }
@@ -48,9 +56,51 @@ class V3CloudCoverPassTest {
         }
     }
 
-    private fun engine(transport: HttpSyncKvTransport): Pair<HttpSyncCloudBooks, V3SyncEngine> {
+    @Test
+    fun aStoredCoverIsFetchedWithoutAnyArchiveRanges() = runBlocking {
+        val transport = Flaky()
+        uploadManga(transport, "manga_one")
+        val manifest = json.decodeFromString(HttpSyncPayloadManifest.serializer(),
+            transport.get(payloadManifestKey("manga_one"))!!.body.toString(Charsets.UTF_8))
+        val key = "books/manga_one/cover/${manifest.sha256.removePrefix("sha256:")}"
+        val thumbnail = byteArrayOf(1, 2, 3)
+        transport.put(key, "image/jpeg", thumbnail)
+        val (cloud, engine) = engine(transport)
+        transport.failRanges = true
+
+        assertEquals(emptyList<V3Error>(), engine.syncOnce(configured).errors)
+
+        assertEquals("stored covers must avoid the ZIP path", 0, transport.rangeCalls)
+        val record = cloud.records().single()
+        assertArrayEquals(thumbnail, cloud.coverFile(record)!!.readBytes())
+        assertEquals(1, transport.getKeys.count { it == key })
+        engine.syncOnce(configured)
+        assertEquals("cached thumbnails are not downloaded again", 1, transport.getKeys.count { it == key })
+    }
+
+    @Test
+    fun aMissingStoredCoverIsCheckedBeforeFallingBackToArchiveRanges() = runBlocking {
+        val transport = Flaky()
+        uploadManga(transport, "manga_one")
+        val manifest = json.decodeFromString(HttpSyncPayloadManifest.serializer(),
+            transport.get(payloadManifestKey("manga_one"))!!.body.toString(Charsets.UTF_8))
+        val key = "books/manga_one/cover/${manifest.sha256.removePrefix("sha256:")}"
+        val (cloud, engine) = engine(transport)
+
+        engine.syncOnce(configured)
+
+        assertTrue("check KVS even when talking to an older server", key in transport.getKeys)
+        assertTrue(transport.rangeCalls > 0)
+        assertTrue(transport.requests.indexOf("GET $key") < transport.requests.indexOfFirst { it.startsWith("RANGE ") })
+        assertArrayEquals(coverPage, cloud.coverFile(cloud.records().single())!!.readBytes())
+    }
+
+    private fun engine(
+        transport: HttpSyncKvTransport,
+        thumbnail: (ByteArray) -> ByteArray? = { it },
+    ): Pair<HttpSyncCloudBooks, V3SyncEngine> {
         val repo = BookRepository(tempFolder.newFolder())
-        val cloud = HttpSyncCloudBooks(repo.booksDirectory, coverThumbnail = { it }, ioDispatcher = Dispatchers.Unconfined)
+        val cloud = HttpSyncCloudBooks(repo.booksDirectory, coverThumbnail = thumbnail, ioDispatcher = Dispatchers.Unconfined)
         return cloud to V3SyncEngine(
             bookRepository = repo,
             payloadCodec = HttpSyncPayloadCodec(Dispatchers.Unconfined),
@@ -58,6 +108,26 @@ class V3CloudCoverPassTest {
             ioDispatcher = Dispatchers.Unconfined,
             cloudBooks = cloud,
         )
+    }
+
+    @Test
+    fun anUnreadableStoredCoverFallsBackWithoutBlockingLaterRetries() = runBlocking {
+        val transport = Flaky()
+        uploadManga(transport, "manga_one")
+        val manifest = json.decodeFromString(HttpSyncPayloadManifest.serializer(),
+            transport.get(payloadManifestKey("manga_one"))!!.body.toString(Charsets.UTF_8))
+        transport.put("books/manga_one/cover/${manifest.sha256.removePrefix("sha256:")}",
+            "image/jpeg", byteArrayOf(9))
+        val (cloud, engine) = engine(transport) { bytes -> bytes.takeIf { it.contentEquals(coverPage) } }
+        transport.failRanges = true
+        engine.syncOnce(configured)
+        assertEquals(null, cloud.records().single().coverFile)
+
+        transport.failRanges = false
+        engine.syncOnce(configured)
+
+        assertTrue("invalid stored images must still try ZIP ranges", transport.rangeCalls > 0)
+        assertArrayEquals(coverPage, cloud.coverFile(cloud.records().single())!!.readBytes())
     }
 
     private suspend fun uploadManga(transport: HttpSyncKvTransport, syncId: String) {
