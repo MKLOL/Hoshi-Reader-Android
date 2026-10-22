@@ -144,6 +144,7 @@ internal fun MangaReaderRouteDestination(
                 book = state.book,
                 bookRoot = state.bookRoot,
                 initialPageIndex = state.initialPageIndex,
+                positionSession = state.positionSession,
                 repository = appContainer.bookRepository,
                 readerSettings = readerSettings,
                 onReaderSettingsChange = onReaderSettingsChange,

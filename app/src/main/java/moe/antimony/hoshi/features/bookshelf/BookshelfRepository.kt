@@ -224,7 +224,7 @@ internal class AndroidBookshelfRepository(
                     .mapNotNull { it.spineIndex }
                     .maxOrNull()
                     ?: 0
-                bookRepository.saveBookmark(
+                bookRepository.navigateReadingPosition(
                     entry.root,
                     Bookmark(
                         chapterIndex = lastChapter,
@@ -232,6 +232,7 @@ internal class AndroidBookshelfRepository(
                         characterCount = bookInfo.characterCount,
                         lastModified = bookRepository.currentAppleReferenceDateSeconds(),
                     ),
+                    action = "markRead",
                 )
             }
             ContentType.Mokuro -> {
@@ -239,7 +240,7 @@ internal class AndroidBookshelfRepository(
                 // is one below it, and that index doubles as the bookmark position.
                 val totalPages = bookInfo.characterCount
                 val lastPageIndex = (totalPages - 1).coerceAtLeast(0)
-                bookRepository.saveBookmark(
+                bookRepository.navigateReadingPosition(
                     entry.root,
                     Bookmark(
                         chapterIndex = lastPageIndex,
@@ -247,6 +248,7 @@ internal class AndroidBookshelfRepository(
                         characterCount = totalPages,
                         lastModified = bookRepository.currentAppleReferenceDateSeconds(),
                     ),
+                    action = "markRead",
                 )
             }
         }

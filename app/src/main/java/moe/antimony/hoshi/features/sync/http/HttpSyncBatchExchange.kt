@@ -73,6 +73,7 @@ internal data class HttpSyncMapChanges(
     val listing: List<HttpSyncKvKeyMeta> = emptyList(),
     /** Bookmark keys whose queued local positions this pass published. */
     val uploadedBookmarkKeys: Set<String> = emptySet(),
+    val positionErrors: List<String> = emptyList(),
 )
 
 /** Per-book reading statistics keys; the statistics lane owns them (see [HttpSyncStatisticsLane]). */
@@ -189,6 +190,9 @@ class HttpSyncBatchState(
         bookRepository, bookLocks, statisticsPreferences, usageLane = usageLog?.let { HttpSyncUsageLane(it) },
     )
     private val statisticsMutex = Mutex()
+    private val positionSync = ReadingPositionSync(bookRepository)
+    internal var positionSyncErrors: List<String> = emptyList()
+        private set
     private val booksRoot: File get() = bookRepository.booksDirectory
 
     /** How current other devices' reading history is here (see [HttpSyncStatisticsLane]). */
@@ -253,6 +257,10 @@ class HttpSyncBatchState(
             // notices writes from per-book clients and changes to chats/settings/translations
             // without fetching unchanged bodies.
             val listing = listAllMetadata(transport)
+            val positionEntries = bookRepository.loadBookEntries()
+            val positions = positionSync.exchange(transport, listing.keys, positionEntries)
+            positionSyncErrors = positions.errors
+            positions.moved.forEach { _remoteBookmarkUpdates.tryEmit(it) }
             val booksMeta = listing.keys.firstOrNull { it.key == BOOKS_MAP_KEY }
             val bookmarkMetas = listing.keys.filter {
                 it.key == BOOKMARKS_MAP_KEY || it.key.startsWith(BOOKMARKS_MAP_PREFIX)
@@ -276,6 +284,7 @@ class HttpSyncBatchState(
             if (booksMeta == null || bookmarkMetas.isEmpty()) {
                 return@withLock HttpSyncMapChanges(
                     needsBootstrap = true,
+                    positionErrors = positions.errors,
                     observedLegacyEtags = legacyKeyEtags,
                     statisticsNeeded = statisticsNeeded(entries = null),
                     listing = listing.keys,
@@ -289,17 +298,22 @@ class HttpSyncBatchState(
             }
             val shardBodies = linkedMapOf<String, Map<String, HttpSyncBookmarkMapEntry>>()
             val ownShardKey = bookmarkMapKey(loadDeviceIdLocked())
+            val acknowledgedShards = before.bookmarkEtags.filterKeys { key -> bookmarkMetas.any { it.key == key } }.toMutableMap()
             for (meta in bookmarkMetas) {
                 shardBodies[meta.key] = if (!before.initialized || before.bookmarkEtags[meta.key] != meta.etag) {
                     // A failed request aborts this poll, so the shard is fetched again. Only
                     // another device's unreadable or just-deleted shard is passed over (until it
                     // changes), so it cannot stop every other device's positions from applying.
-                    val fetched = transport.get(meta.key)
                     try {
+                        val fetched = transport.get(meta.key)
                         // This installation's own shard deleted on the server: its owned
                         // positions are merged below and published again.
-                        if (fetched == null && meta.key == ownShardKey) emptyMap() else decodeBookmarksMap(fetched)
-                    } catch (error: HttpSyncException) {
+                        val decoded = if (fetched == null && meta.key == ownShardKey) emptyMap() else decodeBookmarksMap(fetched)
+                        acknowledgedShards[meta.key] = fetched?.etag ?: meta.etag
+                        decoded
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (error: Exception) {
                         if (meta.key == ownShardKey) throw error
                         before.bookmarkShards[meta.key].orEmpty()
                     }
@@ -316,10 +330,10 @@ class HttpSyncBatchState(
 
             val pendingSnapshot = synchronized(stateLock) { loadPendingLocked() }
             onProgress(HttpSyncProgress(messageResource = R.string.http_sync_reading_local))
-            val localEntries = bookRepository.loadBookEntries()
+            val localEntries = positionEntries
             val localBookmarks = readLocalBookmarks(localEntries)
             onProgress(HttpSyncProgress(messageResource = R.string.http_sync_updating_positions))
-            val downloaded = applyRemoteWinners(remoteBookmarks, localBookmarks, localEntries)
+            val downloaded = applyRemoteWinners(remoteBookmarks, localBookmarks, localEntries) + positions.moved.size
 
             val deviceKey = bookmarkMapKey(loadDeviceIdLocked())
             val ownRemote = shardBodies[deviceKey].orEmpty()
@@ -333,7 +347,7 @@ class HttpSyncBatchState(
                     (owned[syncId] == null || compareBookmarkEntries(local, owned.getValue(syncId)) > 0)
                 ) owned[syncId] = local
             }
-            var uploadedKeys = emptySet<String>()
+            var uploadedKeys = positions.published.mapTo(mutableSetOf()) { bookmarkKey(it) }.toSet()
             var ownEtag = bookmarkMetas.firstOrNull { it.key == deviceKey }?.etag
             if (owned != ownRemote) {
                 val body = json.encodeToString(
@@ -341,7 +355,7 @@ class HttpSyncBatchState(
                     owned.toSortedMap(),
                 ).toByteArray(Charsets.UTF_8)
                 ownEtag = transport.put(deviceKey, JSON_CONTENT_TYPE, body).etag
-                uploadedKeys = pendingSnapshot.mapTo(mutableSetOf()) { it.key }
+                uploadedKeys = uploadedKeys + pendingSnapshot.map { it.key }
                 shardBodies[deviceKey] = owned
             }
             // Remove only mutations captured by this pass. A page turn queued while the PUT was
@@ -355,7 +369,7 @@ class HttpSyncBatchState(
                     CachedMapState(
                         booksEtag = booksMeta.etag,
                         books = remoteBooks,
-                        bookmarkEtags = bookmarkMetas.associate { it.key to it.etag }.toMutableMap().apply {
+                        bookmarkEtags = acknowledgedShards.apply {
                             if (ownEtag != null) this[deviceKey] = ownEtag
                         },
                         bookmarkShards = shardBodies,
@@ -394,6 +408,7 @@ class HttpSyncBatchState(
                 statisticsNeeded = statisticsNeeded(localEntries),
                 listing = listing.keys,
                 uploadedBookmarkKeys = uploadedKeys,
+                positionErrors = positions.errors,
             )
         }
     }
@@ -448,7 +463,14 @@ class HttpSyncBatchState(
     }
 
     /** Whether page turns are queued for this installation's bookmark shard. */
-    internal fun hasPendingBookmarks(): Boolean = hasPending()
+    internal suspend fun hasPendingBookmarks(): Boolean = hasPending() ||
+        bookRepository.readingPositions.snapshots().any { it.pending.isNotEmpty() }
+
+    internal suspend fun pendingBookmarkGeneration(): String? {
+        val maps = synchronized(stateLock) { loadPendingLocked().map { it.mutationId } }
+        val events = bookRepository.readingPositions.snapshots().flatMap { it.pending }.sorted()
+        return (maps + events).takeIf { it.isNotEmpty() }?.joinToString("|")
+    }
 
     /** Every installed book's reading position, to count the books a sync actually moved. */
     internal suspend fun bookmarkPositions(): Map<String, Triple<Int, Double, Int>> = withContext(ioDispatcher) {
@@ -575,9 +597,10 @@ class HttpSyncBatchState(
             bookLocks.withBookLock(root) {
                 // Re-read under the lock: a page turn may have landed after readLocalBookmarks().
                 val current = bookRepository.loadBookmark(root)
+                val currentRevision = revisionStore.current(booksRoot, bookmarkKey(syncId)).localRev
                 if (current != null) {
                     val currentBlob = current.toBlob().copy(
-                        rev = revisionStore.current(booksRoot, bookmarkKey(syncId)).localRev,
+                        rev = currentRevision,
                     )
                     val currentBody = json.encodeToString(
                         HttpSyncBookmarkBlob.serializer(),
@@ -600,6 +623,14 @@ class HttpSyncBatchState(
                     ),
                 )
                 revisionStore.noteRemote(booksRoot, bookmarkKey(syncId), blob.rev, appliedLocally = true)
+                if (current != null && currentRevision == (blob.rev ?: 0) &&
+                    compareRfc3339(current.toBlob().lastModified, blob.lastModified) == 0 &&
+                    (current.chapterIndex != blob.chapterIndex || current.progress != blob.progress || current.characterCount != blob.characterCount)) {
+                    // A map ETag can select this position at an identical timestamp/revision.
+                    // Its per-book JSON has a different hash: carry that resolved ordering
+                    // forward as a compatibility revision, without authoring navigation/time.
+                    revisionStore.bumpForLocalEdit(booksRoot, bookmarkKey(syncId))
+                }
                 // A newer stamp for the very same place only converges the stamps: the reader
                 // stays where it is and nothing was "downloaded".
                 val moved = current == null || current.chapterIndex != blob.chapterIndex ||
@@ -796,6 +827,7 @@ class HttpSyncFastSync(
         val positionsBefore = state.bookmarkPositions()
         val maps = state.syncMaps(client, onProgress)
         var uploadedKeys = maps.uploadedBookmarkKeys
+        var bookmarkErrors = maps.positionErrors
         // A tap sends this device's reading at once and takes every other device's, before and
         // independently of any book transfer.
         onProgress(HttpSyncProgress(messageResource = R.string.http_sync_reading_history))
@@ -811,6 +843,7 @@ class HttpSyncFastSync(
             fullCycleRunner.run(onProgress, requireOwnPass = true) { report ->
                 val work = state.syncMaps(client, report)
                 uploadedKeys = uploadedKeys + work.uploadedBookmarkKeys
+                bookmarkErrors = bookmarkErrors + work.positionErrors
                 if (!forceFullSync && !work.needsBootstrap && !work.booksChanged && !work.otherChanged) {
                     return@run emptyResult()
                 }
@@ -830,7 +863,7 @@ class HttpSyncFastSync(
             downloadedBookmarks = positionsAfter.count { (syncId, position) -> positionsBefore[syncId] != position },
             uploadedStatistics = result.uploadedStatistics + statistics.uploadedBooks,
             downloadedStatistics = result.downloadedStatistics + statistics.downloadedBooks,
-            errors = statistics.errors + result.errors,
+            errors = (bookmarkErrors + statistics.errors + result.errors).distinct(),
         )
     }
 
@@ -869,6 +902,7 @@ class HttpSyncBookmarkScheduler(
     private val jobLock = Any()
     private var pollingJob: Job? = null
     private var mapFlight: Deferred<Unit>? = null
+    private var mapFlightGeneration: String? = null
     private var backgroundFullJob: Job? = null
     private var statisticsFlight: Job? = null
     private var fullRetryDeferredForReader = false
@@ -894,7 +928,7 @@ class HttpSyncBookmarkScheduler(
         start()
         // The poll waits while the app is not visible; a position saved just after leaving it
         // (a debounced page turn, audio still playing) goes up now instead of at the next visit.
-        if (!foreground.value) publishInBackground()
+        publishQueuedPositions()
     }
 
     /**
@@ -902,7 +936,7 @@ class HttpSyncBookmarkScheduler(
      * taken its snapshot before this page turn, so a second pass follows when one is left. No
      * full reconcile starts from here; the process may be frozen at any moment.
      */
-    private fun publishInBackground() {
+    private fun publishQueuedPositions() {
         scope.launch {
             runMaps(allowFullReconcile = false)
             if (state.hasPendingBookmarks()) runMaps(allowFullReconcile = false)
@@ -954,19 +988,28 @@ class HttpSyncBookmarkScheduler(
     fun flushNow() = refreshNow()
 
     private suspend fun runMaps(allowFullReconcile: Boolean = true) {
-        val flight = synchronized(jobLock) {
-            mapFlight?.takeIf { it.isActive } ?: scope.async {
-                runMapsOnce(allowFullReconcile)
-            }.also { created ->
-                mapFlight = created
-                created.invokeOnCompletion {
-                    synchronized(jobLock) {
-                        if (mapFlight === created) mapFlight = null
+        repeat(8) {
+            val requestedGeneration = state.pendingBookmarkGeneration()
+            val (flight, generation) = synchronized(jobLock) {
+                val running = mapFlight?.takeIf { it.isActive }
+                if (running != null) running to mapFlightGeneration else {
+                    val created = scope.async { runMapsOnce(allowFullReconcile) }
+                    mapFlight = created
+                    mapFlightGeneration = requestedGeneration
+                    created.invokeOnCompletion {
+                        synchronized(jobLock) {
+                            if (mapFlight === created) mapFlight = null
+                        }
                     }
+                    created to requestedGeneration
                 }
             }
+            flight.await()
+            val pending = state.pendingBookmarkGeneration()
+            // A failed generation waits for the normal retry; a NEW generation queued after
+            // this flight's snapshot gets another pass now, including on foreground close.
+            if (pending == null || pending == generation) return
         }
-        flight.await()
     }
 
     /**
@@ -1106,7 +1149,7 @@ class HttpSyncBookmarkScheduler(
     }
 }
 
-private fun compareBookmarkEntries(
+internal fun compareBookmarkEntries(
     left: HttpSyncBookmarkMapEntry,
     right: HttpSyncBookmarkMapEntry,
 ): Int {

@@ -62,7 +62,9 @@ class BookRepository(
      * ッツ import). Null only in tests that do not care about devices.
      */
     private val deviceIdentity: DeviceIdentity? = null,
+    positionDirectory: File = File(filesDir, "ReadingPositions"),
 ) : ReaderRouteBookRepository, SasayakiSidecarRepository {
+    val readingPositions = ReadingPositionRepository(positionDirectory, sidecarDataSource, deviceIdentity)
     private val importDataSource = BookImportDataSource(
         filesDir = filesDir,
         fileDataSource = fileDataSource,
@@ -193,7 +195,18 @@ class BookRepository(
         sidecarDataSource.loadBookmark(bookRoot)
 
     override suspend fun saveBookmark(bookRoot: File, bookmark: Bookmark) {
-        sidecarDataSource.saveBookmark(bookRoot, bookmark)
+        readingPositions.saveLegacy(bookRoot, bookmark)
+    }
+
+    /** Explicit shelf actions observe the current position, including after a clock correction. */
+    suspend fun navigateReadingPosition(bookRoot: File, bookmark: Bookmark, action: String) {
+        readingPositions.open(bookRoot).navigate(bookmark, action)?.let { readingPositions.record(bookRoot, it) }
+    }
+
+    override suspend fun openReadingPosition(bookRoot: File): ReadingPositionSession = readingPositions.open(bookRoot)
+
+    override suspend fun recordReadingPosition(bookRoot: File, event: ReadingPositionEvent) {
+        readingPositions.record(bookRoot, event)
     }
 
     override suspend fun loadStatistics(bookRoot: File): List<ReadingStatistics> {
@@ -800,6 +813,10 @@ interface ReaderRouteBookRepository {
     suspend fun saveMetadata(bookRoot: File, metadata: BookMetadata)
     suspend fun loadBookmark(bookRoot: File): Bookmark?
     suspend fun saveBookmark(bookRoot: File, bookmark: Bookmark)
+    suspend fun openReadingPosition(bookRoot: File): ReadingPositionSession? = null
+    suspend fun recordReadingPosition(bookRoot: File, event: ReadingPositionEvent) {
+        saveBookmark(bookRoot, event.position.bookmark(event.compatibilityAt))
+    }
     suspend fun loadStatistics(bookRoot: File): List<ReadingStatistics>
     suspend fun saveStatistics(bookRoot: File, statistics: List<ReadingStatistics>)
     suspend fun loadReaderBookInfo(bookRoot: File): BookInfo?

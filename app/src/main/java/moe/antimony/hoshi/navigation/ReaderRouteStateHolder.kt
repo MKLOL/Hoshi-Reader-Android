@@ -56,12 +56,14 @@ internal class ReaderRouteStateHolder(
                 repository.saveBookInfo(entry.root, displayBook.bookInfo)
             }
             beforeBookmarkRead()
-            val bookmark = repository.loadBookmark(entry.root)
+            val positionSession = repository.openReadingPosition(entry.root)
+            val bookmark = positionSession?.initialBookmark ?: repository.loadBookmark(entry.root)
             ReaderRouteLoadState.Ready(
                 entry = displayEntry,
                 bookRoot = entry.root,
                 book = displayBook,
                 bookmark = bookmark,
+                positionSession = positionSession,
             )
         }.getOrElse { error ->
             if (error is CancellationException) throw error
@@ -75,15 +77,20 @@ internal class ReaderRouteStateHolder(
         progress: Double,
         statistics: List<ReadingStatistics>? = null,
         onBookmarkSaved: () -> Unit,
+        occurredAt: Double = repository.currentAppleReferenceDateSeconds(),
+        event: moe.antimony.hoshi.epub.ReadingPositionEvent? = null,
+        captureAlreadyDone: Boolean = false,
     ) {
         withContext(ioDispatcher) {
             val bookmark = Bookmark(
                 chapterIndex = chapterIndex,
                 progress = progress,
                 characterCount = state.book.characterCountAt(chapterIndex, progress),
-                lastModified = repository.currentAppleReferenceDateSeconds(),
+                lastModified = occurredAt,
             )
-            repository.saveBookmark(state.bookRoot, bookmark)
+            val navigation = if (captureAlreadyDone) event else event ?: state.positionSession?.navigate(bookmark)
+            if (navigation != null) repository.recordReadingPosition(state.bookRoot, navigation)
+            else if (state.positionSession == null) repository.saveBookmark(state.bookRoot, bookmark)
             if (statistics != null) {
                 repository.saveStatistics(state.bookRoot, statistics)
             }
@@ -125,6 +132,7 @@ internal sealed interface ReaderRouteLoadState {
         val bookRoot: File,
         val book: EpubBook,
         val bookmark: Bookmark?,
+        val positionSession: moe.antimony.hoshi.epub.ReadingPositionSession? = null,
     ) : ReaderRouteLoadState
 
     data class Error(

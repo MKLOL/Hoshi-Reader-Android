@@ -192,6 +192,31 @@ internal fun ReaderRouteDestination(
             Text(state.message)
         }
         is ReaderRouteLoadState.Ready -> {
+            fun prepareBookmarkSave(chapterIndex: Int, progress: Double, onlyChanged: Boolean = false): ((List<moe.antimony.hoshi.epub.ReadingStatistics>?) -> Unit)? {
+                val occurredAt = appContainer.bookRepository.currentAppleReferenceDateSeconds()
+                val event = state.positionSession?.navigate(moe.antimony.hoshi.epub.Bookmark(
+                    chapterIndex, progress, state.book.characterCountAt(chapterIndex, progress), occurredAt,
+                ))
+                if (onlyChanged && event == null && state.positionSession != null) return null
+                return { statistics ->
+                    val save = autoSyncExportController.launchSave {
+                        stateHolder.saveBookmark(
+                            state = state,
+                            chapterIndex = chapterIndex,
+                            progress = progress,
+                            statistics = statistics,
+                            onBookmarkSaved = onBookmarkSaved,
+                            occurredAt = occurredAt,
+                            event = event,
+                            captureAlreadyDone = true,
+                        )
+                    }
+                    if (statistics != null) {
+                        appContainer.bookRepository.trackStatisticsSave(state.bookRoot, save)
+                    }
+                    scheduleExport(state.entry)
+                }
+            }
             ReaderWebView(
                 book = state.book,
                 bookRoot = state.bookRoot,
@@ -201,19 +226,13 @@ internal fun ReaderRouteDestination(
                 onReaderSettingsChange = onReaderSettingsChange,
                 onReaderKeyEventHandlerChange = onReaderKeyEventHandlerChange,
                 onSaveBookmark = { chapterIndex, progress, statistics ->
-                    val save = autoSyncExportController.launchSave {
-                        stateHolder.saveBookmark(
-                            state = state,
-                            chapterIndex = chapterIndex,
-                            progress = progress,
-                            statistics = statistics,
-                            onBookmarkSaved = onBookmarkSaved,
-                        )
+                    prepareBookmarkSave(chapterIndex, progress)?.invoke(statistics)
+                },
+                onPrepareBookmarkSave = { chapterIndex, progress ->
+                    prepareBookmarkSave(chapterIndex, progress, onlyChanged = true)?.let { prepared ->
+                        val persist: () -> Unit = { prepared(null) }
+                        persist
                     }
-                    if (statistics != null) {
-                        appContainer.bookRepository.trackStatisticsSave(state.bookRoot, save)
-                    }
-                    scheduleExport(state.entry)
                 },
                 onSaveStatistics = { statistics ->
                     val save = autoSyncExportController.launchSave {

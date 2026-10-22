@@ -120,6 +120,8 @@ fun ReaderWebView(
     onReaderSettingsChange: (ReaderSettings) -> Unit = {},
     onReaderKeyEventHandlerChange: (((KeyEvent) -> Boolean)?) -> Unit = {},
     onSaveBookmark: (chapterIndex: Int, progress: Double, statistics: List<ReadingStatistics>?) -> Unit = { _, _, _ -> },
+    /** Captures a scroll action now and returns its deferred persistence, without refreshing its time. */
+    onPrepareBookmarkSave: ((chapterIndex: Int, progress: Double) -> (() -> Unit)?)? = null,
     /** Persists statistics alone, for leaving or backgrounding the reader without a new bookmark. */
     onSaveStatistics: (statistics: List<ReadingStatistics>) -> Unit = {},
     onFlushAutoSyncExport: () -> Unit = {},
@@ -523,7 +525,12 @@ fun ReaderWebView(
         recordStatisticsAtDisplayedPosition()
         return statisticsTracker?.statisticsForPersistenceOrNull()
     }
+    val pendingContinuousSave = remember(bookRoot, book) { java.util.concurrent.atomic.AtomicReference<(() -> Unit)?>(null) }
+    DisposableEffect(pendingContinuousSave) {
+        onDispose { pendingContinuousSave.getAndSet(null)?.invoke() }
+    }
     fun saveReaderPosition(position: ReaderChapterPosition, statistics: List<ReadingStatistics>? = statisticsForSave()) {
+        pendingContinuousSave.getAndSet(null)?.invoke()
         onSaveBookmark(position.index, position.progress, statistics)
     }
     fun saveCurrentDisplayedPosition() {
@@ -812,18 +819,24 @@ fun ReaderWebView(
     }
     fun displayPagedTurnProgress(progress: Double) {
         stateHolder.enterFocusModeForReaderInteraction()
-        stateHolder.recordDisplayedProgress(progress)
+        val position = stateHolder.recordDisplayedProgress(progress)
         stateHolder.clearForwardHistoryAfterManualMovement()
         recordStatisticsAtDisplayedPosition()
+        // Capture navigation at display time. The later statistics/idle callback must not
+        // turn a disposal flush into a newer bookmark after a remote reader reload.
+        saveReaderPosition(position, statistics = null)
         usageSession?.epubPageTurned(
             chapter = stateHolder.readerPosition.displayedPosition.index + 1,
             character = currentDisplayedCharacter(),
         )
     }
     fun displayContinuousScrollProgress(progress: Double, restoreEpoch: Int) {
-        stateHolder.recordContinuousScrollDisplayProgress(progress, restoreEpoch) ?: return
+        val position = stateHolder.recordContinuousScrollDisplayProgress(progress, restoreEpoch) ?: return
         stateHolder.clearForwardHistoryAfterManualMovement()
         recordStatisticsAtDisplayedPosition()
+        // Coalesce scroll samples in memory; only the newest captured action is persisted at
+        // idle/disposal. Preparing it now freezes intent/time before any remote reader reload.
+        onPrepareBookmarkSave?.invoke(position.index, position.progress)?.let(pendingContinuousSave::set)
     }
     fun saveContinuousScrollProgress(progress: Double, restoreEpoch: Int) {
         val savedPosition = stateHolder.recordContinuousScrollProgress(progress, restoreEpoch) ?: return

@@ -104,6 +104,7 @@ internal class HoshiAppContainer(context: Context) {
         filesDir = appContext.filesDir,
         bookLocks = httpSyncBookLocks,
         deviceIdentity = deviceIdentity,
+        positionDirectory = appContext.noBackupFilesDir.resolve("reading_positions"),
     )
     val dictionaryRepository: DictionaryRepository = DictionaryRepository(appContext.filesDir)
     // Shared between the bookshelf's metadata-sidecar write and the manga reader's load

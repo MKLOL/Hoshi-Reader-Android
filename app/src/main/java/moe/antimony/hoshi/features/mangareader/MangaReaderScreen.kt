@@ -191,6 +191,7 @@ internal fun MangaReaderScreen(
     onBookmarkSaved: () -> Unit,
     onClose: () -> Unit,
     modifier: Modifier = Modifier,
+    positionSession: moe.antimony.hoshi.epub.ReadingPositionSession? = null,
 ) = PlatformReaderUi {
     val systemDark = androidx.compose.foundation.isSystemInDarkTheme()
     val backgroundColor = Color(readerSettings.backgroundColor(systemDark))
@@ -261,7 +262,7 @@ internal fun MangaReaderScreen(
     val usageLog = LocalHoshiAppContainer.current.usageLog
     var bookmarkSaveJob by remember(book) { mutableStateOf<Job?>(null) }
     // The page index awaiting the debounced bookmark write, or null when nothing is pending.
-    val pendingBookmarkPage = remember(book) { mutableStateOf<Int?>(null) }
+    val pendingBookmarkPage = remember(book) { mutableStateOf<moe.antimony.hoshi.epub.Bookmark?>(null) }
     val currentOnBookmarkSaved = rememberUpdatedState(onBookmarkSaved)
     // FORK ADDITION: v2 KV HTTP sync auto-push hooks. See features/sync/http/HttpSyncReaderHooks.kt
     // for the every-5 / on-leave / on-chat counter logic — kept out of this file so upstream
@@ -387,15 +388,23 @@ internal fun MangaReaderScreen(
         textStatisticsForSave()
     }
 
-    fun scheduleBookmarkSave(index: Int) {
-        pendingBookmarkPage.value = index
+    fun scheduleBookmarkSave(index: Int, action: String) {
+        val captured = mangaBookmark(index, repository.currentAppleReferenceDateSeconds())
+        val event = positionSession?.navigate(captured, action)
+        if (event != null) {
+            // Every action is persisted on the app scope. The statistics debounce and a
+            // reader reload cannot cancel it or manufacture a later timestamp for it.
+            persistenceScope.launch {
+                repository.recordReadingPosition(bookRoot, event)
+                httpSyncHooks.onPageTurnPersisted()
+                currentOnBookmarkSaved.value()
+            }
+        }
+        pendingBookmarkPage.value = if (positionSession == null) captured else null
         bookmarkSaveJob?.cancel()
         bookmarkSaveJob = scope.launch {
             delay(BOOKMARK_SAVE_DEBOUNCE_MS)
-            repository.saveBookmark(
-                bookRoot,
-                mangaBookmark(index, repository.currentAppleReferenceDateSeconds()),
-            )
+            if (positionSession == null) repository.saveBookmark(bookRoot, captured)
             statisticsForSave(statisticsPageCounter)?.let { statistics ->
                 repository.saveStatistics(bookRoot, statistics)
             }
@@ -404,7 +413,7 @@ internal fun MangaReaderScreen(
             }
             pendingBookmarkPage.value = null
             currentOnBookmarkSaved.value()
-            httpSyncHooks.onPageTurnPersisted()
+            if (positionSession == null) httpSyncHooks.onPageTurnPersisted()
             httpSyncHooks.onStatisticsPersisted()
         }
     }
@@ -455,7 +464,7 @@ internal fun MangaReaderScreen(
         // not counted as page turns.
         usageSession?.pageTurned(fromPage = previousPageIndex + 1, toPage = clamped + 1, jump = !countAsRead)
         recordStatisticsAtCounter(statisticsPageCounter)
-        scheduleBookmarkSave(clamped)
+        scheduleBookmarkSave(clamped, if (countAsRead) "pageTurn" else "jump")
     }
 
     fun navigate(direction: ReaderNavigationDirection): Boolean {
@@ -878,7 +887,7 @@ internal fun MangaReaderScreen(
                     persistenceScope.launch {
                         repository.saveBookmark(
                             bookRoot,
-                            mangaBookmark(unsaved, repository.currentAppleReferenceDateSeconds()),
+                            unsaved,
                         )
                         if (statistics != null) {
                             repository.saveStatistics(bookRoot, statistics)

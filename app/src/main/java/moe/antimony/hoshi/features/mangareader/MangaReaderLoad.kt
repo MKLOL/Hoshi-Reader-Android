@@ -43,11 +43,13 @@ internal class MangaReaderLoader(
             beforeParse(syncId)
             val book = parser.parse(entry.root)
             beforeBookmarkRead()
-            val bookmark = repository.loadBookmark(entry.root)
+            val positionSession = repository.openReadingPosition(entry.root)
+            val bookmark = positionSession.initialBookmark
             MangaReaderLoadState.Ready(
                 bookRoot = entry.root,
                 book = book,
                 syncId = syncId,
+                positionSession = positionSession,
                 initialPageIndex = (bookmark?.chapterIndex ?: 0)
                     .coerceIn(0, book.pages.lastIndex.coerceAtLeast(0)),
             )
@@ -65,6 +67,7 @@ internal sealed interface MangaReaderLoadState {
         val book: MokuroBook,
         val initialPageIndex: Int,
         val syncId: String? = null,
+        val positionSession: moe.antimony.hoshi.epub.ReadingPositionSession? = null,
     ) : MangaReaderLoadState
 
     data class Error(
