@@ -1,6 +1,4 @@
-# Hoshi Android Agent TODO
-
-Last updated: 2026-10-22
+# Hoshi Android Agent TODO (2026-10-22)
 
 ## Maintenance Rules
 
@@ -11,9 +9,7 @@ Last updated: 2026-10-22
 
 ### Podcasts
 
-- Implemented, including transcripts of the original recording with dictionary lookup (`PodcastTranscriptScreen`); see `docs/PODCASTS.md`. Shows come from the server; downloaded lessons retain their metadata and show names when a show is archived. Catalogue access is serialized, and stale/background/cached progress falls back to a plain wait. Non-retryable failures direct the administrator to Book Sync. Unknown durations remain under "All lengths", with an explanation when a length filter empties a show. Production worker activation remains a deployment step in game-collection `docs/podcasts.md`. Regression entries: `PodcastApiTest`, `PodcastModelsTest`, `PodcastFilesTest`, `PodcastTranscriptTest`, `PodcastUiStateTest`, `PodcastScreenSessionTest`, `AppRouteTest`, `MainShellUiTest`.
-- Verified on a disposable Android 16 emulator: download a lesson, archive its show, reopen offline and play the retained audio; stale progress falls back to waiting, and administrator-only failures hide Prepare. Existing device data was untouched.
-- Known limits: no per-episode delete or storage cap (files go only when another account validates); playback speed not persisted; `pendingPodcasts` is consumed only once access is confirmed.
+- Implemented, including transcripts of the original recording with dictionary lookup (`PodcastTranscriptScreen`); see `docs/PODCASTS.md`. Shows come from the server; downloaded lessons retain their metadata and show names when a show is archived. Catalogue access is serialized, and stale/background/cached progress falls back to a plain wait. Non-retryable failures direct the administrator to Book Sync. Unknown durations remain under "All lengths", with an explanation when a length filter empties a show. Production worker activation remains a deployment step in game-collection `docs/podcasts.md`. Regression entries: `PodcastApiTest`, `PodcastModelsTest`, `PodcastFilesTest`, `PodcastTranscriptTest`, `PodcastUiStateTest`, `PodcastScreenSessionTest`, `AppRouteTest`, `MainShellUiTest`. Verified on a disposable Android 16 emulator: download a lesson, archive its show, reopen offline and play the retained audio; stale progress falls back to waiting, and administrator-only failures hide Prepare. Existing device data was untouched. Known limits: no per-episode delete or storage cap (files go only when another account validates); playback speed not persisted; `pendingPodcasts` is consumed only once access is confirmed.
 
 ### Architecture And Hardening
 
@@ -128,8 +124,7 @@ Last updated: 2026-10-22
 - `./release.py` is the release path (the GitHub workflow is manual-only) and requires `python3 tools/verify_release.py`: full JVM/local-KV checks, lint/build, and disposable-emulator sync regressions, then a launch of the exact minified release APK on a disposable emulator. Publication keeps the verified APK across commit/push/upload, checks upgrade identity and downloaded SHA-256, never overwrites published assets, and `./release.py --resume` finishes an interrupted publication with the same bytes. Coverage and limits: [Sync release testing](SYNC_RELEASE_TESTING.md).
 - Update transfers reconcile with DownloadManager on startup and while About is visible; queued/paused/progress/failure states, retry/cancel, and the always-available latest-release link are covered by `UpdateDownloadCoordinatorTest`, `UpdateDownloadDestinationTest`, `AboutUpdateStatusTest`, `UpdateDownloadManagerInstrumentedTest`, and `AboutUpdateLinkInstrumentedTest`. `Application.onCreate` blocks only on `UpdateStartup.snapshot()`; the DownloadManager query and APK hashing in `UpdateStartup.reconcile()` stay in the background. Cancel, Retry and Skip never discard a verified download (`UpdateDownloadCoordinatorTest`).
 - Before F-Droid distribution, split update behavior by distribution channel so F-Droid builds do not bypass F-Droid update checks.
-- Device-validate GitHub update prompts after the check/download split, covering skip-version, manual checks, completed-download prompts, user-triggered install, and same-version APK cleanup.
-- Device-validate split GitHub release APK updates on arm64-v8a and armeabi-v7a targets, including the transitional arm64 legacy-name APK alias.
+- Device-validate GitHub update prompts after the check/download split, covering skip-version, manual checks, completed-download prompts, user-triggered install, and same-version APK cleanup. Device-validate split GitHub release APK updates on arm64-v8a and armeabi-v7a targets, including the transitional arm64 legacy-name APK alias.
 
 ## Mokuro Manga Support (Android-only)
 
@@ -151,4 +146,4 @@ Last updated: 2026-10-22
 
 ## Required Validation
 
-- Follow [Validation entry points](VALIDATION.md) for build/test/lint commands, cross-platform sync checks, and the reader, theme, localization, audio, and device regression matrices.
+- Follow [Validation entry points](VALIDATION.md) for build/test/lint commands, cross-platform sync checks, and the reader, theme, localization, audio, and device regression matrices. CI SDK setup must explicitly request `platform-tools`, because the setup action's old default also requests Google's retired `tools` package.

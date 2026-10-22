@@ -42,6 +42,9 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          # The action defaults to the retired `tools` package as well.
+          packages: platform-tools
 
       - name: Install Android build tools
         shell: bash
