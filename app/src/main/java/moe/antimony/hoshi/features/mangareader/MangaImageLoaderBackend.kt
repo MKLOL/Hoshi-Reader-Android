@@ -1,5 +1,6 @@
 package moe.antimony.hoshi.features.mangareader
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -32,10 +33,11 @@ internal class MangaImageLoaderBackend(
     private val lock = Any()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var preloadJob: Job? = null
-    private val bytes = LinkedHashMap<ImageKey, ByteArray>(8, 0.75f, true)
+    private val bytes = LinkedHashMap<ImageKey, ByteArray>()
     private val readers = ConcurrentHashMap<String, Any>()
     private var retainedBytes = 0L
-    private var wantedPaths = emptySet<String>()
+    /** The current page, then [mangaAdjacentPreloadIndexes] order: earlier paths are kept longer. */
+    private var wantedPaths = emptyList<String>()
     private var closed = false
     private var hits = 0L
     private var reads = 0L
@@ -53,7 +55,7 @@ internal class MangaImageLoaderBackend(
         preloadJob?.cancel()
         val paths = (listOf(pageIndex) + mangaAdjacentPreloadIndexes(pageIndex, book.pages.size))
             .mapNotNull { book.pages.getOrNull(it)?.imagePath?.trimStart('/') }
-            .toSet()
+            .distinct()
         synchronized(lock) {
             if (closed) return
             wantedPaths = paths
@@ -89,7 +91,11 @@ internal class MangaImageLoaderBackend(
 
         // Bound even a file that grows during the read. Do not retain failures or partial reads.
         shouldContinue()
-        val data = ByteArray(key.length.toInt())
+        val data = try {
+            ByteArray(key.length.toInt())
+        } catch (_: OutOfMemoryError) {
+            return file.inputStream()
+        }
         file.inputStream().use { input ->
             var offset = 0
             while (offset < data.size) {
@@ -107,13 +113,20 @@ internal class MangaImageLoaderBackend(
             if (!closed && key.relativePath in wantedPaths) {
                 // A page can be requested by both the visible image and a superseded preload.
                 bytes.remove(key)?.let { retainedBytes -= it.size }
-                val iterator = bytes.iterator()
-                while (retainedBytes + data.size > policy.encodedBytes && iterator.hasNext()) {
-                    retainedBytes -= iterator.next().value.size
-                    iterator.remove()
+                // Evict by distance, not recency: the decode preloader requests every neighbour,
+                // and least-recently-used order would drop the next page for a farther one.
+                val priority = wantedPaths.indexOf(key.relativePath)
+                val evictable = bytes.keys.filter { wantedPaths.indexOf(it.relativePath) > priority }
+                    .sortedByDescending { wantedPaths.indexOf(it.relativePath) }
+                val freeable = evictable.sumOf { bytes.getValue(it).size.toLong() }
+                if (retainedBytes - freeable + data.size <= policy.encodedBytes) {
+                    for (evicted in evictable) {
+                        if (retainedBytes + data.size <= policy.encodedBytes) break
+                        retainedBytes -= bytes.remove(evicted)!!.size
+                    }
+                    bytes[key] = data
+                    retainedBytes += data.size
                 }
-                bytes[key] = data
-                retainedBytes += data.size
             }
         }
         return ByteArrayInputStream(data)
@@ -137,9 +150,9 @@ internal class MangaImageLoaderBackend(
             for (index in mangaAdjacentPreloadIndexes(pageIndex, book.pages.size)) {
                 ensureActive()
                 val page = book.pages.getOrNull(index) ?: continue
-                val file = resolver.resolveDeclaredImageFile(page.imagePath) ?: continue
-                val length = file.length()
                 try {
+                    val file = resolver.resolveDeclaredImageFile(page.imagePath) ?: continue
+                    val length = file.length()
                     if (length in 1..(policy.encodedBytes - plannedBytes)) {
                         plannedBytes += length
                         get(file) { ensureActive() }.close()
@@ -157,8 +170,12 @@ internal class MangaImageLoaderBackend(
                             }
                         }
                     }
-                } catch (_: java.io.IOException) {
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Exception) {
                     // A failed speculative read must not affect the visible page or poison cache state.
+                } catch (_: OutOfMemoryError) {
+                    // The scope has no handler: an escaping error would crash the reader.
                 }
             }
         }
@@ -181,7 +198,7 @@ internal class MangaImageLoaderBackend(
     override fun close() = synchronized(lock) {
         closed = true
         scope.cancel()
-        wantedPaths = emptySet()
+        wantedPaths = emptyList()
         bytes.clear()
         retainedBytes = 0L
     }

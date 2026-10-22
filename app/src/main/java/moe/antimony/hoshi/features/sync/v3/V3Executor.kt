@@ -20,6 +20,7 @@ import moe.antimony.hoshi.features.sync.http.HttpSyncBookmarkBlob
 import moe.antimony.hoshi.features.sync.http.FailedCloudRequest
 import moe.antimony.hoshi.features.sync.http.HttpSyncCloudBookListing
 import moe.antimony.hoshi.features.sync.http.HttpSyncCloudBooks
+import moe.antimony.hoshi.features.sync.http.MAX_COVER_BYTES
 import moe.antimony.hoshi.features.sync.http.fetchRemoteMangaCover
 import moe.antimony.hoshi.features.sync.http.HttpSyncChatEntryBlob
 import moe.antimony.hoshi.features.sync.http.PretranslationsBlob
@@ -540,7 +541,7 @@ class V3Executor(
                 // upload when the catalogue and its manifest are read at different times.
                 val hash = book.manifest.sha256.removePrefix("sha256:")
                 val stored = if (hash.matches(Regex("[0-9a-f]{64}"))) {
-                    transport.get("books/${book.syncId}/cover/$hash")?.body?.takeIf { it.isNotEmpty() }
+                    transport.getBounded("books/${book.syncId}/cover/$hash", MAX_COVER_BYTES)?.body?.takeIf { it.isNotEmpty() }
                 } else null
                 if (stored != null && store.trySaveCover(book.syncId, book.manifest.sha256, stored)) continue
                 val image = fetchRemoteMangaCover(transport, book.payloadKeys.zip, book.manifest.sizeBytes)

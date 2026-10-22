@@ -46,6 +46,11 @@ class V3CloudCoverPassTest {
             requests += "GET $key"
             return fake.get(key)
         }
+        override suspend fun getBounded(key: String, maxBytes: Int): moe.antimony.hoshi.features.sync.http.HttpSyncKvFetched? {
+            getKeys += key
+            requests += "GET $key"
+            return fake.getBounded(key, maxBytes)
+        }
         override suspend fun getRange(key: String, start: Long?, length: Int): HttpSyncKvRange? {
             rangeCalls += 1
             requests += "RANGE $key"

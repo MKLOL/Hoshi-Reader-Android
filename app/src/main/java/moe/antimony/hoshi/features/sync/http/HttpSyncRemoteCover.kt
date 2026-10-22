@@ -304,4 +304,4 @@ private const val MAX_DIRECTORY_BYTES = 16L * 1024 * 1024
 // Real mokuro.json files are well under a megabyte; covers are one page image.
 private const val MAX_SIDECAR_COMPRESSED_BYTES = 2L * 1024 * 1024
 private const val MAX_SIDECAR_BYTES = 8 * 1024 * 1024
-private const val MAX_COVER_BYTES = 12 * 1024 * 1024
+internal const val MAX_COVER_BYTES = 12 * 1024 * 1024

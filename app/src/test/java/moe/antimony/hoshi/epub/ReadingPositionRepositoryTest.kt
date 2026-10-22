@@ -82,7 +82,7 @@ class ReadingPositionRepositoryTest {
         assertEquals(2, phone.readingPositions.snapshot(phoneRoot).events.count { it.action != "legacy" })
     }
 
-    @Test fun processRestartPreservesPendingSequenceAndHistoryTrimsOnlyAcknowledgedEvents() = runBlocking {
+    @Test fun processRestartPreservesPendingSequenceAndTheOutboxStaysBounded() = runBlocking {
         val files = temporary.newFolder("persistent")
         val repository = BookRepository(files, deviceIdentity = DeviceIdentity("phone", "Phone"))
         val root = repository.createBookDirectoryForImportedTitle("Example")
@@ -90,7 +90,9 @@ class ReadingPositionRepositoryTest {
         val session = repository.openReadingPosition(root)
         for (page in 1..75) repository.recordReadingPosition(root, session.navigate(bookmark(page, 100.0 + page))!!)
         val before = repository.readingPositions.snapshot(root)
-        assertEquals(75, before.pending.size)
+        // Receivers keep 50 events per device; without sync the outbox must not grow past them.
+        assertEquals(50, before.pending.size)
+        assertEquals(before.pending, repository.readingPositions.ownHistories()["example"])
         val reopened = BookRepository(files, deviceIdentity = DeviceIdentity("phone", "Phone"))
         val next = reopened.openReadingPosition(root).navigate(bookmark(76, 176.0))!!
         assertTrue(next.sequence > before.winner()!!.sequence)
@@ -100,6 +102,38 @@ class ReadingPositionRepositoryTest {
         assertEquals(setOf(next.id), after.pending)
         assertEquals(50, after.events.size)
         assertEquals(76, after.winner()!!.position.chapterIndex)
+    }
+
+    @Test fun unreadableJournalAndOriginNeverMakeTheBookUnopenable() = runBlocking {
+        val files = temporary.newFolder("damaged")
+        val repository = BookRepository(files, deviceIdentity = DeviceIdentity("phone", "Phone"))
+        val root = repository.createBookDirectoryForImportedTitle("Example")
+        repository.saveMetadata(root, BookMetadata("book", "Example", null, root.name, 0.0, "example"))
+        repository.saveBookmark(root, bookmark(100, 100.0))
+        val lost = repository.openReadingPosition(root).navigate(bookmark(120, 200.0))!!
+        repository.recordReadingPosition(root, lost)
+        val journals = files.resolve("ReadingPositions")
+        journals.listFiles()!!.filter { it.name.startsWith("book-") }.forEach { it.writeText("{\"truncated") }
+        journals.resolve("origin").writeText("")
+        val reopened = BookRepository(files, deviceIdentity = DeviceIdentity("phone", "Phone"))
+        assertEquals(120, reopened.openReadingPosition(root).initialBookmark!!.chapterIndex)
+        val next = reopened.openReadingPosition(root).navigate(bookmark(121, 210.0))!!
+        // The lost journal hid how far the old counter got: new events use a new one.
+        assertNotEquals(lost.originId, next.originId)
+        reopened.recordReadingPosition(root, next)
+        assertEquals(121, reopened.loadBookmark(root)!!.chapterIndex)
+        assertEquals(mapOf("example" to setOf(next.id)), reopened.readingPositions.ownHistories())
+    }
+
+    @Test fun outOfRangeLegacyPositionsAreClampedInsteadOfRejected() = runBlocking {
+        val (repository, root) = fixture("phone")
+        root.resolve("bookmark.json").writeText(
+            """{"chapterIndex":-3,"progress":1.0000001,"characterCount":-1,"lastModified":300.0}""",
+        )
+        assertEquals(Bookmark(0, 1.0, 0, 300.0), repository.openReadingPosition(root).initialBookmark)
+        // Another device's map entry arrives through the same legacy path.
+        repository.saveBookmark(root, Bookmark(4, -0.5, 5, 400.0))
+        assertEquals(Bookmark(4, 0.0, 5, 400.0), repository.loadBookmark(root))
     }
 
     @Test fun deletedBookIsNotResurrectedByAnAlreadyCapturedAction() = runBlocking {

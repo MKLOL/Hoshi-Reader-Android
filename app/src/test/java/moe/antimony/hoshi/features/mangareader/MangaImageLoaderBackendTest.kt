@@ -41,6 +41,24 @@ class MangaImageLoaderBackendTest {
         assertEquals(0, backend.snapshot().entries)
     }
 
+    @Test fun fartherNeighboursNeverEvictTheNextPage() {
+        val root = temporary.newFolder()
+        val files = (0..7).map { root.resolve("$it.jpg").apply { writeBytes(ByteArray(4) { it.toByte() }) } }
+        val backend = MangaImageLoaderBackend(root, book, MangaImageCachePolicy(8, 0))
+        backend.onPageRequested(4)
+        // The decode preloader requests every neighbour in order, after the encoded preload.
+        for (index in listOf(5, 3, 5, 3, 6, 2, 7)) backend.get(files[index]).close()
+        assertEquals(2, backend.snapshot().entries)
+        backend.get(files[5]).close()
+        backend.get(files[3]).close()
+        assertEquals(4L, backend.snapshot().hits)
+        // A nearer page still displaces a farther one.
+        backend.onPageRequested(5)
+        backend.get(files[6]).close()
+        backend.get(files[6]).close()
+        assertEquals(5L, backend.snapshot().hits)
+    }
+
     @Test fun largeImagesAndClosedBackendsStillServeOriginalsWithoutRetention() {
         val root = temporary.newFolder()
         val file = root.resolve("1.jpg").apply { writeBytes(ByteArray(9) { 7 }) }

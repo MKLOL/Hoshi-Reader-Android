@@ -45,9 +45,8 @@ class ReadingPositionSyncTest {
         exchange(phone, server)
         exchange(tablet, server)
         assertEquals(100, tablet.loadBookmark(t)!!.chapterIndex)
-        val oldClient = json.decodeFromString<HttpSyncBookmarkBlob>(server.body(bookmarkKey("example")).toString(Charsets.UTF_8))
-        assertEquals(100, oldClient.chapterIndex)
-        assertTrue(rfc3339ToAppleSeconds(oldClient.lastModified) > 200.0)
+        // The rewind is newer for released map clients too, which order by this timestamp.
+        assertTrue(tablet.loadBookmark(t)!!.lastModified!! > 200.0)
     }
 
     @Test fun releasedMapOnlyClientStillSendsAndReceivesPositions() = runBlocking {
@@ -69,19 +68,19 @@ class ReadingPositionSyncTest {
         assertTrue(maps.any { it.value?.chapterIndex == 100 && it.lastModified == appleSecondsToRfc3339(210.0) })
     }
 
-    @Test fun legacyPerBookClientsRemainBidirectionalAfterBootstrap() = runBlocking {
+    @Test fun pageTurnsAfterBootstrapNeverWriteTheSharedPerBookKey() = runBlocking {
         val server = ContentAddressedKv()
         val (repository, root) = fixture("phone")
         val state = HttpSyncBatchState(repository)
         state.publishMaps(server)
-        val old = HttpSyncBookmarkBlob(120, 0.0, 121, appleSecondsToRfc3339(200.0))
+        val old = HttpSyncBookmarkBlob(90, 0.0, 91, appleSecondsToRfc3339(50.0))
         server.put(bookmarkKey("example"), "application/json", json.encodeToString(old).toByteArray())
-        state.syncMaps(server)
-        assertEquals(120, repository.loadBookmark(root)!!.chapterIndex)
         move(repository, root, 110, 300.0)
         state.queueBookmark(root, "Example", "example")
         state.syncMaps(server)
-        assertEquals(110, json.decodeFromString<HttpSyncBookmarkBlob>(server.body(bookmarkKey("example")).toString(Charsets.UTF_8)).chapterIndex)
+        // Builds up to 0.12.1 run a full reconcile for every change of this key.
+        assertEquals(old, json.decodeFromString<HttpSyncBookmarkBlob>(server.body(bookmarkKey("example")).toString(Charsets.UTF_8)))
+        assertTrue(server.keys().any { it == "${READING_POSITION_PREFIX}example/phone.json" })
     }
 
     @Test fun equalTimestampMapWinnersRespectReleasedRevisionAndEtagOrdering() = runBlocking {
@@ -98,13 +97,9 @@ class ReadingPositionSyncTest {
             assertEquals(page, repository.loadBookmark(root)!!.chapterIndex)
         }
         remote(120, 20, "old")
-        val old = HttpSyncBookmarkBlob(110, 0.0, 111, appleSecondsToRfc3339(200.0), 1)
-        server.put(bookmarkKey("example"), "application/json", json.encodeToString(old).toByteArray())
-        state.syncMaps(server)
-        assertEquals(120, json.decodeFromString<HttpSyncBookmarkBlob>(server.body(bookmarkKey("example")).toString(Charsets.UTF_8)).chapterIndex)
         remote(90, 20, "zzzz")
         state.syncMaps(server)
-        assertEquals(90, json.decodeFromString<HttpSyncBookmarkBlob>(server.body(bookmarkKey("example")).toString(Charsets.UTF_8)).chapterIndex)
+        assertEquals(90, repository.loadBookmark(root)!!.chapterIndex)
     }
 
     @Test fun backwardClockRewindStrictlyAdvancesLegacyWireTimestamp() = runBlocking {
@@ -113,10 +108,11 @@ class ReadingPositionSyncTest {
         val time = 814000000.06
         move(repository, root, 120, time)
         exchange(repository, server)
-        val previous = json.decodeFromString<HttpSyncBookmarkBlob>(server.body(bookmarkKey("example")).toString(Charsets.UTF_8))
+        // The projection released clients receive through the bookmark maps.
+        val previous = repository.loadBookmark(root)!!.toBlob()
         move(repository, root, 119, time - 20.0)
         exchange(repository, server)
-        val next = json.decodeFromString<HttpSyncBookmarkBlob>(server.body(bookmarkKey("example")).toString(Charsets.UTF_8))
+        val next = repository.loadBookmark(root)!!.toBlob()
         assertEquals(119, next.chapterIndex)
         assertTrue(compareRfc3339(next.lastModified, previous.lastModified) > 0)
     }

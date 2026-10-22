@@ -81,7 +81,7 @@ internal class ReaderRouteStateHolder(
         event: moe.antimony.hoshi.epub.ReadingPositionEvent? = null,
         captureAlreadyDone: Boolean = false,
     ) {
-        withContext(ioDispatcher) {
+        val positionWritten = withContext(ioDispatcher) {
             val bookmark = Bookmark(
                 chapterIndex = chapterIndex,
                 progress = progress,
@@ -94,12 +94,16 @@ internal class ReaderRouteStateHolder(
             if (statistics != null) {
                 repository.saveStatistics(state.bookRoot, statistics)
             }
+            navigation != null || state.positionSession == null
         }
-        onBookmarkPersisted(
-            state.bookRoot,
-            state.entry.metadata.title,
-            state.entry.metadata.syncId,
-        )
+        // A save that did not move (the statistics save after each page turn) queues no sync.
+        if (positionWritten) {
+            onBookmarkPersisted(
+                state.bookRoot,
+                state.entry.metadata.title,
+                state.entry.metadata.syncId,
+            )
+        }
         if (statistics != null) {
             onStatisticsPersisted(state.bookRoot, state.entry.metadata.title, state.entry.metadata.syncId, false)
         }

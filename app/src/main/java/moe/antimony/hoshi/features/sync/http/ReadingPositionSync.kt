@@ -6,7 +6,6 @@ import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import moe.antimony.hoshi.epub.BookEntry
 import moe.antimony.hoshi.epub.BookRepository
-import moe.antimony.hoshi.epub.Bookmark
 import moe.antimony.hoshi.epub.ReadingPositionJournal
 import moe.antimony.hoshi.storage.writeSidecarAtomically
 import java.security.MessageDigest
@@ -17,21 +16,30 @@ internal const val READING_POSITION_PREFIX = "sync/maps/positions/v1/"
 private data class PositionSyncIndex(
     val applied: Map<String, String> = emptyMap(),
     val published: Map<String, String> = emptyMap(),
-    val legacy: Map<String, HttpSyncBookmarkBlob> = emptyMap(),
 )
+
+@Serializable
+private data class PositionJournalVersion(val version: Int = 1)
+
+private data class PositionKeyFailure(val etag: String, val retryAt: Long, val pauseMillis: Long)
 
 internal data class ReadingPositionExchange(val moved: Set<String>, val published: Set<String>, val errors: List<String>)
 
-/** Independent single-writer histories plus a bridge for unchanged released bookmark formats. */
+/**
+ * Independent single-writer histories. Released builds keep exchanging positions through the
+ * bookmark maps; per-book bookmark keys stay bootstrap-only (see docs/HTTP_SYNC_KV.md).
+ */
 internal class ReadingPositionSync(private val repository: BookRepository) {
     private val store get() = repository.readingPositions
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
-    private val revisions = HttpSyncRevisionStore(json)
     private val indexFile get() = store.directory.resolve("sync-index.json")
-    private val failures = mutableMapOf<String, Pair<String, Long>>()
+    private val failures = mutableMapOf<String, PositionKeyFailure>()
 
     suspend fun exchange(transport: HttpSyncKvTransport, listing: List<HttpSyncKvKeyMeta>, entries: List<BookEntry>): ReadingPositionExchange {
-        var index = if (indexFile.exists()) json.decodeFromString<PositionSyncIndex>(indexFile.readText()) else PositionSyncIndex()
+        // An unreadable index only costs one re-read of each history.
+        var index = indexFile.takeIf { it.exists() }
+            ?.let { runCatching { json.decodeFromString<PositionSyncIndex>(it.readText()) }.getOrNull() }
+            ?: PositionSyncIndex()
         val roots = entries.mapNotNull { entry -> syncIdForMetadata(entry.metadata)?.let { it to entry.root } }.toMap()
         val moved = mutableSetOf<String>()
         val published = mutableSetOf<String>()
@@ -40,8 +48,9 @@ internal class ReadingPositionSync(private val repository: BookRepository) {
         val metas = listing.associateBy { it.key }
 
         suspend fun attempt(meta: HttpSyncKvKeyMeta?, key: String, action: suspend () -> Unit): Boolean {
-            val failed = failures[key]
-            if (failed != null && failed.first == meta?.etag.orEmpty() && System.currentTimeMillis() < failed.second) return false
+            val etag = meta?.etag.orEmpty()
+            val failed = failures[key]?.takeIf { it.etag == etag }
+            if (failed != null && System.currentTimeMillis() < failed.retryAt) return false
             return try {
                 action()
                 failures.remove(key)
@@ -49,7 +58,10 @@ internal class ReadingPositionSync(private val repository: BookRepository) {
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
-                failures[key] = meta?.etag.orEmpty() to (System.currentTimeMillis() + 30_000)
+                // As in the statistics lane: tried again when the ETag changes, or after a pause
+                // that starts at 30 s and doubles up to ten minutes.
+                val pause = failed?.let { (it.pauseMillis * 2).coerceAtMost(MAX_RETRY_MILLIS) } ?: FIRST_RETRY_MILLIS
+                failures[key] = PositionKeyFailure(etag, System.currentTimeMillis() + pause, pause)
                 errors += "$key: ${error.message ?: error.javaClass.simpleName}"
                 false
             }
@@ -57,7 +69,13 @@ internal class ReadingPositionSync(private val repository: BookRepository) {
 
         suspend fun receive(meta: HttpSyncKvKeyMeta, bookId: String, writer: String): Boolean = attempt(meta, meta.key) {
             val fetched = transport.getBounded(meta.key, 2 * 1024 * 1024) ?: error("Position history disappeared")
-            val journal = json.decodeFromString<ReadingPositionJournal>(fetched.body.toString(Charsets.UTF_8))
+            val text = fetched.body.toString(Charsets.UTF_8)
+            if (json.decodeFromString<PositionJournalVersion>(text).version > 1) {
+                // A newer build's history is skipped quietly until it changes.
+                index = index.copy(applied = index.applied + (meta.key to fetched.etag))
+                return@attempt
+            }
+            val journal = json.decodeFromString<ReadingPositionJournal>(text)
             require(journal.bookId == bookId && journal.deviceId == writer) { "Position history writer/book mismatch" }
             if (store.merge(journal, roots[bookId])) moved += bookId
             // A listing ETag is not an acknowledgement: only the successfully merged body is.
@@ -70,28 +88,31 @@ internal class ReadingPositionSync(private val repository: BookRepository) {
             if (writer == device) Triple(meta, book, writer) else null
         } }
         val blockedBooks = mutableSetOf<String>()
+        val ownBefore = store.ownHistories()
         for ((meta, book, writer) in ownRemote) {
-            if (index.applied[meta.key] != meta.etag || store.export(book) == null) {
+            if (index.applied[meta.key] != meta.etag || book !in ownBefore) {
                 if (!receive(meta, book, writer)) blockedBooks += book
             }
         }
-        for (state in store.snapshots()) {
-            if (state.bookId in blockedBooks) continue
-            val journal = store.export(state.bookId) ?: continue
-            val key = "$READING_POSITION_PREFIX${state.bookId}/$device.json"
+        for ((book, pending) in store.ownHistories()) {
+            if (book in blockedBooks) continue
+            val key = "$READING_POSITION_PREFIX$book/$device.json"
+            val meta = metas[key]
+            // Nothing new since this history was published: no journal is read on such a poll.
+            if (pending.isEmpty() && meta != null && meta.etag == index.applied[key] && index.published[key] != null) continue
+            val journal = store.export(book) ?: continue
             val body = json.encodeToString(journal).toByteArray()
             val digest = digest(body)
-            val meta = metas[key]
             if (meta?.etag == index.applied[key] && index.published[key] == digest) {
-                store.acknowledge(state.bookId, (journal.events + journal.heads).mapTo(mutableSetOf()) { it.id })
+                store.acknowledge(book, (journal.events + journal.heads).mapTo(mutableSetOf()) { it.id })
                 continue
             }
             attempt(meta, key) {
                 val response = transport.put(key, "application/json", body)
                 index = index.copy(applied = index.applied + (key to response.etag),
                     published = index.published + (key to digest))
-                store.acknowledge(state.bookId, (journal.events + journal.heads).mapTo(mutableSetOf()) { it.id })
-                published += state.bookId
+                store.acknowledge(book, (journal.events + journal.heads).mapTo(mutableSetOf()) { it.id })
+                published += book
             }
         }
         for (meta in listing) {
@@ -99,51 +120,6 @@ internal class ReadingPositionSync(private val repository: BookRepository) {
             if (writer != device && index.applied[meta.key] != meta.etag) receive(meta, book, writer)
         }
 
-        // Released pre-map clients only speak books/{id}/bookmark. Keep this bridge live after
-        // bootstrap; preserve their original timestamp and never turn receiving into navigation.
-        for ((book, root) in roots) {
-            val key = bookmarkKey(book)
-            val meta = metas[key]
-            if (meta != null && index.applied[key] != meta.etag) {
-                val received = attempt(meta, key) {
-                    val fetched = transport.getBounded(key, 1024 * 1024) ?: error("Legacy bookmark disappeared")
-                    val value = json.decodeFromString<HttpSyncBookmarkBlob>(fetched.body.toString(Charsets.UTF_8))
-                    require(value.chapterIndex >= 0 && value.progress.isFinite() && value.progress in 0.0..1.0 && value.characterCount >= 0)
-                    val stamp = rfc3339ToAppleSeconds(value.lastModified)
-                    require(stamp != 0.0 || value.lastModified.startsWith("2001-01-01T00:00:00"))
-                    val before = repository.loadBookmark(root)
-                    val localBlob = before?.toBlob()?.copy(rev = revisions.current(repository.booksDirectory, key).localRev)
-                    val localEntry = localBlob?.let { HttpSyncBookmarkMapEntry(
-                        "sha256:${digest(json.encodeToString(it).toByteArray())}", it.lastModified, it,
-                    ) }
-                    val remoteEntry = HttpSyncBookmarkMapEntry(fetched.etag, value.lastModified, value)
-                    if (localEntry == null || compareBookmarkEntries(remoteEntry, localEntry) > 0) {
-                        repository.saveBookmark(root, Bookmark(value.chapterIndex, value.progress, value.characterCount, stamp))
-                        revisions.noteRemote(repository.booksDirectory, key, value.rev, appliedLocally = true)
-                    }
-                    if (before?.let { Triple(it.chapterIndex, it.progress, it.characterCount) } !=
-                        repository.loadBookmark(root)?.let { Triple(it.chapterIndex, it.progress, it.characterCount) }) moved += book
-                    index = index.copy(applied = index.applied + (key to fetched.etag), legacy = index.legacy + (key to value))
-                }
-                if (!received) continue // Never replace a changed legacy value we could not read.
-            }
-            val local = repository.loadBookmark(root) ?: continue
-            val remote = index.legacy[key]
-            // Creating the compatibility key is needed for new navigation, not for an idle
-            // migration. Existing legacy keys continue to receive updates in either case.
-            val hasNavigation = store.export(book) != null
-            val localBlob = local.toBlob().copy(rev = revisions.current(repository.booksDirectory, key).localRev)
-            val localEntry = HttpSyncBookmarkMapEntry("sha256:${digest(json.encodeToString(localBlob).toByteArray())}", localBlob.lastModified, localBlob)
-            val remoteEntry = remote?.let { HttpSyncBookmarkMapEntry(index.applied[key].orEmpty(), it.lastModified, it) }
-            if ((meta != null || hasNavigation) && localBlob != remote &&
-                (remoteEntry == null || compareBookmarkEntries(localEntry, remoteEntry) > 0)) {
-                attempt(meta, key) {
-                    val value = localBlob
-                    val response = transport.put(key, "application/json", json.encodeToString(value).toByteArray())
-                    index = index.copy(applied = index.applied + (key to response.etag), legacy = index.legacy + (key to value))
-                }
-            }
-        }
         store.directory.mkdirs()
         val text = json.encodeToString(index)
         if (!indexFile.exists() || indexFile.readText() != text) writeSidecarAtomically(indexFile, text)
@@ -161,4 +137,9 @@ internal class ReadingPositionSync(private val repository: BookRepository) {
 
     private fun digest(bytes: ByteArray) = MessageDigest.getInstance("SHA-256").digest(bytes)
         .joinToString("") { "%02x".format(it) }
+
+    private companion object {
+        const val FIRST_RETRY_MILLIS = 30_000L
+        const val MAX_RETRY_MILLIS = 10 * 60_000L
+    }
 }

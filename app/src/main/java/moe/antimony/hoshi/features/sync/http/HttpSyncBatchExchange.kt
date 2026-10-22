@@ -304,17 +304,16 @@ class HttpSyncBatchState(
                     // A failed request aborts this poll, so the shard is fetched again. Only
                     // another device's unreadable or just-deleted shard is passed over (until it
                     // changes), so it cannot stop every other device's positions from applying.
+                    val fetched = transport.get(meta.key)
                     try {
-                        val fetched = transport.get(meta.key)
                         // This installation's own shard deleted on the server: its owned
                         // positions are merged below and published again.
                         val decoded = if (fetched == null && meta.key == ownShardKey) emptyMap() else decodeBookmarksMap(fetched)
                         acknowledgedShards[meta.key] = fetched?.etag ?: meta.etag
                         decoded
-                    } catch (cancelled: CancellationException) {
-                        throw cancelled
-                    } catch (error: Exception) {
+                    } catch (error: HttpSyncException) {
                         if (meta.key == ownShardKey) throw error
+                        acknowledgedShards[meta.key] = meta.etag
                         before.bookmarkShards[meta.key].orEmpty()
                     }
                 } else {
@@ -463,13 +462,15 @@ class HttpSyncBatchState(
     }
 
     /** Whether page turns are queued for this installation's bookmark shard. */
-    internal suspend fun hasPendingBookmarks(): Boolean = hasPending() ||
-        bookRepository.readingPositions.snapshots().any { it.pending.isNotEmpty() }
+    internal suspend fun hasPendingBookmarks(): Boolean = withContext(ioDispatcher) {
+        hasPending() || bookRepository.readingPositions.ownHistories().values.any { it.isNotEmpty() }
+    }
 
-    internal suspend fun pendingBookmarkGeneration(): String? {
+    /** Called from the main thread on every save: the pending file is read on [ioDispatcher]. */
+    internal suspend fun pendingBookmarkGeneration(): String? = withContext(ioDispatcher) {
         val maps = synchronized(stateLock) { loadPendingLocked().map { it.mutationId } }
-        val events = bookRepository.readingPositions.snapshots().flatMap { it.pending }.sorted()
-        return (maps + events).takeIf { it.isNotEmpty() }?.joinToString("|")
+        val events = bookRepository.readingPositions.ownHistories().values.flatten().sorted()
+        (maps + events).takeIf { it.isNotEmpty() }?.joinToString("|")
     }
 
     /** Every installed book's reading position, to count the books a sync actually moved. */
@@ -926,9 +927,10 @@ class HttpSyncBookmarkScheduler(
     suspend fun onBookmarkChanged(bookRoot: File, title: String?, persistedSyncId: String? = null) {
         state.queueBookmark(bookRoot, title, persistedSyncId)
         start()
+        // While the app is visible the five-second poll sends every queued page turn in one pass.
         // The poll waits while the app is not visible; a position saved just after leaving it
         // (a debounced page turn, audio still playing) goes up now instead of at the next visit.
-        publishQueuedPositions()
+        if (!foreground.value) publishQueuedPositions()
     }
 
     /**

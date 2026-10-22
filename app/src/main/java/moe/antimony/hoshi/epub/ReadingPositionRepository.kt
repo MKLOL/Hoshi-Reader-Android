@@ -106,13 +106,14 @@ data class ReadingPositionState(
                 mergedHeads[event.originId] = event
             }
         }
-        val unsent = pending + ownPending
         val all = (events + incoming).associateBy { it.id }.values
-        val recent = all.groupBy { it.deviceId }.values.flatMap { deviceEvents ->
+        // Receivers keep 50 events per device, so an older unsent event could never arrive:
+        // the outbox shares that window and stays bounded while sync is off or offline.
+        // Heads are kept apart and always exported, so positions still converge.
+        val retained = all.groupBy { it.deviceId }.values.flatMap { deviceEvents ->
             deviceEvents.sortedWith(compareBy<ReadingPositionEvent> { it.compatibilityAt }.thenBy { it.id }).takeLast(50)
-        }
-        val retained = (recent + all.filter { it.id in unsent }).distinctBy { it.id }
-            .sortedWith(compareBy<ReadingPositionEvent> { it.compatibilityAt }.thenBy { it.id })
+        }.sortedWith(compareBy<ReadingPositionEvent> { it.compatibilityAt }.thenBy { it.id })
+        val unsent = (pending + ownPending).intersect(retained.mapTo(HashSet()) { it.id })
         return copy(heads = mergedHeads, events = retained, pending = unsent)
     }
 }
@@ -168,18 +169,33 @@ class ReadingPositionRepository(
     private var origin: String? = null
     private var device: DeviceIdentity? = null
     private val sequence = AtomicLong()
+    /** Per book with this device's history: its unsent event ids. Polls read this, not every journal. */
+    private val outbox = ConcurrentHashMap<String, Set<String>>()
+    private val scanLock = Mutex()
+    @Volatile private var scanned = false
 
     private suspend fun identity(): Pair<DeviceIdentity, String> = identityLock.withLock {
         if (origin == null) {
             val file = directory.resolve("origin")
-            val id = if (file.exists()) UUID.fromString(file.readText().trim()).toString() else {
+            val stored = file.takeIf { it.exists() }
+                ?.let { runCatching { UUID.fromString(it.readText().trim()).toString() }.getOrNull() }
+            // An unreadable origin is replaced: a fresh origin never collides with old sequences.
+            val id = stored ?: UUID.randomUUID().toString().also {
                 directory.mkdirs()
-                UUID.randomUUID().toString().also { writeSidecarAtomically(file, it) }
+                writeSidecarAtomically(file, it)
             }
             origin = id
             device = suppliedDevice ?: DeviceIdentity(id, "Android")
         }
         requireNotNull(device) to requireNotNull(origin)
+    }
+
+    /** Starts a new causal counter, for when a lost journal hides how far the old one got. */
+    private suspend fun rotateOrigin() = identityLock.withLock {
+        directory.mkdirs()
+        writeSidecarAtomically(directory.resolve("origin"), UUID.randomUUID().toString())
+        origin = null
+        device = null
     }
 
     suspend fun deviceId(): String = withContext(Dispatchers.IO) { identity().first.id }
@@ -190,8 +206,9 @@ class ReadingPositionRepository(
     suspend fun open(root: File): ReadingPositionSession = withContext(Dispatchers.IO) {
         val id = bookId(root)
         locks.getOrPut(id) { Mutex() }.withLock {
-            val (device, origin) = identity()
             val state = observedProjection(id, root, read(id))
+            // After the read: setting aside an unreadable journal starts a new origin.
+            val (device, origin) = identity()
             val winner = state.winner()
             if (winner != null) persist(state, root)
             sequence.updateAndGet { maxOf(it, state.heads[origin]?.sequence ?: 0) }
@@ -246,7 +263,9 @@ class ReadingPositionRepository(
             val heads = state.heads.values.filter { it.deviceId == own }
             if (heads.isEmpty()) return@withLock null
             val events = state.events.filter { it.deviceId == own }
+            // Sorted, so the body published before acknowledgement hashes the same after it.
             val batch = (events.filter { it.id in state.pending }.take(200) + events.takeLast(50)).distinctBy { it.id }
+                .sortedWith(compareBy<ReadingPositionEvent> { it.compatibilityAt }.thenBy { it.id })
             ReadingPositionJournal(bookId = bookId, deviceId = own, events = batch, heads = heads)
         }
     }
@@ -258,9 +277,25 @@ class ReadingPositionRepository(
         }
     }
 
-    suspend fun snapshots(): List<ReadingPositionState> = withContext(Dispatchers.IO) {
-        directory.listFiles().orEmpty().filter { it.name.endsWith(".json") && it.name.startsWith("book-") }
-            .map { json.decodeFromString<ReadingPositionState>(it.readText()) }
+    /**
+     * Every book with a history written by this device, with its unsent event ids. The
+     * directory is read once; later calls come from memory, kept current by every write.
+     */
+    suspend fun ownHistories(): Map<String, Set<String>> = withContext(Dispatchers.IO) {
+        if (!scanned) scanLock.withLock {
+            if (!scanned) {
+                val own = identity().first.id
+                for (file in directory.listFiles().orEmpty()) {
+                    if (!file.name.startsWith("book-") || !file.name.endsWith(".json")) continue
+                    // An unreadable journal is set aside when its book is next read.
+                    val state = decode(file) ?: continue
+                    // A write during the scan already recorded a newer state.
+                    if (state.heads.values.any { it.deviceId == own }) outbox.putIfAbsent(state.bookId, state.pending)
+                }
+                scanned = true
+            }
+        }
+        outbox.toMap()
     }
 
     suspend fun snapshot(root: File): ReadingPositionState = withContext(Dispatchers.IO) {
@@ -280,7 +315,15 @@ class ReadingPositionRepository(
         } else state
     }
 
-    private fun importLegacy(state: ReadingPositionState, bookmark: Bookmark): ReadingPositionState {
+    private fun importLegacy(state: ReadingPositionState, projected: Bookmark): ReadingPositionState {
+        // Older clients and other devices' maps can hold values navigation never produces.
+        // Clamp them, as the readers do, instead of making the book unopenable or a sync fail.
+        val bookmark = projected.copy(
+            chapterIndex = projected.chapterIndex.coerceAtLeast(0),
+            progress = projected.progress.takeIf { it.isFinite() }?.coerceIn(0.0, 1.0) ?: 0.0,
+            characterCount = projected.characterCount.coerceAtLeast(0),
+            lastModified = projected.lastModified?.takeIf { it.isFinite() },
+        )
         val time = bookmark.lastModified ?: 0.0
         val id = "legacy-${digest(json.encodeToString(bookmark))}"
         // Legacy callers have already resolved timestamp/revision/ETag ties. Each exact
@@ -294,18 +337,30 @@ class ReadingPositionRepository(
             .merging(listOf(event))
     }
 
-    private fun read(id: String): ReadingPositionState {
+    private suspend fun read(id: String): ReadingPositionState {
         val file = fileFor(id)
-        return if (file.exists()) json.decodeFromString<ReadingPositionState>(file.readText()).also {
-            require(it.bookId == id)
-        } else ReadingPositionState(id)
+        if (!file.exists()) return ReadingPositionState(id)
+        decode(file)?.takeIf { it.bookId == id }?.let { return it }
+        // One unreadable journal must not make its book unopenable or stop every sync.
+        // bookmark.json still holds the position; the next sync restores this device's
+        // published history. A new origin keeps new events ahead of the lost sequence.
+        file.renameTo(file.resolveSibling("${file.name}.corrupt"))
+        outbox.remove(id)
+        rotateOrigin()
+        return ReadingPositionState(id)
     }
+
+    private fun decode(file: File): ReadingPositionState? =
+        runCatching { json.decodeFromString<ReadingPositionState>(file.readText()) }.getOrNull()
 
     private suspend fun persist(state: ReadingPositionState, root: File?) {
         directory.mkdirs()
         val file = fileFor(state.bookId)
         val text = json.encodeToString(state)
         if (!file.exists() || file.readText() != text) writeSidecarAtomically(file, text)
+        val own = identity().first.id
+        if (state.heads.values.any { it.deviceId == own }) outbox[state.bookId] = state.pending
+        else outbox.remove(state.bookId)
         // Never resurrect a book deleted while a reader's final IO was still queued.
         if (root?.isDirectory == true) state.winner()?.let { winner ->
             val bookmark = winner.bookmark()

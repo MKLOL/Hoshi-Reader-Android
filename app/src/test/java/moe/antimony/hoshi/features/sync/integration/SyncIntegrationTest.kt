@@ -275,14 +275,15 @@ class SyncIntegrationTest(private val engineA: SyncEngine, private val engineB: 
         val shardsBefore = server.etags().filterKeys { it.startsWith(BOOKMARKS_MAP_PREFIX) }
         assertTrue("both installs published a shard", shardsBefore.size >= 2)
 
-        // A reads on: the durable outbox publishes the map and the legacy compatibility key.
+        // A reads on: the reader path, i.e. the durable outbox + the five-second map exchange,
+        // never the legacy per-book key.
         a.turnPage(rootA, SyncCorpus.MANGA_TITLE, SyncCorpus.bookmark(chapter = 7, appleSeconds = 800_000_500.0))
 
         val shardsAfter = server.etags().filterKeys { it.startsWith(BOOKMARKS_MAP_PREFIX) }
         val changed = shardsAfter.filter { (key, etag) -> shardsBefore[key] != etag }.keys
         assertEquals("exactly A's own shard was rewritten", 1, changed.size)
         assertEquals("A's shard carries the new position", 7, bookmarkShard(changed.single())[SyncCorpus.MANGA_SYNC_ID]?.value?.chapterIndex)
-        assertEquals("released pre-map clients also receive the current position", 7, json.decodeFromString(
+        assertEquals("the legacy per-book key is not dual-written", 2, json.decodeFromString(
             HttpSyncBookmarkBlob.serializer(),
             server.client().get(bookmarkKey(SyncCorpus.MANGA_SYNC_ID))!!.body.toString(Charsets.UTF_8),
         ).chapterIndex)
