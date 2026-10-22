@@ -100,6 +100,25 @@ class V3CloudCoverPassTest {
         assertArrayEquals(coverPage, cloud.coverFile(cloud.records().single())!!.readBytes())
     }
 
+    @Test
+    fun anOversizedStoredCoverFallsBackWithoutStoppingTheOtherCovers() = runBlocking {
+        val transport = Flaky()
+        uploadManga(transport, "manga_one")
+        uploadManga(transport, "manga_two")
+        for (syncId in listOf("manga_one", "manga_two")) {
+            val manifest = json.decodeFromString(HttpSyncPayloadManifest.serializer(),
+                transport.get(payloadManifestKey(syncId))!!.body.toString(Charsets.UTF_8))
+            transport.put("books/$syncId/cover/${manifest.sha256.removePrefix("sha256:")}",
+                "image/jpeg", ByteArray(moe.antimony.hoshi.features.sync.http.MAX_COVER_BYTES + 1))
+        }
+        val (cloud, engine) = engine(transport)
+
+        engine.syncOnce(configured)
+
+        assertEquals(2, cloud.records().size)
+        for (record in cloud.records()) assertArrayEquals(coverPage, cloud.coverFile(record)!!.readBytes())
+    }
+
     private fun engine(
         transport: HttpSyncKvTransport,
         thumbnail: (ByteArray) -> ByteArray? = { it },

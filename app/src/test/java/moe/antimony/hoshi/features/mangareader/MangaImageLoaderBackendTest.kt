@@ -24,7 +24,7 @@ class MangaImageLoaderBackendTest {
         assertEquals(MangaImageCacheSnapshot(1, 3, 1, 1), backend.snapshot())
     }
 
-    @Test fun cacheEvictsByBytesAndMovingTheWindowDropsDistantImages() {
+    @Test fun cacheIsBoundedByBytesAndMovingTheWindowDropsDistantImages() {
         val root = temporary.newFolder()
         val files = (0..7).map { root.resolve("$it.jpg").apply { writeBytes(ByteArray(4) { it.toByte() }) } }
         val backend = MangaImageLoaderBackend(root, book, MangaImageCachePolicy(8, 0))
@@ -49,6 +49,8 @@ class MangaImageLoaderBackendTest {
         // The decode preloader requests every neighbour in order, after the encoded preload.
         for (index in listOf(5, 3, 5, 3, 6, 2, 7)) backend.get(files[index]).close()
         assertEquals(2, backend.snapshot().entries)
+        // Pages that cannot be kept are streamed, not read into a discarded buffer.
+        assertEquals(2L, backend.snapshot().reads)
         backend.get(files[5]).close()
         backend.get(files[3]).close()
         assertEquals(4L, backend.snapshot().hits)
@@ -57,6 +59,19 @@ class MangaImageLoaderBackendTest {
         backend.get(files[6]).close()
         backend.get(files[6]).close()
         assertEquals(5L, backend.snapshot().hits)
+    }
+
+    @Test fun aBudgetForOnePageKeepsTheNextPageRatherThanTheDisplayedOne() {
+        val root = temporary.newFolder()
+        val files = (0..7).map { root.resolve("$it.jpg").apply { writeBytes(ByteArray(6) { it.toByte() }) } }
+        val backend = MangaImageLoaderBackend(root, book, MangaImageCachePolicy(8, 0))
+        for (page in 2..4) {
+            backend.onPageRequested(page)
+            backend.get(files[page]).close()
+            backend.get(files[page + 1]).close()
+        }
+        // Every turn after the first finds its page prepared.
+        assertEquals(2L, backend.snapshot().hits)
     }
 
     @Test fun largeImagesAndClosedBackendsStillServeOriginalsWithoutRetention() {

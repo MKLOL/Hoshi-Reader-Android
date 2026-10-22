@@ -83,6 +83,49 @@ class ReadingPositionSyncTest {
         assertTrue(server.keys().any { it == "${READING_POSITION_PREFIX}example/phone.json" })
     }
 
+    @Test fun aSetAsideJournalGetsThisDevicesPublishedHistoryBackEvenAfterAPageTurn() = runBlocking {
+        val server = ContentAddressedKv()
+        val (repository, root) = fixture("phone")
+        val key = "${READING_POSITION_PREFIX}example/phone.json"
+        move(repository, root, 101, 150.0)
+        exchange(repository, server)
+        val published = json.decodeFromString<ReadingPositionJournal>(server.body(key).toString(Charsets.UTF_8))
+        repository.readingPositions.directory.listFiles()!!.filter { it.name.startsWith("book-") }.forEach { it.writeText("{") }
+        move(repository, root, 102, 160.0)
+        exchange(repository, server)
+        val restored = json.decodeFromString<ReadingPositionJournal>(server.body(key).toString(Charsets.UTF_8))
+        assertTrue(published.heads.all { old -> restored.heads.any { it.id == old.id } })
+        assertEquals(102, repository.loadBookmark(root)!!.chapterIndex)
+    }
+
+    @Test fun aMoveOutsideTheRetainedWindowIsStillPublished() = runBlocking {
+        val server = ContentAddressedKv()
+        val (repository, root) = fixture("phone")
+        val first = repository.openReadingPosition(root)
+        val second = repository.openReadingPosition(root)
+        for (page in 1..60) repository.recordReadingPosition(root, first.navigate(Bookmark(page, 0.0, page + 1, 100.0 + page))!!)
+        exchange(repository, server)
+        // An older-stamped session's move is the newest head but not among the latest 50 events.
+        repository.recordReadingPosition(root, second.navigate(Bookmark(200, 0.0, 201, 101.5))!!)
+        exchange(repository, server)
+        val journal = json.decodeFromString<ReadingPositionJournal>(server.body("${READING_POSITION_PREFIX}example/phone.json").toString(Charsets.UTF_8))
+        assertEquals(200, journal.heads.single().position.chapterIndex)
+    }
+
+    @Test fun aLostIndexReadsHistoriesBackWithoutUploadingThemAgain() = runBlocking {
+        val server = ContentAddressedKv()
+        val (repository, root) = fixture("phone")
+        move(repository, root, 101, 150.0)
+        exchange(repository, server)
+        repository.readingPositions.directory.resolve("sync-index.json").delete()
+        server.resetCounts()
+        exchange(repository, server)
+        assertEquals(emptyList<String>(), server.putKeys)
+        server.resetCounts()
+        exchange(repository, server)
+        assertEquals("the rebuilt index acknowledges the history", 0, server.gets)
+    }
+
     @Test fun equalTimestampMapWinnersRespectReleasedRevisionAndEtagOrdering() = runBlocking {
         val server = ContentAddressedKv()
         val (repository, root) = fixture("phone")

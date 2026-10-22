@@ -16,6 +16,7 @@ import java.security.MessageDigest
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
+import kotlin.math.abs
 
 @Serializable
 data class ReadingPosition(val chapterIndex: Int, val progress: Double, val characterCount: Int) {
@@ -54,8 +55,8 @@ data class ReadingPositionEvent(
         (originId == other.originId && sequence > other.sequence) || (seen[other.originId] ?: 0) >= other.sequence
     fun isValid() = id.isNotBlank() && id.length <= 128 && deviceId.isNotBlank() &&
         originId.isNotBlank() && originId.length <= 128 && sequence > 0 &&
-        position.isValid() && (from?.isValid() != false) && occurredAt.isFinite() &&
-        compatibilityAt.isFinite() && compatibilityAt >= occurredAt && seen.size <= 256 &&
+        position.isValid() && (from?.isValid() != false) && abs(occurredAt) <= MAX_POSITION_SECONDS &&
+        compatibilityAt <= MAX_POSITION_SECONDS && compatibilityAt >= occurredAt && seen.size <= 256 &&
         seen.all { it.key.length in 1..128 && it.value >= 0 }
 }
 
@@ -113,7 +114,9 @@ data class ReadingPositionState(
         val retained = all.groupBy { it.deviceId }.values.flatMap { deviceEvents ->
             deviceEvents.sortedWith(compareBy<ReadingPositionEvent> { it.compatibilityAt }.thenBy { it.id }).takeLast(50)
         }.sortedWith(compareBy<ReadingPositionEvent> { it.compatibilityAt }.thenBy { it.id })
-        val unsent = (pending + ownPending).intersect(retained.mapTo(HashSet()) { it.id })
+        // A head is exported either way, so it stays unsent even outside the window: a move the
+        // window drops at once (odd clocks, concurrent sessions) must still be published.
+        val unsent = (pending + ownPending).intersect(retained.mapTo(HashSet()) { it.id } + mergedHeads.values.map { it.id })
         return copy(heads = mergedHeads, events = retained, pending = unsent)
     }
 }
@@ -173,6 +176,9 @@ class ReadingPositionRepository(
     private val outbox = ConcurrentHashMap<String, Set<String>>()
     private val scanLock = Mutex()
     @Volatile private var scanned = false
+    private val syncIndexFile = directory.resolve("sync-index.json")
+    private val syncIndexLock = Mutex()
+    private var syncIndexGeneration = 0L
 
     private suspend fun identity(): Pair<DeviceIdentity, String> = identityLock.withLock {
         if (origin == null) {
@@ -298,6 +304,22 @@ class ReadingPositionRepository(
         outbox.toMap()
     }
 
+    /** The position sync's acknowledgements, kept beside the journals they describe. */
+    internal suspend fun loadSyncIndex(): Pair<String?, Long> = withContext(Dispatchers.IO) {
+        syncIndexLock.withLock {
+            syncIndexFile.takeIf { it.exists() }?.let { runCatching { it.readText() }.getOrNull() } to syncIndexGeneration
+        }
+    }
+
+    /** Dropped when a journal was set aside since [generation]: it describes the lost journal. */
+    internal suspend fun saveSyncIndex(text: String, generation: Long) = withContext(Dispatchers.IO + NonCancellable) {
+        syncIndexLock.withLock {
+            if (generation != syncIndexGeneration) return@withLock
+            directory.mkdirs()
+            if (!syncIndexFile.exists() || syncIndexFile.readText() != text) writeSidecarAtomically(syncIndexFile, text)
+        }
+    }
+
     suspend fun snapshot(root: File): ReadingPositionState = withContext(Dispatchers.IO) {
         val id = bookId(root)
         locks.getOrPut(id) { Mutex() }.withLock { read(id) }
@@ -322,7 +344,7 @@ class ReadingPositionRepository(
             chapterIndex = projected.chapterIndex.coerceAtLeast(0),
             progress = projected.progress.takeIf { it.isFinite() }?.coerceIn(0.0, 1.0) ?: 0.0,
             characterCount = projected.characterCount.coerceAtLeast(0),
-            lastModified = projected.lastModified?.takeIf { it.isFinite() },
+            lastModified = projected.lastModified?.takeIf { abs(it) <= MAX_POSITION_SECONDS },
         )
         val time = bookmark.lastModified ?: 0.0
         val id = "legacy-${digest(json.encodeToString(bookmark))}"
@@ -346,6 +368,11 @@ class ReadingPositionRepository(
         // published history. A new origin keeps new events ahead of the lost sequence.
         file.renameTo(file.resolveSibling("${file.name}.corrupt"))
         outbox.remove(id)
+        // The sync's acknowledgements cover the published history that must now be read back.
+        syncIndexLock.withLock {
+            syncIndexGeneration++
+            syncIndexFile.delete()
+        }
         rotateOrigin()
         return ReadingPositionState(id)
     }
@@ -372,6 +399,9 @@ class ReadingPositionRepository(
     private fun digest(value: String) = MessageDigest.getInstance("SHA-256")
         .digest(value.toByteArray()).joinToString("") { "%02x".format(it) }
 }
+
+/** Far beyond any real clock, and far below where wire milliseconds would overflow a Long. */
+internal const val MAX_POSITION_SECONDS = 1e12
 
 /** Advance at least one representable wire millisecond, including after wall-clock correction. */
 internal fun nextCompatibilityTimestamp(actionTime: Double, previous: Double): Double {

@@ -36,7 +36,10 @@ internal class MangaImageLoaderBackend(
     private val bytes = LinkedHashMap<ImageKey, ByteArray>()
     private val readers = ConcurrentHashMap<String, Any>()
     private var retainedBytes = 0L
-    /** The current page, then [mangaAdjacentPreloadIndexes] order: earlier paths are kept longer. */
+    /**
+     * The next page, the current one, then [mangaAdjacentPreloadIndexes] order: earlier paths are
+     * kept longer. The next page is shown sooner than the displayed one is shown again.
+     */
     private var wantedPaths = emptyList<String>()
     private var closed = false
     private var hits = 0L
@@ -53,7 +56,7 @@ internal class MangaImageLoaderBackend(
 
     fun onPageRequested(pageIndex: Int) {
         preloadJob?.cancel()
-        val paths = (listOf(pageIndex) + mangaAdjacentPreloadIndexes(pageIndex, book.pages.size))
+        val paths = (listOf(pageIndex + 1, pageIndex) + mangaAdjacentPreloadIndexes(pageIndex, book.pages.size))
             .mapNotNull { book.pages.getOrNull(it)?.imagePath?.trimStart('/') }
             .distinct()
         synchronized(lock) {
@@ -84,9 +87,8 @@ internal class MangaImageLoaderBackend(
                 return ByteArrayInputStream(it)
             }
         }
-        val cacheable = synchronized(lock) {
-            !closed && key.relativePath in wantedPaths && key.length in 1..policy.encodedBytes
-        }
+        // A page that would not be kept is streamed rather than read into a throwaway buffer.
+        val cacheable = synchronized(lock) { admissibleLocked(key) }
         if (!cacheable) return file.inputStream()
 
         // Bound even a file that grows during the read. Do not retain failures or partial reads.
@@ -110,23 +112,15 @@ internal class MangaImageLoaderBackend(
         if (keyFor(file) != key) return file.inputStream()
         synchronized(lock) {
             reads++
-            if (!closed && key.relativePath in wantedPaths) {
+            if (admissibleLocked(key)) {
                 // A page can be requested by both the visible image and a superseded preload.
                 bytes.remove(key)?.let { retainedBytes -= it.size }
-                // Evict by distance, not recency: the decode preloader requests every neighbour,
-                // and least-recently-used order would drop the next page for a farther one.
-                val priority = wantedPaths.indexOf(key.relativePath)
-                val evictable = bytes.keys.filter { wantedPaths.indexOf(it.relativePath) > priority }
-                    .sortedByDescending { wantedPaths.indexOf(it.relativePath) }
-                val freeable = evictable.sumOf { bytes.getValue(it).size.toLong() }
-                if (retainedBytes - freeable + data.size <= policy.encodedBytes) {
-                    for (evicted in evictable) {
-                        if (retainedBytes + data.size <= policy.encodedBytes) break
-                        retainedBytes -= bytes.remove(evicted)!!.size
-                    }
-                    bytes[key] = data
-                    retainedBytes += data.size
+                for (evicted in evictableLocked(key)) {
+                    if (retainedBytes + data.size <= policy.encodedBytes) break
+                    retainedBytes -= bytes.remove(evicted)!!.size
                 }
+                bytes[key] = data
+                retainedBytes += data.size
             }
         }
         return ByteArrayInputStream(data)
@@ -201,6 +195,24 @@ internal class MangaImageLoaderBackend(
         wantedPaths = emptyList()
         bytes.clear()
         retainedBytes = 0L
+    }
+
+    /**
+     * Evict by distance, not recency: the decode preloader requests every neighbour, and
+     * least-recently-used order would drop the next page for a farther one. Farthest first.
+     */
+    private fun evictableLocked(key: ImageKey): List<ImageKey> {
+        val priority = wantedPaths.indexOf(key.relativePath)
+        return bytes.keys.filter { it != key && wantedPaths.indexOf(it.relativePath) > priority }
+            .sortedByDescending { wantedPaths.indexOf(it.relativePath) }
+    }
+
+    /** Whether [key] would be kept, after evicting only pages farther from the current one. */
+    private fun admissibleLocked(key: ImageKey): Boolean {
+        if (closed || key.relativePath !in wantedPaths || key.length !in 1..policy.encodedBytes) return false
+        val freeable = evictableLocked(key).sumOf { bytes.getValue(it).size.toLong() }
+        val replaced = bytes[key]?.size ?: 0
+        return retainedBytes - replaced - freeable + key.length <= policy.encodedBytes
     }
 
     private fun keyFor(file: File) = ImageKey(

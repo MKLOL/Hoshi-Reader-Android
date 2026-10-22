@@ -7,7 +7,6 @@ import kotlinx.serialization.json.Json
 import moe.antimony.hoshi.epub.BookEntry
 import moe.antimony.hoshi.epub.BookRepository
 import moe.antimony.hoshi.epub.ReadingPositionJournal
-import moe.antimony.hoshi.storage.writeSidecarAtomically
 import java.security.MessageDigest
 
 internal const val READING_POSITION_PREFIX = "sync/maps/positions/v1/"
@@ -32,13 +31,12 @@ internal data class ReadingPositionExchange(val moved: Set<String>, val publishe
 internal class ReadingPositionSync(private val repository: BookRepository) {
     private val store get() = repository.readingPositions
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
-    private val indexFile get() = store.directory.resolve("sync-index.json")
     private val failures = mutableMapOf<String, PositionKeyFailure>()
 
     suspend fun exchange(transport: HttpSyncKvTransport, listing: List<HttpSyncKvKeyMeta>, entries: List<BookEntry>): ReadingPositionExchange {
         // An unreadable index only costs one re-read of each history.
-        var index = indexFile.takeIf { it.exists() }
-            ?.let { runCatching { json.decodeFromString<PositionSyncIndex>(it.readText()) }.getOrNull() }
+        val (stored, generation) = store.loadSyncIndex()
+        var index = stored?.let { runCatching { json.decodeFromString<PositionSyncIndex>(it) }.getOrNull() }
             ?: PositionSyncIndex()
         val roots = entries.mapNotNull { entry -> syncIdForMetadata(entry.metadata)?.let { it to entry.root } }.toMap()
         val moved = mutableSetOf<String>()
@@ -103,7 +101,11 @@ internal class ReadingPositionSync(private val repository: BookRepository) {
             val journal = store.export(book) ?: continue
             val body = json.encodeToString(journal).toByteArray()
             val digest = digest(body)
-            if (meta?.etag == index.applied[key] && index.published[key] == digest) {
+            // The server's ETag is the body's hash, which also spares re-uploads after a lost index.
+            if (meta != null && (meta.etag == "sha256:$digest" ||
+                    (meta.etag == index.applied[key] && index.published[key] == digest))) {
+                index = index.copy(applied = index.applied + (key to meta.etag),
+                    published = index.published + (key to digest))
                 store.acknowledge(book, (journal.events + journal.heads).mapTo(mutableSetOf()) { it.id })
                 continue
             }
@@ -120,9 +122,7 @@ internal class ReadingPositionSync(private val repository: BookRepository) {
             if (writer != device && index.applied[meta.key] != meta.etag) receive(meta, book, writer)
         }
 
-        store.directory.mkdirs()
-        val text = json.encodeToString(index)
-        if (!indexFile.exists() || indexFile.readText() != text) writeSidecarAtomically(indexFile, text)
+        store.saveSyncIndex(json.encodeToString(index), generation)
         return ReadingPositionExchange(moved, published, errors)
     }
 

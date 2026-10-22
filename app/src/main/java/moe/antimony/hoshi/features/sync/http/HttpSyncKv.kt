@@ -123,7 +123,7 @@ private data class HttpSyncMultipartCompleteResponse(
     val contentType: String? = null,
 )
 
-class HttpSyncException(message: String, val httpCode: Int? = null) : Exception(message) {
+open class HttpSyncException(message: String, val httpCode: Int? = null) : Exception(message) {
     var messageResource: Int? = null
         private set
 
@@ -137,6 +137,10 @@ class HttpSyncException(message: String, val httpCode: Int? = null) : Exception(
         this.messageResource = messageResource
     }
 }
+
+/** A body larger than the caller's limit: the blob is unusable, the connection is not at fault. */
+class HttpSyncTooLargeException(key: String, maxBytes: Int) :
+    HttpSyncException("Blob at $key exceeds the $maxBytes-byte download limit.")
 
 /** Reads exactly [size] bytes into one array, or null when the stream ends sooner. */
 private fun InputStream.readExactly(size: Int): ByteArray? {
@@ -159,7 +163,7 @@ private fun InputStream.readBytesBounded(key: String, maxBytes: Int): ByteArray 
         if (read < 0) break
         if (read == 0) continue
         if (total > maxBytes - read) {
-            throw HttpSyncException("Blob at $key exceeds the $maxBytes-byte download limit.")
+            throw HttpSyncTooLargeException(key, maxBytes)
         }
         output.write(buffer, 0, read)
         total += read
@@ -202,7 +206,7 @@ interface HttpSyncKvTransport {
         require(maxBytes >= 0)
         val fetched = get(key) ?: return null
         if (fetched.body.size > maxBytes) {
-            throw HttpSyncException("Blob at $key exceeds the $maxBytes-byte download limit.")
+            throw HttpSyncTooLargeException(key, maxBytes)
         }
         return fetched
     }
@@ -566,7 +570,7 @@ class HttpSyncKvClient(
             // an empty payload, and dereferencing would NPE under that pathology.
             val declaredLength = connection.contentLengthLong
             if (maxBytes != null && declaredLength > maxBytes) {
-                throw HttpSyncException("Blob at $key exceeds the $maxBytes-byte download limit.")
+                throw HttpSyncTooLargeException(key, maxBytes)
             }
             val body = connection.inputStream?.use { input ->
                 if (maxBytes == null) input.readBytes() else input.readBytesBounded(key, maxBytes)

@@ -26,6 +26,7 @@ import moe.antimony.hoshi.features.sync.http.HttpSyncChatEntryBlob
 import moe.antimony.hoshi.features.sync.http.PretranslationsBlob
 import moe.antimony.hoshi.features.sync.http.HttpSyncDeletedBookStateStore
 import moe.antimony.hoshi.features.sync.http.HttpSyncKvTransport
+import moe.antimony.hoshi.features.sync.http.HttpSyncTooLargeException
 import moe.antimony.hoshi.features.sync.http.HttpSyncPayloadCodec
 import moe.antimony.hoshi.features.sync.http.MAX_EPUB_SENTENCES_BLOB_BYTES
 import moe.antimony.hoshi.epub.EpubBookParser
@@ -541,7 +542,11 @@ class V3Executor(
                 // upload when the catalogue and its manifest are read at different times.
                 val hash = book.manifest.sha256.removePrefix("sha256:")
                 val stored = if (hash.matches(Regex("[0-9a-f]{64}"))) {
-                    transport.getBounded("books/${book.syncId}/cover/$hash", MAX_COVER_BYTES)?.body?.takeIf { it.isNotEmpty() }
+                    try {
+                        transport.getBounded("books/${book.syncId}/cover/$hash", MAX_COVER_BYTES)?.body?.takeIf { it.isNotEmpty() }
+                    } catch (_: HttpSyncTooLargeException) {
+                        null // Unreadable like a corrupt thumbnail: the archive's own page is used.
+                    }
                 } else null
                 if (stored != null && store.trySaveCover(book.syncId, book.manifest.sha256, stored)) continue
                 val image = fetchRemoteMangaCover(transport, book.payloadKeys.zip, book.manifest.sizeBytes)

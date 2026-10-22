@@ -94,6 +94,8 @@ class ReadingPositionRepositoryTest {
         assertEquals(50, before.pending.size)
         assertEquals(before.pending, repository.readingPositions.ownHistories()["example"])
         val reopened = BookRepository(files, deviceIdentity = DeviceIdentity("phone", "Phone"))
+        // A new process rebuilds the outbox from disk before any book is opened.
+        assertEquals(before.pending, reopened.readingPositions.ownHistories()["example"])
         val next = reopened.openReadingPosition(root).navigate(bookmark(76, 176.0))!!
         assertTrue(next.sequence > before.winner()!!.sequence)
         reopened.recordReadingPosition(root, next)
@@ -104,7 +106,7 @@ class ReadingPositionRepositoryTest {
         assertEquals(76, after.winner()!!.position.chapterIndex)
     }
 
-    @Test fun unreadableJournalAndOriginNeverMakeTheBookUnopenable() = runBlocking {
+    @Test fun anUnreadableJournalNeverMakesTheBookUnopenable() = runBlocking {
         val files = temporary.newFolder("damaged")
         val repository = BookRepository(files, deviceIdentity = DeviceIdentity("phone", "Phone"))
         val root = repository.createBookDirectoryForImportedTitle("Example")
@@ -114,7 +116,6 @@ class ReadingPositionRepositoryTest {
         repository.recordReadingPosition(root, lost)
         val journals = files.resolve("ReadingPositions")
         journals.listFiles()!!.filter { it.name.startsWith("book-") }.forEach { it.writeText("{\"truncated") }
-        journals.resolve("origin").writeText("")
         val reopened = BookRepository(files, deviceIdentity = DeviceIdentity("phone", "Phone"))
         assertEquals(120, reopened.openReadingPosition(root).initialBookmark!!.chapterIndex)
         val next = reopened.openReadingPosition(root).navigate(bookmark(121, 210.0))!!
@@ -123,6 +124,31 @@ class ReadingPositionRepositoryTest {
         reopened.recordReadingPosition(root, next)
         assertEquals(121, reopened.loadBookmark(root)!!.chapterIndex)
         assertEquals(mapOf("example" to setOf(next.id)), reopened.readingPositions.ownHistories())
+    }
+
+    @Test fun anUnreadableOriginStartsANewCounter() = runBlocking {
+        val files = temporary.newFolder("origin")
+        val repository = BookRepository(files, deviceIdentity = DeviceIdentity("phone", "Phone"))
+        val root = repository.createBookDirectoryForImportedTitle("Example")
+        repository.saveMetadata(root, BookMetadata("book", "Example", null, root.name, 0.0, "example"))
+        val first = repository.openReadingPosition(root).navigate(bookmark(120, 200.0))!!
+        repository.recordReadingPosition(root, first)
+        files.resolve("ReadingPositions/origin").writeText("")
+        val reopened = BookRepository(files, deviceIdentity = DeviceIdentity("phone", "Phone"))
+        val next = reopened.openReadingPosition(root).navigate(bookmark(121, 210.0))!!
+        assertNotEquals(first.originId, next.originId)
+        reopened.recordReadingPosition(root, next)
+        assertEquals(121, reopened.loadBookmark(root)!!.chapterIndex)
+    }
+
+    @Test fun anAbsurdStoredTimestampCannotBreakLaterNavigation() = runBlocking {
+        val (repository, root) = fixture("phone")
+        root.resolve("bookmark.json").writeText(
+            """{"chapterIndex":3,"progress":0.0,"characterCount":4,"lastModified":1.0E16}""",
+        )
+        val session = repository.openReadingPosition(root)
+        repository.recordReadingPosition(root, session.navigate(bookmark(4, 500.0))!!)
+        assertEquals(4, repository.loadBookmark(root)!!.chapterIndex)
     }
 
     @Test fun outOfRangeLegacyPositionsAreClampedInsteadOfRejected() = runBlocking {
