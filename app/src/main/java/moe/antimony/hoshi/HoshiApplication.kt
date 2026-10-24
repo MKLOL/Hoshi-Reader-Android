@@ -21,6 +21,7 @@ import moe.antimony.hoshi.features.update.UpdateStartupSnapshot
 import moe.antimony.hoshi.features.update.updateDownloadStore
 
 class HoshiApplication : Application() {
+    internal val hadPreviousAppUse by lazy { hasPriorAppUse(filesDir) }
     internal val appContainer by lazy { HoshiAppContainer(this) }
     internal val podcastRepository by lazy {
         moe.antimony.hoshi.features.podcasts.PodcastRepository(
@@ -29,6 +30,10 @@ class HoshiApplication : Application() {
     }
     override fun onCreate() {
         super.onCreate()
+        // Persist both first-launch choices before any startup component creates app data.
+        // A process killed at the first prompt must stay pending even after an update.
+        // Only this small preferences initialization gates startup; transfers stay async.
+        runBlocking(Dispatchers.IO) { httpSyncSettingsRepository().initializeOnboarding() }
         installCrashDiagnostics(this)
         // HTTP sync polls only while a screen is visible, and pulls at once when one appears.
         registerActivityLifecycleCallbacks(object : ActivityLifecycleCallbacks {

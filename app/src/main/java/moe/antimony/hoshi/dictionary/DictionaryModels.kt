@@ -90,6 +90,9 @@ val RecommendedDictionaries = listOf(
     ),
 )
 
+/** The one-tap starter set offered by iOS: term definitions plus word frequency. */
+val DefaultDictionaries = RecommendedDictionaries.filter { it.id == "jmdict" || it.id == "jiten" }
+
 @Serializable
 data class DictionaryConfig(
     val termDictionaries: List<DictionaryEntry>,

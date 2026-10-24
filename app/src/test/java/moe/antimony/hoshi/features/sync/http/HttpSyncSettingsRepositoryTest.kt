@@ -16,12 +16,46 @@ class HttpSyncSettingsRepositoryTest {
     @get:Rule val temp = TemporaryFolder()
 
     @Test
+    fun interruptedFirstPromptRemainsPendingAfterTheInstallationIsUpdated() = runBlocking {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        val file = temp.newFolder().resolve("interrupted.preferences_pb")
+        try {
+            val store = PreferenceDataStoreFactory.create(scope = scope) { file }
+            val firstLaunch = HttpSyncSettingsRepository(store, isFreshInstall = true)
+            assertFalse(firstLaunch.settings.first().hasCompletedOnboarding)
+            assertFalse(firstLaunch.settings.first().hasCompletedDictionaryOnboarding)
+            // No choice was made before process death. A later launch sees prior app files.
+            val afterUpdate = HttpSyncSettingsRepository(store, isFreshInstall = false)
+            assertFalse(afterUpdate.settings.first().hasCompletedOnboarding)
+            assertFalse(afterUpdate.settings.first().hasCompletedDictionaryOnboarding)
+        } finally {
+            scope.cancel()
+        }
+    }
+
+    @Test
     fun defaultsDoNotEnableSyncWithoutAToken() = withRepository { repository ->
         val settings = repository.settings.first()
         assertEquals(HttpSyncSettings.DEFAULT_BASE_URL, settings.baseUrl)
         assertFalse(settings.isConfigured)
         assertTrue(settings.useV3Sync)
         assertNull(settings.lastSyncedAt)
+        assertFalse(settings.hasCompletedOnboarding)
+    }
+
+    @Test
+    fun existingInstallationDoesNotShowNewInstallOnboarding() = withRepository(isFreshInstall = false) { repository ->
+        assertTrue(repository.settings.first().hasCompletedOnboarding)
+        assertFalse(repository.settings.first().isConfigured)
+    }
+
+    @Test
+    fun onboardingCompletionSurvivesCredentialAndCursorEdits() = withRepository { repository ->
+        repository.update { it.copy(hasCompletedOnboarding = true) }
+        repository.update { it.copy(bearerToken = "friend-token", lastSyncedAt = "2026-10-24T00:00:00Z") }
+        assertTrue(repository.settings.first().hasCompletedOnboarding)
+        repository.update { it.copy(bearerToken = "") }
+        assertTrue(repository.settings.first().hasCompletedOnboarding)
     }
 
     @Test
@@ -82,12 +116,12 @@ class HttpSyncSettingsRepositoryTest {
         assertEquals("2026-09-30T00:00:00Z", settings.lastSyncedAt)
     }
 
-    private fun withRepository(block: suspend (HttpSyncSettingsRepository) -> Unit) = runBlocking {
+    private fun withRepository(isFreshInstall: Boolean = true, block: suspend (HttpSyncSettingsRepository) -> Unit) = runBlocking {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         val file = temp.newFolder().resolve("sync.preferences_pb")
         try {
             val store = PreferenceDataStoreFactory.create(scope = scope) { file }
-            block(HttpSyncSettingsRepository(store))
+            block(HttpSyncSettingsRepository(store, isFreshInstall))
         } finally {
             scope.cancel()
         }

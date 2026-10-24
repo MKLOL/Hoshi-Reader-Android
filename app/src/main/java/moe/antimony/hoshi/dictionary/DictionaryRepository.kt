@@ -124,6 +124,19 @@ internal class DictionaryRepository(
         )
     }
 
+    /** Resumes the starter set without downloading dictionaries a previous attempt installed. */
+    fun importDefaultDictionaries(
+        lowRamImport: Boolean = false,
+        onProgress: (DictionaryUpdateProgress) -> Unit = {},
+    ) {
+        DefaultDictionaries.forEach { dictionary ->
+            val alreadyInstalled = loadDictionaries(dictionary.type).any { it.index.indexUrl == dictionary.indexUrl }
+            if (!alreadyInstalled) {
+                importRecommendedDictionaries(listOf(dictionary), lowRamImport, onProgress)
+            }
+        }
+    }
+
     fun importRecommendedDictionaries(
         dictionaries: List<RecommendedDictionary>,
         lowRamImport: Boolean = false,

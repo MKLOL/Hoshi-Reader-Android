@@ -396,7 +396,7 @@ internal class DictionaryViewModel(
     }
 }
 
-private fun DictionaryUpdateProgress.message(): UiText =
+internal fun DictionaryUpdateProgress.message(): UiText =
     when (stage) {
         DictionaryUpdateStage.Fetching -> UiText.Resource(R.string.dictionary_fetching_named_format, title)
         DictionaryUpdateStage.Checking -> UiText.Resource(R.string.dictionary_checking_named_format, title)

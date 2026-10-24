@@ -64,6 +64,7 @@ internal fun HttpSyncStatusDialog(
     status: SyncStatus,
     onDismiss: () -> Unit,
     onStop: () -> Unit,
+    onEditToken: (() -> Unit)? = null,
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -80,6 +81,8 @@ internal fun HttpSyncStatusDialog(
         },
         dismissButton = if (status is SyncStatus.Running) {
             { TextButton(onClick = onStop) { Text(stringResource(R.string.http_sync_stop)) } }
+        } else if (onEditToken != null) {
+            { TextButton(onClick = onEditToken) { Text(stringResource(R.string.http_sync_onboarding_edit_token)) } }
         } else null,
     )
 }

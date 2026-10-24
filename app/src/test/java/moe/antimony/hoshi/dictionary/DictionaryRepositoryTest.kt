@@ -301,6 +301,39 @@ class DictionaryRepositoryTest {
     }
 
     @Test
+    fun defaultDictionaryRetryKeepsTheFirstDictionaryAndDownloadsOnlyTheMissingOne() {
+        val filesDir = temporaryFolder.newFolder("default-retry")
+        val bridge = ImportingDictionaryNativeBridge()
+        val indexes = DefaultDictionaries.associate { dictionary ->
+            dictionary.indexUrl to DictionaryIndex(
+                title = dictionary.name, format = 3, revision = "first",
+                indexUrl = dictionary.indexUrl, downloadUrl = "https://example.invalid/${dictionary.id}.zip",
+            )
+        }
+        val attempts = mutableListOf<String>()
+        var failJiten = true
+        val remote = object : DictionaryRemoteDataSource {
+            override fun fetchIndex(url: String) = indexes.getValue(url)
+            override fun downloadArchive(url: String): InputStream {
+                attempts += url
+                if (url.endsWith("jiten.zip") && failJiten) throw java.io.IOException("Offline")
+                return ByteArrayInputStream(dictionaryArchive(indexes.values.single { it.downloadUrl == url }))
+            }
+        }
+        val repository = DictionaryRepository(
+            filesDir, importDataSource = DictionaryImportDataSource(bridge),
+            lookupQueryService = DictionaryLookupQueryService(bridge), remoteDataSource = remote,
+        )
+        runCatching { repository.importDefaultDictionaries() }.onSuccess { error("Jiten should fail") }
+        assertEquals(listOf("JMdict"), repository.loadDictionaries(DictionaryType.Term).map { it.index.title })
+        failJiten = false
+        repository.importDefaultDictionaries()
+        assertEquals(listOf("jmdict.zip", "jiten.zip", "jiten.zip"), attempts.map { it.substringAfterLast('/') })
+        assertEquals(listOf("Jiten"), repository.loadDictionaries(DictionaryType.Frequency).map { it.index.title })
+        assertEquals(2, bridge.rebuildCount)
+    }
+
+    @Test
     fun manualImportUsesNativeResultCountsToCommitEachDictionaryType() {
         val filesDir = temporaryFolder.newFolder("detected-import-files")
         val storage = DictionaryStorageDataSource(filesDir)

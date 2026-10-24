@@ -9,6 +9,9 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.onStart
+import moe.antimony.hoshi.HoshiApplication
+import moe.antimony.hoshi.hasPriorAppUse
 
 /**
  * Settings + runtime cursor for the v2 KV HTTP sync (see [HttpSyncReconciler] and
@@ -55,6 +58,10 @@ data class HttpSyncSettings(
      * Decided per pass by the map preflight; never persisted.
      */
     val exchangeLegacyBookmarks: Boolean = true,
+    /** This installation has finished or skipped the first-launch token setup. */
+    val hasCompletedOnboarding: Boolean = false,
+    /** Independent from token setup: people without sync can still add the defaults. */
+    val hasCompletedDictionaryOnboarding: Boolean = false,
 ) {
     val isConfigured: Boolean
         get() = baseUrl.isNotBlank() && bearerToken.isNotBlank()
@@ -71,13 +78,33 @@ data class HttpSyncSettings(
 
 private val Context.httpSyncSettingsDataStore by preferencesDataStore(name = "http-sync-settings")
 
-fun Context.httpSyncSettingsRepository(): HttpSyncSettingsRepository =
-    HttpSyncSettingsRepository(httpSyncSettingsDataStore)
+fun Context.httpSyncSettingsRepository(): HttpSyncSettingsRepository {
+    val previouslyUsed = (applicationContext as? HoshiApplication)?.hadPreviousAppUse ?: hasPriorAppUse(filesDir)
+    return HttpSyncSettingsRepository(
+        httpSyncSettingsDataStore,
+        isFreshInstall = !previouslyUsed,
+    )
+}
 
 class HttpSyncSettingsRepository(
     private val dataStore: DataStore<Preferences>,
+    private val isFreshInstall: Boolean = true,
 ) {
-    val settings: Flow<HttpSyncSettings> = dataStore.data.map { it.toHttpSyncSettings() }
+    val settings: Flow<HttpSyncSettings> = dataStore.data
+        .onStart { initializeOnboarding() }
+        .map { it.toHttpSyncSettings() }
+
+    /** Seed both defaults once; a later launch's storage evidence cannot complete a pending step. */
+    suspend fun initializeOnboarding() {
+        dataStore.edit { preferences ->
+            if (preferences[KEY_ONBOARDING_COMPLETED] == null) {
+                preferences[KEY_ONBOARDING_COMPLETED] = !isFreshInstall
+            }
+            if (preferences[KEY_DICTIONARY_ONBOARDING_COMPLETED] == null) {
+                preferences[KEY_DICTIONARY_ONBOARDING_COMPLETED] = !isFreshInstall
+            }
+        }
+    }
 
     /** A pass started on another server/account cannot advance this connection's cursor. */
     suspend fun recordSyncCursor(startedWith: HttpSyncSettings, cursor: String) = update { current ->
@@ -94,6 +121,8 @@ class HttpSyncSettingsRepository(
             preferences[KEY_BASE_URL] = next.baseUrl
             preferences[KEY_TOKEN] = next.bearerToken
             preferences[KEY_USE_V3_SYNC] = next.useV3Sync
+            preferences[KEY_ONBOARDING_COMPLETED] = next.hasCompletedOnboarding
+            preferences[KEY_DICTIONARY_ONBOARDING_COMPLETED] = next.hasCompletedDictionaryOnboarding
             val sameAccount = current.baseUrl == next.baseUrl && current.bearerToken == next.bearerToken
             val cursor = next.lastSyncedAt?.trim()?.takeIf { sameAccount }
             if (cursor.isNullOrEmpty()) {
@@ -115,6 +144,8 @@ class HttpSyncSettingsRepository(
             // setting; everyone else gets v3 on next launch. Flip back to v2 only as a
             // device-local rollback if v3 misbehaves.
             useV3Sync = this[KEY_USE_V3_SYNC] ?: true,
+            hasCompletedOnboarding = this[KEY_ONBOARDING_COMPLETED] ?: !isFreshInstall,
+            hasCompletedDictionaryOnboarding = this[KEY_DICTIONARY_ONBOARDING_COMPLETED] ?: !isFreshInstall,
         )
 
     private companion object {
@@ -122,5 +153,7 @@ class HttpSyncSettingsRepository(
         val KEY_TOKEN = stringPreferencesKey("bearerToken")
         val KEY_LAST_SYNCED_AT = stringPreferencesKey("lastSyncedAt")
         val KEY_USE_V3_SYNC = booleanPreferencesKey("useV3Sync")
+        val KEY_ONBOARDING_COMPLETED = booleanPreferencesKey("hasCompletedOnboarding")
+        val KEY_DICTIONARY_ONBOARDING_COMPLETED = booleanPreferencesKey("hasCompletedDictionaryOnboarding")
     }
 }

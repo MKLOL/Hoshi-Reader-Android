@@ -7,6 +7,9 @@ Semantic Versioning.
 
 ## [Unreleased]
 
+### Added
+- **Set up reading on first launch.** Enter a shared sync token to start syncing without creating an account, and download the default JMdict and Jiten dictionaries for word lookup. Both steps can be skipped, with directions to finish setup in Settings later.
+
 ### Changed
 - **Reading positions remember which device actually moved.** Each book keeps a timestamped position and recent navigation history from every device. Page turns are saved and queued for sync immediately; reopening an old position does not make it newer than your reading on another device. Deliberate backward movement is preserved, unsent changes survive restarts, and older app versions keep exchanging bookmarks through the existing formats.
 - **Large manga pages prepare ahead of your next turn.** The reader prepares up to three upcoming and two previous page images in the background, caching original image bytes and asking WebView to decode nearby pages ahead of time. Preparation uses memory limits and cancels obsolete work during fast navigation; very large scans still receive file preparation when they cannot fit the decode budget.

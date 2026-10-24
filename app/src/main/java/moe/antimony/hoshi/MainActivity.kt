@@ -27,6 +27,7 @@ import moe.antimony.hoshi.features.update.UpdateConfig
 import moe.antimony.hoshi.navigation.AppShell
 import moe.antimony.hoshi.ui.theme.HoshiReaderTheme
 import moe.antimony.hoshi.features.podcasts.PodcastKeys
+import moe.antimony.hoshi.features.sync.http.HttpSyncOnboarding
 
 class MainActivity : ComponentActivity() {
     private var pendingImportUri by mutableStateOf<Uri?>(null)
@@ -82,6 +83,7 @@ class MainActivity : ComponentActivity() {
                             readerKeyEventHandler = handler
                         }
                     )
+                    HttpSyncOnboarding()
                     if (UpdateConfig.AUTO_UPDATE_ENABLED) {
                         DownloadedUpdatePrompt()
                     }
