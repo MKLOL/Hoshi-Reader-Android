@@ -9,10 +9,16 @@ Semantic Versioning.
 
 ### Added
 - **Set up reading on first launch.** Enter a shared sync token to start syncing without creating an account, and download the default JMdict and Jiten dictionaries for word lookup. Both steps can be skipped, with directions to finish setup in Settings later.
+- **Choose a sentence reading layout.** Put Japanese and its translation above and below each other or side by side, with separate scrolling for long text. Sentence mode remembers the layout on this device.
 
 ### Changed
 - **Reading positions remember which device actually moved.** Each book keeps a timestamped position and recent navigation history from every device. Page turns are saved and queued for sync immediately; reopening an old position does not make it newer than your reading on another device. Deliberate backward movement is preserved, unsent changes survive restarts, and older app versions keep exchanging bookmarks through the existing formats.
 - **Large manga pages prepare ahead of your next turn.** The reader prepares up to three upcoming and two previous page images in the background, caching original image bytes and asking WebView to decode nearby pages ahead of time. Preparation uses memory limits and cancels obsolete work during fast navigation; very large scans still receive file preparation when they cannot fit the decode budget.
+
+### Fixed
+- **Keep words and furigana together in sentence mode.** A word such as 大丈夫 and its complete reading move to the next line together. Wide readings have their own space, and unusually wide groups shrink to fit the pane.
+- **Look up the character you tap.** Tapping the right half of a character in sentence mode now selects that character instead of the next one, including characters under furigana.
+- **Sentence reading counts toward your book and statistics.** Sentence turns update the same reading progress as the regular reader. Reading time, characters, and dictionary lookups appear in Statistics, background time is excluded, and **Finish book** after the last sentence records 100% completion.
 
 ## [v0.12.5] - 2026-10-19
 

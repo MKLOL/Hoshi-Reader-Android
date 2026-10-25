@@ -1,7 +1,6 @@
 package moe.antimony.hoshi.features.reader.sentence
 
 import androidx.activity.compose.BackHandler
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
@@ -15,7 +14,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.systemBars
@@ -31,9 +30,14 @@ import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.rounded.ExpandLess
 import androidx.compose.material.icons.rounded.ExpandMore
 import androidx.compose.material.icons.rounded.Palette
+import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.rounded.Splitscreen
+import androidx.compose.material.icons.rounded.VerticalSplit
 import androidx.compose.material.icons.rounded.TextDecrease
 import androidx.compose.material.icons.rounded.TextIncrease
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -41,15 +45,17 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
-import androidx.compose.runtime.setValue
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -62,22 +68,20 @@ import androidx.compose.ui.platform.LocalContext
 import moe.antimony.hoshi.ui.theme.LocalPlatformDensity
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.AnnotatedString
-import androidx.compose.ui.text.SpanStyle
-import androidx.compose.ui.text.TextLayoutResult
-import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleResumeEffect
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
 import moe.antimony.hoshi.LocalHoshiAppContainer
 import moe.antimony.hoshi.R
 import moe.antimony.hoshi.features.ai.MarkdownText
@@ -88,24 +92,22 @@ import moe.antimony.hoshi.features.dictionary.LookupPopupItem
 import moe.antimony.hoshi.features.dictionary.LookupPopupOptions
 import moe.antimony.hoshi.features.dictionary.createLookupPopupItem
 import moe.antimony.hoshi.features.reader.ReaderAppearanceSheet
-import moe.antimony.hoshi.features.reader.ReaderSelectionData
-import moe.antimony.hoshi.features.reader.ReaderSelectionRect
 import moe.antimony.hoshi.features.reader.ReaderSettings
+import moe.antimony.hoshi.features.statistics.statisticsZone
 import moe.antimony.hoshi.features.sasayaki.SasayakiSettings
-import androidx.compose.ui.draw.drawWithContent
-import androidx.compose.ui.text.drawText
-import androidx.compose.ui.text.rememberTextMeasurer
-import androidx.compose.ui.text.style.LineHeightStyle
-import kotlin.math.max
-import kotlin.math.min
+import moe.antimony.hoshi.features.sync.http.HttpSyncActiveBooks
+import moe.antimony.hoshi.features.sync.http.syncIdForMetadata
+import moe.antimony.hoshi.features.usage.ReaderUsageSession
+import moe.antimony.hoshi.features.usage.UsageContentType
+import moe.antimony.hoshi.features.usage.UsageLookupSource
 
 private const val FONT_SIZE_STEP = 2
 private const val MIN_FONT_SIZE = 16
 private const val MAX_FONT_SIZE = 60
 
 /**
- * Sentence mode: one sentence of an EPUB at a time, laid out horizontally, with its stored
- * pre-translation folded away underneath. Swipe or use the arrows to move a sentence at a time;
+ * Sentence mode: one sentence of an EPUB at a time, with a stacked or side-by-side translation.
+ * Swipe or use the arrows to move a sentence at a time;
  * tap a word to open the same dictionary popup the reader uses.
  */
 @Composable
@@ -113,16 +115,22 @@ internal fun SentenceReaderScreen(
     bookId: String,
     readerSettings: ReaderSettings,
     onReaderSettingsChange: (ReaderSettings) -> Unit,
+    onBookmarkSaved: () -> Unit,
     onClose: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
     val appContainer = LocalHoshiAppContainer.current
     val positionStore = remember(context) { SentenceReaderPositionStore(context.filesDir) }
+    val readerStateHolder = remember(appContainer) { appContainer.readerRouteStateHolder() }
     val loadState by produceState<SentenceReaderLoadState>(SentenceReaderLoadState.Loading, bookId) {
         value = runCatching {
             withContext(Dispatchers.IO) { appContainer.dictionaryRepository.rebuildLookupQuery() }
-            SentenceReaderLoader(appContainer.readerRouteStateHolder(), positionStore).load(bookId)
+            SentenceReaderLoader(
+                readerStateHolder,
+                positionStore,
+                awaitReaderSaves = appContainer.bookRepository::awaitPendingStatisticsSaves,
+            ).load(bookId)
         }.getOrElse { error ->
             SentenceReaderLoadState.Error(error.localizedMessage ?: error.javaClass.simpleName)
         }
@@ -150,6 +158,8 @@ internal fun SentenceReaderScreen(
                 readerSettings = readerSettings,
                 onReaderSettingsChange = onReaderSettingsChange,
                 positionStore = positionStore,
+                readerStateHolder = readerStateHolder,
+                onBookmarkSaved = onBookmarkSaved,
                 foreground = foreground,
                 background = background,
                 onClose = onClose,
@@ -165,21 +175,107 @@ private fun SentenceReaderContent(
     readerSettings: ReaderSettings,
     onReaderSettingsChange: (ReaderSettings) -> Unit,
     positionStore: SentenceReaderPositionStore,
+    readerStateHolder: moe.antimony.hoshi.navigation.ReaderRouteStateHolder,
+    onBookmarkSaved: () -> Unit,
     foreground: Color,
     background: Color,
     onClose: () -> Unit,
 ) {
     val appContainer = LocalHoshiAppContainer.current
+    val context = LocalContext.current
+    val layoutStore = remember(context) { SentenceReaderLayoutStore(context) }
+    var paneLayout by rememberSaveable { mutableStateOf(layoutStore.load()) }
     val density = LocalPlatformDensity.current ?: LocalDensity.current
     val scope = rememberCoroutineScope()
     val book = state.book
     var position by remember(bookId) { mutableStateOf(state.initialPosition) }
+    val progressMapping = state.progress
+    val currentOnBookmarkSaved by rememberUpdatedState(onBookmarkSaved)
+    val progressSession = remember(state, readerStateHolder) {
+        SentenceReaderProgressSession(
+            state = state.readerState,
+            progress = progressMapping,
+            stateHolder = readerStateHolder,
+            scope = appContainer.appScope,
+            now = appContainer.bookRepository::currentAppleReferenceDateSeconds,
+            onBookmarkSaved = { currentOnBookmarkSaved() },
+        )
+    }
+    var bookFinished by rememberSaveable(bookId) {
+        mutableStateOf(progressMapping.isFinished(state.initialPosition, state.readerState.bookmark))
+    }
+    val currentResetHour by rememberUpdatedState(readerSettings.statisticsDayResetHour)
+    val currentStatisticsZone by rememberUpdatedState(readerSettings.statisticsZone())
+    val statisticsSession by produceState<SentenceReaderStatisticsSession?>(null, state) {
+        val repository = appContainer.bookRepository
+        repository.awaitPendingStatisticsSaves(state.readerState.bookRoot)
+        val statistics = repository.loadStatistics(state.readerState.bookRoot)
+        value = SentenceReaderStatisticsSession(
+            title = state.title,
+            initialStatistics = statistics,
+            initialCharacter = state.initialPosition?.let(progressMapping::at)?.characterCount ?: 0,
+            device = appContainer.deviceIdentity,
+            usageSession = ReaderUsageSession(
+                appContainer.usageLog, state.readerState.entry.metadata.id, state.title, UsageContentType.Epub,
+            ),
+            resetHour = { currentResetHour },
+            statisticsZone = { currentStatisticsZone },
+        )
+    }
+    fun saveStatistics(flush: Boolean, session: SentenceReaderStatisticsSession? = statisticsSession) {
+        session?.statisticsForPersistenceOrNull()?.let { statistics ->
+            val save = progressSession.saveStatistics(statistics, flush)
+            appContainer.bookRepository.trackStatisticsSave(state.readerState.bookRoot, save)
+        }
+    }
+    LifecycleResumeEffect(statisticsSession) {
+        val session = statisticsSession
+        session?.resume()
+        onPauseOrDispose {
+            session?.pause()
+            saveStatistics(flush = true, session = session)
+        }
+    }
+    DisposableEffect(statisticsSession) {
+        val session = statisticsSession
+        onDispose {
+            session?.close()
+            saveStatistics(flush = true, session = session)
+        }
+    }
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    LaunchedEffect(statisticsSession, lifecycle) {
+        val session = statisticsSession ?: return@LaunchedEffect
+        lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+            var seconds = 0
+            while (true) {
+                delay(1_000)
+                session.tick()
+                if (++seconds % 30 == 0) saveStatistics(flush = false, session = session)
+            }
+        }
+    }
+    val activeBookLease = remember(state) { HttpSyncActiveBooks.Lease() }
+    LaunchedEffect(state) {
+        activeBookLease.acquire(syncIdForMetadata(state.readerState.entry.metadata))
+    }
+    DisposableEffect(state) {
+        onDispose {
+            appContainer.appScope.launch {
+                delay(1_000)
+                progressSession.awaitSaves()
+                activeBookLease.release()
+                appContainer.httpSyncBookmarkScheduler.refreshAfterReaderClosed()
+            }
+        }
+    }
     var translationExpanded by remember { mutableStateOf(false) }
     var popups by remember { mutableStateOf<List<LookupPopupItem>>(emptyList()) }
     var highlight by remember { mutableStateOf<IntRange?>(null) }
     // The lookup in flight, so a swipe or a dismissal cancels it instead of letting a stale
     // result open the previous sentence's popup over the new one.
     var lookupJob by remember { mutableStateOf<Job?>(null) }
+    var closing by remember { mutableStateOf(false) }
     var showAppearance by remember { mutableStateOf(false) }
     val sasayakiSettings by appContainer.sasayakiSettingsRepository.settings
         .collectAsState(initial = SasayakiSettings())
@@ -204,7 +300,7 @@ private fun SentenceReaderContent(
         reducedMotionScrollPercent = readerSettings.popupReducedMotionScrollPercent,
         reducedMotionSwipeThreshold = readerSettings.popupReducedMotionSwipeThreshold,
         popupScale = readerSettings.popupScale,
-            cardStyle = readerSettings.dictionaryCard,
+        cardStyle = readerSettings.dictionaryCard,
         popupActionBar = false,
         topInset = statusBarTop.toDouble(),
         dictionarySettings = dictionarySettings.normalized(),
@@ -218,8 +314,10 @@ private fun SentenceReaderContent(
             ?.let { file -> runCatching { FontFamily(Font(file)) }.getOrNull() }
             ?: FontFamily.Serif
     }
+    val sentenceScroll = rememberScrollState()
 
     LaunchedEffect(position) {
+        sentenceScroll.scrollTo(0)
         position?.let { positionStore.save(bookId, it) }
     }
     LaunchedEffect(popups.isEmpty()) {
@@ -234,18 +332,48 @@ private fun SentenceReaderContent(
         highlight = null
     }
     fun move(next: SentencePosition?) {
-        if (next == null) return
+        if (next == null || next == position || closing || statisticsSession == null) return
+        currentOnBookmarkSaved()
+        progressSession.navigate(next)
+        progressMapping.at(next)?.let { point ->
+            statisticsSession?.navigate(point.chapterIndex + 1, point.characterCount)
+        }
+        saveStatistics(flush = false)
         position = next
+        bookFinished = false
         translationExpanded = false
         dismissPopups()
     }
     val next = position?.let { SentenceNavigation.next(book, it) }
     val previous = position?.let { SentenceNavigation.previous(book, it) }
+    fun finishBook() {
+        val current = position ?: return
+        if (bookFinished || closing || statisticsSession == null || next != null) return
+        currentOnBookmarkSaved()
+        progressSession.finish(current)
+        progressMapping.endOf(current)?.let { point ->
+            statisticsSession?.navigate(point.chapterIndex + 1, point.characterCount)
+        }
+        saveStatistics(flush = true)
+        bookFinished = true
+        dismissPopups()
+    }
+    fun closeReader() {
+        if (closing) return
+        closing = true
+        dismissPopups()
+        statisticsSession?.pause()
+        saveStatistics(flush = true)
+        appContainer.appScope.launch {
+            progressSession.awaitSaves()
+            onClose()
+        }
+    }
     BackHandler {
         when {
             popups.isNotEmpty() -> dismissPopups()
             showAppearance -> showAppearance = false
-            else -> onClose()
+            else -> closeReader()
         }
     }
     fun stepFontSize(delta: Int) {
@@ -271,81 +399,98 @@ private fun SentenceReaderContent(
                 chapterTitle = position?.let { book.chapters.getOrNull(it.chapter)?.title },
                 counter = position?.let { stringResource(R.string.sentence_mode_counter, book.ordinal(it), book.totalSentences) },
                 foreground = foreground,
-                onClose = onClose,
+                onClose = ::closeReader,
                 onAppearance = { showAppearance = true },
+                paneLayout = paneLayout,
+                onPaneLayoutChange = {
+                    paneLayout = it
+                    layoutStore.save(it)
+                    translationExpanded = true
+                    dismissPopups()
+                },
             )
             val swipeThresholdPx = with(density) { 56.dp.toPx() }
-            Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth()
-                    .pointerInput(book) {
-                        var travel = 0f
-                        detectHorizontalDragGestures(
-                            onDragStart = { travel = 0f },
-                            onDragEnd = {
-                                // Read the live position: this handler outlives many recompositions.
-                                val current = position ?: return@detectHorizontalDragGestures
-                                if (travel <= -swipeThresholdPx) {
-                                    move(SentenceNavigation.next(book, current))
-                                } else if (travel >= swipeThresholdPx) {
-                                    move(SentenceNavigation.previous(book, current))
-                                }
-                            },
-                            onDragCancel = { travel = 0f },
-                        ) { change, delta ->
-                            travel += delta
-                            change.consume()
-                        }
-                    }
-                    .padding(horizontal = 24.dp),
-                contentAlignment = Alignment.Center,
-            ) {
-                if (sentence == null) {
-                    Text(
-                        text = stringResource(R.string.sentence_mode_empty),
-                        color = foreground.copy(alpha = 0.7f),
-                        textAlign = TextAlign.Center,
-                    )
-                } else {
-                    SentenceText(
-                        sentence = sentence,
-                        highlight = highlight,
-                        foreground = foreground,
-                        fontFamily = fontFamily,
-                        fontSizeSp = readerSettings.fontSize * 1.1f,
-                        lineHeightMultiplier = readerSettings.lineHeight.toFloat(),
-                        showFurigana = !readerSettings.hideFurigana,
-                        screenOrigin = { screenOrigin },
-                        onTapOutside = ::dismissPopups,
-                        onWordTap = { selection ->
-                            lookupJob?.cancel()
-                            lookupJob = scope.launch {
-                                val lookup = withContext(Dispatchers.IO) {
-                                    createLookupPopupItem(selection = selection, options = lookupOptions)
-                                }
-                                if (lookup == null) {
-                                    popups = emptyList()
-                                    highlight = null
-                                } else {
-                                    val (popup, matchedCodePoints) = lookup
-                                    val start = selection.sentenceOffset ?: 0
-                                    val end = sentence.text.offsetByCodePoints(start, matchedCodePoints.coerceAtMost(
-                                        sentence.text.codePointCount(start, sentence.text.length),
-                                    ))
-                                    highlight = start until end
-                                    popups = listOf(popup)
+            SentenceReaderPanes(
+                layout = paneLayout,
+                translationExpanded = translationExpanded,
+                modifier = Modifier.weight(1f).fillMaxWidth(),
+                sentenceContent = { paneModifier ->
+                    Box(
+                        modifier = paneModifier
+                            .pointerInput(book) {
+                                var travel = 0f
+                                detectHorizontalDragGestures(
+                                    onDragStart = { travel = 0f },
+                                    onDragEnd = {
+                                        // Read the live position: this handler outlives many recompositions.
+                                        val current = position ?: return@detectHorizontalDragGestures
+                                        if (travel <= -swipeThresholdPx) {
+                                            move(SentenceNavigation.next(book, current))
+                                        } else if (travel >= swipeThresholdPx) {
+                                            move(SentenceNavigation.previous(book, current))
+                                        }
+                                    },
+                                    onDragCancel = { travel = 0f },
+                                ) { change, delta ->
+                                    travel += delta
+                                    change.consume()
                                 }
                             }
-                        },
+                            .padding(horizontal = 24.dp, vertical = 12.dp)
+                            .verticalScroll(sentenceScroll),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        if (sentence == null) {
+                            Text(
+                                text = stringResource(R.string.sentence_mode_empty),
+                                color = foreground.copy(alpha = 0.7f),
+                                textAlign = TextAlign.Center,
+                            )
+                        } else {
+                            SentenceText(
+                                sentence = sentence,
+                                highlight = highlight,
+                                foreground = foreground,
+                                fontFamily = fontFamily,
+                                fontSizeSp = readerSettings.fontSize * 1.1f,
+                                lineHeightMultiplier = readerSettings.lineHeight.toFloat(),
+                                showFurigana = !readerSettings.hideFurigana,
+                                screenOrigin = { screenOrigin },
+                                onTapOutside = ::dismissPopups,
+                                onWordTap = { selection ->
+                                    lookupJob?.cancel()
+                                    lookupJob = scope.launch {
+                                        val lookup = withContext(Dispatchers.IO) {
+                                            createLookupPopupItem(selection = selection, options = lookupOptions)
+                                        }
+                                statisticsSession?.logLookup(selection, lookup?.first, UsageLookupSource.Page)
+                                        if (lookup == null) {
+                                            popups = emptyList()
+                                            highlight = null
+                                        } else {
+                                            val (popup, matchedCodePoints) = lookup
+                                            val start = selection.sentenceOffset ?: 0
+                                            val end = sentence.text.offsetByCodePoints(start, matchedCodePoints.coerceAtMost(
+                                                sentence.text.codePointCount(start, sentence.text.length),
+                                            ))
+                                            highlight = start until end
+                                            popups = listOf(popup)
+                                        }
+                                    }
+                                },
+                            )
+                        }
+                    }
+                },
+                translationContent = { paneModifier ->
+                    TranslationPanel(
+                        translation = translation?.markdownResponse,
+                        expanded = translationExpanded,
+                        onToggle = { translationExpanded = !translationExpanded },
+                        foreground = foreground,
+                        modifier = paneModifier,
                     )
-                }
-            }
-            TranslationPanel(
-                translation = translation?.markdownResponse,
-                expanded = translationExpanded,
-                onToggle = { translationExpanded = !translationExpanded },
-                foreground = foreground,
+                },
             )
             Row(
                 modifier = Modifier
@@ -353,7 +498,7 @@ private fun SentenceReaderContent(
                     .padding(horizontal = 8.dp, vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                IconButton(onClick = { move(previous) }, enabled = previous != null) {
+                IconButton(onClick = { move(previous) }, enabled = previous != null && statisticsSession != null) {
                     Icon(
                         imageVector = Icons.AutoMirrored.Rounded.KeyboardArrowLeft,
                         contentDescription = stringResource(R.string.sentence_mode_previous),
@@ -387,7 +532,14 @@ private fun SentenceReaderContent(
                         tint = foreground.copy(alpha = if (readerSettings.fontSize < MAX_FONT_SIZE) 0.8f else 0.3f),
                     )
                 }
-                IconButton(onClick = { move(next) }, enabled = next != null) {
+                if (next == null && position != null) {
+                    TextButton(onClick = ::finishBook, enabled = !bookFinished && statisticsSession != null) {
+                        Text(
+                            stringResource(if (bookFinished) R.string.sentence_mode_book_finished else R.string.sentence_mode_finish_book),
+                            color = foreground.copy(alpha = if (bookFinished) 0.5f else 1f),
+                        )
+                    }
+                } else IconButton(onClick = { move(next) }, enabled = next != null && statisticsSession != null) {
                     Icon(
                         imageVector = Icons.AutoMirrored.Rounded.KeyboardArrowRight,
                         contentDescription = stringResource(R.string.sentence_mode_next),
@@ -399,7 +551,11 @@ private fun SentenceReaderContent(
         LookupPopupAndroidStack(
             popups = popups,
             onPopupsChange = { popups = it },
-            lookupChildPopup = { selection -> createLookupPopupItem(selection = selection, options = lookupOptions) },
+            lookupChildPopup = { selection ->
+                createLookupPopupItem(selection = selection, options = lookupOptions).also { lookup ->
+                    statisticsSession?.logLookup(selection, lookup?.first, UsageLookupSource.Popup)
+                }
+            },
             modifier = Modifier.fillMaxSize(),
         )
         if (showAppearance) {
@@ -427,6 +583,8 @@ private fun SentenceHeader(
     foreground: Color,
     onClose: () -> Unit,
     onAppearance: () -> Unit,
+    paneLayout: SentenceReaderLayout,
+    onPaneLayoutChange: (SentenceReaderLayout) -> Unit,
 ) {
     Row(
         modifier = Modifier
@@ -467,6 +625,7 @@ private fun SentenceHeader(
                 style = MaterialTheme.typography.labelLarge,
             )
         }
+        SentenceLayoutMenu(paneLayout, foreground, onPaneLayoutChange)
         IconButton(onClick = onAppearance) {
             Icon(
                 imageVector = Icons.Rounded.Palette,
@@ -477,169 +636,70 @@ private fun SentenceHeader(
     }
 }
 
+/** Each open pane owns its scrolling, so long sentences and tutor tables stay reachable. */
 @Composable
-private fun SentenceText(
-    sentence: ReaderSentence,
-    highlight: IntRange?,
-    foreground: Color,
-    fontFamily: FontFamily,
-    fontSizeSp: Float,
-    lineHeightMultiplier: Float,
-    showFurigana: Boolean,
-    screenOrigin: () -> Offset,
-    /** A tap inside the text's box that lands on no word: margin, the gap after the last line. */
-    onTapOutside: () -> Unit,
-    onWordTap: (ReaderSelectionData) -> Unit,
+internal fun SentenceReaderPanes(
+    layout: SentenceReaderLayout,
+    translationExpanded: Boolean,
+    modifier: Modifier = Modifier,
+    sentenceContent: @Composable (Modifier) -> Unit,
+    translationContent: @Composable (Modifier) -> Unit,
 ) {
-    val density = LocalDensity.current
-    val selectionDensity by rememberUpdatedState(LocalPlatformDensity.current ?: density)
-    // The pointerInput block below is keyed on the sentence and outlives recompositions, so it
-    // must read the newest callbacks (and through them the newest lookup options), not the ones
-    // captured when the sentence first appeared.
-    val currentOnTapOutside by rememberUpdatedState(onTapOutside)
-    val currentOnWordTap by rememberUpdatedState(onWordTap)
-    var layout by remember(sentence) { mutableStateOf<TextLayoutResult?>(null) }
-    var origin by remember { mutableStateOf(Offset.Zero) }
-    val text = sentence.text
-    val furigana = if (showFurigana) sentence.ruby else emptyList()
-    val textMeasurer = rememberTextMeasurer()
-    val annotated: AnnotatedString = remember(text, highlight, foreground) {
-        buildAnnotatedString {
-            append(text)
-            highlight?.let { range ->
-                if (range.first in text.indices && range.last < text.length) {
-                    addStyle(SpanStyle(background = foreground.copy(alpha = 0.18f)), range.first, range.last + 1)
-                }
-            }
+    if (translationExpanded && layout == SentenceReaderLayout.SideBySide) {
+        Row(modifier = modifier) {
+            sentenceContent(Modifier.weight(1f).fillMaxHeight())
+            translationContent(Modifier.weight(1f).fillMaxHeight())
         }
-    }
-    val plainStyle = TextStyle(
-        color = foreground,
-        fontFamily = fontFamily,
-        fontSize = fontSizeSp.sp,
-        fontWeight = FontWeight.Normal,
-        textAlign = TextAlign.Start,
-    )
-    val readingStyle = plainStyle.copy(fontSize = (fontSizeSp * RUBY_SIZE_FACTOR).sp)
-    // Furigana are drawn in the leading above each line, exactly where a browser puts them: the
-    // text is untouched (offsets, taps and the highlight keep working), the line grows so a
-    // reading fits, and all of the line's extra space is put above the glyphs.
-    val rubyMetrics = remember(furigana.isEmpty(), plainStyle, readingStyle, textMeasurer) {
-        if (furigana.isEmpty()) {
-            null
-        } else {
-            RubyMetrics(
-                glyphHeight = textMeasurer.measure("漢字", plainStyle).size.height.toFloat(),
-                readingHeight = textMeasurer.measure("かな", readingStyle).size.height.toFloat(),
+    } else {
+        Column(modifier = modifier) {
+            sentenceContent(Modifier.weight(1f).fillMaxWidth())
+            translationContent(
+                if (translationExpanded) Modifier.weight(1f).fillMaxWidth() else Modifier.fillMaxWidth(),
             )
         }
     }
-    val readingLayouts = remember(furigana, readingStyle, textMeasurer) {
-        furigana.map { textMeasurer.measure(it.reading, readingStyle, softWrap = false, maxLines = 1) }
-    }
-    val lineHeight = with(density) {
-        val configured = fontSizeSp.sp.toPx() * lineHeightMultiplier
-        val needed = rubyMetrics?.let { it.glyphHeight + it.readingHeight * RUBY_ROOM_FACTOR } ?: 0f
-        max(configured, needed).toSp()
-    }
-    val style = plainStyle.copy(
-        lineHeight = lineHeight,
-        lineHeightStyle = if (rubyMetrics == null) {
-            null
-        } else {
-            LineHeightStyle(alignment = LineHeightStyle.Alignment.Bottom, trim = LineHeightStyle.Trim.None)
-        },
-    )
-    Text(
-        text = annotated,
-        style = style,
-        onTextLayout = { layout = it },
-        modifier = Modifier
-            .fillMaxWidth()
-            .onGloballyPositioned { origin = it.positionInRoot() }
-            .drawWithContent {
-                drawContent()
-                val current = layout ?: return@drawWithContent
-                val metrics = rubyMetrics ?: return@drawWithContent
-                furigana.forEachIndexed { index, ruby ->
-                    val end = (ruby.start + ruby.length).coerceAtMost(text.length)
-                    if (ruby.start < 0 || ruby.start >= end) return@forEachIndexed
-                    // A base that wraps keeps its reading over the part on the first line.
-                    val line = current.getLineForOffset(ruby.start)
-                    val lineEnd = current.getLineEnd(line, visibleEnd = true).coerceAtMost(end)
-                    if (lineEnd <= ruby.start) return@forEachIndexed
-                    var left = Float.MAX_VALUE
-                    var right = -Float.MAX_VALUE
-                    for (offset in ruby.start until lineEnd) {
-                        val box = current.getBoundingBox(offset)
-                        left = min(left, box.left)
-                        right = max(right, box.right)
-                    }
-                    val reading = readingLayouts.getOrNull(index) ?: return@forEachIndexed
-                    val glyphTop = current.getLineBottom(line) - metrics.glyphHeight
-                    val x = (left + right) / 2f - reading.size.width / 2f
-                    val y = glyphTop - reading.size.height + metrics.readingHeight * RUBY_OVERLAP_FACTOR
-                    drawText(reading, topLeft = Offset(x, y))
-                }
-            }
-            .pointerInput(sentence) {
-                detectTapGestures { tap ->
-                    val current = layout
-                    if (current == null || text.isEmpty()) {
-                        currentOnTapOutside()
-                        return@detectTapGestures
-                    }
-                    val line = current.getLineForVerticalPosition(tap.y)
-                    if (tap.x > current.getLineRight(line) || tap.x < current.getLineLeft(line)) {
-                        currentOnTapOutside()
-                        return@detectTapGestures
-                    }
-                    val lookupQuery = sentenceLookupQuery(text, current.getOffsetForPosition(tap))
-                    if (lookupQuery == null) {
-                        currentOnTapOutside()
-                        return@detectTapGestures
-                    }
-                    val offset = lookupQuery.startOffset
-                    val query = lookupQuery.text
-                    if (query.isBlank()) {
-                        currentOnTapOutside()
-                        return@detectTapGestures
-                    }
-                    val box = current.getBoundingBox(offset)
-                    val shift = origin - screenOrigin()
-                    val rect = with(selectionDensity) {
-                        ReaderSelectionRect(
-                            x = (box.left + shift.x).toDp().value.toDouble(),
-                            y = (box.top + shift.y).toDp().value.toDouble(),
-                            width = box.width.toDp().value.toDouble(),
-                            height = box.height.toDp().value.toDouble(),
-                        )
-                    }
-                    currentOnWordTap(
-                        ReaderSelectionData(
-                            text = query,
-                            sentence = text,
-                            rect = rect,
-                            normalizedOffset = sentence.start + EpubSentenceSegmenter.matchableCount(text, offset),
-                            sentenceOffset = offset,
-                        ),
-                    )
-                }
-            },
-    )
 }
 
-/** Heights of one line of base text and of one line of reading text, in pixels. */
-private class RubyMetrics(val glyphHeight: Float, val readingHeight: Float)
-
-/** Furigana are half the base size, as in the web reader. */
-private const val RUBY_SIZE_FACTOR = 0.5f
-
-/** How much of a reading's box must fit above the glyph box for the line to be tall enough. */
-private const val RUBY_ROOM_FACTOR = 0.75f
-
-/** How far a reading may sink into the glyph box's own top padding, so it sits close to the base. */
-private const val RUBY_OVERLAP_FACTOR = 0.3f
+@Composable
+private fun SentenceLayoutMenu(
+    layout: SentenceReaderLayout,
+    foreground: Color,
+    onLayoutChange: (SentenceReaderLayout) -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    Box {
+        IconButton(onClick = { expanded = true }) {
+            Icon(
+                imageVector = if (layout == SentenceReaderLayout.Stacked) Icons.Rounded.Splitscreen else Icons.Rounded.VerticalSplit,
+                contentDescription = stringResource(R.string.sentence_mode_layout),
+                tint = foreground,
+            )
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            SentenceReaderLayout.entries.forEach { option ->
+                DropdownMenuItem(
+                    text = { Text(stringResource(
+                        if (option == SentenceReaderLayout.Stacked) R.string.sentence_mode_layout_stacked
+                        else R.string.sentence_mode_layout_side_by_side,
+                    )) },
+                    leadingIcon = {
+                        Icon(
+                            imageVector = if (option == SentenceReaderLayout.Stacked) Icons.Rounded.Splitscreen else Icons.Rounded.VerticalSplit,
+                            contentDescription = null,
+                        )
+                    },
+                    trailingIcon = {
+                        if (option == layout) Icon(Icons.Rounded.Check, contentDescription = null)
+                    },
+                    onClick = {
+                        expanded = false
+                        onLayoutChange(option)
+                    },
+                )
+            }
+        }
+    }
+}
 
 @Composable
 private fun TranslationPanel(
@@ -647,12 +707,12 @@ private fun TranslationPanel(
     expanded: Boolean,
     onToggle: () -> Unit,
     foreground: Color,
+    modifier: Modifier = Modifier,
 ) {
     Surface(
         color = foreground.copy(alpha = 0.06f),
         shape = RoundedCornerShape(16.dp),
-        modifier = Modifier
-            .fillMaxWidth()
+        modifier = modifier
             .padding(horizontal = 16.dp, vertical = 4.dp),
     ) {
         Column {
@@ -675,12 +735,12 @@ private fun TranslationPanel(
                     style = MaterialTheme.typography.titleSmall,
                 )
             }
-            AnimatedVisibility(visible = expanded) {
+            if (expanded) {
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(start = 16.dp, end = 16.dp, bottom = 16.dp)
-                        .heightIn(max = 260.dp)
+                        .weight(1f)
                         .verticalScroll(rememberScrollState()),
                 ) {
                     if (translation != null) {

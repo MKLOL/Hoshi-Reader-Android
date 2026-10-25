@@ -1716,6 +1716,12 @@ fun ReaderWebView(
             onSentenceMode = onOpenSentenceMode?.let { open ->
                 {
                     stateHolder.dismissReaderMenu()
+                    // The new reader waits for tracked writes before loading its statistics.
+                    // Register this handoff now, before navigation/transition disposal can race
+                    // that load and let a new session start from an older daily entry.
+                    webView?.flushPendingProgressSave()
+                    resumeStatisticsTrackingOnStart = pauseStatisticsForLifecycleStop()
+                    saveStatisticsWithoutBookmark()
                     open()
                 }
             },

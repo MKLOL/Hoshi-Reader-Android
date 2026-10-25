@@ -653,10 +653,15 @@
     <string name="sasayaki_match_rate">匹配率</string>
     <string name="reader_sentence_mode">逐句模式</string>
     <string name="sentence_mode_translation">翻译</string>
+    <string name="sentence_mode_layout">逐句阅读布局</string>
+    <string name="sentence_mode_layout_stacked">上下分栏</string>
+    <string name="sentence_mode_layout_side_by_side">左右分栏</string>
     <string name="sentence_mode_translation_missing">这句还没有预翻译。</string>
     <string name="sentence_mode_toggle_translation">显示或隐藏翻译</string>
     <string name="sentence_mode_previous">上一句</string>
     <string name="sentence_mode_next">下一句</string>
+    <string name="sentence_mode_finish_book">读完此书</string>
+    <string name="sentence_mode_book_finished">已读完此书</string>
     <string name="sentence_mode_chapter_progress">第 %1$d 章，共 %2$d 章</string>
     <string name="sentence_mode_counter">%1$d / %2$d</string>
     <string name="sentence_mode_empty">这本书没有可读取的文本。</string>

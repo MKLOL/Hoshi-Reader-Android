@@ -111,11 +111,11 @@ internal class ReaderRouteStateHolder(
     }
 
     /** Statistics only: the reader was left or backgrounded and must not write a new bookmark. */
-    suspend fun saveStatistics(state: ReaderRouteLoadState.Ready, statistics: List<ReadingStatistics>) {
+    suspend fun saveStatistics(state: ReaderRouteLoadState.Ready, statistics: List<ReadingStatistics>, flush: Boolean = true) {
         withContext(ioDispatcher) {
             repository.saveStatistics(state.bookRoot, statistics)
         }
-        onStatisticsPersisted(state.bookRoot, state.entry.metadata.title, state.entry.metadata.syncId, true)
+        onStatisticsPersisted(state.bookRoot, state.entry.metadata.title, state.entry.metadata.syncId, flush)
     }
 }
 

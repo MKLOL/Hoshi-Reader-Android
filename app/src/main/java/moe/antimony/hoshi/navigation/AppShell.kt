@@ -293,6 +293,7 @@ fun AppShell(
                             bookId = route.bookId,
                             readerSettings = currentReaderSettings,
                             onReaderSettingsChange = currentOnReaderSettingsChange,
+                            onBookmarkSaved = readerBookmarkRefreshState::markDirty,
                             onClose = ::popRoute,
                             modifier = Modifier.fillMaxSize(),
                         )

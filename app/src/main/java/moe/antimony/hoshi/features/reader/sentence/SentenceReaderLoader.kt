@@ -24,7 +24,7 @@ class SentenceTranslationSource(
     }
 }
 
-sealed interface SentenceReaderLoadState {
+internal sealed interface SentenceReaderLoadState {
     data object Loading : SentenceReaderLoadState
 
     data class Ready(
@@ -32,6 +32,8 @@ sealed interface SentenceReaderLoadState {
         val book: SentenceBook,
         val initialPosition: SentencePosition?,
         val translations: SentenceTranslationSource?,
+        val readerState: ReaderRouteLoadState.Ready,
+        val progress: SentenceReadingProgress,
     ) : SentenceReaderLoadState
 
     data class Error(val message: String) : SentenceReaderLoadState
@@ -42,13 +44,15 @@ internal class SentenceReaderLoader(
     private val stateHolder: ReaderRouteStateHolder,
     private val positionStore: SentenceReaderPositionStore,
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
+    private val awaitReaderSaves: suspend (File) -> Unit = {},
 ) {
     suspend fun load(bookId: String): SentenceReaderLoadState = withContext(ioDispatcher) {
-        when (val state = stateHolder.load(bookId)) {
+        when (val state = stateHolder.load(bookId, beforeBookmarkLoad = { awaitReaderSaves(it.root) })) {
             is ReaderRouteLoadState.Error -> SentenceReaderLoadState.Error(state.message)
             ReaderRouteLoadState.Loading -> SentenceReaderLoadState.Loading
             is ReaderRouteLoadState.Ready -> {
                 val book = segmentBook(state.book)
+                val progress = SentenceReadingProgress(book, state.book)
                 val syncId = syncIdForMetadata(state.entry.metadata)
                 val translations = syncId
                     ?.takeIf { EpubTranslationStore.preload(state.bookRoot, it, state.book.spineCount) }
@@ -56,8 +60,10 @@ internal class SentenceReaderLoader(
                 SentenceReaderLoadState.Ready(
                     title = state.book.title,
                     book = book,
-                    initialPosition = SentenceNavigation.initialPosition(book, positionStore.load(bookId), state.bookmark),
+                    initialPosition = progress.initialPosition(positionStore.load(bookId), state.bookmark),
                     translations = translations,
+                    readerState = state,
+                    progress = progress,
                 )
             }
         }
