@@ -1,10 +1,10 @@
 package moe.antimony.hoshi.features.reader.sentence
 
+import android.os.SystemClock
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
-import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -50,6 +50,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
@@ -73,12 +75,15 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
@@ -92,7 +97,17 @@ import moe.antimony.hoshi.features.dictionary.LookupPopupItem
 import moe.antimony.hoshi.features.dictionary.LookupPopupOptions
 import moe.antimony.hoshi.features.dictionary.createLookupPopupItem
 import moe.antimony.hoshi.features.reader.ReaderAppearanceSheet
+import moe.antimony.hoshi.features.reader.ReaderLookupTouchTarget
+import moe.antimony.hoshi.features.reader.dismissReaderLookupOnOutsideTouch
 import moe.antimony.hoshi.features.reader.ReaderSettings
+import moe.antimony.hoshi.features.reader.ReaderLifecycleAutoSyncEvent
+import moe.antimony.hoshi.features.reader.readerLifecycleAutoSyncPlan
+import moe.antimony.hoshi.features.settings.collectAsLoadedSettings
+import moe.antimony.hoshi.features.sync.SyncDirection
+import moe.antimony.hoshi.navigation.ReaderAutoSyncExportController
+import moe.antimony.hoshi.navigation.ReaderRouteAutoSyncState
+import moe.antimony.hoshi.navigation.ReaderSessionReloadBarrier
+import moe.antimony.hoshi.navigation.RemoteBookmarkUpdateGate
 import moe.antimony.hoshi.features.statistics.statisticsZone
 import moe.antimony.hoshi.features.sasayaki.SasayakiSettings
 import moe.antimony.hoshi.features.sync.http.HttpSyncActiveBooks
@@ -123,16 +138,114 @@ internal fun SentenceReaderScreen(
     val appContainer = LocalHoshiAppContainer.current
     val positionStore = remember(context) { SentenceReaderPositionStore(context.filesDir) }
     val readerStateHolder = remember(appContainer) { appContainer.readerRouteStateHolder() }
-    val loadState by produceState<SentenceReaderLoadState>(SentenceReaderLoadState.Loading, bookId) {
+    val syncSettings = appContainer.syncSettingsRepository.settings.collectAsLoadedSettings()
+    val sasayakiSettings = appContainer.sasayakiSettingsRepository.settings.collectAsLoadedSettings()
+    val autoSyncState = ReaderRouteAutoSyncState(syncSettings, sasayakiSettings)
+    val scope = rememberCoroutineScope()
+    val activeBookLease = remember(bookId) { HttpSyncActiveBooks.Lease() }
+    val remoteUpdateGate = remember(bookId) { RemoteBookmarkUpdateGate() }
+    val sessionReloadBarrier = remember(bookId) { ReaderSessionReloadBarrier() }
+    val autoSyncExportController = remember(bookId, appContainer) { ReaderAutoSyncExportController(appContainer.appScope) }
+    var reloadKey by remember(bookId) { mutableIntStateOf(0) }
+    fun reloadReader() {
+        sessionReloadBarrier.retire()
+        remoteUpdateGate.close()
+        reloadKey += 1
+    }
+    LaunchedEffect(bookId) {
+        appContainer.httpSyncBatchState.remoteBookmarkUpdates.collect { changedId ->
+            if (remoteUpdateGate.shouldReload(changedId)) reloadReader()
+        }
+    }
+    val loadState by produceState<SentenceReaderLoadState>(SentenceReaderLoadState.Loading, bookId, reloadKey) {
+        remoteUpdateGate.close()
+        value = SentenceReaderLoadState.Loading
+        sessionReloadBarrier.awaitWrites()
+        autoSyncExportController.pauseExportsForImport()
         value = runCatching {
             withContext(Dispatchers.IO) { appContainer.dictionaryRepository.rebuildLookupQuery() }
             SentenceReaderLoader(
                 readerStateHolder,
                 positionStore,
                 awaitReaderSaves = appContainer.bookRepository::awaitPendingStatisticsSaves,
-            ).load(bookId)
+            ).load(
+                bookId,
+                beforeBookmarkRead = remoteUpdateGate::open,
+                beforeBookmarkLoad = { entry ->
+                    val syncId = syncIdForMetadata(entry.metadata)
+                    remoteUpdateGate.expect(syncId)
+                    // Protect static EPUB bytes before parsing, just like normal mode.
+                    activeBookLease.acquire(syncId)
+                    appContainer.bookRepository.awaitPendingStatisticsSaves(entry.root)
+                    appContainer.httpSyncBookmarkScheduler.refreshBeforeOpen()
+                    val initialSync = ReaderRouteAutoSyncState(
+                        syncSettings ?: appContainer.syncSettingsRepository.settings.first(),
+                        sasayakiSettings ?: appContainer.sasayakiSettingsRepository.settings.first(),
+                    )
+                    if (initialSync.shouldSyncOnOpen) runCatching {
+                        appContainer.syncManager.syncBook(
+                            entry = entry,
+                            direction = null,
+                            syncStats = readerSettings.statisticsSyncEnabled,
+                            statsSyncMode = readerSettings.statisticsSyncMode,
+                            syncAudioBook = initialSync.shouldSyncAudioBook,
+                            importOnly = true,
+                        )
+                    }.onFailure { if (it is CancellationException) throw it }
+                },
+            )
         }.getOrElse { error ->
+            if (error is CancellationException) throw error
             SentenceReaderLoadState.Error(error.localizedMessage ?: error.javaClass.simpleName)
+        }
+        autoSyncExportController.resumeExports(autoSyncState.isReaderAutoSyncEnabled)
+    }
+    var lastInactiveAtMillis by remember(bookId) { mutableStateOf<Long?>(null) }
+    val lifecycleOwner = LocalLifecycleOwner.current
+    val currentLifecycleResume by rememberUpdatedState {
+        val inactive = lastInactiveAtMillis
+        lastInactiveAtMillis = null
+        scope.launch { appContainer.httpSyncBookmarkScheduler.refreshBeforeOpen() }
+        val import = readerLifecycleAutoSyncPlan(
+            ReaderLifecycleAutoSyncEvent.Resume,
+            inactiveElapsedMillis = inactive?.let { SystemClock.elapsedRealtime() - it },
+        ).importOnForeground
+        if (import && autoSyncState.isReaderAutoSyncEnabled) reloadReader()
+    }
+    DisposableEffect(lifecycleOwner, bookId) {
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_RESUME -> currentLifecycleResume()
+                Lifecycle.Event.ON_PAUSE -> lastInactiveAtMillis = SystemClock.elapsedRealtime()
+                else -> Unit
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+    DisposableEffect(bookId, activeBookLease) {
+        onDispose {
+            appContainer.appScope.launch {
+                delay(1_000)
+                sessionReloadBarrier.awaitCurrentWrites()
+                activeBookLease.release()
+                appContainer.httpSyncBookmarkScheduler.refreshAfterReaderClosed()
+            }
+        }
+    }
+    fun scheduleExport(state: SentenceReaderLoadState.Ready) {
+        autoSyncExportController.scheduleExport(autoSyncState.isReaderAutoSyncEnabled) {
+            sessionReloadBarrier.awaitCurrentWrites()
+            appContainer.bookRepository.awaitPendingStatisticsSaves(state.readerState.bookRoot)
+            runCatching {
+                appContainer.syncManager.syncBook(
+                    entry = state.readerState.entry,
+                    direction = SyncDirection.ExportToTtu,
+                    syncStats = readerSettings.statisticsSyncEnabled,
+                    statsSyncMode = readerSettings.statisticsSyncMode,
+                    syncAudioBook = autoSyncState.shouldSyncAudioBook,
+                )
+            }.onFailure { if (it is CancellationException) throw it }
         }
     }
     val systemDark = isSystemInDarkTheme()
@@ -152,18 +265,21 @@ internal fun SentenceReaderScreen(
                 Text(state.message, color = foreground, textAlign = TextAlign.Center)
                 TextButton(onClick = onClose) { Text(stringResource(R.string.action_close)) }
             }
-            is SentenceReaderLoadState.Ready -> SentenceReaderContent(
+            is SentenceReaderLoadState.Ready -> key(reloadKey) { SentenceReaderContent(
                 bookId = bookId,
                 state = state,
                 readerSettings = readerSettings,
                 onReaderSettingsChange = onReaderSettingsChange,
                 positionStore = positionStore,
                 readerStateHolder = readerStateHolder,
-                onBookmarkSaved = onBookmarkSaved,
+                onBookmarkSaved = { onBookmarkSaved(); scheduleExport(state) },
+                onScheduleExport = { scheduleExport(state) },
+                onFlushExport = { autoSyncExportController.flushExport(autoSyncState.isReaderAutoSyncEnabled) },
+                onPrepareSessionReloadChange = { retire, awaitWrites -> sessionReloadBarrier.attach(retire, awaitWrites) },
                 foreground = foreground,
                 background = background,
                 onClose = onClose,
-            )
+            ) }
         }
     }
 }
@@ -177,6 +293,9 @@ private fun SentenceReaderContent(
     positionStore: SentenceReaderPositionStore,
     readerStateHolder: moe.antimony.hoshi.navigation.ReaderRouteStateHolder,
     onBookmarkSaved: () -> Unit,
+    onScheduleExport: () -> Unit,
+    onFlushExport: () -> Unit,
+    onPrepareSessionReloadChange: ((() -> Unit)?, suspend () -> Unit) -> Unit,
     foreground: Color,
     background: Color,
     onClose: () -> Unit,
@@ -188,7 +307,8 @@ private fun SentenceReaderContent(
     val density = LocalPlatformDensity.current ?: LocalDensity.current
     val scope = rememberCoroutineScope()
     val book = state.book
-    var position by remember(bookId) { mutableStateOf(state.initialPosition) }
+    var position by remember(state) { mutableStateOf(state.initialPosition) }
+    var sessionRetired by remember(state) { mutableStateOf(false) }
     val progressMapping = state.progress
     val currentOnBookmarkSaved by rememberUpdatedState(onBookmarkSaved)
     val progressSession = remember(state, readerStateHolder) {
@@ -223,9 +343,26 @@ private fun SentenceReaderContent(
         )
     }
     fun saveStatistics(flush: Boolean, session: SentenceReaderStatisticsSession? = statisticsSession) {
+        if (sessionRetired) return
         session?.statisticsForPersistenceOrNull()?.let { statistics ->
             val save = progressSession.saveStatistics(statistics, flush)
             appContainer.bookRepository.trackStatisticsSave(state.readerState.bookRoot, save)
+            onScheduleExport()
+        }
+    }
+    val prepareSessionReload by rememberUpdatedState {
+        if (!sessionRetired) {
+            statisticsSession?.close()
+            saveStatistics(flush = true)
+            sessionRetired = true
+        }
+    }
+    val currentOnPrepareSessionReloadChange by rememberUpdatedState(onPrepareSessionReloadChange)
+    DisposableEffect(state, progressSession) {
+        currentOnPrepareSessionReloadChange({ prepareSessionReload() }, progressSession::awaitSaves)
+        onDispose {
+            // Register the final writes with the route before dropping this content.
+            prepareSessionReload()
         }
     }
     LifecycleResumeEffect(statisticsSession) {
@@ -234,6 +371,7 @@ private fun SentenceReaderContent(
         onPauseOrDispose {
             session?.pause()
             saveStatistics(flush = true, session = session)
+            onFlushExport()
         }
     }
     DisposableEffect(statisticsSession) {
@@ -252,20 +390,6 @@ private fun SentenceReaderContent(
                 delay(1_000)
                 session.tick()
                 if (++seconds % 30 == 0) saveStatistics(flush = false, session = session)
-            }
-        }
-    }
-    val activeBookLease = remember(state) { HttpSyncActiveBooks.Lease() }
-    LaunchedEffect(state) {
-        activeBookLease.acquire(syncIdForMetadata(state.readerState.entry.metadata))
-    }
-    DisposableEffect(state) {
-        onDispose {
-            appContainer.appScope.launch {
-                delay(1_000)
-                progressSession.awaitSaves()
-                activeBookLease.release()
-                appContainer.httpSyncBookmarkScheduler.refreshAfterReaderClosed()
             }
         }
     }
@@ -332,7 +456,7 @@ private fun SentenceReaderContent(
         highlight = null
     }
     fun move(next: SentencePosition?) {
-        if (next == null || next == position || closing || statisticsSession == null) return
+        if (next == null || next == position || closing || sessionRetired || statisticsSession == null) return
         currentOnBookmarkSaved()
         progressSession.navigate(next)
         progressMapping.at(next)?.let { point ->
@@ -348,7 +472,7 @@ private fun SentenceReaderContent(
     val previous = position?.let { SentenceNavigation.previous(book, it) }
     fun finishBook() {
         val current = position ?: return
-        if (bookFinished || closing || statisticsSession == null || next != null) return
+        if (bookFinished || closing || sessionRetired || statisticsSession == null || next != null) return
         currentOnBookmarkSaved()
         progressSession.finish(current)
         progressMapping.endOf(current)?.let { point ->
@@ -366,6 +490,7 @@ private fun SentenceReaderContent(
         saveStatistics(flush = true)
         appContainer.appScope.launch {
             progressSession.awaitSaves()
+            onFlushExport()
             onClose()
         }
     }
@@ -381,13 +506,22 @@ private fun SentenceReaderContent(
     }
 
     var screenOrigin by remember { mutableStateOf(Offset.Zero) }
+    val lookupTouchTarget = remember { ReaderLookupTouchTarget() }
+    val lookupTouchDensity = LocalDensity.current.density
+    val currentDismissLookup = rememberUpdatedState(::dismissPopups)
+    val currentHasActiveLookup = rememberUpdatedState { popups.isNotEmpty() || lookupJob?.isActive == true }
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .onGloballyPositioned { screenOrigin = it.positionInRoot() }
-            // Only taps no child claimed reach here: empty header space, the page beside the
-            // sentence, the translation panel. Buttons, words and the popup itself keep priority.
-            .pointerInput(Unit) { detectTapGestures { dismissPopups() } },
+            .onGloballyPositioned {
+                screenOrigin = it.positionInRoot()
+                lookupTouchTarget.rootCoordinates = it
+            }
+            .dismissReaderLookupOnOutsideTouch(
+                hasActiveLookup = { currentHasActiveLookup.value() },
+                hitPopup = { lookupTouchTarget.containsRootPoint(it, lookupTouchDensity) },
+                dismissLookup = { currentDismissLookup.value() },
+            ),
     ) {
         Column(
             modifier = Modifier
@@ -556,7 +690,10 @@ private fun SentenceReaderContent(
                     statisticsSession?.logLookup(selection, lookup?.first, UsageLookupSource.Popup)
                 }
             },
-            modifier = Modifier.fillMaxSize(),
+            onPopupBoundsChanged = { lookupTouchTarget.popupRects = it },
+            modifier = Modifier.fillMaxSize().onGloballyPositioned {
+                lookupTouchTarget.popupCoordinates = it
+            },
         )
         if (showAppearance) {
             // The reader's own appearance sheet: font, size, theme and spacing are shared settings,

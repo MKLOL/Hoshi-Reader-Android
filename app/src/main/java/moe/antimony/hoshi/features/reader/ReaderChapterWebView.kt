@@ -47,6 +47,7 @@ import kotlin.math.abs
 import moe.antimony.hoshi.R
 import moe.antimony.hoshi.epub.EpubBook
 import moe.antimony.hoshi.epub.HighlightColor
+import moe.antimony.hoshi.features.dictionary.openPopupExternalLink
 import moe.antimony.hoshi.features.sasayaki.SasayakiSettings
 import moe.antimony.hoshi.webview.applyHoshiWebViewSecurityDefaults
 
@@ -732,9 +733,12 @@ private class EpubWebViewClient(
     private val resourceBridge = ReaderWebResourceBridge(book, fontManager)
 
     override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
-        val target = book.resolveInternalReaderLink(request.url?.toString().orEmpty()) ?: return false
-        onInternalLink(target)
-        return true
+        return book.handleReaderLinkNavigation(
+            url = request.url?.toString().orEmpty(),
+            isMainFrame = request.isForMainFrame,
+            onInternalLink = onInternalLink,
+            onExternalLink = { view.context.openPopupExternalLink(it) },
+        )
     }
 
     override fun onPageFinished(view: WebView, url: String?) {

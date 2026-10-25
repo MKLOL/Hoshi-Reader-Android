@@ -47,6 +47,9 @@ class ChapterText(HTMLParser):
         self.in_body = "<body" not in html.lower()
         self.skipping = []
         self.parts = []
+        self.ruby_depth = 0
+        self.pending_group = -1
+        self.next_group = 0
         self.feed(html)
         self.close()
 
@@ -55,10 +58,15 @@ class ChapterText(HTMLParser):
             self.in_body = True
         if tag in SKIP:
             if tag in {"rt", "rp"} and self.skipping and self.skipping[-1] in {"rt", "rp"}:
-                self.skipping.pop()
+                if self.skipping.pop() == "rt":
+                    self.pending_group = -1
             self.skipping.append(tag)
-        elif not self.skipping and tag in BLOCKS:
-            self.parts.append(None)
+        elif not self.skipping:
+            if tag == "ruby":
+                self.ruby_depth += 1
+                self.pending_group = -1
+            if tag in BLOCKS:
+                self.parts.append(None)
 
     def handle_startendtag(self, tag, attrs):
         if tag not in SKIP and not self.skipping and tag in BLOCKS:
@@ -67,12 +75,19 @@ class ChapterText(HTMLParser):
     def handle_endtag(self, tag):
         if tag in SKIP:
             if tag in self.skipping:
-                while self.skipping.pop() != tag:
-                    pass
+                while self.skipping:
+                    popped = self.skipping.pop()
+                    if popped == "rt":
+                        self.pending_group = -1
+                    if popped == tag:
+                        break
             return
         if tag == "ruby":
             while self.skipping and self.skipping[-1] in {"rt", "rp"}:
-                self.skipping.pop()
+                if self.skipping.pop() == "rt":
+                    self.pending_group = -1
+            self.ruby_depth = max(0, self.ruby_depth - 1)
+            self.pending_group = -1
         if self.skipping:
             return
         if tag in BLOCKS:
@@ -82,13 +97,30 @@ class ChapterText(HTMLParser):
 
     def handle_data(self, data):
         if self.in_body and not self.skipping:
-            self.parts.append(data)
+            group = -1
+            if self.ruby_depth:
+                if self.pending_group < 0:
+                    self.pending_group = self.next_group
+                    self.next_group += 1
+                group = self.pending_group
+            self.parts.append((data, [group] * len(data)))
 
 
 def segment(html, spine=0):
     sentences = []
     count, length, start, soft_break = 0, 0, None, -1
-    buffer = []
+    buffer, buffer_groups = [], []
+    parts = ChapterText(html).parts
+    remaining_groups = {}
+    for part in parts:
+        if part is not None:
+            for group in part[1]:
+                if group >= 0:
+                    remaining_groups[group] = remaining_groups.get(group, 0) + 1
+
+    def consume(group):
+        if group >= 0:
+            remaining_groups[group] -= 1
 
     def emit(chars, offset):
         text = " ".join("".join(chars).split())
@@ -98,17 +130,20 @@ def segment(html, spine=0):
                                   len=size, text=text, hash=text_hash(text)))
 
     def flush():
-        nonlocal buffer, length, start, soft_break
+        nonlocal buffer, buffer_groups, length, start, soft_break
         emit(buffer, start)
-        buffer, length, start, soft_break = [], 0, None, -1
+        buffer, buffer_groups, length, start, soft_break = [], [], 0, None, -1
 
-    for part in ChapterText(html).parts:
+    for part in parts:
         if part is None:
             flush()
             continue
+        chars, groups = part
         pos = 0
-        while pos < len(part):
-            char = part[pos]
+        while pos < len(chars):
+            char, group = chars[pos], groups[pos]
+            buffer_groups.append(group)
+            consume(group)
             pos += 1
             buffer.append(char)
             if matchable(char):
@@ -119,17 +154,31 @@ def segment(html, spine=0):
             elif char in "、，,":
                 soft_break = len(buffer) - 1
             if char in END:
-                while pos < len(part) and part[pos] in TRAILING:
-                    buffer.append(part[pos])
+                while pos < len(chars) and chars[pos] in TRAILING:
+                    buffer.append(chars[pos])
+                    buffer_groups.append(groups[pos])
+                    consume(groups[pos])
                     pos += 1
                 flush()
-            elif length >= 400:
-                end = soft_break + 1 if 1 <= soft_break < len(buffer) - 1 else len(buffer)
+            elif length >= 400 and (length == 400 or group < 0 or remaining_groups[group] == 0):
+                def safe_boundary(candidate):
+                    before = buffer_groups[candidate - 1]
+                    after = buffer_groups[candidate] if candidate < len(buffer) else (before if remaining_groups.get(before, 0) else -1)
+                    if before >= 0 and before == after:
+                        while candidate and buffer_groups[candidate - 1] == before:
+                            candidate -= 1
+                    return candidate
+
+                end = safe_boundary(soft_break + 1 if 1 <= soft_break < len(buffer) - 1 else len(buffer))
+                if not end:
+                    end = safe_boundary(len(buffer))
+                if not end:
+                    continue  # One overlong ruby base remains a complete, readable atom.
                 head, tail = buffer[:end], buffer[end:]
                 head_length = len(normalize("".join(head)))
                 emit(head, start)
                 length = len(normalize("".join(tail)))
                 start = start + head_length if start is not None and length else None
-                buffer, soft_break = tail, -1
+                buffer, buffer_groups, soft_break = tail, buffer_groups[end:], -1
     flush()
     return sentences

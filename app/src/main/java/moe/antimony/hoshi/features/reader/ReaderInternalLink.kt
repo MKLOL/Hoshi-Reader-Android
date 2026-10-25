@@ -38,3 +38,25 @@ internal fun EpubBook.resolveReaderChapterHref(href: String): ReaderInternalLink
         }.getOrDefault(rawFragment).ifBlank { null },
     )
 }
+
+/** Main-frame links never replace the reader with an unrelated document. */
+internal fun EpubBook.handleReaderLinkNavigation(
+    url: String,
+    isMainFrame: Boolean,
+    onInternalLink: (ReaderInternalLinkTarget) -> Unit,
+    onExternalLink: (String) -> Unit,
+): Boolean {
+    if (!isMainFrame || url.isBlank() || url.startsWith('#') || url == "about:blank") return false
+    resolveInternalReaderLink(url)?.let { target ->
+        onInternalLink(target)
+        return true
+    }
+    val uri = runCatching { URI(url) }.getOrNull() ?: return true
+    if (uri.scheme?.lowercase() in setOf("http", "https") &&
+        !uri.host.isNullOrBlank() && !uri.host.equals("hoshi.local", ignoreCase = true)
+    ) {
+        onExternalLink(url)
+    }
+    // Unknown local resources and schemes cannot navigate the privileged EPUB WebView either.
+    return true
+}

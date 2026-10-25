@@ -314,78 +314,87 @@ class BookRepository(
     }
 
     /**
-     * Makes each day's total across devices match [dayTotals] — device-less per-day entries,
-     * as a ッツ statistics file holds them — by adjusting only this device's entry for the
-     * day. The other devices' entries are theirs and stay untouched, so this device's share
-     * becomes the day's total minus what the other devices recorded (never below zero). A day
-     * whose total already matches is left alone, so importing what was just exported changes
-     * nothing, and the file is not written at all when nothing changed. With [replaceOtherDays]
-     * this device's entries for days missing from [dayTotals] are dropped (ッツ "Replace").
+     * Imports a collapsed TTU day under one shared identity. Device entries remain actual
+     * readings; the external bucket contains only the remainder after counters already
+     * included in that total. Checkpoints merge across independently importing devices, so
+     * phone + tablet cannot count the same external history twice.
      *
-     * @return whether the sidecar changed.
+     * Older unmarked per-device entries remain device reading: their origin cannot safely be
+     * inferred. A matching re-import is a no-op, including files just exported by this device.
      */
     suspend fun applyDayTotals(
         bookRoot: File,
         dayTotals: List<ReadingStatistics>,
         replaceOtherDays: Boolean,
     ): Boolean = withContext(NonCancellable) {
-        val device = deviceIdentity
         val changed = bookLocks.withBookLock(bookRoot) {
             if (!bookRoot.isDirectory) return@withBookLock false
-            val next = readStatisticsSidecar(bookRoot, forWrite = true).legacyAttributed(bookRoot).toMutableList()
-            var changed = false
+            val original = readStatisticsSidecar(bookRoot, forWrite = true).legacyAttributed(bookRoot)
+            val next = original.toMutableList()
             val totals = dayTotals.collapsedByDay()
             for (total in totals) {
                 val sameDay = next.filter { it.dateKey == total.dateKey }
-                val own = sameDay.firstOrNull { it.deviceId == device?.id }
-                val others = sameDay.filter { it.deviceId != device?.id }
-                val ownTime = (total.readingTime - others.sumOf { it.readingTime }).coerceAtLeast(0.0)
-                val ownCharacters = (total.charactersRead - others.sumOf { it.charactersRead }).coerceAtLeast(0)
-                if (own == null && ownTime <= 0.0 && ownCharacters <= 0) continue
-                if (own != null && own.readingTime == ownTime && own.charactersRead == ownCharacters) continue
-                // A collapsed export's hours belong to ALL devices. Subtract only when
-                // every other device's time is located; otherwise keep trustworthy local
-                // evidence and let the streak reconstruction handle the unknown remainder.
-                val hoursFromTotal = total.readingTimeByHour.isNotEmpty() && others.all {
-                    kotlin.math.abs(it.readingTime - it.readingTimeByHour.values.sum()) < 0.001
+                val current = sameDay.readingTotals()
+                val sameTotal = current.readingTime == total.readingTime && current.charactersRead == total.charactersRead
+                val previous = sameDay.firstOrNull { it.deviceId == TTU_STATISTICS_DEVICE_ID }
+                val included = sameDay.filter { it.deviceId != TTU_STATISTICS_DEVICE_ID }.associate { entry ->
+                    // The null bucket is shared legacy history, not this importing device.
+                    (entry.deviceId ?: "") to ImportedReadingCheckpoint(
+                        entry.charactersRead, entry.readingTime, entry.lastStatisticModified,
+                        entry.readingTimeByHour, entry.timeZone,
+                    )
+                }.toSortedMap()
+                val previousBaseline = previous?.importedBaseline
+                val sourceHours = total.readingTimeByHour.ifEmpty {
+                    previousBaseline?.readingTimeByHour
+                        ?.takeIf { previousBaseline.readingTime == total.readingTime }.orEmpty()
                 }
-                val hours = if (hoursFromTotal) {
-                    val otherHours = others.map { it.readingTimeByHour }.sumReadingHours()
-                    total.readingTimeByHour.mapValues { (hour, seconds) ->
-                        (seconds - (otherHours[hour] ?: 0.0)).coerceAtLeast(0.0)
-                    }.filterValues { it > 0.0 }.takeIf { it.values.sum() <= ownTime + 0.001 }.orEmpty()
-                } else {
-                    own?.readingTimeByHour?.takeIf { it.values.sum() <= ownTime + 0.001 }.orEmpty()
-                }
-                // The stamp below comes from ッツ, so it says nothing about the hours' zone:
-                // name the zone they were recorded in.
-                val zone = if (hours.isEmpty()) null else {
-                    val deviceZone = ZoneId.systemDefault()
-                    (if (hoursFromTotal) total.timeZone else null)
-                        ?: own?.let { it.timeZone ?: it.recordedZone(deviceZone)?.id }
-                        ?: deviceZone.id
-                }
-                val updated = total.copy(
-                    readingTime = ownTime,
-                    readingTimeByHour = hours,
-                    charactersRead = ownCharacters,
-                    lastReadingSpeed = if (ownTime > 0.0) (ownCharacters / ownTime * 3600.0).toInt() else 0,
-                    // Newer than the entry it replaces, so HTTP sync carries it to the other devices.
-                    lastStatisticModified = maxOf(total.lastStatisticModified, (own?.lastStatisticModified ?: 0L) + 1),
-                    deviceId = device?.id,
-                    deviceName = device?.name,
-                    timeZone = zone,
+                val baseline = ImportedReadingBaseline(
+                    charactersRead = total.charactersRead,
+                    readingTime = total.readingTime,
+                    sourceModified = total.lastStatisticModified,
+                    readingTimeByHour = sourceHours,
+                    timeZone = total.timeZone ?: previousBaseline?.timeZone,
+                    includedDevices = included,
                 )
-                if (own != null) next.remove(own)
-                next += updated
-                changed = true
+                // Real device counters can already exceed an older external total. The
+                // baseline is still unchanged; do not rewrite it on every repeated import.
+                if (previousBaseline == baseline) continue
+                val imported = total.copy(
+                    deviceId = TTU_STATISTICS_DEVICE_ID,
+                    deviceName = null,
+                    // A metadata-only checkpoint does not advance the exported source time.
+                    lastStatisticModified = if (sameTotal) maxOf(total.lastStatisticModified, previous?.lastStatisticModified ?: 0L)
+                        else maxOf(total.lastStatisticModified, (previous?.lastStatisticModified ?: -1L) + 1),
+                    importedBaseline = baseline,
+                ).withImportedResidual()
+                if (previous != null) next.remove(previous)
+                next += imported
             }
             if (replaceOtherDays) {
                 val keep = totals.map { it.dateKey }.toSet()
-                if (next.removeAll { it.deviceId == device?.id && it.dateKey !in keep }) changed = true
+                // Absence cannot delete a bucket in HTTP's union merge: a stale server or
+                // second device would restore it. Retain a newer zero checkpoint instead,
+                // replacing external history without removing anyone's actual reading.
+                for (index in next.indices) {
+                    val previous = next[index]
+                    if (previous.deviceId != TTU_STATISTICS_DEVICE_ID || previous.dateKey in keep) continue
+                    val cleared = ImportedReadingBaseline(charactersRead = 0, readingTime = 0.0, sourceModified = 0L)
+                    if (previous.importedBaseline == cleared) continue
+                    next[index] = previous.copy(
+                        lastStatisticModified = previous.lastStatisticModified + 1,
+                        minReadingSpeed = 0,
+                        altMinReadingSpeed = 0,
+                        maxReadingSpeed = 0,
+                        importedBaseline = cleared,
+                    ).withImportedResidual()
+                }
             }
-            if (changed) sidecarDataSource.saveStatistics(bookRoot, next.deduplicateReadingStatistics())
-            changed
+            val merged = next.deduplicateReadingStatistics()
+            if (merged == original) false else {
+                sidecarDataSource.saveStatistics(bookRoot, merged)
+                true
+            }
         }
         if (changed) statisticsChangeCounter.update { it + 1 }
         changed

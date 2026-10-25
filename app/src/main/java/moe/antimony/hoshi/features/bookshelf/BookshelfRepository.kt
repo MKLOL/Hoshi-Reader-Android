@@ -340,6 +340,7 @@ internal class AndroidBookshelfRepository(
             // record a fresh RFC 3339 import stamp so a stale remote tombstone cannot wipe
             // this freshly-imported book on the next sync.
             importedAt = previous?.importedAt ?: Instant.now().toString(),
+            renamedTitle = previous?.renamedTitle,
         )
         bookRepository.saveMetadata(root, metadata)
     }

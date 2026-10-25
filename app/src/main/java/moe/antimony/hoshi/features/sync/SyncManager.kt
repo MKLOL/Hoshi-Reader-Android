@@ -3,6 +3,9 @@ package moe.antimony.hoshi.features.sync
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import java.util.concurrent.ConcurrentHashMap
 import moe.antimony.hoshi.epub.BookEntry
 import moe.antimony.hoshi.epub.BookRepository
 import moe.antimony.hoshi.epub.Bookmark
@@ -16,6 +19,10 @@ class SyncManager(
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
     private val nowUnixMillis: () -> Long = { System.currentTimeMillis() },
 ) {
+    // Normal and sentence readers can overlap while switching modes. Their TTU exchanges
+    // must share one lock, otherwise an old export can replace a new import mid-read.
+    private val bookSyncLocks = ConcurrentHashMap<String, Mutex>()
+
     suspend fun syncBook(
         entry: BookEntry,
         direction: SyncDirection?,
@@ -23,7 +30,7 @@ class SyncManager(
         statsSyncMode: StatisticsSyncMode,
         syncAudioBook: Boolean,
         importOnly: Boolean = false,
-    ): SyncResult =
+    ): SyncResult = bookSyncLocks.computeIfAbsent(entry.root.canonicalPath) { Mutex() }.withLock {
         try {
             syncBookOnce(entry, direction, syncStats, statsSyncMode, syncAudioBook, importOnly)
         } catch (error: GoogleDriveApiException) {
@@ -31,6 +38,7 @@ class SyncManager(
             drive.clearCache()
             syncBookOnce(entry, direction, syncStats, statsSyncMode, syncAudioBook, importOnly)
         }
+    }
 
     private suspend fun syncBookOnce(
         entry: BookEntry,
@@ -110,13 +118,12 @@ class SyncManager(
         importProgress(entry, progress)
         if (syncStats) {
             // ッツ keeps one device-less entry per day, i.e. every device's reading added up.
-            // The merge therefore runs on day totals, and what it decides is applied by
-            // adjusting only this device's share of each day (see applyDayTotals), so the
-            // other devices' entries are never duplicated or dropped.
+            // The merge runs on day totals. The imported remainder has a shared origin
+            // (see applyDayTotals), so importing on two devices does not duplicate history.
             val localDays = bookRepository.loadStatistics(entry.root).collapsedByDay()
             val remoteStats = statsFileId?.let { drive.getStatsFile(it) }.orEmpty()
             val merged = TtuSyncRules.mergeStatistics(localDays, remoteStats, statsSyncMode)
-            if (merged.isNotEmpty()) {
+            if (merged.isNotEmpty() || (statsSyncMode == StatisticsSyncMode.Replace && statsFileId != null)) {
                 bookRepository.applyDayTotals(
                     entry.root,
                     merged,
@@ -153,6 +160,9 @@ class SyncManager(
             val localStats = bookRepository.loadStatistics(entry.root).collapsedByDay()
             val statsToExport = TtuSyncRules.mergeStatistics(remoteStats, localStats, statsSyncMode)
             if (statsToExport.isNotEmpty()) {
+                // Share the device counters included in this collapsed export before another
+                // install imports it. Its independent import can then absorb them on HTTP sync.
+                bookRepository.applyDayTotals(entry.root, statsToExport, replaceOtherDays = false)
                 drive.updateStatsFile(driveFolderId, statsFileId, statsToExport)
             }
         }

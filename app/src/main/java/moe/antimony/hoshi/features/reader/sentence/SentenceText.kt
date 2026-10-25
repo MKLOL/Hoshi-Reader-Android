@@ -81,10 +81,25 @@ internal fun SentenceText(
 
     BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
         val availableWidth = with(density) { maxWidth.toPx() }
-        val measuredGroups = remember(groups, plainStyle, readingStyle, highlight, showFurigana, availableWidth, textMeasurer) {
+        val measuredGroups = remember(groups, plainStyle, readingStyle, highlight, showFurigana, availableWidth, textMeasurer, density) {
             groups.map { group ->
+                val readings = if (showFurigana) group.annotations.map { annotation ->
+                    annotation to textMeasurer.measure(annotation.reading, readingStyle, softWrap = false, maxLines = 1)
+                } else emptyList()
                 val base = buildAnnotatedString {
                     append(group.base)
+                    // A long child reading reserves space over its own base; it must not drift
+                    // over an unannotated neighbor just because both belong to one compound.
+                    readings.forEach { (annotation, reading) ->
+                        val end = annotation.start + annotation.length
+                        val child = group.base.substring(annotation.start, end)
+                        val childWidth = textMeasurer.measure(child, plainStyle, softWrap = false, maxLines = 1).size.width
+                        val extra = (reading.size.width - childWidth).coerceAtLeast(0).toFloat()
+                        if (extra > 0f) addStyle(
+                            SpanStyle(letterSpacing = with(density) { (extra / child.codePointCount(0, child.length)).toSp() }),
+                            annotation.start, end,
+                        )
+                    }
                     highlight?.let { range ->
                         val start = maxOf(group.start, range.first)
                         val end = minOf(group.end, range.last + 1)
@@ -96,20 +111,25 @@ internal fun SentenceText(
                     }
                 }
                 val baseLayout = textMeasurer.measure(base, plainStyle, softWrap = false, maxLines = 1)
-                val readingLayout = if (showFurigana && group.reading.isNotBlank()) {
-                    textMeasurer.measure(group.reading, readingStyle, softWrap = false, maxLines = 1)
-                } else null
+                val measuredReadings = readings.map { (annotation, reading) ->
+                    val bounds = (annotation.start until annotation.start + annotation.length).map { baseLayout.getBoundingBox(it) }
+                    val center = (bounds.minOf { it.left } + bounds.maxOf { it.right }) / 2f
+                    MeasuredSentenceReading(reading, center - reading.size.width / 2f)
+                }
+                val left = minOf(0f, measuredReadings.minOfOrNull { it.left } ?: 0f)
+                val right = maxOf(baseLayout.size.width.toFloat(), measuredReadings.maxOfOrNull { it.left + it.layout.size.width } ?: 0f)
+                val placement = sentenceRubyPlacement(
+                    right - left,
+                    baseLayout.size.height.toFloat(),
+                    0f,
+                    measuredReadings.maxOfOrNull { it.layout.size.height.toFloat() } ?: 0f,
+                    availableWidth,
+                )
                 MeasuredSentenceRuby(
                     group,
                     baseLayout,
-                    readingLayout,
-                    sentenceRubyPlacement(
-                        baseLayout.size.width.toFloat(),
-                        baseLayout.size.height.toFloat(),
-                        readingLayout?.size?.width?.toFloat() ?: 0f,
-                        readingLayout?.size?.height?.toFloat() ?: 0f,
-                        availableWidth,
-                    ),
+                    measuredReadings,
+                    placement.copy(baseLeft = placement.baseLeft - left * placement.scale),
                 )
             }
         }
@@ -159,11 +179,11 @@ internal fun SentenceText(
                         translate(placement.baseLeft, placement.baseTop)
                         scale(placement.scale, placement.scale, pivot = Offset.Zero)
                     }) { drawText(measured.base) }
-                    measured.reading?.let { reading ->
+                    measured.readings.forEach { reading ->
                         withTransform({
-                            translate(placement.readingLeft, 0f)
+                            translate(placement.baseLeft + reading.left * placement.scale, 0f)
                             scale(placement.scale, placement.scale, pivot = Offset.Zero)
-                        }) { drawText(reading) }
+                        }) { drawText(reading.layout) }
                     }
                 }
             }
@@ -248,9 +268,11 @@ internal fun SentenceText(
 private data class MeasuredSentenceRuby(
     val group: SentenceRubyGroup,
     val base: TextLayoutResult,
-    val reading: TextLayoutResult?,
+    val readings: List<MeasuredSentenceReading>,
     val placement: SentenceRubyPlacement,
 )
+
+private data class MeasuredSentenceReading(val layout: TextLayoutResult, val left: Float)
 
 /** Relative visual base bounds, also useful to inspect a shrunken word in accessibility tests. */
 internal val SentenceRubyBaseBounds = SemanticsPropertyKey<Rect>("SentenceRubyBaseBounds")

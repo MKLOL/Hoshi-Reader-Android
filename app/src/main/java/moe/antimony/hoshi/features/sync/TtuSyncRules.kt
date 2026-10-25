@@ -179,6 +179,13 @@ data class CoverMetadata(
 )
 
 fun BookInfo.resolveTtuCharacterPosition(characterCount: Int): ResolvedBookPosition? {
+    // A finished book must retain the real end, including trailing image/credits spines.
+    // Clamping to the final readable character would turn 100% back into an unfinished book.
+    if (this.characterCount > 0 && characterCount >= this.characterCount) {
+        return chapterInfo.values.mapNotNull { it.spineIndex }.maxOrNull()?.let {
+            ResolvedBookPosition(spineIndex = it, progress = 1.0)
+        }
+    }
     val clamped = max(0, min(characterCount, this.characterCount - 1))
     return chapterInfo.values
         .filter { it.spineIndex != null && it.chapterCount > 0 }

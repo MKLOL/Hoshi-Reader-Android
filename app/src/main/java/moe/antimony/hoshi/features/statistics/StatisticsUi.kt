@@ -204,6 +204,9 @@ internal fun DevicesCard(
 /** "Pixel 8 · This device", or "Unknown device" for entries no install has claimed. */
 @Composable
 internal fun deviceRowTitle(device: DeviceReadingSummary, localDeviceId: String?): String {
+    if (device.deviceId == moe.antimony.hoshi.epub.TTU_STATISTICS_DEVICE_ID) {
+        return stringResource(R.string.statistics_ttu_history)
+    }
     val name = device.deviceName?.takeIf { it.isNotBlank() } ?: stringResource(R.string.statistics_unknown_device)
     return if (device.deviceId != null && device.deviceId == localDeviceId) {
         name + " · " + stringResource(R.string.statistics_this_device)

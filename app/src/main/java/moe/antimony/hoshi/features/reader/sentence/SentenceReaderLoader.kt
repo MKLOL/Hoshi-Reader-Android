@@ -17,10 +17,18 @@ class SentenceTranslationSource(
     private val bookRoot: File,
     private val syncId: String,
     private val spineCount: Int,
+    sentences: List<ReaderSentence> = emptyList(),
 ) {
+    private val chapterTexts = sentenceTranslationChapterTexts(sentences)
+
     fun translationFor(sentence: ReaderSentence): EpubSentenceTranslation? {
         val hash = EpubTranslationStore.textHash(EpubTranslationStore.normalize(sentence.text))
-        return EpubTranslationStore.lookup("${sentence.id}#$hash", bookRoot, syncId, spineCount)
+        EpubTranslationStore.lookup("${sentence.id}#$hash", bookRoot, syncId, spineCount)?.let { return it }
+        return compatibleSentenceTranslation(
+            sentence,
+            chapterTexts[sentence.spine] ?: return null,
+            EpubTranslationStore.anchors(bookRoot, syncId, spineCount, sentence.spine),
+        ) { anchor -> EpubTranslationStore.lookup(anchor.id, bookRoot, syncId, spineCount) }
     }
 }
 
@@ -46,8 +54,19 @@ internal class SentenceReaderLoader(
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
     private val awaitReaderSaves: suspend (File) -> Unit = {},
 ) {
-    suspend fun load(bookId: String): SentenceReaderLoadState = withContext(ioDispatcher) {
-        when (val state = stateHolder.load(bookId, beforeBookmarkLoad = { awaitReaderSaves(it.root) })) {
+    suspend fun load(
+        bookId: String,
+        beforeBookmarkLoad: suspend (moe.antimony.hoshi.epub.BookEntry) -> Unit = {},
+        beforeBookmarkRead: () -> Unit = {},
+    ): SentenceReaderLoadState = withContext(ioDispatcher) {
+        when (val state = stateHolder.load(
+            bookId,
+            beforeBookmarkLoad = {
+                beforeBookmarkLoad(it)
+                awaitReaderSaves(it.root)
+            },
+            beforeBookmarkRead = beforeBookmarkRead,
+        )) {
             is ReaderRouteLoadState.Error -> SentenceReaderLoadState.Error(state.message)
             ReaderRouteLoadState.Loading -> SentenceReaderLoadState.Loading
             is ReaderRouteLoadState.Ready -> {
@@ -56,7 +75,7 @@ internal class SentenceReaderLoader(
                 val syncId = syncIdForMetadata(state.entry.metadata)
                 val translations = syncId
                     ?.takeIf { EpubTranslationStore.preload(state.bookRoot, it, state.book.spineCount) }
-                    ?.let { SentenceTranslationSource(state.bookRoot, it, state.book.spineCount) }
+                    ?.let { SentenceTranslationSource(state.bookRoot, it, state.book.spineCount, book.chapters.flatMap { it.sentences }) }
                 SentenceReaderLoadState.Ready(
                     title = state.book.title,
                     book = book,

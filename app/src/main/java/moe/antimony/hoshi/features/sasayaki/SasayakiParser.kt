@@ -12,17 +12,22 @@ object SasayakiParser {
                 if (lines.size < 3 || !lines[1].contains("-->")) return@mapIndexedNotNull null
                 val times = lines[1].split("-->", limit = 2)
                 if (times.size != 2) return@mapIndexedNotNull null
+                val startTime = parseTimestamp(times[0]) ?: return@mapIndexedNotNull null
+                val endTime = parseTimestamp(times[1]) ?: return@mapIndexedNotNull null
                 SasayakiCue(
                     id = index.toString(),
-                    startTime = parseTimestamp(times[0]),
-                    endTime = parseTimestamp(times[1]),
+                    startTime = startTime,
+                    endTime = endTime,
                     text = lines[2].trim(),
                 )
             }
 
-    private fun parseTimestamp(timestamp: String): Double {
+    private fun parseTimestamp(timestamp: String): Double? {
         val parts = timestamp.trim().replace(',', '.').split(':')
-        require(parts.size == 3) { "Invalid SRT timestamp: $timestamp" }
-        return parts[0].toDouble() * 3600.0 + parts[1].toDouble() * 60.0 + parts[2].toDouble()
+        if (parts.size != 3) return null
+        val hours = parts[0].toDoubleOrNull() ?: return null
+        val minutes = parts[1].toDoubleOrNull() ?: return null
+        val seconds = parts[2].toDoubleOrNull() ?: return null
+        return (hours * 3600.0 + minutes * 60.0 + seconds).takeIf { it.isFinite() }
     }
 }

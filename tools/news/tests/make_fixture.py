@@ -37,6 +37,9 @@ def make_fixture(job):
         '<p>本文。</p><script>if (a < b) {}</script><p>次。</p><style>a>b{}</style><p>三。</p>',
         '<p>' + ('あ' * 250 + '、') * 3 + '。</p>',
         '<p>' + '𠀀' * 801 + '。</p>',
+        '<p>' + 'あ' * 399 + '<ruby>大<span>丈</span>夫<rt>だいじょうぶ</rt></ruby>ですよ。</p>',
+        '<p><ruby>' + '大丈夫' * 200 + '<rt>よみ</rt></ruby>次。</p>',
+        '<p><ruby>' + '大' * 250 + '、' + '丈' * 200 + '<rt>よみ</rt></ruby>夫。</p>',
     ]
     vectors = []
     for body in bodies:

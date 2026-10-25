@@ -7,12 +7,14 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.text.TextLayoutResult
@@ -24,6 +26,7 @@ import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.click
 import androidx.compose.ui.test.swipeUp
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import moe.antimony.hoshi.features.reader.ReaderSelectionData
@@ -97,6 +100,26 @@ class SentenceTextTest {
     }
 
     @Test
+    fun partiallyAnnotatedCompoundStaysWholeWithScaledFontsAndCharacterHighlights() {
+        val prefix = "あああああ"
+        val text = prefix + "大丈夫ですよ。"
+        val taps = mutableListOf<ReaderSelectionData>()
+        showSentence(
+            text, listOf(RubyAnnotation(prefix.length, 1, "だい")), width = 96, fontScale = 2f,
+            highlight = prefix.length + 1..prefix.length + 1, taps = taps,
+        )
+        val paragraph = compose.onNodeWithTag("sentence-text").textLayout()
+        assertEquals("Partial annotation keeps one compound atom", 1, paragraph.placeholderRects.size)
+        val line = paragraph.getLineForOffset(prefix.length)
+        (prefix.length until prefix.length + 3).forEach { assertEquals(line, paragraph.getLineForOffset(it)) }
+        assertEquals(text, paragraph.layoutInput.text.text)
+        val base = compose.onNodeWithTag("sentence-ruby-0", useUnmergedTree = true).textLayout()
+        val highlights = base.layoutInput.text.spanStyles.filter { it.item.background != Color.Unspecified }
+        assertEquals(listOf(1 to 2), highlights.map { it.start to it.end })
+        assertRubyGlyphTaps(prefix.length, 3, taps)
+    }
+
+    @Test
     fun splitPanesHaveIndependentScrollingAndRearrangeWithoutResettingIt() {
         var layout by mutableStateOf(SentenceReaderLayout.SideBySide)
         var expanded by mutableStateOf(true)
@@ -166,23 +189,28 @@ class SentenceTextTest {
         text: String,
         ruby: List<RubyAnnotation> = emptyList(),
         width: Int = 240,
+        fontScale: Float = 1f,
+        highlight: IntRange? = null,
         taps: MutableList<ReaderSelectionData>,
     ) {
         compose.setContent {
             MaterialTheme {
-                Box(Modifier.width(width.dp)) {
-                    SentenceText(
-                        sentence = ReaderSentence(0, 11, text.length, text, 0, ruby),
-                        highlight = null,
-                        foreground = Color.Black,
-                        fontFamily = FontFamily.Serif,
-                        fontSizeSp = 32f,
-                        lineHeightMultiplier = 1.5f,
-                        showFurigana = true,
-                        screenOrigin = { Offset.Zero },
-                        onTapOutside = {},
-                        onWordTap = { taps += it },
-                    )
+                val density = LocalDensity.current
+                CompositionLocalProvider(LocalDensity provides Density(density.density, fontScale)) {
+                    Box(Modifier.width(width.dp)) {
+                        SentenceText(
+                            sentence = ReaderSentence(0, 11, text.length, text, 0, ruby),
+                            highlight = highlight,
+                            foreground = Color.Black,
+                            fontFamily = FontFamily.Serif,
+                            fontSizeSp = 32f,
+                            lineHeightMultiplier = 1.5f,
+                            showFurigana = true,
+                            screenOrigin = { Offset.Zero },
+                            onTapOutside = {},
+                            onWordTap = { taps += it },
+                        )
+                    }
                 }
             }
         }

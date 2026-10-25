@@ -278,6 +278,29 @@ internal object ReaderContentStyles {
             -webkit-line-box-contain: block glyphs replaced;
         }
         $layoutCss
+        body, body p, body div, body li, body span {
+            line-break: strict !important;
+            word-break: normal !important;
+            overflow-wrap: break-word !important;
+        }
+        .hoshi-word {
+            display: inline-block !important;
+            white-space: nowrap !important;
+            text-indent: 0 !important;
+            break-inside: avoid !important;
+            -webkit-column-break-inside: avoid !important;
+            overflow-wrap: normal !important;
+        }
+        .hoshi-sentence-page-break {
+            display: block !important;
+            width: 0 !important;
+            height: 0 !important;
+            margin: 0 !important;
+            padding: 0 !important;
+            line-height: 0 !important;
+            break-before: column !important;
+            -webkit-column-break-before: always !important;
+        }
         img.block-img {
             max-width: var(--hoshi-image-max-width, ${settings.imageMaxWidthFallbackCss}) !important;
             max-height: var(--hoshi-image-max-height, ${settings.imageMaxHeightFallbackCss}) !important;

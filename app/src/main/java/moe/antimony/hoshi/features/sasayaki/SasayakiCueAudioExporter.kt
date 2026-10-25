@@ -21,6 +21,7 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
+import java.util.UUID
 
 @OptIn(UnstableApi::class)
 internal class SasayakiCueAudioExporter(
@@ -136,7 +137,9 @@ internal class SasayakiCueAudioExporter(
         get() = (endTime * 1000.0).toLong().coerceAtLeast(startPositionMs + 1L)
 
     private fun outputFileName(cue: SasayakiMatch): String =
-        "hoshi_sasayaki_${cue.id.hashCode().toLong().and(0xffffffffL)}.aac"
+        // Independent popup mining requests may encode the same cue concurrently. Keep
+        // their files distinct until Anki has consumed and named them by content hash.
+        "hoshi_sasayaki_${cue.id.hashCode().toLong().and(0xffffffffL)}_${UUID.randomUUID()}.aac"
 
     private companion object {
         const val ExportTimeoutMs = 30_000L

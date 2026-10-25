@@ -4,6 +4,7 @@ import moe.antimony.hoshi.epub.SasayakiPlaybackData
 import moe.antimony.hoshi.ui.UiText
 import moe.antimony.hoshi.epub.SasayakiMatch
 
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertSame
@@ -39,7 +40,7 @@ class SasayakiPlayerFacadeTest {
     }
 
     @Test
-    fun delegatesPlaybackCommandsToControllerFacade() {
+    fun delegatesPlaybackCommandsToControllerFacade() = runBlocking {
         val controller = FakeSasayakiPlaybackController()
         val player = SasayakiPlayer(controller = controller)
 
@@ -142,7 +143,7 @@ class SasayakiPlayerFacadeTest {
             commands += "playCue:${cue.id}:$stop"
         }
 
-        override fun exportCueAudio(cue: SasayakiMatch, sentence: String): File? {
+        override suspend fun exportCueAudio(cue: SasayakiMatch, sentence: String): File? {
             commands += "exportCueAudio:${cue.id}:$sentence"
             return File("cue.m4a")
         }

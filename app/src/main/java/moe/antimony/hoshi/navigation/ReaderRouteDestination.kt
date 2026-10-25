@@ -13,6 +13,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.key
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -23,13 +24,13 @@ import androidx.compose.ui.graphics.Color
 import moe.antimony.hoshi.features.reader.ReaderSettings
 import moe.antimony.hoshi.features.reader.ReaderWebView
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import moe.antimony.hoshi.LocalHoshiAppContainer
 import moe.antimony.hoshi.epub.BookEntry
 import moe.antimony.hoshi.features.settings.collectAsLoadedSettings
 import moe.antimony.hoshi.features.sync.SyncDirection
-import moe.antimony.hoshi.features.sync.SyncResult
 import moe.antimony.hoshi.features.sync.http.syncIdForMetadata
 import moe.antimony.hoshi.features.sync.http.HttpSyncActiveBooks
 import androidx.lifecycle.Lifecycle
@@ -59,6 +60,7 @@ internal fun ReaderRouteDestination(
     val activeBookLease = remember(bookId) { HttpSyncActiveBooks.Lease() }
     val lifecycleOwner = LocalLifecycleOwner.current
     var reloadKey by remember(bookId) { mutableIntStateOf(0) }
+    val sessionReloadBarrier = remember(bookId) { ReaderSessionReloadBarrier() }
     val autoSyncExportController = remember(bookId, appContainer) {
         ReaderAutoSyncExportController(appContainer.appScope)
     }
@@ -79,9 +81,16 @@ internal fun ReaderRouteDestination(
     // Watched for the whole route: refreshBeforeOpen() waits a bounded time for the network, so
     // a remote bookmark can land while the book is still loading. See RemoteBookmarkUpdateGate.
     val remoteUpdateGate = remember(bookId) { RemoteBookmarkUpdateGate() }
+    fun reloadReader() {
+        // Retire the tracker before any asynchronous import can update its base. Disposal
+        // then cannot write the old running day over newly imported statistics.
+        sessionReloadBarrier.retire()
+        remoteUpdateGate.close()
+        reloadKey += 1
+    }
     LaunchedEffect(bookId) {
         appContainer.httpSyncBatchState.remoteBookmarkUpdates.collect { changedId ->
-            if (remoteUpdateGate.shouldReload(changedId)) reloadKey += 1
+            if (remoteUpdateGate.shouldReload(changedId)) reloadReader()
         }
     }
     val routeState by produceState<ReaderRouteLoadState>(
@@ -91,6 +100,9 @@ internal fun ReaderRouteDestination(
         reloadKey,
     ) {
         remoteUpdateGate.close()
+        value = ReaderRouteLoadState.Loading
+        sessionReloadBarrier.awaitWrites()
+        autoSyncExportController.pauseExportsForImport()
         value = stateHolder.load(
             bookId = bookId,
             beforeBookmarkRead = remoteUpdateGate::open,
@@ -98,6 +110,7 @@ internal fun ReaderRouteDestination(
                 val syncId = syncIdForMetadata(entry.metadata)
                 remoteUpdateGate.expect(syncId)
                 activeBookLease.acquire(syncId)
+                appContainer.bookRepository.awaitPendingStatisticsSaves(entry.root)
                 appContainer.httpSyncBookmarkScheduler.refreshBeforeOpen()
                 val initialAutoSyncState = ReaderRouteAutoSyncState(
                     syncSettings = syncSettings ?: appContainer.syncSettingsRepository.settings.first(),
@@ -113,10 +126,11 @@ internal fun ReaderRouteDestination(
                             syncAudioBook = initialAutoSyncState.shouldSyncAudioBook,
                             importOnly = true,
                         )
-                    }
+                    }.onFailure { if (it is CancellationException) throw it }
                 }
             },
         )
+        autoSyncExportController.resumeExports(autoSyncState.isReaderAutoSyncEnabled)
     }
 
     DisposableEffect(lifecycleOwner, bookId) {
@@ -155,23 +169,12 @@ internal fun ReaderRouteDestination(
         autoSyncExportController.flushExport(autoSyncState.isReaderAutoSyncEnabled)
     }
 
-    fun importOnForeground(entry: BookEntry) {
-        if (!autoSyncState.isReaderAutoSyncEnabled) return
-        bookmarkScope.launch {
-            val result = runCatching {
-                appContainer.syncManager.syncBook(
-                    entry = entry,
-                    direction = null,
-                    syncStats = readerSettings.statisticsSyncEnabled,
-                    statsSyncMode = readerSettings.statisticsSyncMode,
-                    syncAudioBook = autoSyncState.shouldSyncAudioBook,
-                    importOnly = true,
-                )
-            }.getOrNull()
-            if (result is SyncResult.Imported) {
-                reloadKey += 1
-            }
-        }
+    fun importOnForeground(): Boolean {
+        if (!autoSyncState.isReaderAutoSyncEnabled) return false
+        // The normal opening path now owns the import, after the old reader is closed and
+        // all its writes are complete. Even a skipped import starts a fresh tracking base.
+        reloadReader()
+        return true
     }
 
     when (val state = routeState) {
@@ -217,6 +220,7 @@ internal fun ReaderRouteDestination(
                     scheduleExport(state.entry)
                 }
             }
+            key(reloadKey) {
             ReaderWebView(
                 book = state.book,
                 bookRoot = state.bookRoot,
@@ -241,11 +245,13 @@ internal fun ReaderRouteDestination(
                     appContainer.bookRepository.trackStatisticsSave(state.bookRoot, save)
                 },
                 onFlushAutoSyncExport = ::flushExport,
-                onForegroundAutoSyncImport = { importOnForeground(state.entry) },
+                onForegroundAutoSyncImport = ::importOnForeground,
+                onPrepareSessionReloadChange = { sessionReloadBarrier.attach(it, autoSyncExportController::awaitSaves) },
                 onClose = onClose,
                 onOpenSentenceMode = onOpenSentenceMode,
                 modifier = modifier.fillMaxSize(),
             )
+            }
         }
     }
 }

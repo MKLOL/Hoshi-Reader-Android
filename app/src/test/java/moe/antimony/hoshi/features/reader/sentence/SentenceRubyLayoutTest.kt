@@ -31,7 +31,8 @@ class SentenceRubyLayoutTest {
             RubyAnnotation(2, 1, "ぶ"),
         ))
 
-        assertEquals(listOf(SentenceRubyGroup(0, 3, "大丈夫", "だいじょうぶ")), groups)
+        assertEquals(listOf("大丈夫"), groups.map { it.base })
+        assertEquals(listOf(RubyAnnotation(0, 1, "だい"), RubyAnnotation(1, 1, "じょう"), RubyAnnotation(2, 1, "ぶ")), groups.single().annotations)
         assertEquals(2, sentenceRubyHitOffset(groups.single(), 2))
     }
 
@@ -51,11 +52,22 @@ class SentenceRubyLayoutTest {
     }
 
     @Test
-    fun isolatedReadingsNeverExtendOverUnannotatedCharacters() {
-        val groups = sentenceRubyGroups("大丈夫", listOf(RubyAnnotation(0, 1, "だい")))
+    fun partialReadingsKeepTheCompoundWholeAndStayOnTheirOwnBase() {
+        for (offset in 0..2) {
+            val groups = sentenceRubyGroups("大丈夫ですよ。", listOf(RubyAnnotation(offset, 1, "よみ")))
+            assertEquals(listOf("大丈夫"), groups.map { it.base })
+            assertEquals(listOf(RubyAnnotation(offset, 1, "よみ")), groups.single().annotations)
+            assertEquals(listOf(0, 1, 2), (0..2).map { sentenceRubyHitOffset(groups.single(), it) })
+        }
+    }
 
-        assertEquals(listOf("大", "丈夫"), groups.map { it.base })
-        assertEquals(listOf("だい", ""), groups.map { it.reading })
+    @Test
+    fun partialReadingsNeverJoinAcrossExplicitPublisherWords() {
+        val groups = sentenceRubyGroups("東京大丈夫大阪", listOf(
+            RubyAnnotation(0, 2, "とうきょう"), RubyAnnotation(2, 1, "だい"), RubyAnnotation(5, 2, "おおさか"),
+        ))
+        assertEquals(listOf("東京", "大丈夫", "大阪"), groups.map { it.base })
+        assertEquals(listOf(RubyAnnotation(0, 1, "だい")), groups[1].annotations)
     }
 
     @Test

@@ -343,6 +343,7 @@
     <string name="statistics_book_not_found">这本书已不在书库中。</string>
     <string name="statistics_devices_title">按设备</string>
     <string name="statistics_this_device">此设备</string>
+    <string name="statistics_ttu_history">ッツ导入记录</string>
     <string name="statistics_unknown_device">未知设备</string>
     <plurals name="statistics_device_books">
         <item quantity="one">%1$s 本书</item>

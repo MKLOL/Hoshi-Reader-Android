@@ -9,6 +9,7 @@ import androidx.compose.runtime.setValue
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -18,6 +19,7 @@ class SasayakiPlaybackPersistenceState(
     initialPlayback: SasayakiPlaybackData?,
     private val persistenceScope: CoroutineScope,
 ) {
+    private var pendingSave: Job? = null
     var playback by mutableStateOf(initialPlayback ?: SasayakiPlaybackData(lastPosition = 0.0))
         private set
 
@@ -57,8 +59,10 @@ class SasayakiPlaybackPersistenceState(
 
     private fun save() {
         val snapshot = playback
-        persistenceScope.launch(start = CoroutineStart.UNDISPATCHED) {
+        val previous = pendingSave
+        pendingSave = persistenceScope.launch(start = CoroutineStart.UNDISPATCHED) {
             withContext(NonCancellable) {
+                previous?.join()
                 playbackRepository.save(snapshot)
             }
         }

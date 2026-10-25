@@ -67,6 +67,7 @@ internal class ReaderSwipeGestureTracker(
         val hasFastFlickDistance = abs(dx) >= MIN_FAST_FLICK_DISTANCE &&
             velocityX >= MIN_FAST_FLICK_VELOCITY_PX_PER_SECOND
         if (
+            abs(dx) < abs(dy) ||
             !hasPageDistance && !hasFastFlickDistance ||
             elapsedMs > MAX_EARLY_SWIPE_DURATION_MS ||
             velocityX < MIN_EARLY_SWIPE_VELOCITY_PX_PER_SECOND

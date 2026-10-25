@@ -5,12 +5,13 @@ import kotlin.math.min
 import java.text.BreakIterator
 import java.util.Locale
 
-/** A publisher's complete ruby base; its offsets still address the original sentence. */
+/** One wrapping atom, with readings still anchored to their own relative base spans. */
 internal data class SentenceRubyGroup(
     val start: Int,
     val end: Int,
     val base: String,
     val reading: String,
+    val annotations: List<RubyAnnotation> = if (reading.isBlank()) emptyList() else listOf(RubyAnnotation(0, base.length, reading)),
 )
 
 /** Invalid or overlapping annotations must never replace or hide sentence characters. */
@@ -23,76 +24,52 @@ internal fun sentenceRubyGroups(text: String, annotations: List<RubyAnnotation>)
                 start > text.length || annotation.length > text.length - start || annotation.reading.isBlank()
             ) return@mapNotNull null
             val end = start + annotation.length
-            // An inline placeholder cannot span paragraphs or half of a supplementary character.
             if ((start > 0 && start < text.length && text[start].isLowSurrogate() && text[start - 1].isHighSurrogate()) ||
                 (end < text.length && text[end].isLowSurrogate() && text[end - 1].isHighSurrogate())
             ) return@mapNotNull null
             val base = text.substring(start, end)
             if ('\n' in base || '\r' in base) return@mapNotNull null
             previousEnd = end
-            SentenceRubyGroup(start, end, base, annotation.reading)
+            annotation
         }
+    val byStart = publisherGroups.associateBy { it.start }
+    fun isCompoundCharacter(offset: Int): Boolean {
+        val codePoint = text.codePointAt(offset)
+        return Character.UnicodeScript.of(codePoint) == Character.UnicodeScript.HAN || codePoint == 0x3005 || codePoint == 0x303B
+    }
+    // An explicit multi-character publisher base is a word boundary. Single-kanji readings
+    // and unannotated kanji can belong to the same compound without sharing one reading.
+    fun isPublisherWord(annotation: RubyAnnotation): Boolean =
+        text.codePointCount(annotation.start, annotation.start + annotation.length) > 1 || !isCompoundCharacter(annotation.start)
     val groups = mutableListOf<SentenceRubyGroup>()
     var position = 0
-    fun appendUnannotated(end: Int) {
-        while (position < end) {
-            val codePoint = text.codePointAt(position)
-            if (Character.UnicodeScript.of(codePoint) != Character.UnicodeScript.HAN) {
-                position += Character.charCount(codePoint)
-                continue
-            }
-            val start = position
-            var count = 0
-            while (position < end) {
-                val next = text.codePointAt(position)
-                if (Character.UnicodeScript.of(next) != Character.UnicodeScript.HAN && next != 0x3005 && next != 0x303B) break
-                position += Character.charCount(next)
-                count += 1
-            }
-            // Even without publisher readings, keep compounds such as 大丈夫 or 人々 together.
-            // Kana remains native paragraph text; a whole Japanese sentence is never one unit.
-            if (count >= 2) groups += SentenceRubyGroup(start, position, text.substring(start, position), "")
-        }
-    }
-    publisherGroups.forEach { group ->
-        appendUnannotated(group.start)
-        groups += group
-        position = group.end
-    }
-    appendUnannotated(text.length)
-    return coalesceSingleKanjiReadings(groups)
-}
-
-/**
- * Books often encode a compound as one ruby per kanji. Such adjacent single-character labels
- * can safely share one base and concatenated reading. Explicit word-sized publisher bases are
- * boundaries: joining those could put one word's reading over a different neighboring word.
- */
-private fun coalesceSingleKanjiReadings(groups: List<SentenceRubyGroup>): List<SentenceRubyGroup> {
-    val result = mutableListOf<SentenceRubyGroup>()
-    var pending: SentenceRubyGroup? = null
-    fun flush() {
-        pending?.let(result::add)
-        pending = null
-    }
-    for (group in groups) {
-        val singleKanjiReading = group.reading.isNotBlank() && group.base.codePointCount(0, group.base.length) == 1 &&
-            Character.UnicodeScript.of(group.base.codePointAt(0)) == Character.UnicodeScript.HAN
-        if (!singleKanjiReading) {
-            flush()
-            result += group
+    while (position < text.length) {
+        val annotation = byStart[position]
+        if (annotation != null && isPublisherWord(annotation)) {
+            val end = position + annotation.length
+            groups += SentenceRubyGroup(position, end, text.substring(position, end), annotation.reading)
+            position = end
             continue
         }
-        val previous = pending
-        if (previous != null && previous.end == group.start) {
-            pending = SentenceRubyGroup(previous.start, group.end, previous.base + group.base, previous.reading + group.reading)
-        } else {
-            flush()
-            pending = group
+        if (!isCompoundCharacter(position)) {
+            position += Character.charCount(text.codePointAt(position))
+            continue
+        }
+        val start = position
+        val children = mutableListOf<RubyAnnotation>()
+        var characterCount = 0
+        while (position < text.length && isCompoundCharacter(position)) {
+            val child = byStart[position]
+            if (child != null && isPublisherWord(child)) break
+            if (child != null) children += child.copy(start = child.start - start)
+            position += Character.charCount(text.codePointAt(position))
+            characterCount += 1
+        }
+        if (characterCount >= 2 || children.isNotEmpty()) {
+            groups += SentenceRubyGroup(start, position, text.substring(start, position), children.joinToString("") { it.reading }, children)
         }
     }
-    flush()
-    return result
+    return groups
 }
 
 /** Physical pixel geometry of one atomic group, including an optional reading above it. */

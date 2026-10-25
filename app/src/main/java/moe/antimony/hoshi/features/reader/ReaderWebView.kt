@@ -35,6 +35,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
@@ -47,7 +49,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
-import androidx.lifecycle.findViewTreeLifecycleOwner
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
 import java.io.File
 import kotlinx.coroutines.Dispatchers
@@ -125,7 +127,9 @@ fun ReaderWebView(
     /** Persists statistics alone, for leaving or backgrounding the reader without a new bookmark. */
     onSaveStatistics: (statistics: List<ReadingStatistics>) -> Unit = {},
     onFlushAutoSyncExport: () -> Unit = {},
-    onForegroundAutoSyncImport: () -> Unit = {},
+    /** True means this session is being replaced; its tracker must remain stopped. */
+    onForegroundAutoSyncImport: () -> Boolean = { false },
+    onPrepareSessionReloadChange: (((() -> Unit)?) -> Unit) = {},
     onTextSelected: (ReaderSelectionData) -> Int? = { null },
     onClose: () -> Unit,
     /** Opens sentence mode for this book; `null` hides the menu entry. */
@@ -206,6 +210,7 @@ fun ReaderWebView(
     var sasayakiPlayer by remember { mutableStateOf<SasayakiPlayer?>(null) }
     var pendingSasayakiCue by remember(book) { mutableStateOf<PendingSasayakiCue?>(null) }
     val view = LocalView.current
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
     val systemDarkTheme = isSystemInDarkTheme()
     val clampedInitialIndex = initialChapterIndex.coerceIn(0, book.chapters.lastIndex)
     val stateHolder = remember(book) {
@@ -340,6 +345,8 @@ fun ReaderWebView(
     val readerPosition = stateHolder.readerPosition
     val lookupPopups = stateHolder.lookupPopups
     val readerIframePopupSupported = remember { ReaderLookupPopupWebBridge.isSupported() }
+    val lookupTouchTarget = remember { ReaderLookupTouchTarget() }
+    val lookupTouchDensity = LocalDensity.current.density
     var readerPopupHistories by remember { mutableStateOf<Map<String, ReaderPopupHistoryCounts>>(emptyMap()) }
     var rootSelectionHighlight by remember { mutableStateOf<ReaderRootSelectionHighlight?>(null) }
     var fullscreenImage by remember { mutableStateOf<ReaderFullscreenImage?>(null) }
@@ -497,6 +504,7 @@ fun ReaderWebView(
     }
     var statisticsState by remember(statisticsTracker) { mutableStateOf(statisticsTracker?.state) }
     var resumeStatisticsTrackingOnStart by remember(statisticsTracker) { mutableStateOf(false) }
+    var sessionRetired by remember { mutableStateOf(false) }
     fun currentDisplayedCharacter(): Int =
         book.characterCountAt(
             stateHolder.readerPosition.displayedPosition.index,
@@ -514,6 +522,7 @@ fun ReaderWebView(
         statisticsState = statisticsTracker?.state
     }
     fun recordStatisticsAtDisplayedPosition() {
+        if (sessionRetired) return
         statisticsTracker?.update(currentDisplayedCharacter())
         syncStatisticsState()
     }
@@ -522,6 +531,7 @@ fun ReaderWebView(
         syncStatisticsState()
     }
     fun statisticsForSave(): List<ReadingStatistics>? {
+        if (sessionRetired) return null
         recordStatisticsAtDisplayedPosition()
         return statisticsTracker?.statisticsForPersistenceOrNull()
     }
@@ -530,6 +540,7 @@ fun ReaderWebView(
         onDispose { pendingContinuousSave.getAndSet(null)?.invoke() }
     }
     fun saveReaderPosition(position: ReaderChapterPosition, statistics: List<ReadingStatistics>? = statisticsForSave()) {
+        if (sessionRetired) return
         pendingContinuousSave.getAndSet(null)?.invoke()
         onSaveBookmark(position.index, position.progress, statistics)
     }
@@ -607,17 +618,23 @@ fun ReaderWebView(
      * otherwise stay in memory only, and the Statistics screen would lag behind this sheet.
      */
     fun saveStatisticsWithoutBookmark() {
+        if (sessionRetired) return
         statisticsTracker?.statisticsForPersistenceOrNull()?.let(onSaveStatistics)
     }
     fun resumeStatisticsForLifecycleStartIfNeeded() {
+        if (sessionRetired) return
         if (!resumeStatisticsTrackingOnStart) return
         resumeStatisticsTrackingOnStart = false
         statisticsTracker?.start(currentDisplayedCharacter())
         syncStatisticsState()
     }
     LaunchedEffect(statisticsTracker) {
-        // Statistics are always on: every opened book starts a tracking session.
-        statisticsTracker?.start(currentDisplayedCharacter())
+        if (sessionRetired) return@LaunchedEffect
+        // A delayed parse/import can finish after Home was pressed. Start only in the
+        // foreground; otherwise the next resume establishes the reading baseline.
+        resumeStatisticsTrackingOnStart = statisticsTracker?.startWhenForeground(
+            currentDisplayedCharacter(), lifecycle.currentState,
+        ) ?: false
         syncStatisticsState()
     }
     LaunchedEffect(statisticsTracker, statisticsState?.isTracking) {
@@ -752,13 +769,9 @@ fun ReaderWebView(
     fun closeLookupPopupsAndSelection() {
         cancelPendingLookups()
         rootSelectionHighlight = null
-        if (lookupPopups.isNotEmpty()) {
-            setLookupPopups(clearPopupSelectionHighlights(stateHolder.lookupPopups))
-            clearReaderSelection()
-            setLookupPopups(emptyList())
-        } else {
-            setLookupPopups(emptyList())
-        }
+        setLookupPopups(clearPopupSelectionHighlights(stateHolder.lookupPopups))
+        clearReaderSelection()
+        setLookupPopups(emptyList())
     }
     fun openFullscreenImage(sourceUrl: String) {
         val resource = readerImageResourceBridge.imageResourceForUrl(sourceUrl) ?: return
@@ -928,13 +941,23 @@ fun ReaderWebView(
             is ReaderLookupPopupBridgeMessage.MineEntry -> {
                 val popup = popupById(message.popupId) ?: return
                 val messageId = message.messageId ?: return
-                val ankiContext = popup.sasayakiCue?.takeIf { ankiUiState.popupSettings.needsSasayakiAudio }?.let { cue ->
-                    popup.state.ankiContext.copy(
-                        sasayakiAudioPath = sasayakiPlayer?.exportCueAudio(cue, popup.state.selection.sentence)?.absolutePath,
-                    )
-                } ?: popup.state.ankiContext
-                ankiViewModel.mineEntryAsync(message.payloadJson, ankiContext) { mined ->
-                    replyReaderPopupMessage(message.popupId, messageId, mined.toString())
+                val cue = popup.sasayakiCue?.takeIf { ankiUiState.popupSettings.needsSasayakiAudio }
+                val player = sasayakiPlayer
+                scope.launch {
+                    val ankiContext = try {
+                        cue?.let {
+                            popup.state.ankiContext.copy(
+                                sasayakiAudioPath = player?.exportCueAudio(it, popup.state.selection.sentence)?.absolutePath,
+                            )
+                        } ?: popup.state.ankiContext
+                    } catch (error: Exception) {
+                        if (error is kotlinx.coroutines.CancellationException) throw error
+                        replyReaderPopupMessage(message.popupId, messageId, "false")
+                        return@launch
+                    }
+                    ankiViewModel.mineEntryAsync(message.payloadJson, ankiContext) { mined ->
+                        replyReaderPopupMessage(message.popupId, messageId, mined.toString())
+                    }
                 }
             }
             is ReaderLookupPopupBridgeMessage.DuplicateCheck -> {
@@ -1271,12 +1294,11 @@ fun ReaderWebView(
             event = ReaderLifecycleAutoSyncEvent.Resume,
             inactiveElapsedMillis = inactiveAt?.let { SystemClock.elapsedRealtime() - it },
         )
-        if (plan.importOnForeground) {
-            onForegroundAutoSyncImport()
-        }
+        if (plan.importOnForeground && onForegroundAutoSyncImport()) return@rememberUpdatedState
         resumeStatisticsForLifecycleStartIfNeeded()
     }
     val currentLifecyclePause = rememberUpdatedState {
+        if (sessionRetired) return@rememberUpdatedState
         lastInactiveAtMillis = SystemClock.elapsedRealtime()
         val plan = readerLifecycleAutoSyncPlan(ReaderLifecycleAutoSyncEvent.Pause)
         if (plan.flushPendingProgressSave) {
@@ -1293,6 +1315,7 @@ fun ReaderWebView(
         }
     }
     val currentLifecycleDispose = rememberUpdatedState {
+        if (sessionRetired) return@rememberUpdatedState
         val plan = readerLifecycleAutoSyncPlan(ReaderLifecycleAutoSyncEvent.Dispose)
         if (plan.flushPendingProgressSave) {
             webView?.flushPendingProgressSave()
@@ -1307,7 +1330,21 @@ fun ReaderWebView(
             onFlushAutoSyncExport()
         }
     }
-    val lifecycle = view.findViewTreeLifecycleOwner()?.lifecycle
+    val currentPrepareSessionReload = rememberUpdatedState {
+        if (!sessionRetired) {
+            // Capture pending navigation before closing the old position session. Its saved
+            // action time stays the one from the original scroll, never the import time.
+            webView?.flushPendingProgressSave()
+            pendingContinuousSave.getAndSet(null)?.invoke()
+            pauseStatisticsForLifecycleStop()
+            saveStatisticsWithoutBookmark()
+            sessionRetired = true
+        }
+    }
+    DisposableEffect(onPrepareSessionReloadChange) {
+        onPrepareSessionReloadChange { currentPrepareSessionReload.value() }
+        onDispose { onPrepareSessionReloadChange(null) }
+    }
     DisposableEffect(lifecycle) {
         val observer = LifecycleEventObserver { _, event ->
             when (event) {
@@ -1316,10 +1353,10 @@ fun ReaderWebView(
                 else -> Unit
             }
         }
-        lifecycle?.addObserver(observer)
+        lifecycle.addObserver(observer)
         onDispose {
             currentLifecycleDispose.value()
-            lifecycle?.removeObserver(observer)
+            lifecycle.removeObserver(observer)
         }
     }
 
@@ -1446,9 +1483,19 @@ fun ReaderWebView(
                 stableStatusBarInsetDp = stableStatusBarPaddingDp,
             ),
     )
+    val currentDismissLookup = rememberUpdatedState(::closeLookupPopupsAndSelection)
+    val currentHasActiveLookup = rememberUpdatedState {
+        stateHolder.lookupPopups.isNotEmpty() || selectionLookups.isPending
+    }
     Box(
         modifier = modifier
             .fillMaxSize()
+            .onGloballyPositioned { lookupTouchTarget.rootCoordinates = it }
+            .dismissReaderLookupOnOutsideTouch(
+                hasActiveLookup = { currentHasActiveLookup.value() },
+                hitPopup = { lookupTouchTarget.containsRootPoint(it, lookupTouchDensity) },
+                dismissLookup = { currentDismissLookup.value() },
+            )
             .background(Color(effectiveSettings.backgroundColor(systemDarkTheme))),
     ) {
         Box(
@@ -1506,6 +1553,11 @@ fun ReaderWebView(
                             iframeUrl = readerPopupIframeUrl,
                             rootSelectionHighlight = rootSelectionHighlight,
                         )
+                    }
+                }
+                if (readerIframePopupSupported) {
+                    lookupTouchTarget.popupRects = readerLookupPopupPayloads.map { popup ->
+                        ReaderSelectionRect(popup.frame.left, popup.frame.top, popup.frame.width, popup.frame.height)
                     }
                 }
                 if (highlights != null) {
@@ -1617,7 +1669,10 @@ fun ReaderWebView(
                             .padding(
                                 horizontal = viewportHorizontalPadding,
                                 vertical = viewportVerticalPadding,
-                            ),
+                            )
+                            .onGloballyPositioned {
+                                if (readerIframePopupSupported) lookupTouchTarget.popupCoordinates = it
+                            },
                     )
                 }
                 if (readerIframePopupSupported) {
@@ -1640,7 +1695,10 @@ fun ReaderWebView(
                         rootHighlightEInkMode = effectiveSettings.eInkMode,
                         rootHighlightVerticalWriting = effectiveSettings.verticalWriting,
                         rootHighlightEInkStyle = PopupSelectionEInkStyle.Box,
-                        modifier = Modifier.fillMaxSize(),
+                        onPopupBoundsChanged = { lookupTouchTarget.popupRects = it },
+                        modifier = Modifier.fillMaxSize().onGloballyPositioned {
+                            lookupTouchTarget.popupCoordinates = it
+                        },
                     )
                 }
             }

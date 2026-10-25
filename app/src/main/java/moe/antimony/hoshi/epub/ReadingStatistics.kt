@@ -41,7 +41,74 @@ data class ReadingStatistics(
      */
     @EncodeDefault(EncodeDefault.Mode.NEVER)
     val timeZone: String? = null,
+    /** Collapsed TTU history has one shared origin, even when imported on several devices. */
+    @EncodeDefault(EncodeDefault.Mode.NEVER)
+    val importedBaseline: ImportedReadingBaseline? = null,
 )
+
+/** The device counters already included in one external day total. Never used by a tracker. */
+@Serializable
+data class ImportedReadingCheckpoint(
+    val charactersRead: Int,
+    val readingTime: Double,
+    val lastStatisticModified: Long,
+    val readingTimeByHour: Map<String, Double> = emptyMap(),
+    val timeZone: String? = null,
+)
+
+@Serializable
+data class ImportedReadingBaseline(
+    val charactersRead: Int,
+    val readingTime: Double,
+    val sourceModified: Long,
+    val readingTimeByHour: Map<String, Double> = emptyMap(),
+    val timeZone: String? = null,
+    val includedDevices: Map<String, ImportedReadingCheckpoint> = emptyMap(),
+)
+
+/** A stable shared bucket: importing the same TTU day on a second device is not new reading. */
+const val TTU_STATISTICS_DEVICE_ID: String = "hoshi:ttu"
+
+internal fun ReadingStatistics.withImportedResidual(): ReadingStatistics {
+    val baseline = importedBaseline ?: return this
+    val seconds = (baseline.readingTime - baseline.includedDevices.values.sumOf { it.readingTime }).coerceAtLeast(0.0)
+    val characters = (baseline.charactersRead - baseline.includedDevices.values.sumOf { it.charactersRead }).coerceAtLeast(0)
+    val hours = if (baseline.readingTimeByHour.isNotEmpty() && baseline.includedDevices.values.all {
+        kotlin.math.abs(it.readingTime - it.readingTimeByHour.values.sum()) < 0.001 &&
+            (it.timeZone == null || baseline.timeZone == null || it.timeZone == baseline.timeZone)
+    }) {
+        val includedHours = baseline.includedDevices.values.map { it.readingTimeByHour }.sumReadingHours()
+        baseline.readingTimeByHour.mapValues { (hour, value) -> (value - (includedHours[hour] ?: 0.0)).coerceAtLeast(0.0) }
+            .filterValues { it > 0.0 }.takeIf { it.values.sum() <= seconds + 0.001 }.orEmpty()
+    } else emptyMap()
+    return copy(
+        readingTime = seconds,
+        charactersRead = characters,
+        lastReadingSpeed = if (seconds > 0.0) (characters / seconds * 3600.0).toInt() else 0,
+        readingTimeByHour = hours,
+        timeZone = baseline.timeZone.takeIf { hours.isNotEmpty() },
+    )
+}
+
+private fun mergeImportedBaseline(first: ReadingStatistics, second: ReadingStatistics): ReadingStatistics? {
+    val left = first.importedBaseline ?: return null
+    val right = second.importedBaseline ?: return null
+    if (left.copy(includedDevices = emptyMap()) != right.copy(includedDevices = emptyMap())) return null
+    val included = (left.includedDevices.keys + right.includedDevices.keys).sorted().associateWith { device ->
+        val a = left.includedDevices[device]
+        val b = right.includedDevices[device]
+        if (a == null) b!! else if (b == null) a else {
+            // Same-source imports on two devices may know different device counters. Keep
+            // the newest checkpoint for each origin, independent of merge order.
+            listOf(a, b).maxWith(compareBy<ImportedReadingCheckpoint> { it.lastStatisticModified }
+                .thenBy { it.readingTime }.thenBy { it.charactersRead })
+        }
+    }
+    return first.copy(
+        lastStatisticModified = maxOf(first.lastStatisticModified, second.lastStatisticModified),
+        importedBaseline = left.copy(includedDevices = included),
+    ).withImportedResidual()
+}
 
 /** Entries recorded before devices were tracked belong to [device], the device that wrote them. */
 fun List<ReadingStatistics>.attributedTo(device: DeviceIdentity): List<ReadingStatistics> =
@@ -70,6 +137,7 @@ fun List<ReadingStatistics>.collapsedByDay(): List<ReadingStatistics> =
                 readingTimeByHour = entries.map { it.readingTimeByHour }.sumReadingHours(),
                 // Hours added up from several zones would be no single zone's wall clock.
                 timeZone = entries.map { it.timeZone }.distinct().singleOrNull(),
+                importedBaseline = null,
             )
         }
 
@@ -103,6 +171,12 @@ fun List<ReadingStatistics>.deduplicateReadingStatistics(): List<ReadingStatisti
     fold(linkedMapOf<String, ReadingStatistics>()) { grouped, statistic ->
         val key = dayDeviceKey(statistic.dateKey, statistic.deviceId)
         val existing = grouped[key]
+        val mergedBaseline = existing?.let { mergeImportedBaseline(it, statistic) }
+        val newerImportEvidence = existing != null && statistic.lastStatisticModified == existing.lastStatisticModified &&
+            statistic.importedBaseline != null && (existing.importedBaseline == null || compareValuesBy(
+                statistic.importedBaseline, existing.importedBaseline,
+                { it.sourceModified }, { it.readingTime }, { it.charactersRead },
+            ) > 0)
         // Older sync clients strip fields they do not understand. On an otherwise identical
         // equal-stamp entry, retain the more complete timing evidence instead of erasing it:
         // more located hours, or the same hours with the zone they were recorded in.
@@ -111,8 +185,11 @@ fun List<ReadingStatistics>.deduplicateReadingStatistics(): List<ReadingStatisti
             existing.copy(readingTimeByHour = emptyMap(), timeZone = null) &&
             (statistic.readingTimeByHour.values.sum() > existing.readingTimeByHour.values.sum() ||
                 (statistic.readingTimeByHour == existing.readingTimeByHour && statistic.timeZone != null && existing.timeZone == null))
-        if (existing == null || statistic.lastStatisticModified > existing.lastStatisticModified || richerTiming) {
-            grouped[key] = statistic
+        if (mergedBaseline != null) {
+            grouped[key] = mergedBaseline
+        } else if (existing == null || statistic.lastStatisticModified > existing.lastStatisticModified || richerTiming ||
+            newerImportEvidence) {
+            grouped[key] = statistic.withImportedResidual()
         }
         grouped
     }.values.toList()

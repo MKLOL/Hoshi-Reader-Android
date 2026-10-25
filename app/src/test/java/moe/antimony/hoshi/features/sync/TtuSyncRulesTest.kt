@@ -73,7 +73,18 @@ class TtuSyncRulesTest {
         )
 
         assertEquals(ResolvedBookPosition(spineIndex = 1, progress = 0.25), bookInfo.resolveTtuCharacterPosition(150))
-        assertEquals(ResolvedBookPosition(spineIndex = 1, progress = 0.995), bookInfo.resolveTtuCharacterPosition(999))
+        assertEquals(ResolvedBookPosition(spineIndex = 1, progress = 1.0), bookInfo.resolveTtuCharacterPosition(999))
+    }
+
+    @Test
+    fun completedProgressIncludesTrailingEmptySpinesAndKeepsTheLastCharacterDistinct() {
+        val info = BookInfo(characterCount = 100, chapterInfo = mapOf(
+            "body" to BookInfo.ChapterInfo(spineIndex = 0, currentTotal = 0, chapterCount = 100),
+            "credits" to BookInfo.ChapterInfo(spineIndex = 1, currentTotal = 100, chapterCount = 0),
+        ))
+        assertEquals(ResolvedBookPosition(0, 0.99), info.resolveTtuCharacterPosition(99))
+        assertEquals(ResolvedBookPosition(1, 1.0), info.resolveTtuCharacterPosition(100))
+        assertEquals(ResolvedBookPosition(1, 1.0), info.resolveTtuCharacterPosition(101))
     }
 
     @Test

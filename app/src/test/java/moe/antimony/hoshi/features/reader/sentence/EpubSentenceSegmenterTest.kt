@@ -218,6 +218,34 @@ class EpubSentenceSegmenterTest {
     }
 
     @Test
+    fun safetyCutMovesBeforeTheCompleteRubyBase() {
+        val prefix = "あ".repeat(399)
+        val sentences = EpubSentenceSegmenter.segment(2, chapter("<p>$prefix<ruby>大<span>丈</span>夫<rt>だいじょうぶ</rt></ruby>ですよ。</p>"))
+        assertEquals(listOf(prefix, "大丈夫ですよ。"), sentences.map { it.text })
+        assertEquals(listOf("c2s0", "c2s399"), sentences.map { it.id })
+        assertEquals(listOf(emptyList(), listOf(RubyAnnotation(0, 3, "だいじょうぶ"))), sentences.map { it.ruby })
+        assertEquals(405, sentences.sumOf { it.length })
+    }
+
+    @Test
+    fun aRubyBaseLongerThanTheSafetyLimitStaysWholeAndHasOneReading() {
+        val base = "大丈夫".repeat(200)
+        val sentences = EpubSentenceSegmenter.segment(0, chapter("<p><ruby>$base<rt>よみ</rt></ruby>次。</p>"))
+        assertEquals(listOf(base, "次。"), sentences.map { it.text })
+        assertEquals(listOf(RubyAnnotation(0, base.length, "よみ")), sentences.first().ruby)
+        assertEquals(emptyList<RubyAnnotation>(), sentences.last().ruby)
+        assertEquals(600, sentences.last().start)
+    }
+
+    @Test
+    fun aCommaInsideRubyCannotCutItsBaseAtTheSafetyLimit() {
+        val base = "大".repeat(250) + "、" + "丈".repeat(200)
+        val sentences = EpubSentenceSegmenter.segment(0, chapter("<p><ruby>$base<rt>よみ</rt></ruby>夫。</p>"))
+        assertEquals(listOf(base, "夫。"), sentences.map { it.text })
+        assertEquals(listOf(RubyAnnotation(0, base.length, "よみ")), sentences.first().ruby)
+    }
+
+    @Test
     fun theFirstHeadingIsTheChapterTitleFallback() {
         val chapter = EpubSentenceSegmenter.chapter(0, chapter("<h1>第一章　　朝</h1><p>本文。</p><h2>二</h2>"))
 

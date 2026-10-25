@@ -38,7 +38,7 @@ internal data class ChapterExtraction(val parts: List<TextRun?>, val heading: St
 
 /**
  * Splits chapter HTML into the exact sentences the desktop pre-translation tool addresses
- * (`tools/pretranslate/hoshi_pretranslate/epub.py`, `_ChapterTextExtractor` + `_segment`), so a
+ * (`tools/news/segment.py`, `ChapterText` + `segment`), so a
  * sentence shown on its own finds its stored translation by the same id and text hash.
  *
  * The extractor mirrors Python's `html.parser` (with `convert_charrefs=True`) because that is
@@ -55,7 +55,8 @@ internal data class ChapterExtraction(val parts: List<TextRun?>, val heading: St
  *    processing instructions are skipped whole.
  *  - Block elements end a sentence even without punctuation; `。！？!?` end a sentence and
  *    swallow the closing brackets and ellipses that follow. ASCII `.` is deliberately not a
- *    terminator. A run of 400 matchable characters with no terminator is split at its last comma.
+ *    terminator. A run of 400 matchable characters with no terminator is split at its last comma,
+ *    or before a ruby base crossing that cutoff. A single longer ruby base stays whole.
  */
 object EpubSentenceSegmenter {
     private const val SENTENCE_TERMINATORS = "。！？!?"
@@ -298,6 +299,15 @@ object EpubSentenceSegmenter {
         var bufferLength = 0
         var paragraph = 0
         var lastSoftBreak = -1
+        val remainingGroups = mutableMapOf<Int, Int>()
+        parts.forEach { part ->
+            part?.groups?.forEach { group ->
+                if (group >= 0) remainingGroups[group] = (remainingGroups[group] ?: 0) + 1
+            }
+        }
+        fun consumeGroup(group: Int) {
+            if (group >= 0) remainingGroups[group] = (remainingGroups[group] ?: 1) - 1
+        }
 
         fun flush() {
             val start = bufferStart
@@ -315,7 +325,20 @@ object EpubSentenceSegmenter {
         }
 
         fun splitOverlong() {
-            val headEnd = if (lastSoftBreak in 1 until buffer.size - 1) lastSoftBreak + 1 else buffer.size
+            fun safeBoundary(candidate: Int): Int {
+                var end = candidate
+                val before = bufferGroups[end - 1]
+                val after = bufferGroups.getOrNull(end) ?: if ((remainingGroups[before] ?: 0) > 0) before else -1
+                if (before >= 0 && before == after) {
+                    while (end > 0 && bufferGroups[end - 1] == before) end -= 1
+                }
+                return end
+            }
+            var headEnd = safeBoundary(if (lastSoftBreak in 1 until buffer.size - 1) lastSoftBreak + 1 else buffer.size)
+            if (headEnd == 0) headEnd = safeBoundary(buffer.size)
+            // A publisher can put a very long base in one ruby. Retaining that base is safer
+            // than inventing partial readings, so let this single atom exceed the safety limit.
+            if (headEnd == 0) return
             val head = buffer.subList(0, headEnd).toList()
             val headGroups = bufferGroups.subList(0, headEnd).toList()
             val tail = buffer.subList(headEnd, buffer.size).toList()
@@ -346,7 +369,9 @@ object EpubSentenceSegmenter {
             while (position < chars.size) {
                 val char = chars[position]
                 buffer += char
-                bufferGroups += groups?.get(position) ?: -1
+                val group = groups?.get(position) ?: -1
+                bufferGroups += group
+                consumeGroup(group)
                 position += 1
                 if (char.isMatchable()) {
                     if (bufferStart == null) bufferStart = normalizedCount
@@ -359,7 +384,9 @@ object EpubSentenceSegmenter {
                     while (position < chars.size && chars[position].let { it.length == 1 && it[0] in TRAILING_CHARS }) {
                         val trailing = chars[position]
                         buffer += trailing
-                        bufferGroups += groups?.get(position) ?: -1
+                        val trailingGroup = groups?.get(position) ?: -1
+                        bufferGroups += trailingGroup
+                        consumeGroup(trailingGroup)
                         position += 1
                         if (trailing.isMatchable()) {
                             normalizedCount += 1
@@ -367,7 +394,9 @@ object EpubSentenceSegmenter {
                         }
                     }
                     flush()
-                } else if (bufferLength >= MAX_SENTENCE_CHARS) {
+                } else if (bufferLength >= MAX_SENTENCE_CHARS &&
+                    (bufferLength == MAX_SENTENCE_CHARS || group < 0 || remainingGroups[group] == 0)
+                ) {
                     splitOverlong()
                 }
             }
@@ -404,8 +433,8 @@ object EpubSentenceSegmenter {
         }
         val ruby = mutableListOf<RubyAnnotation>()
         // A ruby base group normally forms one contiguous run here, so its reading is emitted once.
-        // Guard against a group id recurring within a single sentence (e.g. a base that straddled an
-        // overlong-split boundary, or was broken up by collapsed whitespace): emit the full-reading
+        // Guard against a group id recurring within a single sentence (e.g. a base broken up by
+        // collapsed whitespace): emit the full-reading
         // annotation only for the first run of each id so the same reading is never duplicated.
         val emittedGroups = HashSet<Int>()
         var i = 0

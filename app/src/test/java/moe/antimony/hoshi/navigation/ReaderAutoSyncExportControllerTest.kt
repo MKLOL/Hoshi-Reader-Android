@@ -9,11 +9,41 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ReaderAutoSyncExportControllerTest {
+    @Test
+    fun anImportWaitsForTheRunningExportAndDefersTheNextExportUntilResume() = runBlocking {
+        val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        val controller = ReaderAutoSyncExportController(appScope)
+        val releaseExport = CompletableDeferred<Unit>()
+        val firstStarted = CompletableDeferred<Unit>()
+        val nextExported = CompletableDeferred<Unit>()
+        controller.scheduleExport(true) { firstStarted.complete(Unit); releaseExport.await() }
+        controller.flushExport(true)
+        firstStarted.await()
+        val paused = CompletableDeferred<Unit>()
+        val import = launch {
+            controller.pauseExportsForImport()
+            paused.complete(Unit)
+        }
+        kotlinx.coroutines.yield()
+        assertFalse(paused.isCompleted)
+        controller.scheduleExport(true) { nextExported.complete(Unit) }
+        assertEquals(null, controller.flushExport(true))
+        releaseExport.complete(Unit)
+        import.join()
+        assertTrue(paused.isCompleted)
+        assertFalse(nextExported.isCompleted)
+        controller.resumeExports(true)
+        controller.flushExport(true)?.join()
+        assertTrue(nextExported.isCompleted)
+        appScope.cancel()
+    }
+
     @Test
     fun flushExportSurvivesCallerScopeCancellationAndWaitsForLatestSave() = runBlocking {
         val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)

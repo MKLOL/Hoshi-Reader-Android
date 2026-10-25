@@ -4,6 +4,10 @@ import moe.antimony.hoshi.epub.SasayakiPlaybackData
 
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.yield
+import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -11,6 +15,39 @@ import java.io.File
 import java.nio.file.Files
 
 class SasayakiPlaybackPersistenceStateTest {
+    @Test
+    fun delayedPositionWriteCannotRestoreClearedAudioOrOverwriteNewSettings() = runBlocking {
+        val firstWrite = CompletableDeferred<Unit>()
+        val releaseFirstWrite = CompletableDeferred<Unit>()
+        val saved = mutableListOf<SasayakiPlaybackData>()
+        val initial = SasayakiPlaybackData(lastPosition = 0.0, audioFileName = "sasayaki_audio.m4b")
+        val repository = object : SasayakiPlaybackRepository {
+            override suspend fun load() = initial
+            override suspend fun save(playback: SasayakiPlaybackData) {
+                if (!firstWrite.isCompleted) {
+                    firstWrite.complete(Unit)
+                    releaseFirstWrite.await()
+                }
+                saved += playback
+            }
+        }
+        val state = SasayakiPlaybackPersistenceState(repository, SasayakiAudioRepository(File("book-root")), initial, this)
+        state.savePosition(13.0)
+        firstWrite.await()
+        state.clearAudioMetadata()
+        state.setRate(1.4f)
+        state.setDelay(0.5)
+        yield()
+        assertTrue(saved.isEmpty())
+        releaseFirstWrite.complete(Unit)
+        withTimeout(5_000) { while (saved.size < 4) yield() }
+        assertEquals(listOf(13.0, 0.0, 0.0, 0.0), saved.map { it.lastPosition })
+        assertEquals(null, saved.last().audioFileName)
+        assertEquals(1.4f, saved.last().rate)
+        assertEquals(0.5, saved.last().delay, 0.0)
+        assertEquals(state.playback, saved.last())
+    }
+
     @Test
     fun loadsPlaybackAndSavesDelayRateAndPositionChanges() {
         val initial = SasayakiPlaybackData(

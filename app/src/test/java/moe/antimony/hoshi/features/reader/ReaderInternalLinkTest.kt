@@ -70,4 +70,40 @@ class ReaderInternalLinkTest {
         assertNull(duplicateBook.resolveInternalReaderLink("https://hoshi.local/epub/chapter-1.xhtml"))
     }
 
+    @Test
+    fun externalLinkOpensBrowserAndAlwaysConsumesReaderNavigation() {
+        val opened = mutableListOf<String>()
+        val navigated = mutableListOf<ReaderInternalLinkTarget>()
+        val external = "https://example.com/help#part-1"
+
+        assertEquals(true, book.handleReaderLinkNavigation(external, true, navigated::add, opened::add))
+        assertEquals(listOf(external), opened)
+        assertEquals(emptyList<ReaderInternalLinkTarget>(), navigated)
+        // A missing browser handler still cannot permit the remote page to replace the book.
+        assertEquals(true, book.handleReaderLinkNavigation(external, true, {}, {}))
+    }
+
+    @Test
+    fun internalLinksKeepChapterNavigationAndSubframesKeepTheirResourceLoading() {
+        val navigated = mutableListOf<ReaderInternalLinkTarget>()
+        val opened = mutableListOf<String>()
+        val internal = "https://hoshi.local/epub/OPS/chapter-1.xhtml#part-2"
+
+        assertEquals(true, book.handleReaderLinkNavigation(internal, true, navigated::add, opened::add))
+        assertEquals(ReaderInternalLinkTarget(ReaderChapterPosition(1, 0.0), "part-2"), navigated.single())
+        assertEquals(false, book.handleReaderLinkNavigation("https://hoshi.local/popup/iframe.html", false, navigated::add, opened::add))
+        assertEquals(false, book.handleReaderLinkNavigation("about:blank", true, navigated::add, opened::add))
+        assertEquals(false, book.handleReaderLinkNavigation("#part-3", true, navigated::add, opened::add))
+        assertEquals(emptyList<String>(), opened)
+    }
+
+    @Test
+    fun unsupportedSchemesAndUnknownBookResourcesCannotReplaceTheReader() {
+        val opened = mutableListOf<String>()
+        for (url in listOf("javascript:alert(1)", "file:///tmp/book.html", "https://hoshi.local/epub/missing.xhtml")) {
+            assertEquals(true, book.handleReaderLinkNavigation(url, true, {}, opened::add))
+        }
+        assertEquals(emptyList<String>(), opened)
+    }
+
 }

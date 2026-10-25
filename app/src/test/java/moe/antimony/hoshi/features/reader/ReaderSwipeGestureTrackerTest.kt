@@ -61,6 +61,16 @@ class ReaderSwipeGestureTrackerTest {
     }
 
     @Test
+    fun fastMostlyVerticalFlicksNeverTurnPages() {
+        for (dx in listOf(-44f, 44f, -90f, 90f)) {
+            val tracker = ReaderSwipeGestureTracker(minDistance = 72f)
+            tracker.onDown(240f, 100f, eventTime = 1_000L)
+            assertEquals(ReaderSwipeGestureTracker.Result.None, tracker.onMove(240f + dx, 300f, 1_030L))
+            assertEquals(ReaderSwipeGestureTracker.Result.None, tracker.onUp(240f + dx, 300f, 1_050L))
+        }
+    }
+
+    @Test
     fun slowHorizontalDragDoesNotTriggerPageSwipe() {
         val tracker = ReaderSwipeGestureTracker(minDistance = 72f)
 

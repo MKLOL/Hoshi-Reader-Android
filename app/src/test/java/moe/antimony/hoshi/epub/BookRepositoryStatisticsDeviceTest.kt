@@ -44,12 +44,12 @@ class BookRepositoryStatisticsDeviceTest {
         repository.saveStatistics(root, listOf(other))
         val total = day("2026-09-29", 1800.0, 30, 2).copy(readingTimeByHour = mapOf("2026-09-29T01:00" to 600.0, "2026-09-29T10:00" to 1200.0))
         repository.applyDayTotals(root, listOf(total), false)
-        val own = repository.loadStatistics(root).single { it.deviceId == phone.id }
+        val own = repository.loadStatistics(root).single { it.deviceId == TTU_STATISTICS_DEVICE_ID }
         assertEquals(1200.0, own.readingTime, 0.0)
         assertEquals(mapOf("2026-09-29T01:00" to 600.0, "2026-09-29T10:00" to 600.0), own.readingTimeByHour)
         // A legacy client adds characters but cannot report any hours. Existing evidence survives.
         repository.applyDayTotals(root, listOf(total.copy(charactersRead = 40, readingTimeByHour = emptyMap())), false)
-        assertEquals(own.readingTimeByHour, repository.loadStatistics(root).single { it.deviceId == phone.id }.readingTimeByHour)
+        assertEquals(own.readingTimeByHour, repository.loadStatistics(root).single { it.deviceId == TTU_STATISTICS_DEVICE_ID }.readingTimeByHour)
     }
 
     @Test
@@ -165,14 +165,14 @@ class BookRepositoryStatisticsDeviceTest {
         val later = java.time.Instant.parse("2026-10-03T14:20:00Z").toEpochMilli()
         repository.applyDayTotals(root, listOf(day("2026-10-03", 3000.0, 160, modified = later)), replaceOtherDays = false)
 
-        val rebuilt = repository.loadStatistics(root).single()
-        assertEquals(mapOf("2026-10-03T01:00" to 1800.0), rebuilt.readingTimeByHour)
-        assertEquals(java.time.ZoneId.of("America/New_York"), rebuilt.recordedZone(java.time.ZoneId.of("America/New_York")))
-        assertEquals("America/New_York", rebuilt.timeZone)
+        val kept = repository.loadStatistics(root).single { it.deviceId == phone.id }
+        assertEquals(night, kept)
+        assertEquals(java.time.ZoneId.of("America/New_York"), kept.recordedZone(java.time.ZoneId.of("America/New_York")))
+        assertEquals(ReadingTotals(3000.0, 160), repository.loadStatistics(root).readingTotals())
     }
 
     @Test
-    fun applyDayTotalsAdjustsOnlyThisDevicesShareOfADay() = runBlocking {
+    fun applyDayTotalsKeepsRealDeviceSharesAndAddsTheExternalRemainder() = runBlocking {
         val repository = repository(phone)
         val root = repository.createBookDirectory("book")
         repository.saveStatistics(
@@ -194,21 +194,27 @@ class BookRepositoryStatisticsDeviceTest {
         assertEquals(true, changed)
         val entries = repository.loadStatistics(root)
         val phone12 = entries.single { it.dateKey == "2026-09-12" && it.deviceId == phone.id }
-        assertEquals(700.0, phone12.readingTime, 0.0)
-        assertEquals(120, phone12.charactersRead)
-        assertEquals(20L, phone12.lastStatisticModified)
+        assertEquals(600.0, phone12.readingTime, 0.0)
+        assertEquals(100, phone12.charactersRead)
+        assertEquals(5L, phone12.lastStatisticModified)
+        val external12 = entries.single { it.dateKey == "2026-09-12" && it.deviceId == TTU_STATISTICS_DEVICE_ID }
+        assertEquals(100.0, external12.readingTime, 0.0)
+        assertEquals(20, external12.charactersRead)
         assertEquals(day("2026-09-12", 300.0, 40, modified = 9, device = tablet), entries.single { it.dateKey == "2026-09-12" && it.deviceId == tablet.id })
         assertEquals(day("2026-09-11", 120.0, 30, modified = 1, device = tablet), entries.single { it.dateKey == "2026-09-11" })
-        assertEquals(day("2026-09-13", 50.0, 5, modified = 21, device = phone).copy(lastReadingSpeed = 360), entries.single { it.dateKey == "2026-09-13" })
+        val external13 = entries.single { it.dateKey == "2026-09-13" }
+        assertEquals(TTU_STATISTICS_DEVICE_ID, external13.deviceId)
+        assertEquals(50.0, external13.readingTime, 0.0)
+        assertEquals(5, external13.charactersRead)
         assertEquals(1170.0, entries.readingTotals().readingTime, 0.0)
 
         // Applying the same totals again changes nothing: importing what was exported is a no-op.
-        assertEquals(false, repository.applyDayTotals(root, entries.collapsedByDay(), replaceOtherDays = false))
+        assertEquals(false, repository.applyDayTotals(root, entries.filter { it.dateKey != "2026-09-11" }.collapsedByDay(), replaceOtherDays = false))
         assertEquals(1170.0, repository.loadStatistics(root).readingTotals().readingTime, 0.0)
     }
 
     @Test
-    fun applyDayTotalsNeverReducesOtherDevicesAndReplaceDropsOnlyThisDevicesOtherDays() = runBlocking {
+    fun applyDayTotalsNeverReducesAnyDevicesActualReading() = runBlocking {
         val repository = repository(phone)
         val root = repository.createBookDirectory("book")
         repository.saveStatistics(
@@ -225,10 +231,15 @@ class BookRepositoryStatisticsDeviceTest {
         repository.applyDayTotals(root, listOf(day("2026-09-12", 200.0, 20, modified = 30)), replaceOtherDays = true)
 
         val entries = repository.loadStatistics(root)
-        assertEquals(setOf("2026-09-12", "2026-09-09"), entries.map { it.dateKey }.toSet())
-        assertEquals(0.0, entries.single { it.deviceId == phone.id }.readingTime, 0.0)
+        assertEquals(setOf("2026-09-12", "2026-09-10", "2026-09-09"), entries.map { it.dateKey }.toSet())
+        assertEquals(600.0, entries.single { it.deviceId == phone.id && it.dateKey == "2026-09-12" }.readingTime, 0.0)
+        assertEquals(0.0, entries.single { it.deviceId == TTU_STATISTICS_DEVICE_ID }.readingTime, 0.0)
         assertEquals(day("2026-09-12", 300.0, 40, modified = 9, device = tablet), entries.single { it.dateKey == "2026-09-12" && it.deviceId == tablet.id })
         assertEquals(day("2026-09-09", 90.0, 9, modified = 1, device = tablet), entries.single { it.dateKey == "2026-09-09" })
+        assertEquals(false, repository.applyDayTotals(
+            root, listOf(day("2026-09-12", 200.0, 20, modified = 30)), replaceOtherDays = true,
+        ))
+        assertEquals(entries.toSet(), repository.loadStatistics(root).toSet())
     }
 
     @Test

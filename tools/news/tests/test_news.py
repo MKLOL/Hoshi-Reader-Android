@@ -27,6 +27,21 @@ sync_server = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(sync_server)
 
 
+class SentenceBoundaryTests(unittest.TestCase):
+    def test_safety_cut_keeps_the_entire_ruby_base(self):
+        prefix = "あ" * 399
+        sentences = segment("<p>" + prefix + "<ruby>大<span>丈</span>夫<rt>だいじょうぶ</rt></ruby>ですよ。</p>")
+        self.assertEqual([prefix, "大丈夫ですよ。"], [sentence["text"] for sentence in sentences])
+        self.assertEqual([0, 399], [sentence["start"] for sentence in sentences])
+        self.assertEqual(405, sum(sentence["len"] for sentence in sentences))
+
+    def test_overlong_ruby_and_its_comma_remain_one_atom(self):
+        base = "大" * 250 + "、" + "丈" * 200
+        sentences = segment("<p><ruby>" + base + "<rt>よみ</rt></ruby>夫。</p>")
+        self.assertEqual([base, "夫。"], [sentence["text"] for sentence in sentences])
+        self.assertEqual([0, 450], [sentence["start"] for sentence in sentences])
+
+
 class FixtureTest(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()

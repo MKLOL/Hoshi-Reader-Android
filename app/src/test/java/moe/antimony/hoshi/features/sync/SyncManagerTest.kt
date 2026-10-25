@@ -1,6 +1,9 @@
 package moe.antimony.hoshi.features.sync
 
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.yield
 import moe.antimony.hoshi.epub.BookEntry
 import moe.antimony.hoshi.epub.BookInfo
 import moe.antimony.hoshi.epub.BookMetadata
@@ -10,6 +13,7 @@ import moe.antimony.hoshi.epub.ReadingStatistics
 import moe.antimony.hoshi.epub.readingTotals
 import moe.antimony.hoshi.epub.DeviceIdentity
 import moe.antimony.hoshi.epub.SasayakiPlaybackData
+import moe.antimony.hoshi.epub.TTU_STATISTICS_DEVICE_ID
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -55,7 +59,7 @@ class SyncManagerTest {
             Bookmark(1, 0.5, 150, TtuSyncRules.unixMillisToAppleReferenceSeconds(2_000)),
             repository.loadBookmark(entry.root),
         )
-        assertEquals(120, repository.loadStatistics(entry.root).single().charactersRead)
+        assertEquals(120, repository.loadStatistics(entry.root).readingTotals().charactersRead)
         assertEquals(
             SasayakiPlaybackData(lastPosition = 88.5, delay = 0.2, rate = 1.5f, audioUri = "content://audio"),
             repository.loadSasayakiPlayback(entry.root),
@@ -63,7 +67,25 @@ class SyncManagerTest {
     }
 
     @Test
-    fun importFromTtuAdjustsOnlyThisDevicesShareAndIsStableAcrossRepeatedImports() = runBlocking {
+    fun importingCompletedBookKeepsFullCompletionIncludingTrailingEmptySpines() = runBlocking {
+        val repository = BookRepository(tempFolder.root)
+        val entry = repository.createEntry()
+        val info = repository.loadBookInfo(entry.root)!!
+        repository.saveBookInfo(entry.root, info.copy(chapterInfo = info.chapterInfo +
+            ("credits" to BookInfo.ChapterInfo(spineIndex = 2, currentTotal = info.characterCount, chapterCount = 0))))
+        val drive = FakeDriveSyncDataSource(progress = TtuProgress(7, info.characterCount, 1.0, 2_000))
+        SyncManager(repository, drive).syncBook(
+            entry, SyncDirection.ImportFromTtu, syncStats = false,
+            statsSyncMode = StatisticsSyncMode.Merge, syncAudioBook = false,
+        )
+        val bookmark = repository.loadBookmark(entry.root)!!
+        assertEquals(2, bookmark.chapterIndex)
+        assertEquals(1.0, bookmark.progress, 0.0)
+        assertEquals(info.characterCount, bookmark.characterCount)
+    }
+
+    @Test
+    fun importFromTtuPreservesDeviceReadingsAndIsStableAcrossRepeatedImports() = runBlocking {
         val phone = DeviceIdentity(id = "phone-id", name = "Pixel 8")
         val tablet = DeviceIdentity(id = "tablet-id", name = "Galaxy Tab")
         val repository = BookRepository(tempFolder.root, deviceIdentity = phone)
@@ -91,10 +113,52 @@ class SyncManagerTest {
         sync()
         val twice = repository.loadStatistics(entry.root)
 
-        assertEquals(700.0, once.single { it.deviceId == phone.id }.readingTime, 0.0)
+        assertEquals(600.0, once.single { it.deviceId == phone.id }.readingTime, 0.0)
         assertEquals(300.0, once.single { it.deviceId == tablet.id }.readingTime, 0.0)
         assertEquals(1000.0, once.readingTotals().readingTime, 0.0)
         assertEquals("a second import of the same file must not grow the day", once.toSet(), twice.toSet())
+    }
+
+    @Test
+    fun replacingFromAnExplicitlyEmptyStatsFileClearsOnlyImportedHistory() = runBlocking {
+        for ((mode, hasStatisticsFile, expectedCharacters) in listOf(
+            Triple(StatisticsSyncMode.Replace, true, 10),
+            Triple(StatisticsSyncMode.Replace, false, 300),
+            Triple(StatisticsSyncMode.Merge, true, 300),
+        )) {
+            val phone = DeviceIdentity("phone", "Phone")
+            val repository = BookRepository(tempFolder.newFolder(), deviceIdentity = phone)
+            val entry = repository.createEntry()
+            val physicalReading = ReadingStatistics(
+                "Title", "2026-10-24", charactersRead = 10, readingTime = 10.0,
+                lastStatisticModified = 1, deviceId = phone.id, deviceName = phone.name,
+            )
+            repository.saveStatistics(entry.root, listOf(physicalReading))
+            repository.applyDayTotals(entry.root, listOf(physicalReading.copy(
+                charactersRead = 300, readingTime = 300.0, lastStatisticModified = 2,
+                deviceId = null, deviceName = null,
+            )), false)
+            val drive = FakeDriveSyncDataSource(
+                progress = TtuProgress(7, 150, 0.5, 2_000),
+                statistics = if (hasStatisticsFile) emptyList() else null,
+            )
+
+            SyncManager(repository, drive).syncBook(
+                entry, SyncDirection.ImportFromTtu, syncStats = true,
+                statsSyncMode = mode, syncAudioBook = false,
+            )
+
+            val stored = repository.loadStatistics(entry.root)
+            assertEquals(expectedCharacters, stored.readingTotals().charactersRead)
+            assertEquals(physicalReading, stored.single { it.deviceId == phone.id })
+            if (expectedCharacters == 10) {
+                // A zero imported checkpoint carries the removal to other HTTP devices.
+                assertEquals(0, stored.single { it.deviceId == TTU_STATISTICS_DEVICE_ID }.charactersRead)
+                val once = stored.toSet()
+                repository.applyDayTotals(entry.root, emptyList(), replaceOtherDays = true)
+                assertEquals(once, repository.loadStatistics(entry.root).toSet())
+            }
+        }
     }
 
     @Test
@@ -129,6 +193,39 @@ class SyncManagerTest {
         assertEquals(220, drive.updatedStatistics.single().charactersRead)
         assertEquals(TtuAudioBook("Title", 45.0, 9_999), drive.updatedAudioBook)
         assertEquals(4_321, TtuSyncRules.appleReferenceSecondsToUnixMillis(repository.loadBookmark(entry.root)!!.lastModified!!))
+    }
+
+    @Test
+    fun simultaneousModesSerializeOneBooksExchangeWhileAnotherBookCanSync() = runBlocking {
+        val repository = BookRepository(tempFolder.root)
+        val entry = repository.createEntry()
+        val otherRoot = repository.createBookDirectory("other-book")
+        val other = entry.copy(root = otherRoot, metadata = entry.metadata.copy(id = "other", folder = "other-book"))
+        val firstStarted = CompletableDeferred<Unit>()
+        val releaseFirst = CompletableDeferred<Unit>()
+        var starts = 0
+        val drive = FakeDriveSyncDataSource(beforeFindRoot = {
+            starts += 1
+            if (starts == 1) {
+                firstStarted.complete(Unit)
+                releaseFirst.await()
+            }
+        })
+        val manager = SyncManager(repository, drive)
+        suspend fun sync(book: BookEntry) = manager.syncBook(
+            book, null, false, StatisticsSyncMode.Merge, false,
+        )
+        val first = launch { sync(entry) }
+        firstStarted.await()
+        val second = launch { sync(entry) }
+        val independent = launch { sync(other) }
+        yield()
+        independent.join()
+        assertEquals("only the first mode and the unrelated book can enter Drive", 2, starts)
+        releaseFirst.complete(Unit)
+        first.join()
+        second.join()
+        assertEquals(3, starts)
     }
 
     @Test
@@ -180,6 +277,7 @@ private class FakeDriveSyncDataSource(
     statistics: List<ReadingStatistics>? = null,
     audioBook: TtuAudioBook? = null,
     private val staleOnFirstList: Boolean = false,
+    private val beforeFindRoot: suspend () -> Unit = {},
 ) : DriveSyncDataSource {
     private val progressFile = progress?.let { DriveFile("progress", TtuSyncRules.progressFileName(it)) }
     private val statisticsFile = statistics?.let { DriveFile("statistics", TtuSyncRules.statisticsFileName(it)) }
@@ -194,7 +292,7 @@ private class FakeDriveSyncDataSource(
     var updatedStatistics: List<ReadingStatistics> = emptyList()
     var updatedAudioBook: TtuAudioBook? = null
 
-    override suspend fun findRootFolder(): String = "root"
+    override suspend fun findRootFolder(): String { beforeFindRoot(); return "root" }
 
     override suspend fun ensureBookFolder(
         bookTitle: String,

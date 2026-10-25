@@ -45,6 +45,7 @@ import moe.antimony.hoshi.features.reader.ReaderFontManager
 import moe.antimony.hoshi.features.reader.ReaderSelectionData
 import moe.antimony.hoshi.features.reader.ReaderSelectionRect
 import moe.antimony.hoshi.webview.applyHoshiWebViewSecurityDefaults
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -76,6 +77,7 @@ internal fun LookupPopupAndroidStack(
     rootHighlightEInkMode: Boolean = false,
     rootHighlightVerticalWriting: Boolean = false,
     rootHighlightEInkStyle: PopupSelectionEInkStyle = PopupSelectionEInkStyle.Underline,
+    onPopupBoundsChanged: (List<ReaderSelectionRect>) -> Unit = {},
 ) {
     val context = LocalContext.current
     val appContainer = LocalHoshiAppContainer.current
@@ -114,6 +116,7 @@ internal fun LookupPopupAndroidStack(
                 onPopupsChange = onPopupsChange,
                 lookupChildPopup = lookupChildPopup,
                 onRootPopupDismissed = onRootPopupDismissed,
+                onPopupBoundsChanged = onPopupBoundsChanged,
                 sasayakiWasPaused = false,
                 sasayakiIsPlaying = false,
                 onSasayakiReplayCue = {},
@@ -146,6 +149,7 @@ private class LookupPopupOverlayController(
             view.post(resizeUpdate)
         }
         view.onOutsideStylusTouch = ::dismissFromOverlay
+        view.onPopupBoundsChanged = { lastUpdate?.onPopupBoundsChanged?.invoke(it) }
         view.addView(
             rootHighlightView,
             FrameLayout.LayoutParams(
@@ -175,13 +179,14 @@ private class LookupPopupOverlayController(
         onPopupsChange: (List<LookupPopupItem>) -> Unit,
         lookupChildPopup: (ReaderSelectionData) -> Pair<LookupPopupItem, Int>?,
         onRootPopupDismissed: () -> Boolean,
+        onPopupBoundsChanged: (List<ReaderSelectionRect>) -> Unit,
         sasayakiWasPaused: Boolean,
         sasayakiIsPlaying: Boolean,
         onSasayakiReplayCue: (SasayakiMatch) -> Unit,
         onSasayakiTogglePlayback: () -> Unit,
         onSasayakiPauseStateCleared: () -> Unit,
         onSasayakiPlayForward: (SasayakiMatch) -> Unit,
-        onPrepareSasayakiAudio: (SasayakiMatch, String) -> String?,
+        onPrepareSasayakiAudio: suspend (SasayakiMatch, String) -> String?,
     ) {
         lastUpdate = OverlayUpdate(
             popups = popups,
@@ -195,6 +200,7 @@ private class LookupPopupOverlayController(
             onPopupsChange = onPopupsChange,
             lookupChildPopup = lookupChildPopup,
             onRootPopupDismissed = onRootPopupDismissed,
+            onPopupBoundsChanged = onPopupBoundsChanged,
             sasayakiWasPaused = sasayakiWasPaused,
             sasayakiIsPlaying = sasayakiIsPlaying,
             onSasayakiReplayCue = onSasayakiReplayCue,
@@ -211,6 +217,7 @@ private class LookupPopupOverlayController(
         view.removeCallbacks(resizeUpdate)
         view.onOverlaySizeChanged = {}
         view.onOutsideStylusTouch = {}
+        view.onPopupBoundsChanged = {}
         // Destroy every remaining popup WebView when the overlay leaves composition so no native
         // render context survives the reader teardown.
         childHosts.values.forEach { it.release() }
@@ -283,23 +290,35 @@ private data class OverlayUpdate(
     val onPopupsChange: (List<LookupPopupItem>) -> Unit,
     val lookupChildPopup: (ReaderSelectionData) -> Pair<LookupPopupItem, Int>?,
     val onRootPopupDismissed: () -> Boolean,
+    val onPopupBoundsChanged: (List<ReaderSelectionRect>) -> Unit,
     val sasayakiWasPaused: Boolean,
     val sasayakiIsPlaying: Boolean,
     val onSasayakiReplayCue: (SasayakiMatch) -> Unit,
     val onSasayakiTogglePlayback: () -> Unit,
     val onSasayakiPauseStateCleared: () -> Unit,
     val onSasayakiPlayForward: (SasayakiMatch) -> Unit,
-    val onPrepareSasayakiAudio: (SasayakiMatch, String) -> String?,
+    val onPrepareSasayakiAudio: suspend (SasayakiMatch, String) -> String?,
 )
 
 private class LookupPopupOverlayLayout(context: Context) : FrameLayout(context) {
     var onOverlaySizeChanged: () -> Unit = {}
     var onOutsideStylusTouch: () -> Unit = {}
+    var onPopupBoundsChanged: (List<ReaderSelectionRect>) -> Unit = {}
     private val touchStreamTracker = PopupTouchStreamTracker()
 
     override fun onSizeChanged(width: Int, height: Int, oldWidth: Int, oldHeight: Int) {
         super.onSizeChanged(width, height, oldWidth, oldHeight)
         onOverlaySizeChanged()
+    }
+
+    override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
+        super.onLayout(changed, left, top, right, bottom)
+        val density = resources.displayMetrics.density.toDouble()
+        onPopupBoundsChanged((0 until childCount).mapNotNull { index ->
+            val child = getChildAt(index)
+            if (child !is LookupPopupHostView || child.visibility != VISIBLE) return@mapNotNull null
+            ReaderSelectionRect(child.left / density, child.top / density, child.width / density, child.height / density)
+        })
     }
 
     override fun dispatchTouchEvent(event: MotionEvent): Boolean {
@@ -450,7 +469,7 @@ private class LookupPopupHostView(
         onSasayakiTogglePlayback: () -> Unit,
         onSasayakiPauseStateCleared: () -> Unit,
         onSasayakiPlayForward: (SasayakiMatch) -> Unit,
-        onPrepareSasayakiAudio: (SasayakiMatch, String) -> String?,
+        onPrepareSasayakiAudio: suspend (SasayakiMatch, String) -> String?,
     ) {
         val state = popup.state
         val overlayView = parent as? View
@@ -553,7 +572,7 @@ private class LookupPopupHostView(
         onRootPopupDismissed: () -> Boolean,
         onContentReady: (String) -> Unit,
         isContentVisible: Boolean,
-        onPrepareSasayakiAudio: (SasayakiMatch, String) -> String?,
+        onPrepareSasayakiAudio: suspend (SasayakiMatch, String) -> String?,
     ): PopupWebViewCallbacks {
         val state = popup.state
         return PopupWebViewCallbacks(
@@ -608,16 +627,18 @@ private class LookupPopupHostView(
             },
             onMineEntry = mine@{ payload, reply ->
                 if (state.previewUiScale != null) { reply(false); return@mine }
-                val miningContext = runCatching {
-                    popup.sasayakiCue?.let { cue ->
-                        state.ankiContext.copy(
-                            sasayakiAudioPath = onPrepareSasayakiAudio(cue, state.selection.sentence),
-                        )
-                    } ?: state.ankiContext
-                }.getOrNull()
-                if (miningContext == null) {
-                    reply(false)
-                } else {
+                lookupScope.launch {
+                    val miningContext = try {
+                        popup.sasayakiCue?.let { cue ->
+                            state.ankiContext.copy(
+                                sasayakiAudioPath = onPrepareSasayakiAudio(cue, state.selection.sentence),
+                            )
+                        } ?: state.ankiContext
+                    } catch (error: Exception) {
+                        if (error is CancellationException) throw error
+                        reply(false)
+                        return@launch
+                    }
                     ankiViewModel.mineEntryAsync(payload, miningContext, reply)
                 }
             },

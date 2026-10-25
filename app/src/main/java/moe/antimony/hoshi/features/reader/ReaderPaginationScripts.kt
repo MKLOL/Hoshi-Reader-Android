@@ -886,6 +886,7 @@ internal object ReaderPaginationScripts {
           }
         };
         ${readerHighlightsScript()}
+        ${readerTextLayoutScript()}
         window.hoshiReader.initialize = function() {
           if (window.hoshiReader.didInitialize) return;
           window.hoshiReader.didInitialize = true;
@@ -942,10 +943,12 @@ internal object ReaderPaginationScripts {
           spacer.style.breakInside = 'avoid';
           document.body.appendChild(spacer);
           window.hoshiReader.stabilizeRubyAdjacentTextNodes();
+          if (document.fonts) imagePromises.push(document.fonts.ready);
           Promise.all(imagePromises).then(function() {
             if (!images.length) return;
             return new Promise(function(resolve) { setTimeout(resolve, 50); });
           }).then(function() {
+            window.hoshiTextLayout.prepare(window.hoshiReader, true);
             window.hoshiReader.buildNodeOffsets();
             $restoreScripts
           });
@@ -1655,6 +1658,7 @@ internal object ReaderPaginationScripts {
           }
         };
         ${readerHighlightsScript()}
+        ${readerTextLayoutScript()}
         window.hoshiReader.initialize = function() {
           if (window.hoshiReader.didInitialize) return;
           window.hoshiReader.didInitialize = true;
@@ -1699,10 +1703,12 @@ internal object ReaderPaginationScripts {
               }
             });
           });
+          if (document.fonts) imagePromises.push(document.fonts.ready);
           Promise.all(imagePromises).then(function() {
             if (!images.length) return;
             return new Promise(function(resolve) { setTimeout(resolve, 50); });
           }).then(function() {
+            window.hoshiTextLayout.prepare(window.hoshiReader, false);
             window.hoshiReader.buildNodeOffsets();
             $restoreScripts
           });

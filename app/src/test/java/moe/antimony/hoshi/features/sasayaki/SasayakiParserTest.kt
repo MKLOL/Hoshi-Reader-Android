@@ -43,4 +43,25 @@ class SasayakiParserTest {
 
         assertEquals(listOf("1"), cues.map { it.id })
     }
+
+    @Test
+    fun skipsBrokenTimestampsWithoutLosingValidSurroundingCues() {
+        val timestamps = listOf(
+            "00:00:01,000 --> 00:00:02,000",
+            "missing --> 00:00:03,000",
+            "00:00:04,000 --> 00:invalid:05,000",
+            "00:00:NaN --> 00:00:06,000",
+            "00:00:07,000 --> 00:00:08,000",
+        )
+        val source = timestamps.mapIndexed { index, timestamp ->
+            "${index + 1}\n$timestamp\ntext $index"
+        }.joinToString("\n\n")
+
+        val cues = SasayakiParser.parseCues(source.toByteArray())
+
+        assertEquals(listOf("0", "4"), cues.map { it.id })
+        assertEquals(listOf("text 0", "text 4"), cues.map { it.text })
+        assertEquals(7.0, cues.last().startTime, 0.0)
+        assertEquals(8.0, cues.last().endTime, 0.0)
+    }
 }

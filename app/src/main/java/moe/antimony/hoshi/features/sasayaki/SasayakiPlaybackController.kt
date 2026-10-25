@@ -38,7 +38,7 @@ internal interface SasayakiPlaybackControllerContract {
     fun skipBackward(seconds: Int)
     fun findCue(chapterIndex: Int, offset: Int): SasayakiMatch?
     fun playCue(cue: SasayakiMatch, stop: Boolean)
-    fun exportCueAudio(cue: SasayakiMatch, sentence: String): File?
+    suspend fun exportCueAudio(cue: SasayakiMatch, sentence: String): File?
     fun release()
 }
 
@@ -308,7 +308,7 @@ internal class SasayakiPlaybackController(
         )
     }
 
-    override fun exportCueAudio(cue: SasayakiMatch, sentence: String): File? {
+    override suspend fun exportCueAudio(cue: SasayakiMatch, sentence: String): File? {
         val source = audioSourceRepository.playbackSource(playback) ?: return null
         val range = SasayakiCueAudioRangeResolver.resolve(
             matchData = matchData,
@@ -316,11 +316,9 @@ internal class SasayakiPlaybackController(
             sentence = sentence,
             delay = delay,
         )
-        return cueAudioExporter.export(
-            source = source,
-            cue = cue,
-            range = range,
-        )
+        return dispatchSasayakiCueAudioExport {
+            cueAudioExporter.export(source = source, cue = cue, range = range)
+        }
     }
 
     override fun release() {
