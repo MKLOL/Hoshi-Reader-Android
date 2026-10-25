@@ -13,7 +13,7 @@ Semantic Versioning.
 
 ### Changed
 - **Reading positions remember which device actually moved.** Each book keeps a timestamped position and recent navigation history from every device. Page turns are saved and queued for sync immediately; reopening an old position does not make it newer than your reading on another device. Deliberate backward movement is preserved, unsent changes survive restarts, and older app versions keep exchanging bookmarks through the existing formats.
-- **EPUB pages finish at sentence boundaries.** Normal reading keeps Japanese words and their furigana together in horizontal and vertical text. Sentences move to the next page as a whole when they fit; a sentence longer than a page continues across pages.
+- **EPUB pages finish at sentence boundaries.** Normal reading keeps Japanese words and their furigana together in horizontal and vertical text. Sentences move to the next page as a whole when they fit; a sentence longer than a page continues across pages. Publisher line breaks and inline illustrations keep their intended placement.
 - **Dismiss a word lookup with one tap outside it.** Tapping another word, page controls, or reader chrome closes the popup before another action can happen.
 - **Large manga pages prepare ahead of your next turn.** The reader prepares up to three upcoming and two previous page images in the background, caching original image bytes and asking WebView to decode nearby pages ahead of time. Preparation uses memory limits and cancels obsolete work during fast navigation; very large scans still receive file preparation when they cannot fit the decode budget.
 
@@ -21,11 +21,11 @@ Semantic Versioning.
 - **Keep words and furigana together in sentence mode.** A word such as 大丈夫 and its complete reading move to the next line together, including partially annotated words and long sentences. Wide readings have their own space, and unusually wide groups shrink to fit the pane.
 - **Look up the character you tap.** Tapping the right half of a character in sentence mode now selects that character instead of the next one, including characters under furigana.
 - **Sentence reading counts toward your book and statistics.** Sentence turns update the same reading progress as the regular reader. Reading time, characters, and dictionary lookups appear in Statistics, background time is excluded, and **Finish book** after the last sentence records 100% completion. Sentence mode also refreshes bookmarks on opening and returning to the app, and uses the same HTTP and Drive sync as normal reading.
-- **Keep imported reading history consistent across devices.** Importing the same ッツ history on several devices no longer counts it repeatedly, and importing while a reader is open no longer lets an older session overwrite the imported totals or position. Replacing cleared ッツ history also keeps it cleared after HTTP sync, and importing a finished book preserves 100% completion.
+- **Keep imported reading history consistent across devices.** Importing the same ッツ history on several devices no longer counts it repeatedly, and importing while a reader is open no longer lets an older session overwrite the imported totals or position. Replacing cleared ッツ history also keeps it cleared after HTTP sync, and importing a finished book preserves 100% completion. Reading time synchronizes even when the bookmark has not moved or the book is still on its first page.
 - **Count reading time only while the reader is visible.** Finishing a slow book load after switching apps no longer starts a background reading session.
 - **Import usable audiobook subtitle cues even if a block is malformed.** A broken timestamp no longer stops the whole subtitle import.
 - **Keep word mining responsive with audiobook audio.** Preparing an audio clip for an Anki card now runs in the background instead of freezing the reader.
-- **Keep audiobook settings after quick changes.** Delayed saves no longer restore removed audio or older playback settings.
+- **Keep audiobook settings after quick changes.** Delayed saves no longer restore removed audio or older playback settings, including after reopening the same book.
 - **Preserve renamed manga titles during repair.** Rebuilding missing book information retains the title you chose.
 - **Avoid accidental EPUB page turns.** Fast gestures that move mostly up or down no longer turn pages because of a small sideways movement.
 - **Open external book links in your browser.** Following a web link no longer replaces the EPUB page inside the reader.

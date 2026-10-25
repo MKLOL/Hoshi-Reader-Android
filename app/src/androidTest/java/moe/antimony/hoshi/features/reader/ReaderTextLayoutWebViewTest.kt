@@ -21,6 +21,58 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class ReaderTextLayoutWebViewTest {
     @Test
+    fun aFollowingIllustrationDoesNotMakeAFittingSentenceContinueAcrossPages() {
+        val illustration = "<img style='display:block' width='300' height='260' " +
+            "src='data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=='>"
+        val content = (120..210 step 10).joinToString("") { prefixLength ->
+            "<p>${"あ".repeat(prefixLength)}。" +
+                "<span data-layout-target='target-$prefixLength'>${"い".repeat(40)}。</span>" +
+                illustration + "次です。</p>"
+        }
+        for (vertical in listOf(false, true)) {
+            val result = render(ReaderSettings(verticalWriting = vertical, fontSize = 20), content)
+            assertPreserved(result)
+            val targets = result.getJSONArray("targetGlyphPages")
+            assertEquals(10, targets.length())
+            for (index in 0 until targets.length()) {
+                val target = targets.getJSONObject(index)
+                assertEquals("a short sentence's actual characters cross a page: $target", 1, target.getJSONArray("pages").length())
+            }
+        }
+    }
+
+    @Test
+    fun authoredHardBreaksAndBlockSpansRetainTheirLineFlow() {
+        val content = "<p data-layout-flow='br'>これは<ruby>大<rt>だい</rt></ruby><br>丈夫です。</p>" +
+            "<p data-layout-flow='block'><span style='display:block'>大</span><span style='display:block'>丈夫</span>です。</p>"
+        for (continuous in listOf(false, true)) for (vertical in listOf(false, true)) {
+            val result = render(ReaderSettings(verticalWriting = vertical, continuousMode = continuous, fontSize = 20), content)
+            assertPreserved(result)
+            assertEquals("a wrapping atom must not enclose an authored hard break", 0, result.getInt("wordsWithHardBreaks"))
+            val before = result.getJSONArray("beforeLineFlows")
+            val after = result.getJSONArray("afterLineFlows")
+            assertEquals(before.length(), after.length())
+            for (index in 0 until before.length()) {
+                val source = before.getJSONArray(index)
+                val laidOut = after.getJSONArray(index)
+                assertEquals(source.length(), laidOut.length())
+                val inlineAxis = if (vertical) "y" else "x"
+                val blockAxis = if (vertical) "x" else "y"
+                for (character in 0 until source.length()) {
+                    // A ruby inline box can increase the line's ascent. Its characters must
+                    // still retain the authored position along each line and line membership.
+                    assertEquals(source.getJSONObject(character).getDouble(inlineAxis), laidOut.getJSONObject(character).getDouble(inlineAxis), 1.0)
+                    if (character > 0) {
+                        val wasSameLine = kotlin.math.abs(source.getJSONObject(character).getDouble(blockAxis) - source.getJSONObject(character - 1).getDouble(blockAxis)) < 1.0
+                        val isSameLine = kotlin.math.abs(laidOut.getJSONObject(character).getDouble(blockAxis) - laidOut.getJSONObject(character - 1).getDouble(blockAxis)) < 1.0
+                        assertEquals("authored line membership changed: $result", wasSameLine, isSameLine)
+                    }
+                }
+            }
+        }
+    }
+
+    @Test
     fun fittingSentencesStayOnOnePageAndPreserveRubyWordsAndInlineMarkupInBothDirections() {
         for (vertical in listOf(false, true)) {
             val result = render(ReaderSettings(verticalWriting = vertical, fontSize = 20), regularFixture())
@@ -192,11 +244,24 @@ class ReaderTextLayoutWebViewTest {
           while ((node = walker.nextNode())) text += node.nodeValue;
           return text;
         };
+        window.__baseGlyphs = function(root) {
+          var walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+            acceptNode: function(node) { return node.parentElement?.closest('rt,rp,script,style') ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT; }
+          });
+          var result = [], node;
+          while ((node = walker.nextNode())) for (var offset = 0; offset < node.length;) {
+            var char = String.fromCodePoint(node.data.codePointAt(offset)), range = document.createRange();
+            range.setStart(node, offset); range.setEnd(node, offset + char.length); offset += char.length;
+            var rect = range.getBoundingClientRect(); result.push({text:char, x:rect.x, y:rect.y});
+          }
+          return result;
+        };
         document.addEventListener('DOMContentLoaded', function() {
           var text = window.__baseText(document.body);
           window.__beforeLayout = { text: text,
             paragraphs: Array.from(document.querySelectorAll('p')).map(window.__baseText),
             readings: Array.from(document.querySelectorAll('rt')).map(function(rt) { return rt.textContent; }),
+            lineFlows: Array.from(document.querySelectorAll('[data-layout-flow]')).map(window.__baseGlyphs),
             count: window.hoshiReader.countChars(text) };
         });
     """.trimIndent()
@@ -221,11 +286,24 @@ class ReaderTextLayoutWebViewTest {
           var walker = reader.createWalker(), counted = 0, node;
           while ((node = walker.nextNode())) counted += reader.countChars(node.textContent);
           var partial = document.getElementById('partial-ruby'), partialWord = partial?.closest('.hoshi-word');
+          var targetGlyphPages = Array.from(document.querySelectorAll('[data-layout-target]')).map(function(target) {
+            var glyphs = window.__baseGlyphs(target);
+            var pages = glyphs.map(function(glyph) {
+              return Math.floor(((context.vertical ? glyph.y : glyph.x) + .5) / context.pageSize);
+            });
+            var start = target.querySelector('.hoshi-sentence-start');
+            return {target:target.dataset.layoutTarget, pages:Array.from(new Set(pages)), glyphs:glyphs,
+              html:target.outerHTML, startClass:start?.className, oversized:start?.dataset.oversized,
+              vertical:context.vertical, pageSize:context.pageSize};
+          });
           return JSON.stringify({
             errors:window.__layoutErrors, textPreserved:window.hoshiTextLayout.textPreserved,
             beforeText:before.text, afterText:afterText,
             beforeParagraphs:before.paragraphs, afterParagraphs:Array.from(document.querySelectorAll('p')).map(window.__baseText),
             beforeReadings:before.readings, afterReadings:Array.from(document.querySelectorAll('rt')).map(function(rt) { return rt.textContent; }),
+            beforeLineFlows:before.lineFlows, afterLineFlows:Array.from(document.querySelectorAll('[data-layout-flow]')).map(window.__baseGlyphs),
+            wordsWithHardBreaks:document.querySelectorAll('.hoshi-word br,.hoshi-word hr,.hoshi-word [style*="display:block"]').length,
+            targetGlyphPages:targetGlyphPages,
             beforeCount:before.count, afterCount:reader.countChars(afterText), readerCount:counted,
             partialWord:partialWord ? window.__baseText(partialWord) : '', partialReading:partial?.querySelector('rt')?.textContent || '',
             partialRubyCount:document.querySelectorAll('#partial-ruby').length,

@@ -243,6 +243,7 @@ internal fun ReaderRouteDestination(
                         stateHolder.saveStatistics(state = state, statistics = statistics)
                     }
                     appContainer.bookRepository.trackStatisticsSave(state.bookRoot, save)
+                    scheduleExport(state.entry)
                 },
                 onFlushAutoSyncExport = ::flushExport,
                 onForegroundAutoSyncImport = ::importOnForeground,

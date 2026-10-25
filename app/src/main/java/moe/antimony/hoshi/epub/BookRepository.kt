@@ -5,6 +5,8 @@ import android.net.Uri
 import androidx.documentfile.provider.DocumentFile
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
@@ -753,10 +755,20 @@ class BookRepository(
         sidecarDataSource.saveSasayakiMatch(bookRoot, match)
     }
 
-    override suspend fun loadSasayakiPlayback(bookRoot: File): SasayakiPlaybackData? =
-        sidecarDataSource.loadSasayakiPlayback(bookRoot)
+    override suspend fun loadSasayakiPlayback(bookRoot: File): SasayakiPlaybackData? {
+        SasayakiPlaybackWrites.await(SasayakiPlaybackWrites.bookKey(bookRoot))
+        return sidecarDataSource.loadSasayakiPlayback(bookRoot)
+    }
 
     override suspend fun saveSasayakiPlayback(bookRoot: File, playback: SasayakiPlaybackData) {
+        coroutineScope { enqueueSasayakiPlaybackSave(bookRoot, playback, this).join() }
+    }
+
+    override fun enqueueSasayakiPlaybackSave(
+        bookRoot: File,
+        playback: SasayakiPlaybackData,
+        scope: CoroutineScope,
+    ): Job = SasayakiPlaybackWrites.enqueue(SasayakiPlaybackWrites.bookKey(bookRoot), scope) {
         sidecarDataSource.saveSasayakiPlayback(bookRoot, playback)
     }
 
@@ -838,6 +850,14 @@ interface SasayakiSidecarRepository {
     suspend fun saveSasayakiMatch(bookRoot: File, match: SasayakiMatchData)
     suspend fun loadSasayakiPlayback(bookRoot: File): SasayakiPlaybackData?
     suspend fun saveSasayakiPlayback(bookRoot: File, playback: SasayakiPlaybackData)
+
+    fun enqueueSasayakiPlaybackSave(
+        bookRoot: File,
+        playback: SasayakiPlaybackData,
+        scope: CoroutineScope,
+    ): Job = SasayakiPlaybackWrites.enqueue(SasayakiPlaybackWrites.bookKey(bookRoot), scope) {
+        saveSasayakiPlayback(bookRoot, playback)
+    }
 }
 
 class BookFileDataSource(

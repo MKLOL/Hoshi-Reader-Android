@@ -66,16 +66,22 @@ class SyncManager(
         val syncFiles = drive.listSyncFiles(driveFolderId)
         val syncDirection = direction ?: TtuSyncRules.determineDirection(localBookmark, syncFiles.progress)
 
-        if (syncDirection == SyncDirection.Synced) {
-            return SyncResult.Synced(displayTitle)
-        }
-        if (importOnly && syncDirection != SyncDirection.ImportFromTtu) {
-            return SyncResult.Skipped
-        }
-
         val progressFileId = syncFiles.progress?.id
         val statsFileId = if (syncStats) syncFiles.statistics?.id else null
         val audioBookFileId = if (syncAudioBook) syncFiles.audioBook?.id else null
+
+        if (syncDirection == SyncDirection.Synced || (importOnly && syncDirection != SyncDirection.ImportFromTtu)) {
+            // Reading time can change without a bookmark move. Refresh statistics on open
+            // even when progress is equal or this device has the newer position; neither
+            // case grants an import permission to replace that position or audio settings.
+            val publishMergedToFolder = driveFolderId.takeIf {
+                !importOnly && syncDirection == SyncDirection.Synced && statsSyncMode == StatisticsSyncMode.Merge
+            }
+            if (syncStats && (statsFileId != null || publishMergedToFolder != null)) {
+                reconcileStatistics(entry, statsFileId, statsSyncMode, publishMergedToFolder)
+            }
+            return if (syncDirection == SyncDirection.Synced) SyncResult.Synced(displayTitle) else SyncResult.Skipped
+        }
 
         return when (syncDirection) {
             SyncDirection.ImportFromTtu -> importFromTtu(
@@ -116,27 +122,39 @@ class SyncManager(
     ): SyncResult {
         val progress = progressFileId?.let { drive.getProgressFile(it) } ?: return SyncResult.Skipped
         importProgress(entry, progress)
-        if (syncStats) {
-            // ッツ keeps one device-less entry per day, i.e. every device's reading added up.
-            // The merge runs on day totals. The imported remainder has a shared origin
-            // (see applyDayTotals), so importing on two devices does not duplicate history.
-            val localDays = bookRepository.loadStatistics(entry.root).collapsedByDay()
-            val remoteStats = statsFileId?.let { drive.getStatsFile(it) }.orEmpty()
-            val merged = TtuSyncRules.mergeStatistics(localDays, remoteStats, statsSyncMode)
-            if (merged.isNotEmpty() || (statsSyncMode == StatisticsSyncMode.Replace && statsFileId != null)) {
-                bookRepository.applyDayTotals(
-                    entry.root,
-                    merged,
-                    replaceOtherDays = statsSyncMode == StatisticsSyncMode.Replace,
-                )
-            }
-        }
+        if (syncStats) reconcileStatistics(entry, statsFileId, statsSyncMode)
         if (syncAudioBook) {
             audioBookFileId?.let { fileId ->
                 importAudioBook(entry, drive.getAudioBookFile(fileId))
             }
         }
         return SyncResult.Imported(title, progress.exploredCharCount)
+    }
+
+    private suspend fun reconcileStatistics(
+        entry: BookEntry,
+        statsFileId: String?,
+        statsSyncMode: StatisticsSyncMode,
+        publishMergedToFolder: String? = null,
+    ) {
+        // ッツ keeps one device-less entry per day, i.e. every device's reading added up.
+        // The imported remainder has a shared origin, so several devices cannot count it twice.
+        val localDays = bookRepository.loadStatistics(entry.root).collapsedByDay()
+        val remoteStats = statsFileId?.let { drive.getStatsFile(it) }.orEmpty()
+        val merged = TtuSyncRules.mergeStatistics(localDays, remoteStats, statsSyncMode)
+        if (merged.isNotEmpty() || (statsSyncMode == StatisticsSyncMode.Replace && statsFileId != null)) {
+            bookRepository.applyDayTotals(
+                entry.root,
+                merged,
+                replaceOtherDays = statsSyncMode == StatisticsSyncMode.Replace,
+            )
+        }
+        if (publishMergedToFolder != null && merged.isNotEmpty() &&
+            merged.sortedBy { it.dateKey } != remoteStats.sortedBy { it.dateKey }) {
+            // The checkpoint above is durable before this collapsed total becomes visible
+            // to another device. An import-only refresh never supplies a publish folder.
+            drive.updateStatsFile(publishMergedToFolder, statsFileId, merged)
+        }
     }
 
     private suspend fun exportToTtu(
@@ -151,21 +169,13 @@ class SyncManager(
         statsSyncMode: StatisticsSyncMode,
         syncAudioBook: Boolean,
     ): SyncResult {
-        val bookmark = localBookmark ?: return SyncResult.Skipped
+        val bookmark = localBookmark ?: return if (syncStats && exportStatistics(
+            entry, driveFolderId, statsFileId, statsSyncMode, requireLocalReading = true,
+        )) SyncResult.Synced(title) else SyncResult.Skipped
         val remoteProgress = progressFileId?.let { drive.getProgressFile(it) }
         exportProgress(entry, driveFolderId, progressFileId, bookmark, remoteProgress)
 
-        if (syncStats) {
-            val remoteStats = statsFileId?.let { drive.getStatsFile(it) }.orEmpty()
-            val localStats = bookRepository.loadStatistics(entry.root).collapsedByDay()
-            val statsToExport = TtuSyncRules.mergeStatistics(remoteStats, localStats, statsSyncMode)
-            if (statsToExport.isNotEmpty()) {
-                // Share the device counters included in this collapsed export before another
-                // install imports it. Its independent import can then absorb them on HTTP sync.
-                bookRepository.applyDayTotals(entry.root, statsToExport, replaceOtherDays = false)
-                drive.updateStatsFile(driveFolderId, statsFileId, statsToExport)
-            }
-        }
+        if (syncStats) exportStatistics(entry, driveFolderId, statsFileId, statsSyncMode)
 
         if (syncAudioBook) {
             val playback = bookRepository.loadSasayakiPlayback(entry.root)
@@ -182,6 +192,29 @@ class SyncManager(
             }
         }
         return SyncResult.Exported(title, bookmark.characterCount)
+    }
+
+    private suspend fun exportStatistics(
+        entry: BookEntry,
+        driveFolderId: String,
+        statsFileId: String?,
+        statsSyncMode: StatisticsSyncMode,
+        requireLocalReading: Boolean = false,
+    ): Boolean {
+        val localStats = bookRepository.loadStatistics(entry.root).collapsedByDay()
+        // A fresh reader can accumulate time before its first navigation. That time may
+        // sync independently, without inventing a bookmark or exporting unrelated audio.
+        if (requireLocalReading && localStats.none { it.readingTime > 0.0 || it.charactersRead > 0 }) return false
+        val remoteStats = statsFileId?.let { drive.getStatsFile(it) }.orEmpty()
+        val statsToExport = TtuSyncRules.mergeStatistics(remoteStats, localStats, statsSyncMode)
+        if (statsToExport.isEmpty()) return false
+        // Share the device counters included in this collapsed export before another
+        // install imports it. Its independent import can then absorb them on HTTP sync.
+        bookRepository.applyDayTotals(entry.root, statsToExport, replaceOtherDays = false)
+        if (statsToExport.sortedBy { it.dateKey } != remoteStats.sortedBy { it.dateKey }) {
+            drive.updateStatsFile(driveFolderId, statsFileId, statsToExport)
+        }
+        return true
     }
 
     private suspend fun importProgress(entry: BookEntry, progress: TtuProgress) {

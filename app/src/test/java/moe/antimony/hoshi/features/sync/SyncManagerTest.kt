@@ -11,6 +11,7 @@ import moe.antimony.hoshi.epub.BookRepository
 import moe.antimony.hoshi.epub.Bookmark
 import moe.antimony.hoshi.epub.ReadingStatistics
 import moe.antimony.hoshi.epub.readingTotals
+import moe.antimony.hoshi.epub.collapsedByDay
 import moe.antimony.hoshi.epub.DeviceIdentity
 import moe.antimony.hoshi.epub.SasayakiPlaybackData
 import moe.antimony.hoshi.epub.TTU_STATISTICS_DEVICE_ID
@@ -64,6 +65,170 @@ class SyncManagerTest {
             SasayakiPlaybackData(lastPosition = 88.5, delay = 0.2, rate = 1.5f, audioUri = "content://audio"),
             repository.loadSasayakiPlayback(entry.root),
         )
+    }
+
+    @Test
+    fun openingImportsStatisticsWithoutReplacingAnEqualOrNewerLocalBookmark() = runBlocking {
+        for (localBookmarkMillis in listOf(2_000L, 4_000L)) for (syncStats in listOf(true, false)) {
+            val repository = BookRepository(tempFolder.newFolder())
+            val entry = repository.createEntry()
+            val localBookmark = Bookmark(0, 0.5, 100, TtuSyncRules.unixMillisToAppleReferenceSeconds(localBookmarkMillis))
+            repository.saveBookmark(entry.root, localBookmark)
+            val localStatistic = ReadingStatistics(
+                "Title", "2026-10-24", charactersRead = 100, readingTime = 100.0,
+                lastStatisticModified = 1_000,
+            )
+            repository.saveStatistics(entry.root, listOf(localStatistic))
+            val localPlayback = SasayakiPlaybackData(lastPosition = 10.0, rate = 1.5f, audioUri = "content://audio")
+            repository.saveSasayakiPlayback(entry.root, localPlayback)
+            val drive = FakeDriveSyncDataSource(
+                progress = TtuProgress(7, 100, 0.5, 2_000),
+                // The same displayed page acquired another minute of reading time on TTU.
+                statistics = listOf(localStatistic.copy(readingTime = 160.0, lastStatisticModified = 3_000)),
+                audioBook = TtuAudioBook("Title", 88.0, 3_000),
+            )
+
+            val result = SyncManager(repository, drive).syncBook(
+                entry, direction = null, syncStats = syncStats,
+                statsSyncMode = StatisticsSyncMode.Merge, syncAudioBook = true, importOnly = true,
+            )
+
+            assertEquals(if (localBookmarkMillis == 2_000L) SyncResult.Synced("Title") else SyncResult.Skipped, result)
+            assertEquals(localBookmark, repository.loadBookmark(entry.root))
+            assertEquals(localPlayback, repository.loadSasayakiPlayback(entry.root))
+            assertEquals(if (syncStats) 160.0 else 100.0, repository.loadStatistics(entry.root).readingTotals().readingTime, 0.0)
+            assertEquals(if (syncStats) 1 else 0, drive.getStatsFileCalls)
+            assertEquals(0, drive.getProgressFileCalls)
+            assertEquals(0, drive.getAudioBookFileCalls)
+            assertEquals(null, drive.updatedProgress)
+            assertEquals(emptyList<ReadingStatistics>(), drive.updatedStatistics)
+            assertEquals(null, drive.updatedAudioBook)
+        }
+    }
+
+    @Test
+    fun equalBookmarkMergeReconcilesStatisticsInBothDirectionsAndCheckpointsBeforePublishing() = runBlocking {
+        for (localNewer in listOf(true, false)) for (importOnly in listOf(true, false)) {
+            val repository = BookRepository(tempFolder.newFolder(), deviceIdentity = DeviceIdentity("phone", "Phone"))
+            val entry = repository.createEntry()
+            val bookmark = Bookmark(0, 0.5, 100, TtuSyncRules.unixMillisToAppleReferenceSeconds(2_000))
+            repository.saveBookmark(entry.root, bookmark)
+            val older = ReadingStatistics("Title", "2026-10-24", 100, 100.0, lastStatisticModified = 1_000)
+            val newer = older.copy(charactersRead = 200, readingTime = 200.0, lastStatisticModified = 3_000)
+            val local = if (localNewer) newer else older
+            repository.saveStatistics(entry.root, listOf(local.copy(deviceId = "phone", deviceName = "Phone")))
+            var checkpointVerified = false
+            val drive = FakeDriveSyncDataSource(
+                progress = TtuProgress(7, 100, 0.5, 2_000),
+                statistics = listOf(if (localNewer) older else newer),
+                audioBook = TtuAudioBook("Title", 88.0, 3_000),
+                beforeUpdateStats = { published ->
+                    val saved = repository.loadStatistics(entry.root)
+                    assertEquals(published, saved.collapsedByDay())
+                    val baseline = saved.single { it.deviceId == TTU_STATISTICS_DEVICE_ID }.importedBaseline!!
+                    assertEquals(local.charactersRead, baseline.includedDevices.getValue("phone").charactersRead)
+                    checkpointVerified = true
+                },
+            )
+
+            val result = SyncManager(repository, drive).syncBook(
+                entry, direction = null, syncStats = true,
+                statsSyncMode = StatisticsSyncMode.Merge, syncAudioBook = true, importOnly = importOnly,
+            )
+
+            assertEquals(SyncResult.Synced("Title"), result)
+            assertEquals(bookmark, repository.loadBookmark(entry.root))
+            assertEquals(200.0, repository.loadStatistics(entry.root).readingTotals().readingTime, 0.0)
+            val publishes = localNewer && !importOnly
+            assertEquals(if (publishes) 1 else 0, drive.updateStatsFileCalls)
+            assertEquals(publishes, checkpointVerified)
+            if (publishes) assertEquals(200.0, drive.updatedStatistics.single().readingTime, 0.0)
+            assertEquals(1, drive.getStatsFileCalls)
+            assertEquals(0, drive.getProgressFileCalls)
+            assertEquals(0, drive.getAudioBookFileCalls)
+            assertEquals(null, drive.updatedProgress)
+            assertEquals(null, drive.updatedAudioBook)
+        }
+    }
+
+    @Test
+    fun equalBookmarkMergeCreatesAMissingStatisticsFileOnlyForAFullSyncWithLocalReading() = runBlocking {
+        for (hasReading in listOf(true, false)) for (syncStats in listOf(true, false)) for (importOnly in listOf(true, false)) {
+            val repository = BookRepository(tempFolder.newFolder())
+            val entry = repository.createEntry()
+            val bookmark = Bookmark(0, 0.5, 100, TtuSyncRules.unixMillisToAppleReferenceSeconds(2_000))
+            repository.saveBookmark(entry.root, bookmark)
+            if (hasReading) repository.saveStatistics(entry.root, listOf(ReadingStatistics(
+                "Title", "2026-10-24", 100, 100.0, lastStatisticModified = 3_000,
+            )))
+            val drive = FakeDriveSyncDataSource(progress = TtuProgress(7, 100, 0.5, 2_000))
+
+            SyncManager(repository, drive).syncBook(
+                entry, direction = null, syncStats = syncStats,
+                statsSyncMode = StatisticsSyncMode.Merge, syncAudioBook = false, importOnly = importOnly,
+            )
+
+            assertEquals(if (hasReading && syncStats && !importOnly) 1 else 0, drive.updateStatsFileCalls)
+            assertEquals(0, drive.getStatsFileCalls)
+            assertEquals(bookmark, repository.loadBookmark(entry.root))
+            assertEquals(null, drive.updatedProgress)
+        }
+    }
+
+    @Test
+    fun equalBookmarkMergeDoesNotRepublishTheSameDaysInAnotherOrder() = runBlocking {
+        val repository = BookRepository(tempFolder.newFolder())
+        val entry = repository.createEntry()
+        val bookmark = Bookmark(0, 0.5, 100, TtuSyncRules.unixMillisToAppleReferenceSeconds(2_000))
+        repository.saveBookmark(entry.root, bookmark)
+        val days = listOf(
+            ReadingStatistics("Title", "2026-10-23", 100, 100.0, lastStatisticModified = 1_000, lastReadingSpeed = 3_600),
+            ReadingStatistics("Title", "2026-10-24", 200, 200.0, lastStatisticModified = 3_000, lastReadingSpeed = 3_600),
+        )
+        repository.saveStatistics(entry.root, days)
+        val drive = FakeDriveSyncDataSource(progress = TtuProgress(7, 100, 0.5, 2_000), statistics = days.reversed())
+
+        SyncManager(repository, drive).syncBook(
+            entry, direction = null, syncStats = true,
+            statsSyncMode = StatisticsSyncMode.Merge, syncAudioBook = false,
+        )
+
+        assertEquals(1, drive.getStatsFileCalls)
+        assertEquals(0, drive.updateStatsFileCalls)
+    }
+
+    @Test
+    fun openingWithAnEqualBookmarkCanReplaceExplicitlyEmptyImportedStatistics() = runBlocking {
+        for (importOnly in listOf(true, false)) {
+            val repository = BookRepository(tempFolder.newFolder(), deviceIdentity = DeviceIdentity("phone", "Phone"))
+            val entry = repository.createEntry()
+            val bookmark = Bookmark(0, 0.5, 100, TtuSyncRules.unixMillisToAppleReferenceSeconds(2_000))
+            repository.saveBookmark(entry.root, bookmark)
+            val physicalReading = ReadingStatistics(
+                "Title", "2026-10-24", charactersRead = 10, readingTime = 10.0,
+                lastStatisticModified = 1, deviceId = "phone", deviceName = "Phone",
+            )
+            repository.saveStatistics(entry.root, listOf(physicalReading))
+            repository.applyDayTotals(entry.root, listOf(physicalReading.copy(
+                charactersRead = 100, readingTime = 100.0, lastStatisticModified = 2,
+                deviceId = null, deviceName = null,
+            )), false)
+            val drive = FakeDriveSyncDataSource(
+                progress = TtuProgress(7, 100, 0.5, 2_000),
+                statistics = emptyList(),
+            )
+
+            val result = SyncManager(repository, drive).syncBook(
+                entry, direction = null, syncStats = true,
+                statsSyncMode = StatisticsSyncMode.Replace, syncAudioBook = false, importOnly = importOnly,
+            )
+
+            assertEquals(SyncResult.Synced("Title"), result)
+            assertEquals(bookmark, repository.loadBookmark(entry.root))
+            assertEquals(10.0, repository.loadStatistics(entry.root).readingTotals().readingTime, 0.0)
+            assertEquals(physicalReading, repository.loadStatistics(entry.root).single { it.deviceId == "phone" })
+            assertEquals(1, drive.getStatsFileCalls)
+        }
     }
 
     @Test
@@ -159,6 +324,101 @@ class SyncManagerTest {
                 assertEquals(once, repository.loadStatistics(entry.root).toSet())
             }
         }
+    }
+
+    @Test
+    fun firstPageTimeExportsWithoutCreatingAPositionOrExportingAudio() = runBlocking {
+        for (mode in StatisticsSyncMode.entries) for (hasRemoteFiles in listOf(true, false)) {
+            val repository = BookRepository(tempFolder.newFolder(), deviceIdentity = DeviceIdentity("phone", "Phone"))
+            val entry = repository.createEntry()
+            val local = ReadingStatistics(
+                "Title", "2026-10-24", charactersRead = 0, readingTime = 100.0,
+                lastStatisticModified = 3_000, deviceId = "phone", deviceName = "Phone",
+            )
+            repository.saveStatistics(entry.root, listOf(local))
+            val playback = SasayakiPlaybackData(lastPosition = 10.0, rate = 1.5f, audioUri = "content://audio")
+            repository.saveSasayakiPlayback(entry.root, playback)
+            val remote = ReadingStatistics("Title", "2026-10-23", 0, 50.0, lastStatisticModified = 9_000)
+            val drive = FakeDriveSyncDataSource(
+                progress = if (hasRemoteFiles) TtuProgress(7, 150, 0.75, 2_000) else null,
+                statistics = if (hasRemoteFiles) listOf(remote) else null,
+                audioBook = if (hasRemoteFiles) TtuAudioBook("Title", 88.0, 3_000) else null,
+                beforeUpdateStats = { published ->
+                    assertEquals(published.sortedBy { it.dateKey }, repository.loadStatistics(entry.root).collapsedByDay().sortedBy { it.dateKey })
+                },
+            )
+
+            val result = SyncManager(repository, drive).syncBook(
+                entry, SyncDirection.ExportToTtu, syncStats = true,
+                statsSyncMode = mode, syncAudioBook = true,
+            )
+
+            assertEquals(SyncResult.Synced("Title"), result)
+            assertEquals(null, repository.loadBookmark(entry.root))
+            assertEquals(playback, repository.loadSasayakiPlayback(entry.root))
+            val expectedDays = if (hasRemoteFiles && mode == StatisticsSyncMode.Merge) {
+                setOf("2026-10-23", "2026-10-24")
+            } else setOf("2026-10-24")
+            assertEquals(expectedDays, drive.updatedStatistics.map { it.dateKey }.toSet())
+            assertEquals(100.0, drive.updatedStatistics.single { it.dateKey == local.dateKey }.readingTime, 0.0)
+            assertEquals(1, drive.updateStatsFileCalls)
+            assertEquals(if (hasRemoteFiles) 1 else 0, drive.getStatsFileCalls)
+            assertEquals(0, drive.getProgressFileCalls)
+            assertEquals(0, drive.getAudioBookFileCalls)
+            assertEquals(null, drive.updatedProgress)
+            assertEquals(null, drive.updatedAudioBook)
+        }
+    }
+
+    @Test
+    fun firstPageExportSkipsDisabledStatisticsOrNoRecordedReadingWithoutReadingRemoteSidecars() = runBlocking {
+        for (syncStats in listOf(true, false)) for (recordedSeconds in listOf(null, 0.0, 100.0)) {
+            if (syncStats && recordedSeconds == 100.0) continue
+            val repository = BookRepository(tempFolder.newFolder())
+            val entry = repository.createEntry()
+            if (recordedSeconds != null) repository.saveStatistics(entry.root, listOf(ReadingStatistics(
+                "Title", "2026-10-24", 0, recordedSeconds, lastStatisticModified = 3_000,
+            )))
+            val drive = FakeDriveSyncDataSource(
+                progress = TtuProgress(7, 150, 0.75, 2_000),
+                statistics = listOf(ReadingStatistics("Title", "2026-10-23", 0, 50.0, lastStatisticModified = 9_000)),
+                audioBook = TtuAudioBook("Title", 88.0, 3_000),
+            )
+
+            val result = SyncManager(repository, drive).syncBook(
+                entry, SyncDirection.ExportToTtu, syncStats = syncStats,
+                statsSyncMode = StatisticsSyncMode.Replace, syncAudioBook = true,
+            )
+
+            assertEquals(SyncResult.Skipped, result)
+            assertEquals(null, repository.loadBookmark(entry.root))
+            assertEquals(0, drive.getStatsFileCalls)
+            assertEquals(0, drive.updateStatsFileCalls)
+            assertEquals(0, drive.getProgressFileCalls)
+            assertEquals(0, drive.getAudioBookFileCalls)
+            assertEquals(null, drive.updatedProgress)
+            assertEquals(null, drive.updatedAudioBook)
+        }
+    }
+
+    @Test
+    fun firstPageStatisticsAlreadyOnTtuAreSyncedWithoutRewritingTheFile() = runBlocking {
+        val repository = BookRepository(tempFolder.newFolder())
+        val entry = repository.createEntry()
+        val statistics = ReadingStatistics("Title", "2026-10-24", 0, 100.0, lastStatisticModified = 3_000)
+        repository.saveStatistics(entry.root, listOf(statistics))
+        val drive = FakeDriveSyncDataSource(statistics = listOf(statistics))
+
+        val result = SyncManager(repository, drive).syncBook(
+            entry, SyncDirection.ExportToTtu, syncStats = true,
+            statsSyncMode = StatisticsSyncMode.Merge, syncAudioBook = true,
+        )
+
+        assertEquals(SyncResult.Synced("Title"), result)
+        assertEquals(1, drive.getStatsFileCalls)
+        assertEquals(0, drive.updateStatsFileCalls)
+        assertEquals(null, repository.loadBookmark(entry.root))
+        assertEquals(null, drive.updatedAudioBook)
     }
 
     @Test
@@ -278,6 +538,7 @@ private class FakeDriveSyncDataSource(
     audioBook: TtuAudioBook? = null,
     private val staleOnFirstList: Boolean = false,
     private val beforeFindRoot: suspend () -> Unit = {},
+    private val beforeUpdateStats: suspend (List<ReadingStatistics>) -> Unit = {},
 ) : DriveSyncDataSource {
     private val progressFile = progress?.let { DriveFile("progress", TtuSyncRules.progressFileName(it)) }
     private val statisticsFile = statistics?.let { DriveFile("statistics", TtuSyncRules.statisticsFileName(it)) }
@@ -288,6 +549,10 @@ private class FakeDriveSyncDataSource(
 
     var clearCacheCalls = 0
     var listSyncFilesCalls = 0
+    var getProgressFileCalls = 0
+    var getStatsFileCalls = 0
+    var updateStatsFileCalls = 0
+    var getAudioBookFileCalls = 0
     var updatedProgress: TtuProgress? = null
     var updatedStatistics: List<ReadingStatistics> = emptyList()
     var updatedAudioBook: TtuAudioBook? = null
@@ -316,11 +581,20 @@ private class FakeDriveSyncDataSource(
         )
     }
 
-    override suspend fun getProgressFile(fileId: String): TtuProgress = progressById.getValue(fileId)
+    override suspend fun getProgressFile(fileId: String): TtuProgress {
+        getProgressFileCalls += 1
+        return progressById.getValue(fileId)
+    }
 
-    override suspend fun getStatsFile(fileId: String): List<ReadingStatistics> = statisticsById.getValue(fileId)
+    override suspend fun getStatsFile(fileId: String): List<ReadingStatistics> {
+        getStatsFileCalls += 1
+        return statisticsById.getValue(fileId)
+    }
 
-    override suspend fun getAudioBookFile(fileId: String): TtuAudioBook = audioBookById.getValue(fileId)
+    override suspend fun getAudioBookFile(fileId: String): TtuAudioBook {
+        getAudioBookFileCalls += 1
+        return audioBookById.getValue(fileId)
+    }
 
     override suspend fun updateProgressFile(folderId: String, fileId: String?, progress: TtuProgress) {
         assertEquals("book-folder", folderId)
@@ -331,6 +605,8 @@ private class FakeDriveSyncDataSource(
     override suspend fun updateStatsFile(folderId: String, fileId: String?, stats: List<ReadingStatistics>) {
         assertEquals("book-folder", folderId)
         assertTrue(fileId == null || fileId == statisticsFile?.id)
+        beforeUpdateStats(stats)
+        updateStatsFileCalls += 1
         updatedStatistics = stats
     }
 

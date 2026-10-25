@@ -10,17 +10,39 @@ internal fun readerTextLayoutScript(): String = """
   var SKIP = 'rt,rp,script,style,noscript,svg,math,textarea,pre,code';
   var BLOCK = 'p,div,li,dd,dt,blockquote,figcaption,h1,h2,h3,h4,h5,h6,td,th,section,article';
   function runs() {
-    var out = [], current = null;
-    var walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
+    var out = [], current = null, blocks = new WeakMap();
+    function blockFor(element) {
+      if (!element || element === document.body) return document.body;
+      if (blocks.has(element)) return blocks.get(element);
+      var display = getComputedStyle(element).display;
+      var block = element.matches(BLOCK) || /^(block|flow-root|list-item|flex|grid|table|table-.+)$/.test(display)
+        ? element : blockFor(element.parentElement);
+      blocks.set(element, block);
+      return block;
+    }
+    // A hard break or a replaced element separates authored lines, even when both sides
+    // have the same paragraph parent. Never turn those lines into one inline word box.
+    var walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT, {
       acceptNode: function (node) {
-        var parent = node.parentElement;
-        return !parent || parent.closest(SKIP) || !node.nodeValue || getComputedStyle(parent).display === 'none'
-          ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT;
+        if (node.nodeType === Node.ELEMENT_NODE) {
+          if (node.matches('rt,rp')) return NodeFilter.FILTER_REJECT;
+          if (node.matches(SKIP) || getComputedStyle(node).display === 'none') {
+            current = null;
+            return NodeFilter.FILTER_REJECT;
+          }
+          if (node.matches('br,hr,img,video,audio,canvas,iframe,object,embed')) {
+            current = null;
+            return NodeFilter.FILTER_REJECT;
+          }
+          if (blockFor(node) === node) current = null;
+          return NodeFilter.FILTER_SKIP;
+        }
+        return node.nodeValue ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
       }
     });
     var node;
     while ((node = walker.nextNode())) {
-      var block = node.parentElement.closest(BLOCK) || document.body;
+      var block = blockFor(node.parentElement);
       if (!current || current.block !== block) {
         current = { block: block, text: '', nodes: [] }; out.push(current);
       }
@@ -29,18 +51,18 @@ internal fun readerTextLayoutScript(): String = """
     }
     return out;
   }
-  function point(run, offset) {
+  function point(run, offset, endBoundary) {
     var low = 0, high = run.nodes.length;
     while (low < high) {
       var middle = (low + high) >>> 1;
-      if (run.nodes[middle].start <= offset) low = middle + 1;
+      if (run.nodes[middle].start < offset || (!endBoundary && run.nodes[middle].start === offset)) low = middle + 1;
       else high = middle;
     }
     var item = run.nodes[Math.max(0, low - 1)];
     return { node: item.node, offset: Math.max(0, Math.min(offset - item.start, item.node.length)) };
   }
   function boundaryRange(run, start, end) {
-    var a = point(run, start), b = point(run, end), range = workingRange;
+    var a = point(run, start), b = point(run, end, true), range = workingRange;
     var firstRuby = a.node.parentElement.closest('ruby');
     var lastRuby = b.node.parentElement.closest('ruby');
     if (firstRuby && a.offset === 0 && firstRuby.textContent) range.setStartBefore(firstRuby);
@@ -115,37 +137,55 @@ internal fun readerTextLayoutScript(): String = """
       }
     });
   }
-  function insertMarker(location, marker, after) {
-    var range = workingRange, word = location.node.parentElement.closest('.hoshi-word');
-    if (word) {
-      range.selectNodeContents(word);
-      if (after) range.setStart(location.node, location.offset);
-      else range.setEnd(location.node, location.offset);
-      var remaining = range.cloneContents();
-      remaining.querySelectorAll('rt,rp').forEach(function (node) { node.remove(); });
-      if (!remaining.textContent.length) {
-        if (after) word.after(marker); else word.before(marker); return;
-      }
+  function insertMarker(location, marker, after, block) {
+    function emptySibling(node) {
+      return node.nodeType === Node.COMMENT_NODE ||
+        (node.nodeType === Node.TEXT_NODE && !node.nodeValue.length) ||
+        (node.nodeType === Node.ELEMENT_NODE && node.matches('rt,rp,.hoshi-sentence-start,.hoshi-sentence-end'));
     }
-    range = workingRange; range.setStart(location.node, location.offset); range.collapse(true); range.insertNode(marker);
+    // Keep forced column breaks outside a complete inline publisher element. Older WebView
+    // versions can ignore a block break nested in an inline span. Replaced elements and hard
+    // breaks still count as siblings even though their textContent is empty.
+    var boundary = location.node, edge = location.offset === (after ? boundary.length : 0);
+    while (edge && boundary.parentElement && boundary.parentElement !== document.body && boundary.parentElement !== block) {
+      var parent = boundary.parentElement;
+      var sibling = after ? boundary.nextSibling : boundary.previousSibling;
+      while (sibling && emptySibling(sibling)) sibling = after ? sibling.nextSibling : sibling.previousSibling;
+      if (sibling) break;
+      boundary = parent;
+    }
+    // Avoid Range.insertNode's parent-offset bookkeeping over a paragraph with thousands of
+    // siblings. Keep the shared measurement range on a text node while changing the DOM.
+    workingRange.setStart(location.node, location.offset); workingRange.collapse(true);
+    if (boundary !== location.node) {
+      if (after) boundary.after(marker); else boundary.before(marker);
+    } else if (location.offset === 0) {
+      location.node.before(marker);
+    } else if (location.offset === location.node.length) {
+      location.node.after(marker);
+    } else {
+      location.node.splitText(location.offset).before(marker);
+    }
   }
   function sentenceAnchors() {
     var sentences = [];
     runs().forEach(function (run) {
-      var parts = segments(run.text, 'sentence');
+      var parts = segments(run.text, 'sentence'), runSentences = [];
       for (var i = parts.length - 1; i >= 0; i--) {
         var part = parts[i];
         if (!part.segment.trim()) continue;
-        var a = point(run, part.index), b = point(run, part.index + part.segment.length);
+        var a = point(run, part.index), b = point(run, part.index + part.segment.length, true);
         var end = document.createElement('span'), start = document.createElement('span');
         end.className = 'hoshi-sentence-end'; start.className = 'hoshi-sentence-start';
         end.setAttribute('aria-hidden', 'true'); start.setAttribute('aria-hidden', 'true');
-        insertMarker(b, end, true);
-        insertMarker(a, start, false);
-        sentences.push({ start: start, end: end, text: part.segment });
+        insertMarker(b, end, true, run.block);
+        insertMarker(a, start, false, run.block);
+        runSentences.push({ start: start, end: end, text: part.segment });
       }
+      // Runs already follow document order, so reverse each run's insertion order directly.
+      runSentences.reverse().forEach(function (sentence) { sentences.push(sentence); });
     });
-    return sentences.sort(function (a, b) { return a.start.compareDocumentPosition(b.start) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1; });
+    return sentences;
   }
   function pages(sentence, context) {
     var range = workingRange; range.setStart(sentence.start, 0); range.setEnd(sentence.end, 0);

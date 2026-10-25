@@ -28,6 +28,16 @@ spec.loader.exec_module(sync_server)
 
 
 class SentenceBoundaryTests(unittest.TestCase):
+    def test_internal_punctuation_keeps_the_publisher_ruby_base_whole(self):
+        sentences = segment("<p>前です。<ruby>大丈夫？<em>本当</em><rt>だいじょうぶほんとう</rt></ruby>です。後です。</p>")
+        self.assertEqual(["前です。", "大丈夫？本当です。", "後です。"], [sentence["text"] for sentence in sentences])
+        self.assertEqual([0, 3, 10], [sentence["start"] for sentence in sentences])
+
+    def test_punctuation_at_the_end_of_the_ruby_base_still_ends_the_sentence(self):
+        sentences = segment("<p><ruby>大丈夫？<em>本当</em>！<rt>だいじょうぶほんとう</rt></ruby>次です。</p>")
+        self.assertEqual(["大丈夫？本当！", "次です。"], [sentence["text"] for sentence in sentences])
+        self.assertEqual([0, 5], [sentence["start"] for sentence in sentences])
+
     def test_safety_cut_keeps_the_entire_ruby_base(self):
         prefix = "あ" * 399
         sentences = segment("<p>" + prefix + "<ruby>大<span>丈</span>夫<rt>だいじょうぶ</rt></ruby>ですよ。</p>")

@@ -218,6 +218,27 @@ class EpubSentenceSegmenterTest {
     }
 
     @Test
+    fun punctuationInsideOnePublisherBaseCannotDuplicateItsReadingAcrossSentences() {
+        val sentences = EpubSentenceSegmenter.segment(0, chapter(
+            "<p>前です。<ruby>大丈夫？<em>本当</em><rt>だいじょうぶほんとう</rt></ruby>です。後です。</p>",
+        ))
+        assertEquals(listOf("前です。", "大丈夫？本当です。", "後です。"), sentences.map { it.text })
+        assertEquals(listOf(0, 3, 10), sentences.map { it.start })
+        assertEquals(listOf(RubyAnnotation(0, 6, "だいじょうぶほんとう")), sentences[1].ruby)
+        assertEquals(1, sentences.sumOf { it.ruby.size })
+    }
+
+    @Test
+    fun punctuationAtTheEndOfACompleteBaseStillEndsTheSentence() {
+        val sentences = EpubSentenceSegmenter.segment(0, chapter(
+            "<p><ruby>大丈夫？<em>本当</em>！<rt>だいじょうぶほんとう</rt></ruby>次です。</p>",
+        ))
+        assertEquals(listOf("大丈夫？本当！", "次です。"), sentences.map { it.text })
+        assertEquals(listOf(0, 5), sentences.map { it.start })
+        assertEquals(listOf(RubyAnnotation(0, 7, "だいじょうぶほんとう")), sentences[0].ruby)
+    }
+
+    @Test
     fun safetyCutMovesBeforeTheCompleteRubyBase() {
         val prefix = "あ".repeat(399)
         val sentences = EpubSentenceSegmenter.segment(2, chapter("<p>$prefix<ruby>大<span>丈</span>夫<rt>だいじょうぶ</rt></ruby>ですよ。</p>"))

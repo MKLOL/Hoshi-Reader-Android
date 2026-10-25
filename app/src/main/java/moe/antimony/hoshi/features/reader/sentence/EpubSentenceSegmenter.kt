@@ -54,8 +54,9 @@ internal data class ChapterExtraction(val parts: List<TextRun?>, val heading: St
  *  - A `<` that does not start markup is text; `<![CDATA[…]]>`, comments, declarations and
  *    processing instructions are skipped whole.
  *  - Block elements end a sentence even without punctuation; `。！？!?` end a sentence and
- *    swallow the closing brackets and ellipses that follow. ASCII `.` is deliberately not a
- *    terminator. A run of 400 matchable characters with no terminator is split at its last comma,
+ *    swallow the closing brackets and ellipses that follow. A terminator inside an unfinished
+ *    ruby base waits for the next sentence boundary, so its reading stays whole. ASCII `.` is
+ *    deliberately not a terminator. A run of 400 matchable characters with no terminator is split at its last comma,
  *    or before a ruby base crossing that cutoff. A single longer ruby base stays whole.
  */
 object EpubSentenceSegmenter {
@@ -393,7 +394,7 @@ object EpubSentenceSegmenter {
                             bufferLength += 1
                         }
                     }
-                    flush()
+                    if (group < 0 || remainingGroups[group] == 0) flush()
                 } else if (bufferLength >= MAX_SENTENCE_CHARS &&
                     (bufferLength == MAX_SENTENCE_CHARS || group < 0 || remainingGroups[group] == 0)
                 ) {

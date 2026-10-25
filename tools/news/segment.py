@@ -159,7 +159,8 @@ def segment(html, spine=0):
                     buffer_groups.append(groups[pos])
                     consume(groups[pos])
                     pos += 1
-                flush()
+                if group < 0 or remaining_groups[group] == 0:
+                    flush()
             elif length >= 400 and (length == 400 or group < 0 or remaining_groups[group] == 0):
                 def safe_boundary(candidate):
                     before = buffer_groups[candidate - 1]

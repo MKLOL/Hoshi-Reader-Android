@@ -29,6 +29,8 @@ def make_fixture(job):
         '<h1>第一章</h1><p>朝だ<br/>起きる</p><div>終わり。</div>',
         '<p><ruby>漢<rt>かん</rt>字<rt>じ</rt></ruby>を読む。</p>',
         '<p><ruby>今<rt>いま</ruby>から行く。</p>',
+        '<p>前です。<ruby>大丈夫？<em>本当</em><rt>だいじょうぶほんとう</rt></ruby>です。後です。</p>',
+        '<p><ruby>大丈夫？<em>本当</em>！<rt>だいじょうぶほんとう</rt></ruby>次です。</p>',
         '<p>one\n   two&nbsp;&nbsp;three。</p>',
         '<p>山﨑さん。𠀀𱍐々〻〇○◯。次。</p>',
         '<p>caf&eacute; は良い。&yen;100だ。次の文。</p>',
