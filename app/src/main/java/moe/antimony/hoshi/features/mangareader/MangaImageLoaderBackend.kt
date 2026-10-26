@@ -52,15 +52,32 @@ internal class MangaImageLoaderBackend(
     private var closed = false
     private var hits = 0L
     private var reads = 0L
+    /** The version [imageUrl] last read for each declared image path, for [knownImageUrl]. */
+    private val versions = ConcurrentHashMap<String, String>()
 
+    /**
+     * The page image's URL from its current file version. Reads file metadata, so call it off the
+     * main thread; the version it reads is what [knownImageUrl] returns until the next read.
+     */
     fun imageUrl(page: MokuroPage): String {
         val file = resolver.resolveDeclaredImageFile(page.imagePath)
         val version = file?.let { "${it.length()}-${it.lastModified()}" } ?: "missing"
-        // A book/session namespace prevents two volumes with e.g. images/001.jpg from
-        // sharing a browser cache entry. The file version also isolates replaced content.
-        return MangaPageHtml.BASE_URL + MangaPageHtml.encodeImagePath(page.imagePath) +
-            "?hoshiImage=$namespace&v=$version"
+        versions[page.imagePath] = version
+        return urlFor(page, version)
     }
+
+    /**
+     * The URL from the version last read by [imageUrl], without touching the disk, or null when
+     * this image has not been looked at yet. A file replaced since then keeps its old URL here
+     * until [imageUrl] reads it again.
+     */
+    fun knownImageUrl(page: MokuroPage): String? = versions[page.imagePath]?.let { urlFor(page, it) }
+
+    // A book/session namespace prevents two volumes with e.g. images/001.jpg from sharing a
+    // browser cache entry. The file version also isolates replaced content.
+    private fun urlFor(page: MokuroPage, version: String) =
+        MangaPageHtml.BASE_URL + MangaPageHtml.encodeImagePath(page.imagePath) +
+            "?hoshiImage=$namespace&v=$version"
 
     fun onPageRequested(pageIndex: Int) {
         val paths = (listOf(pageIndex + 1, pageIndex) + mangaAdjacentPreloadIndexes(pageIndex, book.pages.size))
@@ -137,21 +154,29 @@ internal class MangaImageLoaderBackend(
         return ByteArrayInputStream(data)
     }
 
-    fun preloadScript(pageIndex: Int): String {
-        preloadEncodedImages(pageIndex)
-        val candidates = mangaAdjacentPreloadIndexes(pageIndex, book.pages.size).mapNotNull { index ->
-            book.pages.getOrNull(index)?.let { page ->
-                MangaImageDecodeCandidate(imageUrl(page), page.imageWidth, page.imageHeight)
-            }
-        }
-        return MangaImageDecodePreloader.script(pageIndex, candidates, policy.decodedBytes)
-    }
-
-    /** Encoded preparation is independent of the much larger decoded-pixel budget. */
-    private fun preloadEncodedImages(pageIndex: Int) {
+    /**
+     * Prepares the neighbours of the displayed [pageIndex] on a background thread: first their
+     * file versions and the WebView decode script, which is handed to [onDecodeScript] on that
+     * thread unless a newer page arrived meanwhile, then their encoded bytes. Encoded preparation
+     * is independent of the much larger decoded-pixel budget.
+     */
+    fun prepareAdjacentImages(pageIndex: Int, onDecodeScript: (String) -> Unit) {
         val previous = preloadJob
         val generation = synchronized(lock) { ++preloadGeneration }
         preloadJob = scope.launch {
+            try {
+                val candidates = mangaAdjacentPreloadIndexes(pageIndex, book.pages.size).mapNotNull { index ->
+                    book.pages.getOrNull(index)?.let { page ->
+                        MangaImageDecodeCandidate(imageUrl(page), page.imageWidth, page.imageHeight)
+                    }
+                }
+                val script = MangaImageDecodePreloader.script(pageIndex, candidates, policy.decodedBytes)
+                if (synchronized(lock) { !closed && generation == preloadGeneration }) onDecodeScript(script)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                // Decoding ahead is an optimisation; the encoded preparation below still helps.
+            }
             // One pass reads at a time. A superseded pass may still be finishing an image this
             // window wants; waiting for it keeps the transient buffers bounded and makes this pass
             // find that image cached instead of reading it alongside.

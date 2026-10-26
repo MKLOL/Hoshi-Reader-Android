@@ -11,10 +11,16 @@ import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.viewinterop.AndroidView
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import moe.antimony.hoshi.features.reader.ReaderNavigationDirection
 import moe.antimony.hoshi.features.reader.ReaderSelectionBridge
 import moe.antimony.hoshi.features.reader.ReaderSelectionCommand
@@ -84,12 +90,16 @@ internal fun MangaReaderWebView(
     val page = book.pages[pageIndex.coerceIn(0, book.pages.lastIndex)]
     // Re-keyed on the viewport size so a real viewport change (rotation) reloads the page
     // with fresh dimensions baked in — see MangaPageHtml's frame-sizing script.
-    val html = remember(
-        page,
-        renderConfig,
-        pageRenderCache,
-    ) {
-        pageRenderCache.htmlFor(page, renderConfig)
+    // The image URL carries the file's version, and file metadata is never read on the main
+    // thread: a page turned to renders at once from the version its neighbour preparation read,
+    // and a page never looked at yet loads once the background read below finishes.
+    var html by remember(page, renderConfig, pageRenderCache) {
+        mutableStateOf(pageRenderCache.knownHtmlFor(page, renderConfig))
+    }
+    LaunchedEffect(page, renderConfig, pageRenderCache) {
+        // Revalidate in the background: an image replaced since its version was read gets a new
+        // URL, and the changed HTML reloads the page.
+        html = withContext(Dispatchers.IO) { pageRenderCache.htmlFor(page, renderConfig) }
     }
 
     AndroidView(
@@ -164,9 +174,10 @@ internal fun MangaReaderWebView(
             // The WebViewClient and touch listener are attached once in factory(); both
             // read rememberUpdatedState values, so they stay current without being
             // re-allocated on every recomposition. update() only swaps the page content.
+            val pageHtml = html ?: return@AndroidView
             val loadToken = MangaPageLoadToken(
                 pageIndex = page.index,
-                htmlHash = html.hashCode(),
+                htmlHash = pageHtml.hashCode(),
             )
             if (webView.tag != loadToken) {
                 imageLoader?.onPageRequested(page.index)
@@ -175,7 +186,7 @@ internal fun MangaReaderWebView(
                 // can slightly magnify a fitted page and make it horizontally pannable.
                 webView.loadDataWithBaseURL(
                     MangaPageHtml.BASE_URL,
-                    html,
+                    pageHtml,
                     "text/html",
                     "utf-8",
                     null,
@@ -346,7 +357,15 @@ private class MangaWebViewClient(
                         view.scrollTo(0, 0)
                         view.syncMangaHostScale()
                         onPageReady(loadToken.pageIndex)
-                        imageLoader?.let { view.evaluateJavascript(it.preloadScript(loadToken.pageIndex), null) }
+                        // Neighbour versions are read in the background; the decode script comes
+                        // back here only while this page is still the one loaded.
+                        imageLoader?.prepareAdjacentImages(loadToken.pageIndex) { script ->
+                            view.post {
+                                if (view.tag == loadToken && view.isAttachedToWindow) {
+                                    view.evaluateJavascript(script, null)
+                                }
+                            }
+                        }
                     }
                 }
             },

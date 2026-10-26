@@ -41,8 +41,28 @@ internal class MangaPageRenderCache(
             size > maxEntries.coerceAtLeast(1)
     }
 
-    fun htmlFor(page: MokuroPage, config: MangaPageRenderConfig): String {
-        val imageUrl = imageLoader?.imageUrl(page) ?: MangaPageHtml.encodeImagePath(page.imagePath)
+    /**
+     * The page's HTML for its image's current file version. With an [imageLoader] this reads file
+     * metadata, so call it off the main thread.
+     */
+    fun htmlFor(page: MokuroPage, config: MangaPageRenderConfig): String =
+        htmlFor(page, config, imageLoader?.imageUrl(page) ?: MangaPageHtml.encodeImagePath(page.imagePath))
+
+    /**
+     * The page's HTML without touching the disk: built from the image version last read off the
+     * main thread, or null when this page's image has not been looked at yet. Callers revalidate
+     * with [htmlFor] in the background, so a replaced image still gets its new URL.
+     */
+    fun knownHtmlFor(page: MokuroPage, config: MangaPageRenderConfig): String? {
+        val imageUrl = if (imageLoader == null) {
+            MangaPageHtml.encodeImagePath(page.imagePath)
+        } else {
+            imageLoader.knownImageUrl(page) ?: return null
+        }
+        return htmlFor(page, config, imageUrl)
+    }
+
+    private fun htmlFor(page: MokuroPage, config: MangaPageRenderConfig, imageUrl: String): String {
         val key = MangaPageRenderKey(page.index, config, imageUrl)
         synchronized(lock) {
             entries[key]?.let { return it }

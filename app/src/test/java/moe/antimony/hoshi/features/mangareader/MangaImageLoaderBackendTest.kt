@@ -103,6 +103,47 @@ class MangaImageLoaderBackendTest {
         assertNotEquals(oldUrl, backend.imageUrl(book.pages[1]))
     }
 
+    @Test fun knownUrlsNeverReadTheDiskAndFollowTheLastBackgroundRead() {
+        val root = temporary.newFolder()
+        val file = root.resolve("1.jpg").apply { writeBytes(byteArrayOf(1)) }
+        val backend = MangaImageLoaderBackend(root, book, MangaImageCachePolicy(8, 0))
+        val page = book.pages[1]
+        try {
+            assertNull(backend.knownImageUrl(page))
+            val read = backend.imageUrl(page)
+            assertEquals(read, backend.knownImageUrl(page))
+            file.writeBytes(byteArrayOf(2, 3))
+            // The lookup used on the main thread does not notice: it reads no file metadata.
+            assertEquals(read, backend.knownImageUrl(page))
+            // The next background read does, and the lookup follows it.
+            val reread = backend.imageUrl(page)
+            assertNotEquals(read, reread)
+            assertEquals(reread, backend.knownImageUrl(page))
+        } finally { backend.close() }
+    }
+
+    @Test fun preparingNeighboursReadsTheirVersionsOffTheCallingThread() = kotlinx.coroutines.runBlocking {
+        val root = temporary.newFolder()
+        for (index in 1..3) root.resolve("$index.jpg").writeBytes(byteArrayOf(index.toByte()))
+        val backend = MangaImageLoaderBackend(root, book, MangaImageCachePolicy(8, 0))
+        try {
+            backend.onPageRequested(0)
+            val callingThread = Thread.currentThread()
+            val delivered = java.util.concurrent.LinkedBlockingQueue<Pair<String, Thread>>()
+            backend.prepareAdjacentImages(0) { script -> delivered.add(script to Thread.currentThread()) }
+            val (script, deliveringThread) = requireNotNull(delivered.poll(5, java.util.concurrent.TimeUnit.SECONDS))
+            backend.awaitEncodedPreload()
+            assertNotSame(callingThread, deliveringThread)
+            // A turn to any neighbour now renders from a version already read, and the decode
+            // script asks for the same URLs that page HTML will use.
+            for (index in 1..3) {
+                val url = requireNotNull(backend.knownImageUrl(book.pages[index]))
+                assertTrue(script.contains(url))
+            }
+            assertNull(backend.knownImageUrl(book.pages[4]))
+        } finally { backend.close() }
+    }
+
     @Test fun differentBooksWithIdenticalImageNamesHaveDifferentBrowserCacheKeys() {
         val first = MangaImageLoaderBackend(temporary.newFolder(), book)
         val second = MangaImageLoaderBackend(temporary.newFolder(), book)
@@ -123,7 +164,7 @@ class MangaImageLoaderBackendTest {
         val backend = MangaImageLoaderBackend(root, book, MangaImageCachePolicy(8, 0))
         try {
             backend.onPageRequested(0)
-            backend.preloadScript(0)
+            backend.prepareAdjacentImages(0) {}
             backend.awaitEncodedPreload()
             assertEquals(3L, backend.snapshot().bytes)
             backend.get(file).use { assertArrayEquals(byteArrayOf(9, 8, 7), it.readBytes()) }
@@ -175,7 +216,7 @@ class MangaImageLoaderBackendTest {
         val backend = pause.backend()
         try {
             backend.onPageRequested(0)
-            backend.preloadScript(0)
+            backend.prepareAdjacentImages(0) {}
             pause.awaitMidRead()
             // The reader turns to page 1 while page 1 is half read into the cache.
             backend.onPageRequested(1)
@@ -195,7 +236,7 @@ class MangaImageLoaderBackendTest {
         val backend = pause.backend()
         try {
             backend.onPageRequested(0)
-            backend.preloadScript(0)
+            backend.prepareAdjacentImages(0) {}
             pause.awaitMidRead()
             // A jump far ahead: page 1 is no longer worth finishing.
             backend.onPageRequested(6)
@@ -213,11 +254,11 @@ class MangaImageLoaderBackendTest {
         val backend = pause.backend()
         try {
             backend.onPageRequested(0)
-            backend.preloadScript(0)
+            backend.prepareAdjacentImages(0) {}
             pause.awaitMidRead()
             backend.onPageRequested(1)
             // Page 1 became visible: its own pass (pages 2, 0 and 3) is started at once.
-            backend.preloadScript(1)
+            backend.prepareAdjacentImages(1) {}
             pause.resume()
             backend.awaitEncodedPreload()
             // Page 1 was read once, then each of the new window's pages once.
