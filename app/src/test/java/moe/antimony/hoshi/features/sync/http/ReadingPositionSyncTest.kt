@@ -168,7 +168,8 @@ class ReadingPositionSyncTest {
         server.put(foreign, "application/json", "not json".toByteArray())
         val sync = ReadingPositionSync(repository)
         val result = sync.exchange(server, server.listing(), repository.loadBookEntries())
-        assertTrue(result.errors.isNotEmpty())
+        // Passed over quietly until it changes, as the spec says.
+        assertTrue(result.errors.isEmpty())
         assertTrue(server.keys().any { it == "${READING_POSITION_PREFIX}example/phone.json" })
         assertTrue(repository.readingPositions.snapshot(root).pending.isEmpty())
         // A changed remote ETag immediately gets another attempt even during failure backoff.
@@ -209,12 +210,16 @@ class ReadingPositionSyncTest {
             kotlinx.coroutines.withTimeout(5_000) { entered.await() }
             move(repository, root, 102, 160.0)
             scheduler.onBookmarkChanged(root, "Example", "example")
-            val flushed = async { scheduler.refreshBeforeOpen(10_000) }
             release.complete(Unit)
-            assertTrue(flushed.await())
-            assertTrue(repository.readingPositions.snapshot(root).pending.isEmpty())
-            val journal = json.decodeFromString<ReadingPositionJournal>(server.body("${READING_POSITION_PREFIX}example/phone.json").toString(Charsets.UTF_8))
-            assertEquals(102, journal.heads.single().position.chapterIndex)
+            // No further trigger: the background publish itself drains the newer page.
+            val key = "${READING_POSITION_PREFIX}example/phone.json"
+            fun publishedHead() = json.decodeFromString<ReadingPositionJournal>(server.body(key).toString(Charsets.UTF_8))
+                .heads.single().position.chapterIndex
+            kotlinx.coroutines.withTimeout(10_000) {
+                while (repository.readingPositions.snapshot(root).pending.isNotEmpty() || publishedHead() != 102) {
+                    kotlinx.coroutines.delay(20)
+                }
+            }
         } finally {
             scope.coroutineContext[kotlinx.coroutines.Job]?.cancel()
         }
@@ -425,5 +430,75 @@ class ReadingPositionSyncTest {
         assertTrue(changes.positionErrors.isEmpty())
         // The tablet's history is older than that map position.
         assertEquals(130, phone.loadBookmark(root)!!.chapterIndex)
+    }
+    @Test fun anotherDevicesUnusableHistoryIsPassedOverUntilItChangesEvenAfterARestart() = runBlocking {
+        val server = ContentAddressedKv()
+        val (repository, root) = fixture("phone")
+        val foreign = "${READING_POSITION_PREFIX}example/tablet.json"
+        server.put(foreign, "application/json", "not json".toByteArray())
+        server.resetCounts()
+        assertTrue(exchange(repository, server).errors.isEmpty())
+        assertEquals(1, server.gets)
+        server.resetCounts()
+        // A new process (a new exchange) neither fetches nor reports it again.
+        assertTrue(exchange(repository, server).errors.isEmpty())
+        assertEquals(0, server.gets)
+        val (tablet, t) = fixture("tablet")
+        move(tablet, t, 120, 200.0)
+        server.put(foreign, "application/json", json.encodeToString(tablet.readingPositions.export("example")!!).toByteArray())
+        exchange(repository, server)
+        assertEquals(120, repository.loadBookmark(root)!!.chapterIndex)
+    }
+
+    private fun answering(server: ContentAddressedKv, header: String) = object : HttpSyncKvTransport by server {
+        override suspend fun get(key: String): HttpSyncKvFetched? = server.get(key)?.copy(etag = header)
+        override suspend fun getBounded(key: String, maxBytes: Int): HttpSyncKvFetched? =
+            server.getBounded(key, maxBytes)?.copy(etag = header)
+    }
+
+    private fun aProxyRewritingETagsDoesNotMakeEveryPollFetchAgain(header: String) = runBlocking {
+        val server = ContentAddressedKv()
+        val (phone, root) = fixture("phone")
+        val (tablet, t) = fixture("tablet")
+        move(tablet, t, 120, 200.0)
+        exchange(tablet, server)
+        val state = HttpSyncBatchState(phone)
+        state.publishMaps(server)
+        putShard(server, "older", 130, 300.0)
+        val proxy = answering(server, header)
+        state.syncMaps(proxy)
+        assertEquals(130, phone.loadBookmark(root)!!.chapterIndex)
+        server.resetCounts()
+        state.syncMaps(proxy)
+        assertEquals("unchanged shards and histories are not fetched again", 0, server.gets)
+    }
+
+    @Test fun aDroppedETagHeaderDoesNotMakeEveryPollFetchAgain() = aProxyRewritingETagsDoesNotMakeEveryPollFetchAgain("")
+
+    @Test fun aWeakenedETagHeaderDoesNotMakeEveryPollFetchAgain() =
+        aProxyRewritingETagsDoesNotMakeEveryPollFetchAgain("W/\"compressed\"")
+
+    @Test fun aHistoryChangedAfterTheListingIsReadOnceMore() = runBlocking {
+        val server = ContentAddressedKv()
+        val (phone, root) = fixture("phone")
+        val (tablet, t) = fixture("tablet")
+        move(tablet, t, 120, 200.0)
+        exchange(tablet, server)
+        val listed = server.listing()
+        // The tablet moves on between this device's listing and its read.
+        move(tablet, t, 125, 210.0)
+        exchange(tablet, server)
+        val proxy = answering(server, "")
+        val sync = ReadingPositionSync(phone)
+        sync.exchange(proxy, listed, phone.loadBookEntries())
+        assertEquals(125, phone.loadBookmark(root)!!.chapterIndex)
+        server.resetCounts()
+        // The newer body was acknowledged by the older listing's ETag: it is read once more...
+        sync.exchange(proxy, server.listing(), phone.loadBookEntries())
+        assertEquals(1, server.gets)
+        server.resetCounts()
+        // ...and then matches.
+        sync.exchange(proxy, server.listing(), phone.loadBookEntries())
+        assertEquals(0, server.gets)
     }
 }

@@ -12,6 +12,7 @@ import moe.antimony.hoshi.features.sync.http.deriveSyncId
 import moe.antimony.hoshi.features.sync.http.syncIdForMetadata
 import moe.antimony.hoshi.storage.writeSidecarAtomically
 import java.io.File
+import java.io.FileNotFoundException
 import java.lang.ref.WeakReference
 import java.security.MessageDigest
 import java.util.UUID
@@ -433,10 +434,17 @@ class ReadingPositionRepository(
         val own = identity().first.id
         if (state.heads.values.any { it.deviceId == own }) outbox[state.bookId] = state.pending
         else outbox.remove(state.bookId)
-        // Never resurrect a book deleted while a reader's final IO was still queued.
-        if (root?.isDirectory == true) state.winner()?.let { winner ->
+        // Never resurrect a book deleted while a reader's final IO was still queued: the
+        // projection is written only into the existing folder, and one removed meanwhile (even
+        // between a check and the write) just has no projection left to update.
+        if (root != null) state.winner()?.let { winner ->
             val bookmark = winner.bookmark()
-            if (storage.loadBookmark(root) != bookmark) storage.saveBookmark(root, bookmark)
+            if (storage.loadBookmark(root) != bookmark) {
+                try {
+                    storage.saveBookmark(root, bookmark)
+                } catch (_: FileNotFoundException) {
+                }
+            }
         }
         adoptIntoOpenSessions(state)
     }

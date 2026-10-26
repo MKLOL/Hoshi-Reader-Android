@@ -1214,8 +1214,12 @@ class BookSidecarDataSource(
     suspend fun loadBookmark(bookRoot: File): Bookmark? =
         loadJson(Bookmark.serializer(), bookRoot.resolve(BOOKMARK_FILE_NAME))
 
+    /**
+     * Never creates [bookRoot]: the reading-position projection of a book deleted meanwhile
+     * must fail (FileNotFoundException), not bring back a folder holding only a bookmark.
+     */
     suspend fun saveBookmark(bookRoot: File, bookmark: Bookmark) {
-        saveJson(bookRoot, BOOKMARK_FILE_NAME, Bookmark.serializer(), bookmark)
+        saveJson(bookRoot, BOOKMARK_FILE_NAME, Bookmark.serializer(), bookmark, createDirectory = false)
     }
 
     suspend fun loadStatistics(bookRoot: File): List<ReadingStatistics>? =

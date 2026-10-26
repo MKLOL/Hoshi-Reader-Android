@@ -16,8 +16,8 @@ private data class PositionSyncIndex(
     val applied: Map<String, String> = emptyMap(),
     val published: Map<String, String> = emptyMap(),
     /**
-     * This device's own keys it cannot use (undecodable, invalid or from a newer build), by
-     * ETag. Only this device writes them, so they are replaced, never fetched again unchanged.
+     * Keys this build cannot use (undecodable, invalid, too large or from a newer build), by
+     * ETag: never fetched again unchanged. This device's own are replaced by its next publish.
      */
     val unusable: Map<String, String> = emptyMap(),
 )
@@ -95,16 +95,26 @@ internal class ReadingPositionSync(
             index = index.copy(applied = index.applied - key, unusable = index.unusable + (key to etag))
         }
 
+        // A history this build cannot use (undecodable, invalid, too large or from a newer build)
+        // is passed over quietly until its ETag changes; this device's own is replaced by the
+        // next publish. Only a failed request is an error, retried after a pause.
         suspend fun receive(meta: HttpSyncKvKeyMeta, bookId: String, writer: String): Boolean = attempt(meta, meta.key) {
             reads += 1
-            val own = writer == device
+            val fetched = try {
+                transport.getBounded(meta.key, MAX_HISTORY_BYTES)
+            } catch (tooLarge: HttpSyncTooLargeException) {
+                null
+            }
+            if (fetched == null) {
+                // Too large, or deleted since a stale listing showed it.
+                markUnusable(meta.key, meta.etag)
+                return@attempt
+            }
+            val etag = acknowledgedEtag(meta.etag, fetched)
             try {
-                val fetched = transport.getBounded(meta.key, MAX_HISTORY_BYTES) ?: error("Position history disappeared")
                 val text = fetched.body.toString(Charsets.UTF_8)
                 if (json.decodeFromString<PositionJournalVersion>(text).version > 1) {
-                    // A newer build's history is skipped quietly until it changes.
-                    if (own) markUnusable(meta.key, fetched.etag)
-                    else index = index.copy(applied = index.applied + (meta.key to fetched.etag))
+                    markUnusable(meta.key, etag)
                     return@attempt
                 }
                 val journal = json.decodeFromString<ReadingPositionJournal>(text)
@@ -112,17 +122,12 @@ internal class ReadingPositionSync(
                 if (store.merge(journal, roots[bookId])) moved += bookId
                 // A listing ETag is not an acknowledgement: only the successfully merged body is.
                 index = index.copy(
-                    applied = index.applied + (meta.key to fetched.etag),
+                    applied = index.applied + (meta.key to etag),
                     unusable = index.unusable - meta.key,
                 )
             } catch (invalid: IllegalArgumentException) {
-                // Undecodable or invalid (SerializationException is one). Another device's body
-                // waits for that device; this device's own is replaced by the next publish.
-                if (!own) throw invalid
-                markUnusable(meta.key, meta.etag)
-            } catch (tooLarge: HttpSyncTooLargeException) {
-                if (!own) throw tooLarge
-                markUnusable(meta.key, meta.etag)
+                // SerializationException is one, as are the history's own validation failures.
+                markUnusable(meta.key, etag)
             }
         }
 
@@ -180,7 +185,8 @@ internal class ReadingPositionSync(
         // later finds its keys still unacknowledged and reads them then.
         val foreign = listing.mapNotNull { meta -> parseKey(meta.key)?.let { (book, writer) ->
             Triple(meta, book, writer).takeIf {
-                writer != device && book in roots && index.applied[meta.key] != meta.etag && !backedOff(meta, meta.key)
+                writer != device && book in roots && index.applied[meta.key] != meta.etag &&
+                    index.unusable[meta.key] != meta.etag && !backedOff(meta, meta.key)
             }
         } }.sortedBy { activeFirst(it.second) }
         for ((meta, book, writer) in foreign) {

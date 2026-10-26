@@ -4,9 +4,13 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import kotlinx.serialization.builtins.MapSerializer
+import kotlinx.serialization.builtins.serializer
 import moe.antimony.hoshi.epub.BookRepository
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -214,7 +218,8 @@ class HttpSyncBookmarkSchedulerTest {
             // A poll that read the old setting may still be finishing; the next pass is set up.
             while (shard !in server.keys() || !server.body(shard).toString(Charsets.UTF_8).contains("\"chapterIndex\":3") ||
                 repository.readingPositions.snapshot(root).pending.isNotEmpty()) {
-                scheduler.refreshBeforeOpen(timeoutMillis = 10_000)
+                scheduler.refreshNow()
+                kotlinx.coroutines.delay(50)
             }
         }
         assertTrue(server.keys().any { it.startsWith(READING_POSITION_PREFIX) })
@@ -253,5 +258,50 @@ class HttpSyncBookmarkSchedulerTest {
         withTimeout(5_000) { transfers.await() }
         release.complete(Unit)
         assertTrue(scheduler.refreshBeforeOpen(timeoutMillis = 10_000))
+    }
+    @Test
+    fun aReaderOpenWaitsForTheMapsButNotForPositionHistories() = runBlocking<Unit> {
+        val server = ContentAddressedKv()
+        val phone = BookRepository(temporaryFolder.newFolder())
+        val root = phone.installedBook()
+        val state = HttpSyncBatchState(phone)
+        state.publishMaps(server)
+        // An older build's position in the maps, and a newer one in the tablet's history.
+        val mapped = HttpSyncBookmarkBlob(5, 0.0, 6, appleSecondsToRfc3339(800_000_000.0), 1)
+        server.put("${BOOKMARKS_MAP_PREFIX}older.json", "application/json", kotlinx.serialization.json.Json.encodeToString(
+            MapSerializer(String.serializer(), HttpSyncBookmarkMapEntry.serializer()),
+            mapOf("book" to HttpSyncBookmarkMapEntry("older", mapped.lastModified, mapped)),
+        ).toByteArray())
+        val tablet = BookRepository(temporaryFolder.newFolder(), deviceIdentity = moe.antimony.hoshi.epub.DeviceIdentity("tablet", "Tablet"))
+        val tabletRoot = tablet.installedBook()
+        tablet.recordReadingPosition(tabletRoot, tablet.openReadingPosition(tabletRoot)
+            .navigate(moe.antimony.hoshi.epub.Bookmark(7, 0.0, 8, 800_000_100.0))!!)
+        ReadingPositionSync(tablet).exchange(server, server.listing(), tablet.loadBookEntries())
+        val release = CompletableDeferred<Unit>()
+        val stalling = object : HttpSyncKvTransport by server {
+            override suspend fun getBounded(key: String, maxBytes: Int): HttpSyncKvFetched? {
+                if (key.startsWith(READING_POSITION_PREFIX)) release.await()
+                return server.getBounded(key, maxBytes)
+            }
+        }
+        val scheduler = HttpSyncBookmarkScheduler(
+            state = state,
+            currentSettings = { configured },
+            syncBooksNow = { _, _, _ -> emptyResult() },
+            fullCycleRunner = HttpSyncFullCycleRunner(scope),
+            scope = scope,
+            transportFactory = { stalling },
+        )
+
+        // The history read never finishes until released, yet the reader opens on the maps.
+        assertTrue(scheduler.refreshBeforeOpen(timeoutMillis = 5_000))
+        assertEquals(5, phone.loadBookmark(root)!!.chapterIndex)
+        // The history lane finishes in the background and reloads the reader with its move.
+        val update = scope.async(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) {
+            state.remoteBookmarkUpdates.first { it == "book" }
+        }
+        release.complete(Unit)
+        withTimeout(5_000) { update.await() }
+        assertEquals(7, phone.loadBookmark(root)!!.chapterIndex)
     }
 }

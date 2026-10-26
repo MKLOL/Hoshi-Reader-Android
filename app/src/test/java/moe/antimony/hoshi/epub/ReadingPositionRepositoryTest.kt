@@ -274,4 +274,23 @@ class ReadingPositionRepositoryTest {
         repository.recordReadingPosition(root, next)
         assertEquals(121, repository.loadBookmark(root)!!.chapterIndex)
     }
+    @Test fun theBookmarkProjectionNeverCreatesABookFolder() = runBlocking {
+        val missing = temporary.root.resolve("Books/Deleted book")
+        try {
+            BookSidecarDataSource().saveBookmark(missing, bookmark(3, 100.0))
+            fail("a projection for a folder that is gone must fail")
+        } catch (_: java.io.FileNotFoundException) {
+        }
+        assertFalse(missing.exists())
+    }
+
+    @Test fun aBookRetiredWhileItsLastMoveIsSavedIsNotBroughtBack() = runBlocking {
+        val (repository, root) = fixture("phone")
+        val event = repository.openReadingPosition(root).navigate(bookmark(101, 150.0))!!
+        // Deleting a book renames its folder away in one step, as retireBook does.
+        assertTrue(root.renameTo(root.resolveSibling(".deleted-${root.name}")))
+        repository.recordReadingPosition(root, event)
+        assertFalse("no folder holding only a bookmark reappears", root.exists())
+        assertEquals(event.id, repository.readingPositions.export("example")!!.heads.single().id)
+    }
 }

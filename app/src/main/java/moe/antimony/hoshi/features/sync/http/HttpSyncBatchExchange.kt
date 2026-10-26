@@ -1,6 +1,7 @@
 package moe.antimony.hoshi.features.sync.http
 
 import moe.antimony.hoshi.storage.writeSidecarAtomically
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
@@ -259,6 +260,8 @@ class HttpSyncBatchState(
     internal suspend fun syncMaps(
         transport: HttpSyncKvTransport,
         onProgress: suspend (HttpSyncProgress) -> Unit = {},
+        /** The maps are done, applied or failed; only the history lane remains. */
+        onMapsEnded: () -> Unit = {},
         onMapsApplied: (HttpSyncMapChanges) -> Unit = {},
     ): HttpSyncMapChanges = withContext(ioDispatcher) {
         onProgress(HttpSyncProgress(messageResource = R.string.http_sync_checking_changes))
@@ -274,11 +277,13 @@ class HttpSyncBatchState(
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (error: Exception) {
+            onMapsEnded()
             // The maps failed after the listing: histories are still exchanged with it.
             listed?.let { exchangePositions(transport, it, entries) }
             throw error
         }
         onMapsApplied(maps)
+        onMapsEnded()
         val positions = exchangePositions(transport, maps.listing, entries)
         val uploaded = maps.uploadedBookmarkKeys + positions.published.map { bookmarkKey(it) }
         maps.copy(
@@ -368,7 +373,7 @@ class HttpSyncBatchState(
                     // This installation's own shard deleted on the server: its owned
                     // positions are merged below and published again.
                     val decoded = if (fetched == null && meta.key == ownShardKey) emptyMap() else decodeBookmarksMap(fetched)
-                    acknowledgedShards[meta.key] = fetched?.etag ?: meta.etag
+                    acknowledgedShards[meta.key] = fetched?.let { acknowledgedEtag(meta.etag, it) } ?: meta.etag
                     decoded
                 } catch (error: HttpSyncException) {
                     if (meta.key == ownShardKey) throw error
@@ -959,7 +964,7 @@ class HttpSyncBookmarkScheduler(
 ) {
     private val jobLock = Any()
     private var pollingJob: Job? = null
-    private var mapFlight: Deferred<MapPass>? = null
+    private var mapFlight: MapFlight? = null
     private var backgroundFullJob: Job? = null
     private var statisticsFlight: Job? = null
     private var fullRetryDeferredForReader = false
@@ -1063,26 +1068,42 @@ class HttpSyncBookmarkScheduler(
      * @return `true` when the refresh finished within the timeout.
      */
     suspend fun refreshBeforeOpen(timeoutMillis: Long = REFRESH_BEFORE_OPEN_TIMEOUT_MS): Boolean =
-        withTimeoutOrNull(timeoutMillis) { runMaps() } != null
+        // Only the maps: they carry every device's winning position. The pass's history lane
+        // goes on in the background and reloads the reader if it moves the position.
+        withTimeoutOrNull(timeoutMillis) { flight().maps.await() } != null
 
     fun flushNow() = refreshNow()
 
     /** One map pass: whether sync was set up, and the queue it started from. */
     private class MapPass(val configured: Boolean, val generation: String?)
 
-    private suspend fun runMaps(allowFullReconcile: Boolean = true) {
-        repeat(8) {
-            val flight = synchronized(jobLock) {
-                mapFlight?.takeIf { it.isActive } ?: scope.async { runMapsOnce(allowFullReconcile) }.also { created ->
-                    mapFlight = created
-                    created.invokeOnCompletion {
-                        synchronized(jobLock) {
-                            if (mapFlight === created) mapFlight = null
-                        }
+    /** The pass in flight; [maps] completes once its bookmark maps are done, before its histories. */
+    private class MapFlight(val maps: CompletableDeferred<Unit>, val pass: Deferred<MapPass>)
+
+    private fun flight(allowFullReconcile: Boolean = true): MapFlight = synchronized(jobLock) {
+        mapFlight?.takeIf { it.pass.isActive } ?: run {
+            val maps = CompletableDeferred<Unit>()
+            val pass = scope.async {
+                try {
+                    runMapsOnce(allowFullReconcile) { maps.complete(Unit) }
+                } finally {
+                    maps.complete(Unit)
+                }
+            }
+            MapFlight(maps, pass).also { created ->
+                mapFlight = created
+                pass.invokeOnCompletion {
+                    synchronized(jobLock) {
+                        if (mapFlight === created) mapFlight = null
                     }
                 }
             }
-            val pass = flight.await()
+        }
+    }
+
+    private suspend fun runMaps(allowFullReconcile: Boolean = true) {
+        repeat(8) {
+            val pass = flight(allowFullReconcile).pass.await()
             // Sync is off: no queue is read and no pass follows until it is set up again.
             if (!pass.configured) return
             // An unreadable queue waits for the next poll like a failed generation.
@@ -1137,7 +1158,7 @@ class HttpSyncBookmarkScheduler(
         }
     }
 
-    private suspend fun runMapsOnce(allowFullReconcile: Boolean = true): MapPass {
+    private suspend fun runMapsOnce(allowFullReconcile: Boolean = true, onMapsEnded: () -> Unit = {}): MapPass {
         val settings = try {
             currentSettings()
         } catch (cancelled: CancellationException) {
@@ -1150,7 +1171,7 @@ class HttpSyncBookmarkScheduler(
         val generation = pendingGeneration().getOrNull()
         val client = HttpSyncWriteTrackingTransport(transportFactory(settings))
         try {
-            state.syncMaps(client) { changes ->
+            state.syncMaps(client, onMapsEnded = onMapsEnded) { changes ->
                 // Started before the history lane, so statistics and book transfers never wait for it.
                 if (changes.statisticsNeeded) launchStatistics(client, changes.listing)
                 if (allowFullReconcile) {
@@ -1258,6 +1279,18 @@ private fun rfc3339ToAppleSecondsStrict(value: String): Double {
         throw HttpSyncException("Invalid bookmark timestamp: $value")
     }
     return converted
+}
+
+/**
+ * The ETag a fetched body is acknowledged by, compared with later listings. The listed one when
+ * the body is the listed version (the server's ETag is the body's SHA-256), or when the response
+ * header is missing or weak (a proxy may drop it, or weaken it while compressing): the next
+ * listing then matches. Otherwise the header, for a body that changed after the listing.
+ */
+internal fun acknowledgedEtag(listed: String, fetched: HttpSyncKvFetched): String {
+    if (listed == fetched.body.sha256Etag()) return listed
+    val header = fetched.etag.trim()
+    return if (header.isEmpty() || header.startsWith("W/")) listed else header
 }
 
 private fun ByteArray.sha256Etag(): String {
