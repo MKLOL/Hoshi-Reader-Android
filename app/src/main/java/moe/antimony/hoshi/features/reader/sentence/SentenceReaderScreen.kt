@@ -105,6 +105,7 @@ import moe.antimony.hoshi.features.reader.readerLifecycleAutoSyncPlan
 import moe.antimony.hoshi.features.settings.collectAsLoadedSettings
 import moe.antimony.hoshi.features.sync.SyncDirection
 import moe.antimony.hoshi.navigation.ReaderAutoSyncExportController
+import moe.antimony.hoshi.navigation.ReaderForegroundImport
 import moe.antimony.hoshi.navigation.ReaderRouteAutoSyncState
 import moe.antimony.hoshi.navigation.ReaderSessionReloadBarrier
 import moe.antimony.hoshi.navigation.RemoteBookmarkUpdateGate
@@ -146,10 +147,12 @@ internal fun SentenceReaderScreen(
     val remoteUpdateGate = remember(bookId) { RemoteBookmarkUpdateGate() }
     val sessionReloadBarrier = remember(bookId) { ReaderSessionReloadBarrier() }
     val autoSyncExportController = remember(bookId, appContainer) { ReaderAutoSyncExportController(appContainer.appScope) }
+    val foregroundImport = remember(bookId, autoSyncExportController) { ReaderForegroundImport(scope, autoSyncExportController) }
     var reloadKey by remember(bookId) { mutableIntStateOf(0) }
     // Keyed by the load that produced the content, never by the request (see ReaderRouteDestination).
     var loadedKey by remember(bookId) { mutableIntStateOf(0) }
     fun reloadReader() {
+        foregroundImport.cancel()
         autoSyncExportController.holdExports()
         sessionReloadBarrier.retire()
         remoteUpdateGate.close()
@@ -162,15 +165,19 @@ internal fun SentenceReaderScreen(
     }
     // The entry of the content a reload retires; its queued export is for this entry.
     var lastLoadedEntry by remember(bookId) { mutableStateOf<moe.antimony.hoshi.epub.BookEntry?>(null) }
-    suspend fun importOnOpen(entry: moe.antimony.hoshi.epub.BookEntry, sync: ReaderRouteAutoSyncState) {
-        appContainer.syncManager.syncBook(
+    /** The automatic ッツ import; true when it changed this book's position or statistics here. */
+    suspend fun importOnOpen(entry: moe.antimony.hoshi.epub.BookEntry, sync: ReaderRouteAutoSyncState): Boolean {
+        var statisticsImported = false
+        val result = appContainer.syncManager.syncBook(
             entry = entry,
             direction = null,
             syncStats = readerSettings.statisticsSyncEnabled,
             statsSyncMode = readerSettings.statisticsSyncMode,
             syncAudioBook = sync.shouldSyncAudioBook,
             importOnly = true,
+            onStatisticsImported = { statisticsImported = true },
         )
+        return result is moe.antimony.hoshi.features.sync.SyncResult.Imported || statisticsImported
     }
     val loadState by produceState<SentenceReaderLoadState>(SentenceReaderLoadState.Loading, bookId, reloadKey) {
         val requestedKey = reloadKey
@@ -236,7 +243,18 @@ internal fun SentenceReaderScreen(
             ReaderLifecycleAutoSyncEvent.Resume,
             inactiveElapsedMillis = inactive?.let { SystemClock.elapsedRealtime() - it },
         ).importOnForeground
-        if (import && autoSyncState.isReaderAutoSyncEnabled) reloadReader()
+        // As in normal mode, the import runs with the content still shown and counting, and
+        // only an import that changed the book reloads it.
+        val entry = (loadState as? SentenceReaderLoadState.Ready)?.readerState?.entry
+        val sync = autoSyncState
+        if (import && sync.isReaderAutoSyncEnabled && entry != null) foregroundImport.start(
+            import = {
+                appContainer.bookRepository.awaitPendingStatisticsSaves(entry.root)
+                importOnOpen(entry, sync)
+            },
+            exportsEnabled = { sync.isReaderAutoSyncEnabled },
+            reload = ::reloadReader,
+        )
     }
     DisposableEffect(lifecycleOwner, bookId) {
         val observer = LifecycleEventObserver { _, event ->

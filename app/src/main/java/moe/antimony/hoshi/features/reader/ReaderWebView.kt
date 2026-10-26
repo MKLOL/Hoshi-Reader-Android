@@ -127,8 +127,8 @@ fun ReaderWebView(
     /** Persists statistics alone, for leaving or backgrounding the reader without a new bookmark. */
     onSaveStatistics: (statistics: List<ReadingStatistics>) -> Unit = {},
     onFlushAutoSyncExport: () -> Unit = {},
-    /** True means this session is being replaced; its tracker must remain stopped. */
-    onForegroundAutoSyncImport: () -> Boolean = { false },
+    /** Starts the foreground ッツ import with this reader still shown; the route reloads it only on a change. */
+    onForegroundAutoSyncImport: () -> Unit = {},
     onPrepareSessionReloadChange: (((() -> Unit)?) -> Unit) = {},
     /** Receives a query for whether this reader's audiobook is playing; `null` when it leaves. */
     onAudiobookPlayingQueryChange: (((() -> Boolean)?) -> Unit) = {},
@@ -1302,11 +1302,10 @@ fun ReaderWebView(
             event = ReaderLifecycleAutoSyncEvent.Resume,
             inactiveElapsedMillis = inactiveAt?.let { SystemClock.elapsedRealtime() - it },
         )
-        // The import reloads the reader, which releases its audiobook player. Never stop audio
-        // that kept playing in the background; while it plays, it drives the position anyway.
-        if (plan.importOnForeground && sasayakiPlayer?.isPlaying != true && onForegroundAutoSyncImport()) {
-            return@rememberUpdatedState
-        }
+        // As on iOS the import runs while this reader goes on counting; the route reloads it only
+        // when the import changed the book. That reload would release the audiobook player, so
+        // audio that kept playing in the background skips the import; it drives the position anyway.
+        if (plan.importOnForeground && sasayakiPlayer?.isPlaying != true) onForegroundAutoSyncImport()
         resumeStatisticsForLifecycleStartIfNeeded()
     }
     val currentLifecyclePause = rememberUpdatedState {

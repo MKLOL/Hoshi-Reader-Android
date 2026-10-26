@@ -42,6 +42,7 @@ import java.time.ZoneId
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.zip.ZipInputStream
+import kotlin.math.abs
 
 /**
  * Cover file materialized by a sync receiver for a book whose payload shipped none. The name is
@@ -50,6 +51,16 @@ import java.util.zip.ZipInputStream
  * identical to iOS `FileNames.generatedCover`.
  */
 internal const val GENERATED_COVER_FILENAME: String = ".generated_cover.jpg"
+
+/** What [BookRepository.mergeDayTotals] applied. */
+class MergedDayTotals(
+    /** The day totals the merge returned; empty for a book folder that no longer exists. */
+    val totals: List<ReadingStatistics>,
+    /** The sidecar was rewritten, possibly with checkpoint metadata only. */
+    val written: Boolean,
+    /** Some day's reading time or characters here now differ from before the merge. */
+    val totalsChanged: Boolean,
+)
 
 class BookRepository(
     filesDir: File,
@@ -338,12 +349,38 @@ class BookRepository(
         bookRoot: File,
         dayTotals: List<ReadingStatistics>,
         replaceOtherDays: Boolean,
-    ): Boolean = withContext(NonCancellable) {
+    ): Boolean = writeDayTotals(bookRoot, replaceOtherDays) { dayTotals }.written
+
+    /**
+     * [applyDayTotals] for totals merged with this book's days, which [merge] receives collapsed
+     * by day under the book lock. A statistics save landing between a snapshot read before a
+     * slow download and the write would otherwise be counted among the included counters and
+     * vanish from the imported remainder.
+     */
+    suspend fun mergeDayTotals(
+        bookRoot: File,
+        replaceOtherDays: Boolean,
+        merge: (localDays: List<ReadingStatistics>) -> List<ReadingStatistics>,
+    ): MergedDayTotals {
+        foldStatisticsHistorySafely(bookRoot)
+        return writeDayTotals(bookRoot, replaceOtherDays, merge)
+    }
+
+    private suspend fun writeDayTotals(
+        bookRoot: File,
+        replaceOtherDays: Boolean,
+        merge: (localDays: List<ReadingStatistics>) -> List<ReadingStatistics>,
+    ): MergedDayTotals = withContext(NonCancellable) {
+        var applied = emptyList<ReadingStatistics>()
+        var totalsChanged = false
         val changed = bookLocks.withBookLock(bookRoot) {
             if (!bookRoot.isDirectory) return@withBookLock false
             val original = readStatisticsSidecar(bookRoot, forWrite = true).legacyAttributed(bookRoot)
+            val before = original.collapsedByDay()
+            applied = merge(before)
+            if (applied.isEmpty() && !replaceOtherDays) return@withBookLock false
             val next = original.toMutableList()
-            val totals = dayTotals.collapsedByDay()
+            val totals = applied.collapsedByDay()
             for (total in totals) {
                 val sameDay = next.filter { it.dateKey == total.dateKey }
                 val current = sameDay.readingTotals()
@@ -405,11 +442,26 @@ class BookRepository(
             val merged = next.deduplicateReadingStatistics()
             if (merged == original) false else {
                 sidecarDataSource.saveStatistics(bookRoot, merged)
+                // A rewrite can be checkpoint metadata only: this device's counters included in
+                // an unchanged total.
+                totalsChanged = !merged.collapsedByDay().sameDayTotals(before)
                 true
             }
         }
         if (changed) statisticsChangeCounter.update { it + 1 }
-        changed
+        MergedDayTotals(applied, changed, totalsChanged)
+    }
+
+    /** Days whose totals are both zero carry no reading, e.g. a cleared ッツ day's checkpoint. */
+    private fun List<ReadingStatistics>.sameDayTotals(other: List<ReadingStatistics>): Boolean {
+        val mine = associateBy { it.dateKey }
+        val theirs = other.associateBy { it.dateKey }
+        return (mine.keys + theirs.keys).all { day ->
+            val a = mine[day]
+            val b = theirs[day]
+            (a?.charactersRead ?: 0) == (b?.charactersRead ?: 0) &&
+                abs((a?.readingTime ?: 0.0) - (b?.readingTime ?: 0.0)) < 0.001
+        }
     }
 
     suspend fun loadMangaTextStatistics(bookRoot: File): List<MangaTextStatistic> {

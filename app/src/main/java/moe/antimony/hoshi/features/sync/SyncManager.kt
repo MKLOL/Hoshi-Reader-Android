@@ -30,13 +30,18 @@ class SyncManager(
         statsSyncMode: StatisticsSyncMode,
         syncAudioBook: Boolean,
         importOnly: Boolean = false,
+        /**
+         * Called when this sync's import changed a day's reading time or characters here,
+         * whether or not the position moved. An open reader then rebuilds on the new totals.
+         */
+        onStatisticsImported: () -> Unit = {},
     ): SyncResult = bookSyncLocks.computeIfAbsent(entry.root.canonicalPath) { Mutex() }.withLock {
         try {
-            syncBookOnce(entry, direction, syncStats, statsSyncMode, syncAudioBook, importOnly)
+            syncBookOnce(entry, direction, syncStats, statsSyncMode, syncAudioBook, importOnly, onStatisticsImported)
         } catch (error: GoogleDriveApiException) {
             if (!error.isStaleCacheError) throw error
             drive.clearCache()
-            syncBookOnce(entry, direction, syncStats, statsSyncMode, syncAudioBook, importOnly)
+            syncBookOnce(entry, direction, syncStats, statsSyncMode, syncAudioBook, importOnly, onStatisticsImported)
         }
     }
 
@@ -47,6 +52,7 @@ class SyncManager(
         statsSyncMode: StatisticsSyncMode,
         syncAudioBook: Boolean,
         importOnly: Boolean,
+        onStatisticsImported: () -> Unit,
     ): SyncResult {
         val title = entry.metadata.title ?: return SyncResult.Skipped
         entry.metadata.folder ?: return SyncResult.Skipped
@@ -78,7 +84,7 @@ class SyncManager(
                 !importOnly && syncDirection == SyncDirection.Synced && statsSyncMode == StatisticsSyncMode.Merge
             }
             if (syncStats && (statsFileId != null || publishMergedToFolder != null)) {
-                reconcileStatistics(entry, statsFileId, statsSyncMode, publishMergedToFolder)
+                reconcileStatistics(entry, statsFileId, statsSyncMode, onStatisticsImported, publishMergedToFolder)
             }
             return if (syncDirection == SyncDirection.Synced) SyncResult.Synced(displayTitle) else SyncResult.Skipped
         }
@@ -95,6 +101,7 @@ class SyncManager(
                 syncAudioBook = syncAudioBook,
                 // Chosen by the reader rather than by comparing timestamps.
                 explicit = direction == SyncDirection.ImportFromTtu,
+                onStatisticsImported = onStatisticsImported,
             )
             SyncDirection.ExportToTtu -> exportToTtu(
                 title = displayTitle,
@@ -122,10 +129,11 @@ class SyncManager(
         statsSyncMode: StatisticsSyncMode,
         syncAudioBook: Boolean,
         explicit: Boolean,
+        onStatisticsImported: () -> Unit,
     ): SyncResult {
         val progress = progressFileId?.let { drive.getProgressFile(it) } ?: return SyncResult.Skipped
         importProgress(entry, progress, explicit)
-        if (syncStats) reconcileStatistics(entry, statsFileId, statsSyncMode)
+        if (syncStats) reconcileStatistics(entry, statsFileId, statsSyncMode, onStatisticsImported)
         if (syncAudioBook) {
             audioBookFileId?.let { fileId ->
                 importAudioBook(entry, drive.getAudioBookFile(fileId))
@@ -138,20 +146,21 @@ class SyncManager(
         entry: BookEntry,
         statsFileId: String?,
         statsSyncMode: StatisticsSyncMode,
+        onStatisticsImported: () -> Unit,
         publishMergedToFolder: String? = null,
     ) {
         // ッツ keeps one device-less entry per day, i.e. every device's reading added up.
         // The imported remainder has a shared origin, so several devices cannot count it twice.
-        val localDays = bookRepository.loadStatistics(entry.root).collapsedByDay()
+        // The download comes first: the merge reads this book's days under its lock.
         val remoteStats = statsFileId?.let { drive.getStatsFile(it) }.orEmpty()
-        val merged = TtuSyncRules.mergeStatistics(localDays, remoteStats, statsSyncMode)
-        if (merged.isNotEmpty() || (statsSyncMode == StatisticsSyncMode.Replace && statsFileId != null)) {
-            bookRepository.applyDayTotals(
-                entry.root,
-                merged,
-                replaceOtherDays = statsSyncMode == StatisticsSyncMode.Replace,
-            )
-        }
+        val applied = bookRepository.mergeDayTotals(
+            entry.root,
+            // Replace without a ッツ file has nothing to replace with.
+            replaceOtherDays = statsSyncMode == StatisticsSyncMode.Replace && statsFileId != null,
+        ) { localDays -> TtuSyncRules.mergeStatistics(localDays, remoteStats, statsSyncMode) }
+        // Only different day totals are new statistics for a reader.
+        if (applied.totalsChanged) onStatisticsImported()
+        val merged = applied.totals
         if (publishMergedToFolder != null && merged.isNotEmpty() &&
             merged.sortedBy { it.dateKey } != remoteStats.sortedBy { it.dateKey }) {
             // The checkpoint above is durable before this collapsed total becomes visible
@@ -209,11 +218,14 @@ class SyncManager(
         // sync independently, without inventing a bookmark or exporting unrelated audio.
         if (requireLocalReading && localStats.none { it.readingTime > 0.0 || it.charactersRead > 0 }) return false
         val remoteStats = statsFileId?.let { drive.getStatsFile(it) }.orEmpty()
-        val statsToExport = TtuSyncRules.mergeStatistics(remoteStats, localStats, statsSyncMode)
-        if (statsToExport.isEmpty()) return false
         // Share the device counters included in this collapsed export before another
-        // install imports it. Its independent import can then absorb them on HTTP sync.
-        bookRepository.applyDayTotals(entry.root, statsToExport, replaceOtherDays = false)
+        // install imports it. Its independent import can then absorb them on HTTP sync. The
+        // export merges the days read under the book lock, so a save made during the download
+        // is either in it or stays outside the counters it includes.
+        val statsToExport = bookRepository.mergeDayTotals(entry.root, replaceOtherDays = false) { localDays ->
+            TtuSyncRules.mergeStatistics(remoteStats, localDays, statsSyncMode)
+        }.totals
+        if (statsToExport.isEmpty()) return false
         if (statsToExport.sortedBy { it.dateKey } != remoteStats.sortedBy { it.dateKey }) {
             drive.updateStatsFile(driveFolderId, statsFileId, statsToExport)
         }

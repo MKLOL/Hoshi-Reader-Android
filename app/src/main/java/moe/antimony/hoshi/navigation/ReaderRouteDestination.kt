@@ -33,6 +33,7 @@ import moe.antimony.hoshi.LocalHoshiAppContainer
 import moe.antimony.hoshi.epub.BookEntry
 import moe.antimony.hoshi.features.settings.collectAsLoadedSettings
 import moe.antimony.hoshi.features.sync.SyncDirection
+import moe.antimony.hoshi.features.sync.SyncResult
 import moe.antimony.hoshi.features.sync.http.syncIdForMetadata
 import moe.antimony.hoshi.features.sync.http.HttpSyncActiveBooks
 import androidx.lifecycle.Lifecycle
@@ -69,6 +70,9 @@ internal fun ReaderRouteDestination(
     val autoSyncExportController = remember(bookId, appContainer) {
         ReaderAutoSyncExportController(appContainer.appScope)
     }
+    val foregroundImport = remember(bookId, autoSyncExportController) {
+        ReaderForegroundImport(bookmarkScope, autoSyncExportController)
+    }
     val systemDarkTheme = isSystemInDarkTheme()
     val readerLoadingBackground = Modifier.background(
         Color(readerSettings.backgroundColor(systemDarkTheme)),
@@ -89,6 +93,7 @@ internal fun ReaderRouteDestination(
     fun reloadReader() {
         // Retire the tracker before any asynchronous import can update its base. Disposal
         // then cannot write the old running day over newly imported statistics.
+        foregroundImport.cancel()
         autoSyncExportController.holdExports()
         sessionReloadBarrier.retire()
         remoteUpdateGate.close()
@@ -101,15 +106,19 @@ internal fun ReaderRouteDestination(
     }
     // The entry of the reader a reload retires; its queued export is for this entry.
     var lastLoadedEntry by remember(bookId) { mutableStateOf<BookEntry?>(null) }
-    suspend fun importOnOpen(entry: BookEntry, syncState: ReaderRouteAutoSyncState) {
-        appContainer.syncManager.syncBook(
+    /** The automatic ッツ import; true when it changed this book's position or statistics here. */
+    suspend fun importOnOpen(entry: BookEntry, syncState: ReaderRouteAutoSyncState): Boolean {
+        var statisticsImported = false
+        val result = appContainer.syncManager.syncBook(
             entry = entry,
             direction = null,
             syncStats = readerSettings.statisticsSyncEnabled,
             statsSyncMode = readerSettings.statisticsSyncMode,
             syncAudioBook = syncState.shouldSyncAudioBook,
             importOnly = true,
+            onStatisticsImported = { statisticsImported = true },
         )
+        return result is SyncResult.Imported || statisticsImported
     }
     val routeState by produceState<ReaderRouteLoadState>(
         ReaderRouteLoadState.Loading,
@@ -198,12 +207,19 @@ internal fun ReaderRouteDestination(
         autoSyncExportController.flushExport(autoSyncState.isReaderAutoSyncEnabled)
     }
 
-    fun importOnForeground(): Boolean {
-        if (!autoSyncState.isReaderAutoSyncEnabled) return false
-        // The normal opening path now owns the import, after the old reader is closed and
-        // all its writes are complete. Even a skipped import starts a fresh tracking base.
-        reloadReader()
-        return true
+    fun importOnForeground() {
+        if (!autoSyncState.isReaderAutoSyncEnabled) return
+        val entry = (routeState as? ReaderRouteLoadState.Ready)?.entry ?: return
+        val syncState = autoSyncState
+        // The reader stays shown; only an import that changed the book reloads it.
+        foregroundImport.start(
+            import = {
+                appContainer.bookRepository.awaitPendingStatisticsSaves(entry.root)
+                importOnOpen(entry, syncState)
+            },
+            exportsEnabled = { syncState.isReaderAutoSyncEnabled },
+            reload = ::reloadReader,
+        )
     }
 
     when (val state = routeState) {

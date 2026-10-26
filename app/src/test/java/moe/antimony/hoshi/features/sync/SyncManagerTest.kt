@@ -555,6 +555,121 @@ class SyncManagerTest {
         assertEquals(2, drive.listSyncFilesCalls)
     }
 
+    @Test
+    fun anImportOnlyRefreshReportsStatisticsOnlyWhenADaysTotalsChange() = runBlocking {
+        for (remoteSeconds in listOf(160.0, 100.0)) for (hasStatisticsFile in listOf(true, false)) {
+            val repository = BookRepository(tempFolder.newFolder(), deviceIdentity = DeviceIdentity("phone", "Phone"))
+            val entry = repository.createEntry()
+            repository.saveBookmark(entry.root, Bookmark(0, 0.5, 100, TtuSyncRules.unixMillisToAppleReferenceSeconds(2_000)))
+            val local = ReadingStatistics(
+                "Title", "2026-10-24", 100, 100.0, lastStatisticModified = 1_000, deviceId = "phone", deviceName = "Phone",
+            )
+            repository.saveStatistics(entry.root, listOf(local))
+            val drive = FakeDriveSyncDataSource(
+                progress = TtuProgress(7, 100, 0.5, 2_000),
+                statistics = listOf(local.copy(readingTime = remoteSeconds, lastStatisticModified = 3_000, deviceId = null, deviceName = null))
+                    .takeIf { hasStatisticsFile },
+            )
+            var reported = 0
+
+            val result = SyncManager(repository, drive).syncBook(
+                entry, direction = null, syncStats = true, statsSyncMode = StatisticsSyncMode.Merge,
+                syncAudioBook = false, importOnly = true, onStatisticsImported = { reported++ },
+            )
+
+            assertEquals(SyncResult.Synced("Title"), result)
+            // An equal newer total still rewrites the file (this device's counters are checkpointed),
+            // but it is no new reading: an open reader must not be rebuilt for it.
+            assertEquals("$remoteSeconds s, file $hasStatisticsFile", if (hasStatisticsFile && remoteSeconds != 100.0) 1 else 0, reported)
+        }
+    }
+
+    @Test
+    fun aReaderLeftRunningThroughAForegroundImportCannotOverwriteWhatItImported() = runBlocking {
+        val device = DeviceIdentity("phone", "Phone")
+        val repository = BookRepository(tempFolder.newFolder(), deviceIdentity = device)
+        val entry = repository.createEntry()
+        val today = java.time.LocalDate.of(2026, 10, 25)
+        repository.saveBookmark(entry.root, Bookmark(0, 0.1, 10, TtuSyncRules.unixMillisToAppleReferenceSeconds(1_000)))
+        repository.saveStatistics(entry.root, listOf(ReadingStatistics(
+            "Title", today.toString(), 100, 100.0, lastStatisticModified = 1_000, deviceId = device.id, deviceName = device.name,
+        )))
+        val clock = object : moe.antimony.hoshi.features.reader.ReaderStatisticsClock {
+            var millis = 2_000L
+            override fun currentTimeMillis() = millis
+            override fun currentDate() = today
+        }
+        // The reader shown before the import keeps counting from the base it loaded.
+        val tracker = moe.antimony.hoshi.features.reader.ReaderStatisticsTracker(
+            "Title", repository.loadStatistics(entry.root), true, clock, device,
+        )
+        tracker.start(10)
+        // Another device read to character 150 and 400 s in total today.
+        val drive = FakeDriveSyncDataSource(
+            progress = TtuProgress(7, 150, 0.75, 3_000),
+            statistics = listOf(ReadingStatistics("Title", today.toString(), 400, 400.0, lastStatisticModified = 3_000)),
+        )
+        var statisticsImported = false
+
+        val result = SyncManager(repository, drive).syncBook(
+            entry, direction = null, syncStats = true, statsSyncMode = StatisticsSyncMode.Merge,
+            syncAudioBook = false, importOnly = true, onStatisticsImported = { statisticsImported = true },
+        )
+        assertEquals(SyncResult.Imported("Title", 150), result)
+        assertTrue(statisticsImported)
+
+        // The old reader reads on and saves from its stale base, as on a pause or when the reload
+        // retires it: its own new reading is added, the imported history and position stay.
+        clock.millis += 10_000
+        tracker.pause(20)
+        repository.saveStatistics(entry.root, tracker.statisticsForPersistence())
+        val stored = repository.loadStatistics(entry.root)
+        assertEquals(410, stored.readingTotals().charactersRead)
+        assertEquals(410.0, stored.readingTotals().readingTime, 0.0)
+        assertEquals(110, stored.single { it.deviceId == device.id }.charactersRead)
+        assertEquals(150, repository.loadBookmark(entry.root)?.characterCount)
+    }
+
+    @Test
+    fun aReaderSaveDuringTheTtuStatisticsDownloadKeepsItsReadingTime() = runBlocking {
+        for (direction in listOf(SyncDirection.ImportFromTtu, SyncDirection.ExportToTtu)) {
+            val device = DeviceIdentity("phone", "Phone")
+            val repository = BookRepository(tempFolder.newFolder(), deviceIdentity = device)
+            val entry = repository.createEntry()
+            repository.saveBookmark(entry.root, Bookmark(0, 0.5, 100, TtuSyncRules.unixMillisToAppleReferenceSeconds(2_000)))
+            val mine = ReadingStatistics(
+                "Title", "2026-10-24", 30, 30.0, lastStatisticModified = 1_000, deviceId = device.id, deviceName = device.name,
+            )
+            repository.saveStatistics(entry.root, listOf(mine))
+            // 100 s read elsewhere (iOS or the ッツ web reader) were imported earlier today.
+            val ttuDay = ReadingStatistics("Title", "2026-10-24", 130, 130.0, lastStatisticModified = 2_000)
+            repository.applyDayTotals(entry.root, listOf(ttuDay), replaceOtherDays = false)
+            val drive = FakeDriveSyncDataSource(
+                progress = TtuProgress(7, 100, 0.5, 2_000),
+                statistics = listOf(ttuDay),
+                // The open reader saves a page turn while the statistics file downloads.
+                beforeGetStats = {
+                    repository.saveStatistics(
+                        entry.root,
+                        listOf(mine.copy(charactersRead = 35, readingTime = 35.0, lastStatisticModified = 3_000)),
+                    )
+                },
+            )
+
+            SyncManager(repository, drive).syncBook(
+                entry, direction, syncStats = true, statsSyncMode = StatisticsSyncMode.Merge, syncAudioBook = false,
+            )
+
+            val stored = repository.loadStatistics(entry.root)
+            assertEquals("$direction", 135, stored.readingTotals().charactersRead)
+            assertEquals("$direction", 135.0, stored.readingTotals().readingTime, 0.0)
+            assertEquals("$direction", 100, stored.single { it.deviceId == TTU_STATISTICS_DEVICE_ID }.charactersRead)
+            if (direction == SyncDirection.ExportToTtu) {
+                assertEquals(135, drive.updatedStatistics.single().charactersRead)
+            }
+        }
+    }
+
     private suspend fun BookRepository.createEntry(): BookEntry {
         val root = createBookDirectory("book")
         val metadata = BookMetadata(
@@ -587,6 +702,7 @@ private class FakeDriveSyncDataSource(
     private val beforeFindRoot: suspend () -> Unit = {},
     private val beforeUpdateStats: suspend (List<ReadingStatistics>) -> Unit = {},
     private val beforeGetProgress: suspend () -> Unit = {},
+    private val beforeGetStats: suspend () -> Unit = {},
 ) : DriveSyncDataSource {
     private val progressFile = progress?.let { DriveFile("progress", TtuSyncRules.progressFileName(it)) }
     private val statisticsFile = statistics?.let { DriveFile("statistics", TtuSyncRules.statisticsFileName(it)) }
@@ -637,6 +753,7 @@ private class FakeDriveSyncDataSource(
 
     override suspend fun getStatsFile(fileId: String): List<ReadingStatistics> {
         getStatsFileCalls += 1
+        beforeGetStats()
         return statisticsById.getValue(fileId)
     }
 
