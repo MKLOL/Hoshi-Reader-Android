@@ -111,6 +111,25 @@ class HttpSyncOnboardingViewModelTest {
     }
 
     @Test
+    fun choosingNoTokenAfterAFailedOneStopsSyncingWithIt() = withRepository { repository, models ->
+        val manualSync = HttpSyncManualSync(this) { throw IOException("Unauthorized") }
+        val model = models.create(repository, start = manualSync::start)
+        advanceUntilIdle()
+        model.useToken("rejected")
+        advanceUntilIdle()
+        model.skipDictionaries()
+        advanceUntilIdle()
+        model.editToken()
+        model.withoutToken()
+        model.finishLater()
+        advanceUntilIdle()
+
+        assertEquals(HttpSyncOnboardingStep.Hidden, model.state.value.step)
+        assertFalse(repository.settings.first().isConfigured)
+        assertTrue(repository.settings.first().hasCompletedOnboarding)
+    }
+
+    @Test
     fun configuredInstallsSkipOnboardingAndNeverAutomaticallyStartAnotherSync() = withRepository { repository, models ->
         repository.update { it.copy(bearerToken = "existing", hasCompletedDictionaryOnboarding = true) }
         val model = models.create(repository) { fail("Existing connection must not start sync") }

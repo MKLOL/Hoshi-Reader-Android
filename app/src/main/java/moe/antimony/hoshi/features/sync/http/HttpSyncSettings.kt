@@ -12,6 +12,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onStart
 import moe.antimony.hoshi.HoshiApplication
 import moe.antimony.hoshi.hasPriorAppUse
+import java.io.IOException
 
 /**
  * Settings + runtime cursor for the v2 KV HTTP sync (see [HttpSyncReconciler] and
@@ -96,13 +97,18 @@ class HttpSyncSettingsRepository(
 
     /** Seed both defaults once; a later launch's storage evidence cannot complete a pending step. */
     suspend fun initializeOnboarding() {
-        dataStore.edit { preferences ->
-            if (preferences[KEY_ONBOARDING_COMPLETED] == null) {
-                preferences[KEY_ONBOARDING_COMPLETED] = !isFreshInstall
+        try {
+            dataStore.edit { preferences ->
+                if (preferences[KEY_ONBOARDING_COMPLETED] == null) {
+                    preferences[KEY_ONBOARDING_COMPLETED] = !isFreshInstall
+                }
+                if (preferences[KEY_DICTIONARY_ONBOARDING_COMPLETED] == null) {
+                    preferences[KEY_DICTIONARY_ONBOARDING_COMPLETED] = !isFreshInstall
+                }
             }
-            if (preferences[KEY_DICTIONARY_ONBOARDING_COMPLETED] == null) {
-                preferences[KEY_DICTIONARY_ONBOARDING_COMPLETED] = !isFreshInstall
-            }
+        } catch (_: IOException) {
+            // Startup runs this, so a full disk must not crash every launch. Until a later
+            // attempt persists it, the unseeded defaults in toHttpSyncSettings decide.
         }
     }
 

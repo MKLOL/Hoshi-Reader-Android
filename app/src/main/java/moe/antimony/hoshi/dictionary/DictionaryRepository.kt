@@ -14,6 +14,7 @@ internal class DictionaryRepository(
     private val remoteDataSource: DictionaryRemoteDataSource = UrlDictionaryRemoteDataSource(),
 ) {
     private val lookupQueryLock = Any()
+    private val defaultDictionariesLock = Any()
 
     @Volatile
     private var lookupQueryReady = false
@@ -124,11 +125,14 @@ internal class DictionaryRepository(
         )
     }
 
-    /** Resumes the starter set without downloading dictionaries a previous attempt installed. */
+    /**
+     * Resumes the starter set without downloading dictionaries a previous attempt installed.
+     * Serialized so a second setup prompt (another activity instance) waits and then skips them.
+     */
     fun importDefaultDictionaries(
         lowRamImport: Boolean = false,
         onProgress: (DictionaryUpdateProgress) -> Unit = {},
-    ) {
+    ) = synchronized(defaultDictionariesLock) {
         DefaultDictionaries.forEach { dictionary ->
             val alreadyInstalled = loadDictionaries(dictionary.type).any { it.index.indexUrl == dictionary.indexUrl }
             if (!alreadyInstalled) {

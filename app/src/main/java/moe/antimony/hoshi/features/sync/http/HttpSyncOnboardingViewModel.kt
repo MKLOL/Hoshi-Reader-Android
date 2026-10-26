@@ -77,8 +77,14 @@ internal class HttpSyncOnboardingViewModel(
 
     fun finishLater() {
         if (state.value.step != HttpSyncOnboardingStep.Later || state.value.saving) return
+        // Reaching this after a saved token is only possible through Edit token, offered when that
+        // token failed. Without a token, background sync must not keep retrying the abandoned one.
+        val abandonedToken = startedSync
         save(if (dictionarySetupCompleted) HttpSyncOnboardingStep.Hidden else HttpSyncOnboardingStep.Dictionaries) {
-            repository.update { it.copy(hasCompletedOnboarding = true) }
+            repository.update {
+                it.copy(bearerToken = if (abandonedToken) "" else it.bearerToken, hasCompletedOnboarding = true)
+            }
+            startedSync = false
         }
     }
 
