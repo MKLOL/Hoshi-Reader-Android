@@ -767,10 +767,16 @@ fun ReaderWebView(
         setLookupPopups(emptyList())
     }
     fun closeLookupPopupsAndSelection() {
+        // Only a shown or pending lookup owns the page selection. Continuous scrolling calls this
+        // on every progress sample, and must not drop a native selection made for a highlight.
+        val lookupActive = stateHolder.lookupPopups.isNotEmpty() || selectionLookups.isPending ||
+            rootSelectionHighlight != null
         cancelPendingLookups()
         rootSelectionHighlight = null
-        setLookupPopups(clearPopupSelectionHighlights(stateHolder.lookupPopups))
-        clearReaderSelection()
+        if (lookupActive) {
+            setLookupPopups(clearPopupSelectionHighlights(stateHolder.lookupPopups))
+            clearReaderSelection()
+        }
         setLookupPopups(emptyList())
     }
     fun openFullscreenImage(sourceUrl: String) {

@@ -284,12 +284,15 @@ internal object ReaderContentStyles {
             overflow-wrap: break-word !important;
         }
         .hoshi-word {
-            display: inline-block !important;
+            display: inline !important;
             white-space: nowrap !important;
-            text-indent: 0 !important;
-            break-inside: avoid !important;
-            -webkit-column-break-inside: avoid !important;
             overflow-wrap: normal !important;
+        }
+        .hoshi-sentence-block-break {
+            break-before: column !important;
+            -webkit-column-break-before: always !important;
+            -webkit-margin-before: 0 !important;
+            margin-block-start: 0 !important;
         }
         .hoshi-sentence-page-break {
             display: block !important;

@@ -158,6 +158,82 @@ class ReaderTextLayoutWebViewTest {
         }
     }
 
+    @Test
+    fun wrappedWordsKeepLineStartRulesAndInlineDecorationsInBothDirectionsAndModes() {
+        val content = "<p><span style='text-decoration:underline'>これは大丈夫な文章です</span>。</p>" +
+            (0 until 36).joinToString("") { index ->
+                "<p>" + "あ".repeat(index % 13) + (1..6).joinToString("") { "東京。大阪、「学校」と言葉ー" } + "</p>"
+            }
+        for (continuous in listOf(false, true)) for (vertical in listOf(false, true)) {
+            val result = render(ReaderSettings(verticalWriting = vertical, continuousMode = continuous, fontSize = 20), content)
+            assertPreserved(result)
+            assertEquals("closing punctuation starts a line: $result", "[]", result.getJSONArray("lineStartPunctuation").toString())
+            // Decorations such as underlines do not reach into atomic inline boxes.
+            assertTrue("a wrapped word must remain an inline box", result.getBoolean("allWordsInline"))
+        }
+    }
+
+    @Test
+    fun aSentenceOpeningItsParagraphBreaksBeforeTheParagraphAndKeepsItsIndent() {
+        val content = "<style>p { text-indent: 1em; margin: 0; }</style>" +
+            (0 until 30).joinToString("") { index -> "<p>${"あ".repeat(40 + index * 7 % 50)}。</p>" }
+        for (vertical in listOf(false, true)) {
+            val result = render(ReaderSettings(verticalWriting = vertical, fontSize = 20), content)
+            assertPreserved(result)
+            val indents = result.getJSONArray("blockBreakIndents")
+            assertTrue("one-sentence paragraphs must need paragraph breaks: $result", indents.length() > 0)
+            assertEquals("a block marker must not open a paragraph", 0, result.getInt("markerBreaksOpeningBlocks"))
+            for (index in 0 until indents.length()) {
+                val indent = indents.getJSONObject(index)
+                assertEquals("paragraph indent after a page break: $indent", indent.getDouble("expected"), indent.getDouble("actual"), 1.0)
+            }
+            val sentences = result.getJSONArray("sentences")
+            for (index in 0 until sentences.length()) {
+                val sentence = sentences.getJSONObject(index)
+                assertEquals("a fitting sentence crosses a page: $sentence", sentence.getInt("first"), sentence.getInt("last"))
+            }
+        }
+    }
+
+    @Test
+    fun sentenceBreaksDoNotLeaveNearlyEmptyPages() {
+        val lengths = listOf(9, 31, 14, 47, 22, 6, 38, 17, 26, 11, 43, 19)
+        val content = (0 until 70).joinToString("") { paragraph ->
+            "<p>" + (0..paragraph % 5).joinToString("") { sentence ->
+                "あ".repeat(lengths[(paragraph * 3 + sentence) % lengths.size]) + "<ruby>大丈夫<rt>だいじょうぶ</rt></ruby>です。"
+            } + "</p>"
+        }
+        for (vertical in listOf(false, true)) {
+            val result = render(ReaderSettings(verticalWriting = vertical, fontSize = 20), content)
+            assertPreserved(result)
+            val sentences = result.getJSONArray("sentences")
+            for (index in 0 until sentences.length()) {
+                val sentence = sentences.getJSONObject(index)
+                assertEquals("a fitting sentence crosses a page: $sentence", sentence.getInt("first"), sentence.getInt("last"))
+            }
+            val counts = result.getJSONArray("pageGlyphCounts")
+            val full = (0 until counts.length() - 1).map { counts.getInt(it) }
+            assertTrue("fixture must exercise several pages: $result", full.size > 4)
+            // Moving one whole sentence can shorten a page, but never down to a fragment.
+            val median = full.sorted()[full.size / 2]
+            assertTrue("a nearly empty page remains: $full", full.min() * 10 >= median * 4)
+        }
+    }
+
+    @Test
+    fun rubyWordsInOneLongParagraphStayWholeAndKeepTheirIds() {
+        val content = "<div>" + (1..1_500).joinToString("") {
+            "これは<ruby>漢字<rt>かんじ</rt></ruby>の<ruby id='study-$it'>勉強<rt>べんきょう</rt></ruby>です。"
+        } + "</div>"
+        for (vertical in listOf(false, true)) {
+            val result = render(ReaderSettings(verticalWriting = vertical, fontSize = 20), content)
+            assertPreserved(result)
+            assertEquals(3_000, result.getInt("rubyCount"))
+            assertEquals("every ruby stays inside one word box", 0, result.getInt("rubiesOutsideWords"))
+            assertEquals(1_500, result.getInt("studyIdCount"))
+        }
+    }
+
     private fun regularFixture(compactInline: Boolean = false): String =
         "<p id='opening'>大丈夫です。次です。</p>" +
             "<p id='partial'>ああああ<ruby id='partial-ruby'>大<rt>だい</rt></ruby><em>丈夫</em>ですよ。</p>" +
@@ -281,7 +357,7 @@ class ReaderTextLayoutWebViewTest {
               first = Math.min(first, Math.floor((start + .5) / context.pageSize));
               last = Math.max(last, Math.floor((end - .5) / context.pageSize));
             });
-            return {text:sentence.text, first:first, last:last, oversized:sentence.start.dataset.oversized === 'true', forcedPageBreak:sentence.start.classList.contains('hoshi-sentence-page-break')};
+            return {text:sentence.text, first:first, last:last, oversized:sentence.start.dataset.oversized === 'true', forcedPageBreak:sentence.breakTarget.classList.contains(sentence.breakClass)};
           });
           var walker = reader.createWalker(), counted = 0, node;
           while ((node = walker.nextNode())) counted += reader.countChars(node.textContent);
@@ -296,8 +372,40 @@ class ReaderTextLayoutWebViewTest {
               html:target.outerHTML, startClass:start?.className, oversized:start?.dataset.oversized,
               vertical:context.vertical, pageSize:context.pageSize};
           });
+          var vertical = getComputedStyle(document.body).writingMode.indexOf('vertical') === 0;
+          var glyphs = window.__baseGlyphs(document.body).filter(function(glyph) { return glyph.text.trim(); });
+          function pageOf(glyph) { return context ? Math.floor(((vertical ? glyph.y : glyph.x) + .5) / context.pageSize) : 0; }
+          var lineStartPunctuation = [], previousLine = null;
+          glyphs.forEach(function(glyph, index) {
+            var line = Math.round(vertical ? glyph.x : glyph.y) + ':' + pageOf(glyph);
+            if (line !== previousLine && '。、」』）！？ー'.indexOf(glyph.text) >= 0) {
+              lineStartPunctuation.push(glyphs.slice(Math.max(0, index - 3), index + 2).map(function(g) { return g.text; }).join(''));
+            }
+            previousLine = line;
+          });
+          var pageGlyphCounts = [];
+          if (context) glyphs.forEach(function(glyph) { var page = pageOf(glyph); pageGlyphCounts[page] = (pageGlyphCounts[page] || 0) + 1; });
+          var blockBreakIndents = Array.from(document.querySelectorAll('.hoshi-sentence-block-break')).map(function(block) {
+            var glyph = window.__baseGlyphs(block).filter(function(g) { return g.text.trim(); })[0];
+            var rect = block.getBoundingClientRect(), style = getComputedStyle(block);
+            var origin = vertical ? rect.top + parseFloat(style.paddingTop) + parseFloat(style.borderTopWidth)
+              : rect.left + parseFloat(style.paddingLeft) + parseFloat(style.borderLeftWidth);
+            return {expected:parseFloat(style.textIndent) || 0, actual:glyph ? (vertical ? glyph.y : glyph.x) - origin : -1, html:block.outerHTML.slice(0, 120)};
+          });
+          var markerBreaksOpeningBlocks = Array.from(document.querySelectorAll('.hoshi-sentence-page-break')).filter(function(marker) {
+            var block = marker.parentElement.closest('p,div,li,dd,dt,blockquote,figcaption,h1,h2,h3,h4,h5,h6,section,article');
+            if (!block) return false;
+            var range = document.createRange(); range.setStart(block, 0); range.setEndBefore(marker);
+            return !range.toString().trim();
+          }).length;
           return JSON.stringify({
             errors:window.__layoutErrors, textPreserved:window.hoshiTextLayout.textPreserved,
+            lineStartPunctuation:lineStartPunctuation, pageGlyphCounts:pageGlyphCounts.map(function(count) { return count || 0; }),
+            blockBreakIndents:blockBreakIndents, markerBreaksOpeningBlocks:markerBreaksOpeningBlocks,
+            allWordsInline:Array.from(document.querySelectorAll('.hoshi-word')).every(function(word) { return getComputedStyle(word).display === 'inline'; }),
+            rubyCount:document.querySelectorAll('ruby').length,
+            rubiesOutsideWords:Array.from(document.querySelectorAll('ruby')).filter(function(ruby) { return !ruby.closest('.hoshi-word'); }).length,
+            studyIdCount:document.querySelectorAll('[id^="study-"]').length,
             beforeText:before.text, afterText:afterText,
             beforeParagraphs:before.paragraphs, afterParagraphs:Array.from(document.querySelectorAll('p')).map(window.__baseText),
             beforeReadings:before.readings, afterReadings:Array.from(document.querySelectorAll('rt')).map(function(rt) { return rt.textContent; }),
