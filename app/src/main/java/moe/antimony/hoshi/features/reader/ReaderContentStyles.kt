@@ -244,6 +244,9 @@ internal object ReaderContentStyles {
                 box-sizing: border-box !important;
                 column-width: ${generatedLayout.paginatedColumnWidthCss} !important;
                 column-gap: ${settings.columnGapCss};
+                /* Fill each page in turn, as WebKit does for a fixed-height container. Chrome's
+                   default balancing shortens every page to share content between forced breaks. */
+                column-fill: auto !important;
                 padding: ${settings.pagePaddingCss} !important;
                 padding-bottom: ${settings.bottomPaddingCss} !important;
                 $gridCss
@@ -303,6 +306,11 @@ internal object ReaderContentStyles {
             line-height: 0 !important;
             break-before: column !important;
             -webkit-column-break-before: always !important;
+        }
+        /* An inline element around a sentence break, which WebView 133 would otherwise
+           apply before the whole paragraph. Only elements that draw nothing themselves. */
+        .hoshi-sentence-break-host {
+            display: contents !important;
         }
         img.block-img {
             max-width: var(--hoshi-image-max-width, ${settings.imageMaxWidthFallbackCss}) !important;

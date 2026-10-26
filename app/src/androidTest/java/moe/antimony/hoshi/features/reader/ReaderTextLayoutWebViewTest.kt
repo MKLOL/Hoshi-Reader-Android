@@ -175,10 +175,9 @@ class ReaderTextLayoutWebViewTest {
 
     @Test
     fun aSentenceOpeningItsParagraphBreaksBeforeTheParagraphAndKeepsItsIndent() {
-        val content = "<style>p { text-indent: 1em; margin: 0; }</style>" +
-            (0 until 30).joinToString("") { index -> "<p>${"あ".repeat(40 + index * 7 % 50)}。</p>" }
+        val content = (0 until 30).joinToString("") { index -> "<p>${"あ".repeat(40 + index * 7 % 50)}。</p>" }
         for (vertical in listOf(false, true)) {
-            val result = render(ReaderSettings(verticalWriting = vertical, fontSize = 20), content)
+            val result = render(ReaderSettings(verticalWriting = vertical, fontSize = 20), content, css = "p { text-indent: 1em; margin: 0; }")
             assertPreserved(result)
             val indents = result.getJSONArray("blockBreakIndents")
             assertTrue("one-sentence paragraphs must need paragraph breaks: $result", indents.length() > 0)
@@ -234,6 +233,195 @@ class ReaderTextLayoutWebViewTest {
         }
     }
 
+    @Test
+    fun hangingIndentsSettleWithoutTreatingParagraphsAsOversized() {
+        val paragraphs = (0 until 60).joinToString("") { index ->
+            "<p>「" + "東京の学校です。".repeat(listOf(1, 9, 3, 14, 2, 6)[index % 6]) + "」</p>"
+        }
+        // A hanging indent written for the other writing direction leaves each paragraph's first
+        // glyph outside the column, in the gap before it.
+        for ((vertical, inset) in listOf(true to "padding-left", false to "padding-top")) {
+            val result = render(
+                ReaderSettings(verticalWriting = vertical, fontSize = 20),
+                paragraphs,
+                css = "p { text-indent: -1em; $inset: 1em; }",
+            )
+            assertPreserved(result)
+            assertTrue("the estimate must settle without the page-by-page fallback: $result", result.getInt("passes") < 12)
+            val sentences = result.getJSONArray("sentences")
+            for (index in 0 until sentences.length()) {
+                assertFalse("a fitting sentence was treated as oversized", sentences.getJSONObject(index).getBoolean("oversized"))
+            }
+        }
+    }
+
+    @Test
+    fun noForcedBreakLeavesANearlyEmptyPageItsSentenceCouldShare() {
+        val lengths = listOf(9, 31, 14, 47, 22, 6, 38, 17, 26, 11, 43, 19)
+        val content = (0 until 120).joinToString("") { paragraph ->
+            "<p>" + (0..paragraph % 6).joinToString("") { sentence ->
+                "東京".repeat(lengths[(paragraph * 5 + sentence) % lengths.size] / 4) +
+                    "あ".repeat(lengths[(paragraph + sentence * 7) % lengths.size] / 2) + "<ruby>魔法<rt>まほう</rt></ruby>。"
+            } + "</p>"
+        }
+        for (fontSize in listOf(20, 26)) for (vertical in listOf(false, true)) {
+            val result = render(ReaderSettings(verticalWriting = vertical, fontSize = fontSize), content)
+            assertPreserved(result)
+            assertEquals("a forced break leaves a short page its sentence fits on: $result", "[]", result.getJSONArray("staleBreaks").toString())
+        }
+    }
+
+    @Test
+    fun anOpeningBracketStartsTheSentenceItOpensAsInSentenceMode() {
+        val content = (0 until 40).joinToString("") { index ->
+            "<p>" + "あ".repeat(10 + index * 7 % 30) + "いた。「" + "猫目アメ".repeat(1 + index % 3) + "」、と書いてある。『" +
+                "う".repeat(5 + index % 9) + "』（" + "え".repeat(3 + index % 4) + "）。</p>"
+        }
+        for (vertical in listOf(false, true)) {
+            val result = render(ReaderSettings(verticalWriting = vertical, fontSize = 20), content)
+            assertPreserved(result)
+            val sentences = result.getJSONArray("sentences")
+            for (index in 0 until sentences.length()) {
+                val text = sentences.getJSONObject(index).getString("text").trim()
+                assertFalse("a sentence ends with an opening bracket: $text", text.last() in "「『（【〈《〔［｛“‘(")
+                assertTrue("a sentence ends at a terminator and its closing brackets: $text", text.last() in "。！？!?」』）)】〉》〕｝}］]、…‥")
+            }
+        }
+    }
+
+    @Test
+    fun aForcedBreakNeverLeavesAPageHoldingOnlyAnEmptySeparator() {
+        for (separator in listOf("<p><br/></p>", "<p>　</p>", "<p></p>")) {
+            val content = (0 until 40).joinToString("") { index -> separator + "<p>" + "あ".repeat(50 + index * 13 % 70) + "。</p>" }
+            for (vertical in listOf(false, true)) {
+                val result = render(ReaderSettings(verticalWriting = vertical, fontSize = 20), content)
+                assertPreserved(result)
+                val counts = result.getJSONArray("pageGlyphCounts")
+                for (page in 0 until counts.length()) {
+                    assertTrue("page $page holds no text: $separator $result", counts.getInt(page) > 0)
+                }
+            }
+        }
+    }
+
+    @Test
+    fun aBreakInsideAPublisherSpanLeavesTheTextBeforeItOnThePreviousPage() {
+        val lengths = listOf(9, 31, 14, 47, 22, 6, 38, 17, 26, 11, 43, 19)
+        fun content(open: String) = (0 until 60).joinToString("") { paragraph ->
+            "<p><span class='koboSpan' id='kobo.$paragraph.1'>" + "う".repeat(5 + paragraph % 7) + "。</span>" + open +
+                (0..paragraph % 4).joinToString("") { sentence -> "あ".repeat(lengths[(paragraph * 3 + sentence) % lengths.size]) + "大丈夫です。" } +
+                "</span></p>"
+        }
+        for (vertical in listOf(false, true)) {
+            val plain = render(ReaderSettings(verticalWriting = vertical, fontSize = 20), content("<span class='koboSpan'>"))
+            assertPreserved(plain)
+            val sentences = plain.getJSONArray("sentences")
+            var inside = 0
+            for (index in 1 until sentences.length()) {
+                val sentence = sentences.getJSONObject(index)
+                if (!sentence.getBoolean("forcedPageBreak") || !sentence.getBoolean("insideInline")) continue
+                inside++
+                assertTrue("a break inside a span moved the text before it: $sentence",
+                    sentences.getJSONObject(index - 1).getInt("last") < sentence.getInt("first"))
+            }
+            assertTrue("no break fell inside a span: $plain", inside > 0)
+
+            val decorated = render(ReaderSettings(verticalWriting = vertical, fontSize = 20),
+                content("<span data-keep-box style='text-decoration: underline; background: #eee'>"))
+            assertPreserved(decorated)
+            assertTrue("a span that draws its own box gave it up: $decorated", decorated.getBoolean("keptBoxes"))
+        }
+    }
+
+    @Test
+    fun rubyInAParagraphsFirstLineStaysWithItsTextAndLeavesNoNearlyEmptyPage() {
+        // WebView 133 lays out such a line taller but places it as if it were not, so it can
+        // overhang a page or leave its ruby on the page before.
+        val lengths = listOf(9, 31, 14, 47, 22, 6, 38, 17, 26, 11, 43, 19)
+        val content = (0 until 120).joinToString("") { paragraph ->
+            "<p>" + "う".repeat(2 + paragraph % 5) + "。<ruby>魔法<rt>まほう</rt></ruby>" + "あ".repeat(lengths[paragraph % lengths.size]) + "。" +
+                "東京".repeat(lengths[(paragraph * 7) % lengths.size] / 3) + "です。</p>"
+        }
+        for (fontSize in listOf(20, 26)) for (vertical in listOf(false, true)) {
+            val result = render(ReaderSettings(verticalWriting = vertical, fontSize = fontSize), content)
+            assertPreserved(result)
+            assertEquals("ruby shown on another page than its text: $result", "[]", result.getJSONArray("splitRubies").toString())
+            assertTrue("breaks did not settle: $result", result.getInt("passes") < 12)
+            val sentences = result.getJSONArray("sentences")
+            for (index in 0 until sentences.length()) {
+                val sentence = sentences.getJSONObject(index)
+                assertEquals("a fitting sentence crosses a page: $sentence", sentence.getInt("first"), sentence.getInt("last"))
+            }
+            val counts = result.getJSONArray("pageGlyphCounts")
+            val full = (0 until counts.length() - 1).map { counts.getInt(it) }.sorted()
+            for (page in 0 until counts.length() - 1) {
+                assertTrue("page $page is nearly empty: $result", counts.getInt(page) * 3 >= full[full.size / 2])
+            }
+        }
+    }
+
+    @Test
+    fun translationButtonsArrivingAfterLayoutPlaceTheBreaksAgainAtTheSamePosition() {
+        val lengths = listOf(9, 31, 14, 47, 22, 6, 38, 17, 26, 11, 43, 19)
+        val buttonCss = ".hoshi-tl { display: inline-block; width: .6em; height: .6em; margin-inline-end: .45em; }"
+        val content = (0 until 70).joinToString("") { paragraph ->
+            "<p>" + (0..paragraph % 5).joinToString("") { sentence ->
+                "あ".repeat(lengths[(paragraph * 3 + sentence) % lengths.size]) + "大丈夫です。"
+            } + "</p>"
+        }
+        val lateButtons = """
+            (function() {
+              var reader = window.hoshiReader, context = reader.getScrollContext();
+              // The page holding a character, counted the way reading positions are.
+              function pageOfCharacter(count) {
+                var walker = reader.createWalker(), node, running = 0;
+                while ((node = walker.nextNode())) {
+                  var length = reader.countChars(node.textContent);
+                  if (running + length > count) {
+                    var offset = reader.textOffsetForCharCount(node, count - running), range = document.createRange();
+                    range.setStart(node, offset); range.setEnd(node, offset + 1);
+                    var rect = range.getBoundingClientRect(), scroll = reader.getPagePosition(reader.getScrollContext());
+                    return Math.floor(((context.vertical ? rect.top + rect.bottom : rect.left + rect.right) / 2 + scroll) / context.pageSize);
+                  }
+                  running += length;
+                }
+                return -1;
+              }
+              function total() {
+                var walker = reader.createWalker(), node, count = 0;
+                while ((node = walker.nextNode())) count += reader.countChars(node.textContent);
+                return count;
+              }
+              reader.setPagePosition(context, 8 * context.pageSize);
+              var opening = Math.round(reader.calculateProgress() * total());
+              window.hoshiTextLayout.sentences.forEach(function(sentence, index) {
+                var button = document.createElement('span'); button.className = 'hoshi-tl'; button.dataset.tl = 'tl-' + index;
+                sentence.end.before(button);
+              });
+              reader.buildNodeOffsets();
+              var refreshed = window.hoshiTextLayout.refresh(reader);
+              var again = window.hoshiTextLayout.refresh(reader);
+              var shown = Math.round(reader.getPagePosition(reader.getScrollContext()) / context.pageSize);
+              var holding = pageOfCharacter(opening);
+              reader.setPagePosition(reader.getScrollContext(), 0);
+              return JSON.stringify({refreshed: refreshed, again: again, shown: shown, holding: holding});
+            })();
+        """.trimIndent()
+        for (vertical in listOf(false, true)) {
+            val result = render(ReaderSettings(verticalWriting = vertical, fontSize = 20), content, lateButtons, buttonCss)
+            assertPreserved(result)
+            val refresh = result.getJSONObject("beforeInspect")
+            assertTrue("late buttons must place the breaks again: $refresh", refresh.getBoolean("refreshed"))
+            assertFalse("unchanged buttons must not lay out again", refresh.getBoolean("again"))
+            assertEquals("the page shown holds the character that opened the page before: $refresh", refresh.getInt("holding"), refresh.getInt("shown"))
+            val sentences = result.getJSONArray("sentences")
+            for (index in 0 until sentences.length()) {
+                val sentence = sentences.getJSONObject(index)
+                assertEquals("a fitting sentence crosses a page after late buttons: $sentence", sentence.getInt("first"), sentence.getInt("last"))
+            }
+        }
+    }
+
     private fun regularFixture(compactInline: Boolean = false): String =
         "<p id='opening'>大丈夫です。次です。</p>" +
             "<p id='partial'>ああああ<ruby id='partial-ruby'>大<rt>だい</rt></ruby><em>丈夫</em>ですよ。</p>" +
@@ -260,7 +448,8 @@ class ReaderTextLayoutWebViewTest {
     }
 
     @SuppressLint("SetJavaScriptEnabled")
-    private fun render(settings: ReaderSettings, content: String): JSONObject {
+    // Publisher CSS goes into the head: the reader counts every text node in the body.
+    private fun render(settings: ReaderSettings, content: String, beforeInspect: String? = null, css: String = ""): JSONObject {
         val loaded = CountDownLatch(1)
         ActivityScenario.launch(ComponentActivity::class.java).use { scenario ->
             lateinit var webView: WebView
@@ -278,7 +467,7 @@ class ReaderTextLayoutWebViewTest {
                 webView.loadDataWithBaseURL(
                     "https://hoshi.local/epub/layout-test.xhtml",
                     """<!doctype html><html lang="ja"><head><meta name="viewport" content="width=device-width,initial-scale=1">
-                    ${ReaderContentStyles.styleTag(settings)}
+                    ${ReaderContentStyles.styleTag(settings)}<style>$css</style>
                     <script>$snapshotScript</script>${ReaderPaginationScripts.shellScript(settings = settings)}
                     </head><body>$content</body></html>""",
                     "text/html", "utf-8", null,
@@ -289,7 +478,10 @@ class ReaderTextLayoutWebViewTest {
                 val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(15)
                 while (System.nanoTime() < deadline) {
                     if (evaluate(scenario, webView, "JSON.stringify({ready:!!window.hoshiTextLayout?.prepared})").optBoolean("ready")) {
-                        return evaluate(scenario, webView, inspectionScript)
+                        val prepared = beforeInspect?.let { evaluate(scenario, webView, it) }
+                        return evaluate(scenario, webView, inspectionScript).apply {
+                            if (prepared != null) put("beforeInspect", prepared)
+                        }
                     }
                     Thread.sleep(25)
                 }
@@ -357,7 +549,8 @@ class ReaderTextLayoutWebViewTest {
               first = Math.min(first, Math.floor((start + .5) / context.pageSize));
               last = Math.max(last, Math.floor((end - .5) / context.pageSize));
             });
-            return {text:sentence.text, first:first, last:last, oversized:sentence.start.dataset.oversized === 'true', forcedPageBreak:sentence.breakTarget.classList.contains(sentence.breakClass)};
+            return {text:sentence.text, first:first, last:last, oversized:sentence.start.dataset.oversized === 'true', forcedPageBreak:sentence.breakTarget.classList.contains(sentence.breakClass),
+              insideInline:sentence.breakTarget === sentence.start && sentence.start.parentElement !== sentence.block};
           });
           var walker = reader.createWalker(), counted = 0, node;
           while ((node = walker.nextNode())) counted += reader.countChars(node.textContent);
@@ -385,6 +578,8 @@ class ReaderTextLayoutWebViewTest {
           });
           var pageGlyphCounts = [];
           if (context) glyphs.forEach(function(glyph) { var page = pageOf(glyph); pageGlyphCounts[page] = (pageGlyphCounts[page] || 0) + 1; });
+          // A page without glyphs stays in the list as 0, so a blank page is visible.
+          for (var page = 0; page < pageGlyphCounts.length; page++) pageGlyphCounts[page] = pageGlyphCounts[page] || 0;
           var blockBreakIndents = Array.from(document.querySelectorAll('.hoshi-sentence-block-break')).map(function(block) {
             var glyph = window.__baseGlyphs(block).filter(function(g) { return g.text.trim(); })[0];
             var rect = block.getBoundingClientRect(), style = getComputedStyle(block);
@@ -392,6 +587,33 @@ class ReaderTextLayoutWebViewTest {
               : rect.left + parseFloat(style.paddingLeft) + parseFloat(style.borderLeftWidth);
             return {expected:parseFloat(style.textIndent) || 0, actual:glyph ? (vertical ? glyph.y : glyph.x) - origin : -1, html:block.outerHTML.slice(0, 120)};
           });
+          // A page holding under a third of the usual glyphs must not end at a forced break whose
+          // sentence would fit on it.
+          var staleBreaks = [];
+          if (context) {
+            var allSentences = window.hoshiTextLayout.sentences || [];
+            var sentencePages = function(sentence) {
+              var range = document.createRange(); range.setStart(sentence.start, 0); range.setEnd(sentence.end, 0);
+              var first = Infinity, last = -Infinity;
+              Array.from(range.getClientRects()).forEach(function(rect) {
+                if (!rect.width || !rect.height) return;
+                first = Math.min(first, Math.floor(((vertical ? rect.top : rect.left) + .5) / context.pageSize));
+                last = Math.max(last, Math.floor(((vertical ? rect.bottom : rect.right) - .5) / context.pageSize));
+              });
+              return [first, last];
+            };
+            var fullPages = pageGlyphCounts.slice(0, -1).sort(function(a, b) { return a - b; });
+            var usual = fullPages.length ? fullPages[fullPages.length >> 1] : 0;
+            pageGlyphCounts.forEach(function(count, page) {
+              if (page >= pageGlyphCounts.length - 1 || (count || 0) * 3 >= usual) return;
+              var opener = allSentences.find(function(sentence) { return sentencePages(sentence)[0] === page + 1; });
+              if (!opener || !opener.breakTarget.classList.contains(opener.breakClass)) return;
+              opener.breakTarget.classList.remove(opener.breakClass);
+              var joined = sentencePages(opener);
+              opener.breakTarget.classList.add(opener.breakClass);
+              if (joined[0] === page && joined[1] === page) staleBreaks.push({page: page, glyphs: count, usual: usual, text: opener.text});
+            });
+          }
           var markerBreaksOpeningBlocks = Array.from(document.querySelectorAll('.hoshi-sentence-page-break')).filter(function(marker) {
             var block = marker.parentElement.closest('p,div,li,dd,dt,blockquote,figcaption,h1,h2,h3,h4,h5,h6,section,article');
             if (!block) return false;
@@ -400,12 +622,24 @@ class ReaderTextLayoutWebViewTest {
           }).length;
           return JSON.stringify({
             errors:window.__layoutErrors, textPreserved:window.hoshiTextLayout.textPreserved,
-            lineStartPunctuation:lineStartPunctuation, pageGlyphCounts:pageGlyphCounts.map(function(count) { return count || 0; }),
+            lineStartPunctuation:lineStartPunctuation, pageGlyphCounts:pageGlyphCounts,
             blockBreakIndents:blockBreakIndents, markerBreaksOpeningBlocks:markerBreaksOpeningBlocks,
             allWordsInline:Array.from(document.querySelectorAll('.hoshi-word')).every(function(word) { return getComputedStyle(word).display === 'inline'; }),
             rubyCount:document.querySelectorAll('ruby').length,
             rubiesOutsideWords:Array.from(document.querySelectorAll('ruby')).filter(function(ruby) { return !ruby.closest('.hoshi-word'); }).length,
             studyIdCount:document.querySelectorAll('[id^="study-"]').length,
+            staleBreaks:staleBreaks, passes:window.hoshiTextLayout.passes || 0,
+            keptBoxes:Array.from(document.querySelectorAll('[data-keep-box]')).every(function(span) { return getComputedStyle(span).display === 'inline'; }),
+            // Ruby whose reading shows on another page than its base text.
+            splitRubies:context ? Array.from(document.querySelectorAll('ruby')).filter(function(ruby) {
+              var rt = ruby.querySelector('rt'), base = ruby.firstChild;
+              if (!rt || !base || base === rt) return false;
+              var range = document.createRange(); range.selectNode(base);
+              var scroll = vertical ? context.scrollEl.scrollTop : context.scrollEl.scrollLeft;
+              function pageOf(rect) { return Math.floor(((vertical ? rect.top + rect.bottom : rect.left + rect.right) / 2 + scroll) / context.pageSize); }
+              var reading = rt.getBoundingClientRect(), text = range.getBoundingClientRect();
+              return reading.width && text.width && pageOf(reading) !== pageOf(text);
+            }).map(function(ruby) { return ruby.textContent; }) : [],
             beforeText:before.text, afterText:afterText,
             beforeParagraphs:before.paragraphs, afterParagraphs:Array.from(document.querySelectorAll('p')).map(window.__baseText),
             beforeReadings:before.readings, afterReadings:Array.from(document.querySelectorAll('rt')).map(function(rt) { return rt.textContent; }),

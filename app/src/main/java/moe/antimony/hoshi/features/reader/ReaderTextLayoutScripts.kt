@@ -16,9 +16,11 @@ internal fun readerTextLayoutScript(): String = """
   var BLOCK = 'p,div,li,dd,dt,blockquote,figcaption,h1,h2,h3,h4,h5,h6,td,th,section,article';
   var VISIBLE_EMPTY = 'img,svg,video,audio,canvas,iframe,object,embed,br,hr,input,.hoshi-tl';
   var MEDIA = 'img,svg,video,canvas,iframe,object,embed';
-  var MARKER_BREAK = 'hoshi-sentence-page-break', BLOCK_BREAK = 'hoshi-sentence-block-break';
-  // Each pass costs one chapter layout; the model normally settles within a few.
-  var MAX_PASSES = 8;
+  var MARKER_BREAK = 'hoshi-sentence-page-break', BLOCK_BREAK = 'hoshi-sentence-block-break',
+    BREAK_HOST = 'hoshi-sentence-break-host';
+  // Each pass costs one chapter layout; the model normally settles within a few. The exact
+  // fallback costs a layout per page, so it gets a hard budget and leaves the rest unbroken.
+  var MAX_PASSES = 12, FALLBACK_LAYOUTS = 24, FALLBACK_MILLIS = 200;
   function runs() {
     var out = [], current = null, blocks = new WeakMap();
     function blockFor(element) {
@@ -129,32 +131,57 @@ internal fun readerTextLayoutScript(): String = """
     range.insertNode(holder);
     park();
   }
-  function segments(text, granularity) {
+  function words(text) {
     if (window.Intl && Intl.Segmenter) {
-      var segmenter = segmenters[granularity] || (segmenters[granularity] = new Intl.Segmenter('ja', { granularity: granularity }));
+      var segmenter = segmenters.word || (segmenters.word = new Intl.Segmenter('ja', { granularity: 'word' }));
       return Array.from(segmenter.segment(text));
     }
-    var found = [], regex = granularity === 'word' ? /[\p{Script=Han}々〻]+/gu : /[^。！？!?]+[。！？!?]*[」』）)】〉》〕｝}］\]]*/gu;
-    var match;
+    var found = [], regex = /[\p{Script=Han}々〻]+/gu, match;
     while ((match = regex.exec(text))) found.push({ index: match.index, segment: match[0], isWordLike: true });
     return found;
   }
+  // Ruby bases of a run as [start, end) offsets into its text.
+  function rubySpans(run) {
+    var spans = new Map();
+    run.nodes.forEach(function (item) {
+      var ruby = item.node.parentElement.closest('ruby');
+      if (!ruby) return;
+      var previous = spans.get(ruby);
+      spans.set(ruby, { start: previous ? Math.min(previous.start, item.start) : item.start, end: item.start + item.node.length });
+    });
+    return spans;
+  }
+  // Sentences as sentence mode splits them (EpubSentenceSegmenter): 。！？!? end a sentence and
+  // keep the closing brackets and ellipses after them, so an opening bracket starts the next
+  // sentence. A terminator inside a ruby base waits for the base to end.
+  var TERMINATORS = '。！？!?', TRAILING = '。、！？…‥」』）)】〉》〕｝}］]';
+  function sentenceParts(run) {
+    var text = run.text, parts = [], start = 0, inside = [];
+    rubySpans(run).forEach(function (span) { inside.push(span); });
+    function splitsRuby(offset) {
+      return inside.some(function (span) { return span.start < offset && offset < span.end; });
+    }
+    for (var index = 0; index < text.length; index++) {
+      if (TERMINATORS.indexOf(text[index]) < 0) continue;
+      var end = index + 1;
+      while (end < text.length && TRAILING.indexOf(text[end]) >= 0) end++;
+      index = end - 1;
+      if (splitsRuby(end)) continue;
+      parts.push({ index: start, segment: text.slice(start, end) });
+      start = end;
+    }
+    if (start < text.length) parts.push({ index: start, segment: text.slice(start) });
+    return parts;
+  }
   function wrapWords() {
     runs().forEach(function (run) {
-      var words = segments(run.text, 'word').filter(function (word) {
+      var found = words(run.text).filter(function (word) {
         return word.isWordLike && /[\p{Script=Han}々〻]/u.test(word.segment);
       });
-      var rubySpans = new Map();
-      run.nodes.forEach(function (item) {
-        var ruby = item.node.parentElement.closest('ruby');
-        if (!ruby) return;
-        var previous = rubySpans.get(ruby);
-        rubySpans.set(ruby, { start: previous ? Math.min(previous.start, item.start) : item.start,
-          end: item.start + item.node.length });
-      });
-      words = words.map(function (word) {
+      var spans = rubySpans(run);
+      found = found.map(function (word) {
         var start = word.index, end = start + word.segment.length;
-        rubySpans.forEach(function (ruby) {
+        spans.forEach(function (ruby) {
           if (ruby.start < end && ruby.end > start) { start = Math.min(start, ruby.start); end = Math.max(end, ruby.end); }
         });
         return { index: start, segment: run.text.slice(start, end) };
@@ -166,7 +193,7 @@ internal fun readerTextLayoutScript(): String = """
         return merged;
       }, []);
       // Descending words retain offsets in the untouched prefix of every original text node.
-      words.reverse().forEach(function (word) {
+      found.reverse().forEach(function (word) {
         var nodes = wordNodes(run, word.index, word.index + word.segment.length);
         var holder = document.createElement('span'); holder.className = 'hoshi-word';
         wrapNodes(nodes.first, nodes.last, holder);
@@ -231,7 +258,10 @@ internal fun readerTextLayoutScript(): String = """
   function sentenceAnchors() {
     var sentences = [];
     runs().forEach(function (run, runIndex) {
-      var parts = segments(run.text, 'sentence'), runSentences = [];
+      var parts = sentenceParts(run), runSentences = [];
+      // A table lays out its own rows: WebView 133 moves a break inside a cell to the row and
+      // leaves near-empty pages around it, so table text only continues across pages.
+      var inTable = run.block !== document.body && !!run.block.closest('table');
       var blockBreaks = run.block !== document.body &&
         /^(block|flow-root|list-item|flex|grid|table)$/.test(getComputedStyle(run.block).display);
       for (var i = parts.length - 1; i >= 0; i--) {
@@ -247,7 +277,7 @@ internal fun readerTextLayoutScript(): String = """
         // inside the paragraph would make the following text a continuation line and drop
         // the paragraph's first-line indent.
         runSentences.push({ start: start, end: end, text: part.segment, block: run.block, run: runIndex, opensBlock: opensBlock,
-          breakTarget: opensBlock && blockBreaks ? run.block : start,
+          inTable: inTable, breakTarget: opensBlock && blockBreaks ? run.block : start,
           breakClass: opensBlock && blockBreaks ? BLOCK_BREAK : MARKER_BREAK });
       }
       // Runs already follow document order, so reverse each run's insertion order directly.
@@ -256,11 +286,42 @@ internal fun readerTextLayoutScript(): String = """
     return sentences;
   }
   function hasBreak(sentence) { return sentence.breakTarget.classList.contains(sentence.breakClass); }
+  // An inline element that only passes styles on to its text, so its text looks the same
+  // without the element's own box. Links keep theirs.
+  function drawsNothing(element) {
+    if (element.classList.contains(BREAK_HOST)) return true;
+    if (element.matches('a,.hoshi-word,ruby,rb,rt,rp,bdi,bdo')) return false;
+    var style = getComputedStyle(element);
+    if (style.display !== 'inline' || style.position !== 'static' || style.verticalAlign !== 'baseline' ||
+        style.textDecorationLine !== 'none' || style.backgroundImage !== 'none' || style.boxShadow !== 'none' ||
+        style.outlineStyle !== 'none' || style.opacity !== '1' || style.unicodeBidi !== 'normal' ||
+        !/^(transparent|rgba\(0, ?0, ?0, ?0\))$/.test(style.backgroundColor)) return false;
+    return ['Top', 'Right', 'Bottom', 'Left'].every(function (side) {
+      return !parseFloat(style['margin' + side]) && !parseFloat(style['padding' + side]) && !parseFloat(style['border' + side + 'Width']);
+    });
+  }
+  // Android WebView 133 applies a block break nested in an inline element before the whole
+  // paragraph. While such a break is in place, the inline elements around it give up their
+  // boxes so that it stands directly in the paragraph; only when none of them draws anything.
+  function breakHosts(marker, block) {
+    var hosts = [];
+    for (var parent = marker.parentElement; parent && parent !== block && parent !== document.body; parent = parent.parentElement) {
+      if (!drawsNothing(parent)) return [];
+      hosts.push(parent);
+    }
+    return hosts;
+  }
   function setBreak(sentence, on) {
     if (on) sentence.breakTarget.classList.add(sentence.breakClass);
     else sentence.breakTarget.classList.remove(sentence.breakClass);
+    if (sentence.breakClass !== MARKER_BREAK) return;
+    if (on && !sentence.hosts) sentence.hosts = breakHosts(sentence.start, sentence.block);
+    (sentence.hosts || []).forEach(function (host) {
+      if (on) host.classList.add(BREAK_HOST);
+      else if (!host.querySelector('.' + MARKER_BREAK)) host.classList.remove(BREAK_HOST);
+    });
   }
-  function isOversized(sentence) { return sentence.start.dataset.oversized === 'true'; }
+  function isOversized(sentence) { return sentence.inTable || sentence.start.dataset.oversized === 'true'; }
   // The column box along the block axis: lines advance down (horizontal) or leftwards (vertical).
   function columnGeometry(context) {
     var style = getComputedStyle(document.body), body = document.body;
@@ -273,34 +334,68 @@ internal fun readerTextLayoutScript(): String = """
     return { origin: top, capacity: body.clientHeight - parseFloat(style.paddingBottom) - top, inlineOrigin: parseFloat(style.paddingLeft),
       inlineSize: body.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight) };
   }
+  // The page whose column holds a span along the page axis. A line fragment never spans two
+  // columns, but glyphs can stand outside the column box: a negative text indent hangs the
+  // first glyphs into the gap before a column, or even over the previous column's end.
+  function columnOf(a, b, context, geometry) {
+    var size = context.pageSize, origin = geometry.inlineOrigin, inline = geometry.inlineSize;
+    var middle = (a + b) / 2, page = Math.floor((middle - origin) / size);
+    if (middle - origin - page * size <= inline) return page;
+    // Between two columns: the end of a line that overflows, or the hanging start of the next.
+    var start = page * size + origin, next = start + size;
+    var current = Math.min(b, start + inline) - Math.max(a, start);
+    var following = Math.min(b, next + inline) - Math.max(a, next);
+    return current > 0 && current >= following ? page : page + 1;
+  }
   function boxFor(rect, context, geometry, scroll) {
     var a = (context.vertical ? rect.top : rect.left) + scroll;
     var b = (context.vertical ? rect.bottom : rect.right) + scroll;
-    var page = Math.floor((a + 0.5) / context.pageSize);
     return {
-      page: page,
-      lastPage: Math.floor((b - 0.5) / context.pageSize),
-      inlineStart: a - page * context.pageSize - geometry.inlineOrigin,
-      inlineEnd: b - page * context.pageSize - geometry.inlineOrigin,
+      a: a, b: b,
       start: context.vertical ? geometry.origin - rect.right : rect.top - geometry.origin,
       end: context.vertical ? geometry.origin - rect.left : rect.bottom - geometry.origin
     };
   }
+  function placeBox(box, page, context, geometry) {
+    box.page = page;
+    box.inlineStart = box.a - page * context.pageSize - geometry.inlineOrigin;
+    box.inlineEnd = box.b - page * context.pageSize - geometry.inlineOrigin;
+  }
+  // Pages of a sentence's fragments, decided per line: fragments that share a line and touch
+  // along it belong to the column holding most of that line, wherever single glyphs hang.
   function measure(sentence, context, geometry, scroll, withBoxes) {
     var range = workingRange; range.setStart(sentence.start, 0); range.setEnd(sentence.end, 0);
-    var rects = range.getClientRects(), first = Infinity, last = -Infinity, boxes = withBoxes ? [] : null;
+    var rects = range.getClientRects(), first = Infinity, last = -Infinity, boxes = [], line = [];
+    function settle() {
+      if (!line.length) return;
+      var a = Infinity, b = -Infinity;
+      line.forEach(function (box) { a = Math.min(a, box.a); b = Math.max(b, box.b); });
+      var page = columnOf(a, b, context, geometry);
+      line.forEach(function (box) { placeBox(box, page, context, geometry); });
+      first = Math.min(first, page); last = Math.max(last, page);
+      line = [];
+    }
     for (var i = 0; i < rects.length; i++) {
       var rect = rects[i];
       if (rect.width <= 0 || rect.height <= 0) continue;
-      var box = boxFor(rect, context, geometry, scroll);
-      first = Math.min(first, box.page); last = Math.max(last, box.lastPage);
-      if (boxes) boxes.push(box);
+      var box = boxFor(rect, context, geometry, scroll), previous = line[line.length - 1];
+      var reach = Math.max(box.end - box.start, previous ? previous.end - previous.start : 0);
+      if (previous && !(Math.min(box.end, previous.end) > Math.max(box.start, previous.start) &&
+          box.a <= previous.b + reach && box.b >= previous.a - reach)) settle();
+      line.push(box); boxes.push(box);
     }
-    return { first: first, last: last, boxes: boxes };
+    settle();
+    return { first: first, last: last, boxes: withBoxes ? boxes : null };
   }
   function blockMargin(element, end, vertical) {
     var style = getComputedStyle(element);
     return parseFloat(vertical ? (end ? style.marginLeft : style.marginRight) : (end ? style.marginBottom : style.marginTop)) || 0;
+  }
+  // Border and padding a block keeps before its first line, or after its last one.
+  function blockInset(element, end, vertical) {
+    var style = getComputedStyle(element);
+    var side = vertical ? (end ? 'Left' : 'Right') : (end ? 'Bottom' : 'Top');
+    return (parseFloat(style['padding' + side]) || 0) + (parseFloat(style['border' + side + 'Width']) || 0);
   }
   // Reads the unbroken chapter once and lays its lines end to end along the block axis: each
   // page's unused tail is removed and a paragraph margin truncated at a page boundary is
@@ -324,6 +419,7 @@ internal fun readerTextLayoutScript(): String = """
       var rect = element.getBoundingClientRect();
       if (rect.width <= 0 || rect.height <= 0) return;
       var box = boxFor(rect, context, geometry, scroll);
+      placeBox(box, columnOf(box.a, box.b, context, geometry), context, geometry);
       note(box, -1); mediaBoxes.push(box);
     });
     var sizes = [], textEnd = -Infinity;
@@ -332,39 +428,46 @@ internal fun readerTextLayoutScript(): String = """
     }
     sizes.sort(function (x, y) { return x - y; });
     var textSize = sizes.length ? sizes[sizes.length >> 1] : 0;
+    var textBoxes = [], annotations = [];
     measured.forEach(function (measurement) {
-      measurement.boxes.forEach(function (box) { textEnd = Math.max(textEnd, box.end); });
-    });
-    var textBoxes = [];
-    measured.forEach(function (measurement) {
-      measurement.boxes.forEach(function (box) { if (box.end - box.start >= textSize * 0.75) textBoxes.push(box); });
+      measurement.boxes.forEach(function (box) {
+        (box.end - box.start < textSize * 0.75 ? annotations : textBoxes).push(box);
+      });
     });
     textBoxes.sort(function (x, y) { return x.page - y.page || x.end - y.end; });
-    var ordinal = -1, previousBox = null, lineEnds = [], advances = [];
+    var ordinal = -1, previousBox = null, lineEnds = [], lineStarts = [], pageLines = {}, advances = [];
     textBoxes.forEach(function (box) {
       if (!previousBox || box.page !== previousBox.page || box.end - previousBox.end > 3) {
         if (previousBox && box.page === previousBox.page) advances.push(box.end - previousBox.end);
         lineEnds[++ordinal] = 0;
+        lineStarts[ordinal] = Infinity;
+        (pageLines[box.page] = pageLines[box.page] || []).push(ordinal);
       }
       box.ordinal = ordinal; previousBox = box;
       lineEnds[ordinal] = Math.max(lineEnds[ordinal], box.inlineEnd);
+      lineStarts[ordinal] = Math.min(lineStarts[ordinal], box.start);
     });
+    // Lines carrying ruby right before their text. WebView 133 never moves such a line that
+    // opens a paragraph to the next page, so it can overhang the column: it does not show
+    // where text fits.
+    var annotated = {};
+    annotations.forEach(function (box) {
+      (pageLines[box.page] || []).forEach(function (line) {
+        if (Math.abs(lineStarts[line] - box.end) <= 2) annotated[line] = true;
+      });
+    });
+    textBoxes.forEach(function (box) { if (!annotated[box.ordinal]) textEnd = Math.max(textEnd, box.end); });
     advances.sort(function (x, y) { return x - y; });
-    // Below a page's last line there is only half the leading. The closest plain lines show
-    // the leading; the lowest text any page already holds is known to fit.
+    // Half the leading sits above and below each plain line; the closest lines show it. A page
+    // ends where text still fits: at least above the leading under its last line, and as low
+    // as any page already holds plain text.
     var plainAdvance = advances.length ? advances[Math.floor(advances.length * 0.1)] : textSize;
-    var bottom = Math.min(geometry.capacity, Math.max(isFinite(textEnd) ? textEnd : 0,
-      geometry.capacity - Math.max(0, plainAdvance - textSize) / 2));
-    // Above a page's first line sits the same half leading, unless the line starts with a
-    // ruby annotation; only plain first lines show it.
-    var pageTops = [];
-    for (var page = 1; page <= lastPage; page++) if (tops[page] > 0.5) pageTops.push(tops[page]);
-    pageTops.sort(function (x, y) { return x - y; });
-    var lead = pageTops.length ? Math.min(pageTops[pageTops.length >> 1], geometry.capacity / 4) : geometry.capacity - bottom;
+    var lead = Math.min(Math.max(0, plainAdvance - textSize) / 2, geometry.capacity / 4);
+    var bottom = Math.min(geometry.capacity, Math.max(isFinite(textEnd) ? textEnd : 0, geometry.capacity - lead));
     var flow = [0];
-    for (page = 0; page <= lastPage; page++) {
+    for (var page = 0; page <= lastPage; page++) {
       var opening = sentences[opener[page + 1]];
-      flow[page + 1] = flow[page] + (used[page] === undefined ? 0 : used[page] + geometry.capacity - bottom) + (opening ? opening.gapBefore : 0);
+      flow[page + 1] = flow[page] + (used[page] === undefined ? 0 : used[page] + lead) + (opening ? opening.gapBefore : 0);
     }
     sentences.forEach(function (sentence, index) {
       var first = null, last = null, top = null;
@@ -380,7 +483,7 @@ internal fun readerTextLayoutScript(): String = """
       sentence.lines = lines;
       sentence.flowStart = lines.length ? lines[0][0] : NaN;
       // How far below a page's top this sentence's first box sits when it opens the page.
-      sentence.inset = top && top.end - top.start < textSize * 0.75 ? 0 : lead;
+      sentence.inset = (top && top.end - top.start < textSize * 0.75 ? 0 : lead) + sentence.blockInset;
       sentence.flowEnd = lines.reduce(function (value, line) { return Math.max(value, line[1]); }, -Infinity);
       // Where the sentence begins and ends along numbered lines, to estimate rewrapping.
       sentence.firstLine = first ? first.ordinal : null;
@@ -401,25 +504,99 @@ internal fun readerTextLayoutScript(): String = """
         .sort(function (x, y) { return x[0] - y[0]; })
     };
   }
+  // Pages holding a replaced element such as an illustration, which is content of its own.
+  function mediaPages(media, context, geometry) {
+    var scroll = context.vertical ? context.scrollEl.scrollTop : context.scrollEl.scrollLeft, pages = {};
+    media.forEach(function (element) {
+      var rect = element.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0) return;
+      var box = boxFor(rect, context, geometry, scroll);
+      pages[columnOf(box.a, box.b, context, geometry)] = true;
+    });
+    return pages;
+  }
   // One pass reads the layout from where the previous pass first changed a break, since
   // nothing before that point moved. While the breaks in place are kept, decisions follow the
   // real layout exactly. After a change, the natural flow predicts the content it moves until
   // the next break that stays: a forced break makes everything after it independent of the
   // rest. An existing break is only dropped when its sentence fits with a line to spare, so
-  // near calls cannot flip the same break back and forth between passes.
-  function planPass(sentences, context, geometry, natural, resume) {
+  // near calls cannot flip the same break back and forth between passes. A break the real
+  // layout required stops the estimate, which keeps a correction from rippling through the
+  // rest of the chapter.
+  function planPass(sentences, context, geometry, natural, media, resume) {
     var scroll = context.vertical ? context.scrollEl.scrollTop : context.scrollEl.scrollLeft;
     var lead = natural.lead, bottom = natural.bottom, tolerance = 0.5;
     var synced = true, page = resume.page, pageTop = resume.pageTop, nextMedia = resume.nextMedia;
     var rewrap = resume.rewrap && { run: resume.rewrap.run, line: resume.rewrap.line, offset: resume.rewrap.offset, tail: resume.rewrap.tail };
-    var changes = 0, next = null, before = null, actual = [];
+    var changes = 0, next = null, before = null, actual = [], droppedStale = false;
     // Read every position before changing a break: a read after a change lays out the chapter.
-    for (var read = resume.index; read < sentences.length; read++) {
-      actual[read] = sentences[read].lines.length ? measure(sentences[read], context, geometry, scroll, false) : null;
+    // The line before the first sentence read can matter as well.
+    for (var read = Math.max(0, resume.index - 16); read < sentences.length; read++) {
+      actual[read] = sentences[read].lines.length ? measure(sentences[read], context, geometry, scroll, true) : null;
+    }
+    var illustrated = mediaPages(media, context, geometry);
+    // A page with no sentence or illustration before this one would be left blank by a break:
+    // an empty separator paragraph is all it holds. Such a sentence continues across instead.
+    function leavesBlankPage(blankPage, previousLast) {
+      return previousLast < blankPage && !illustrated[blankPage];
+    }
+    // Where a sentence opening a page after its forced break would sit on the page before, from
+    // the real layout. Assumes it starts a new line there, so it never claims too much room.
+    function placeWithoutBreak(sentence, measurement, previous) {
+      if (!previous || !previous.boxes || !measurement.boxes || previous.last !== measurement.first - 1) return null;
+      var previousEnd = -Infinity, top = Infinity, bottomEdge = -Infinity;
+      previous.boxes.forEach(function (box) { if (box.page === previous.last) previousEnd = Math.max(previousEnd, box.end); });
+      measurement.boxes.forEach(function (box) { top = Math.min(top, box.start); bottomEdge = Math.max(bottomEdge, box.end); });
+      if (!isFinite(previousEnd) || !isFinite(top)) return null;
+      var start = previousEnd + 2 * lead + (sentence.breakClass === BLOCK_BREAK ? sentence.gapBefore + sentence.blockInset : 0);
+      return { previousEnd: previousEnd, start: start, end: start + bottomEdge - top + sentence.endInset };
     }
     function change(sentence, on) {
       setBreak(sentence, on);
       if (!changes++) next = before;
+    }
+    // WebView 133 makes a paragraph's first line taller when it carries ruby, but places it as
+    // if it were not: the line overhangs the end of its page, or its ruby stays at the end of
+    // one page while its text opens the next. A forced break right after such a line skips a
+    // page, and one inside it leaves the ruby behind. Returns that line at a sentence's first
+    // or last text on a page; the page it starts on must keep earlier content.
+    function isText(box) { return box.end - box.start >= natural.textSize * 0.75; }
+    function strandedLine(boxes, page, last) {
+      function textOn(onPage) {
+        return boxes.filter(function (box) { return box.page === onPage && isText(box); });
+      }
+      var text = textOn(page), keep = page;
+      if (!text.length && !last) text = textOn(++page);
+      if (!text.length) return null;
+      var start = last ? -Infinity : Infinity, end = -Infinity;
+      text.forEach(function (box) { start = last ? Math.max(start, box.start) : Math.min(start, box.start); });
+      text.forEach(function (box) { if (Math.abs(box.start - start) < 1) end = Math.max(end, box.end); });
+      // No line that fits ends below the bottom: plain lines set it.
+      return page !== keep || end > bottom + 0.01 ? { page: page, keep: keep, start: start } : null;
+    }
+    // The sentence that opens the line, from a sentence on it backwards.
+    function lineOpener(from, line) {
+      var opener = -1;
+      for (var at = from; at >= Math.max(0, from - 15); at--) {
+        var candidate = sentences[at], placed = actual[at], onLine = false, earlier = false, earlierPage = false;
+        if (!candidate.lines.length) continue;
+        if (!placed || !placed.boxes) return null;
+        placed.boxes.forEach(function (box) {
+          if (!isText(box)) return;
+          if (box.page === line.page && Math.abs(box.start - line.start) < 1) onLine = true;
+          else if (box.page < line.page) earlier = earlierPage = true;
+          else if (box.page === line.page && box.start < line.start) earlier = true;
+        });
+        if (!onLine) break;
+        if (hasBreak(candidate) || isOversized(candidate) || earlierPage) return null;
+        opener = at;
+        if (earlier) break;
+      }
+      if (opener < 0) return null;
+      // The page the line starts on keeps what comes before the opener.
+      for (var previous = opener - 1; previous >= 0 && !sentences[previous].lines.length; previous--);
+      if (previous >= 0 && !actual[previous]) return null;
+      return leavesBlankPage(line.keep, previous >= 0 ? actual[previous].last : -1) ? null : sentences[opener];
     }
     function continueLines(sentence) {
       // A sentence longer than a page continues line by line.
@@ -450,7 +627,7 @@ internal fun readerTextLayoutScript(): String = """
         before = { index: index, page: page, pageTop: pageTop, nextMedia: nextMedia,
           rewrap: rewrap && { run: rewrap.run, line: rewrap.line, offset: rewrap.offset, tail: rewrap.tail } };
       }
-      var start = sentence.flowStart, end = sentence.flowEnd;
+      var start = sentence.flowStart, end = sentence.flowEnd + sentence.endInset;
       if (rewrap && rewrap.run !== sentence.run) {
         pageTop += rewrap.tail;
         rewrap = null;
@@ -468,22 +645,55 @@ internal fun readerTextLayoutScript(): String = """
       var fitsWithRoom = end + natural.line <= pageTop + bottom;
       var fitsPage = !isOversized(sentence) && end - start <= bottom - sentence.inset + tolerance;
       var crosses = measurement.first !== measurement.last;
+      // A required break opening a page that holds less than half a page is stale. One is
+      // dropped per correction; later ones still stop the estimate so that it settles.
+      var stale = sentence.required && !droppedStale && fitsWithRoom && start - pageTop < bottom / 2;
+      var previousLast = page;
       if (synced) {
-        if (crosses && hasBreak(sentence)) {
+        if (crosses && !hasBreak(sentence) && !isOversized(sentence) && leavesBlankPage(measurement.first, previousLast)) {
+          sentence.start.dataset.oversized = 'true';
+          continueLines(sentence);
+          page = measurement.last;
+        } else if (crosses && hasBreak(sentence)) {
           // An oversized sentence needs ordinary continuation, not a blank initial page.
           change(sentence, false);
           sentence.start.dataset.oversized = 'true';
           synced = false;
           continueLines(sentence);
         } else if (crosses && !isOversized(sentence)) {
-          change(sentence, true);
-          sentence.required = true;
+          var line = strandedLine(measurement.boxes, measurement.first, false);
+          var opener = (line && lineOpener(index, line)) || sentence;
+          change(opener, true);
+          opener.required = true;
           synced = false;
-          anchor(sentence);
+          anchor(opener);
+        } else if (measurement.first > page && hasBreak(sentence) && leavesBlankPage(measurement.first - 1, previousLast)) {
+          var previousBoxes = actual[index - 1] && actual[index - 1].boxes;
+          var overhang = previousBoxes && strandedLine(previousBoxes, previousLast, true);
+          var opening = overhang && lineOpener(index - 1, overhang);
+          change(sentence, false);
+          sentence.required = false;
+          synced = false;
+          if (opening) {
+            change(opening, true);
+            opening.required = true;
+            anchor(opening);
+          } else {
+            sentence.start.dataset.oversized = 'true';
+            continueLines(sentence);
+          }
         } else if (measurement.first > page) {
-          if (hasBreak(sentence) && !sentence.required && fitsWithRoom) {
+          // A page left less than half full by the break after it is checked on the real layout,
+          // since the estimate can be off by more than the line it keeps in hand.
+          var joined = hasBreak(sentence) && !sentence.required ? placeWithoutBreak(sentence, measurement, actual[index - 1]) : null;
+          var short = !!joined && joined.previousEnd < bottom / 2 && joined.end <= bottom + tolerance;
+          if (hasBreak(sentence) && (sentence.required ? stale : fitsWithRoom || short)) {
             change(sentence, false);
+            droppedStale = sentence.required;
+            sentence.required = false;
             synced = false;
+            // Keep estimating from where the real layout puts this sentence on that page.
+            if (short) pageTop = start - joined.start;
           } else {
             anchor(sentence);
             page = measurement.first;
@@ -493,18 +703,23 @@ internal fun readerTextLayoutScript(): String = """
           continueLines(sentence);
           page = measurement.last;
         }
-      } else if (hasBreak(sentence) && (sentence.required || (!fitsWithRoom && fitsPage))) {
+      } else if (hasBreak(sentence) && (sentence.required ? !stale : !fitsWithRoom && fitsPage)) {
         synced = true;
+        droppedStale = false;
         anchor(sentence);
         page = measurement.first;
         if (crosses) { continueLines(sentence); page = measurement.last; }
       } else if (fits) {
-        if (hasBreak(sentence)) change(sentence, false);
+        if (hasBreak(sentence)) {
+          change(sentence, false);
+          if (sentence.required) droppedStale = true;
+          sentence.required = false;
+        }
       } else if (fitsPage) {
         change(sentence, true);
         anchor(sentence);
       } else {
-        if (hasBreak(sentence)) change(sentence, false);
+        if (hasBreak(sentence)) { change(sentence, false); sentence.required = false; }
         continueLines(sentence);
       }
     }
@@ -516,32 +731,47 @@ internal fun readerTextLayoutScript(): String = """
     var media = Array.from(document.querySelectorAll(MEDIA)).filter(function (element) {
       return getComputedStyle(element).display.indexOf('inline') !== 0;
     });
-    // Natural margins between paragraphs, read before any break truncates or clears them.
+    // Natural margins between paragraphs, read before any break truncates or clears them, and
+    // the padding that closes the paragraph before.
     sentences.forEach(function (sentence, index) {
       var previous = sentences[index - 1];
       sentence.gapBefore = sentence.opensBlock && previous && previous.block !== sentence.block
-        ? Math.max(0, blockMargin(previous.block, true, context.vertical), blockMargin(sentence.block, false, context.vertical))
+        ? Math.max(0, blockMargin(previous.block, true, context.vertical), blockMargin(sentence.block, false, context.vertical)) +
+          blockInset(previous.block, true, context.vertical)
         : 0;
+      sentence.blockInset = sentence.breakClass === BLOCK_BREAK ? blockInset(sentence.block, false, context.vertical) : 0;
+      // A paragraph's closing padding stays on the page of its last line.
+      var following = sentences[index + 1];
+      sentence.endInset = !following || following.block !== sentence.block ? blockInset(sentence.block, true, context.vertical) : 0;
     });
     var natural = naturalFlow(sentences, context, geometry, media);
     var passes = 0, resume = { index: 0, page: -1, pageTop: 0, nextMedia: 0, rewrap: null };
-    while (passes < MAX_PASSES && (resume = planPass(sentences, context, geometry, natural, resume))) passes++;
+    while (passes < MAX_PASSES && (resume = planPass(sentences, context, geometry, natural, media, resume))) passes++;
     if (resume) {
       // The estimate kept disagreeing with the layout. Finish exactly, one page at a time from
       // where it last changed: drop its later estimates, then break at each crossing sentence.
       var scroll = context.vertical ? context.scrollEl.scrollTop : context.scrollEl.scrollLeft;
+      var deadline = Date.now() + FALLBACK_MILLIS;
       for (var index = resume.index; index < sentences.length; index++) setBreak(sentences[index], false);
-      for (var guard = 0, from = resume.index; from >= 0 && guard < sentences.length; guard++) {
-        var settled = -1;
-        for (index = from; index < sentences.length && settled < 0; index++) {
+      for (var guard = 0, from = resume.index; from >= 0 && guard < FALLBACK_LAYOUTS && Date.now() < deadline; guard++) {
+        var settled = -1, previousLast = -1, blank = false, illustrated = mediaPages(media, context, geometry);
+        for (index = Math.max(0, from - 1); index < sentences.length && settled < 0; index++) {
           var sentence = sentences[index];
-          if (isOversized(sentence) || !sentence.lines.length) continue;
+          if (!sentence.lines.length) continue;
           var measurement = measure(sentence, context, geometry, scroll, false);
-          if (isFinite(measurement.first) && measurement.first !== measurement.last) settled = index;
+          if (!isFinite(measurement.first)) continue;
+          if (index >= from && !isOversized(sentence) && measurement.first !== measurement.last) {
+            settled = index;
+            // Breaking would leave the page it starts on blank, as in the passes above.
+            blank = previousLast < measurement.first && !illustrated[measurement.first] && !hasBreak(sentence);
+          }
+          previousLast = measurement.last;
         }
         if (settled >= 0) {
           sentence = sentences[settled];
-          if (hasBreak(sentence)) {
+          if (blank) {
+            sentence.start.dataset.oversized = 'true';
+          } else if (hasBreak(sentence)) {
             setBreak(sentence, false);
             sentence.start.dataset.oversized = 'true';
           } else {
@@ -555,16 +785,71 @@ internal fun readerTextLayoutScript(): String = """
     park();
     window.hoshiTextLayout.passes = passes;
   }
+  // Breaks are an enhancement: if placing them fails, the chapter reads in its natural flow.
+  function placeBreaksSafely(sentences, reader) {
+    sentences.forEach(function (sentence) {
+      setBreak(sentence, false);
+      delete sentence.start.dataset.oversized;
+      sentence.required = false;
+    });
+    try {
+      placeSentenceBreaks(sentences, reader.getScrollContext());
+    } catch (error) {
+      sentences.forEach(function (sentence) { setBreak(sentence, false); });
+      if (window.console) console.error('hoshiTextLayout', error);
+    }
+    park();
+  }
+  function translationButtons() {
+    return Array.from(document.querySelectorAll('.hoshi-tl')).map(function (button) { return button.dataset.tl || ''; }).join('|');
+  }
+  // The reading position as the count of characters before the page, like a saved bookmark.
+  function charactersBeforePage(reader) {
+    var walker = reader.createWalker(), node, total = 0;
+    while ((node = walker.nextNode())) total += reader.countChars(node.textContent);
+    return Math.round(reader.calculateProgress() * total);
+  }
+  function showCharacter(reader, count) {
+    var context = reader.getScrollContext(), walker = reader.createWalker(), node, running = 0;
+    while ((node = walker.nextNode())) {
+      var length = reader.countChars(node.textContent);
+      if (running + length > count) {
+        var text = node.textContent, offset = reader.textOffsetForCharCount(node, count - running), range = document.createRange();
+        range.setStart(node, offset);
+        range.setEnd(node, Math.min(text.length, offset + String.fromCodePoint(text.codePointAt(offset)).length));
+        var rect = reader.getRect(range), scroll = reader.getPagePosition(context);
+        reader.setPagePosition(context, reader.alignToPage(context, (context.vertical ? rect.top : rect.left) + scroll));
+        return;
+      }
+      running += length;
+    }
+  }
   function visibleText() { return runs().map(function (run) { return run.text; }).join(''); }
   var textBefore = null;
   window.hoshiTextLayout = {
     prepare: function (reader, paginated) {
       if (this.prepared) return;
       this.prepared = true;
+      this.paginated = paginated;
       textBefore = visibleText();
       wrapWords();
       this.sentences = paginated ? sentenceAnchors() : [];
-      if (paginated) placeSentenceBreaks(this.sentences, reader.getScrollContext());
+      this.buttons = translationButtons();
+      if (paginated) placeBreaksSafely(this.sentences, reader);
+    },
+    // The characters before the shown page, read before the buttons are added to it.
+    position: function (reader) { return this.prepared && this.paginated ? charactersBeforePage(reader) : null; },
+    // Sentence translation buttons can arrive after the breaks were placed; each takes room in
+    // a line. Places the breaks again for the new buttons and shows the page holding the
+    // character at [position], the reader's place before the buttons moved the text.
+    refresh: function (reader, position) {
+      if (!this.prepared || !this.paginated || translationButtons() === this.buttons) return false;
+      this.buttons = translationButtons();
+      if (position == null) position = charactersBeforePage(reader);
+      placeBreaksSafely(this.sentences, reader);
+      reader.paginationMetrics = null;
+      showCharacter(reader, position);
+      return true;
     },
     // Checked on demand: reading the whole chapter again is only needed for verification.
     get textPreserved() { return textBefore !== null && textBefore === visibleText(); }

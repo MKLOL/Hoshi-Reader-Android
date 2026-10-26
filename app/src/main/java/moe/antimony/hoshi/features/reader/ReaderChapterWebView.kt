@@ -214,8 +214,13 @@ internal fun ChapterWebView(
         if (isWebViewRestoring) return@LaunchedEffect
         if (webView.tag != loadKey) return@LaunchedEffect
         if (readerPageReadyKey != loadKey) return@LaunchedEffect
+        // Anchors that arrive after the chapter was laid out add buttons to its lines; the
+        // refresh places the sentence page breaks again only when the buttons changed, and
+        // returns to the character shown before the buttons moved the text.
         webView.evaluateJavascript(
-            "window.hoshiTranslations?.apply(${chapterSentenceAnchorsJson ?: "[]"});",
+            "(function() { var position = window.hoshiTextLayout?.position?.(window.hoshiReader);" +
+                "window.hoshiTranslations?.apply(${chapterSentenceAnchorsJson ?: "[]"});" +
+                "window.hoshiTextLayout?.refresh?.(window.hoshiReader, position); })();",
             null,
         )
     }

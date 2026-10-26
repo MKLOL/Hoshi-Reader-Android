@@ -148,6 +148,13 @@ internal object ReaderPaginationScripts {
           },
           getRect: function(target) {
             var rect = target.getClientRects()[0];
+            if (!rect && target.nodeType === Node.ELEMENT_NODE && target.firstChild) {
+              // A sentence-break host (display: contents), such as a fragment target, has no
+              // box of its own; its text does.
+              var contents = document.createRange();
+              contents.selectNodeContents(target);
+              rect = contents.getClientRects()[0];
+            }
             return rect || target.getBoundingClientRect();
           },
           buildNodeOffsets: function() {
@@ -948,7 +955,8 @@ internal object ReaderPaginationScripts {
             if (!images.length) return;
             return new Promise(function(resolve) { setTimeout(resolve, 50); });
           }).then(function() {
-            window.hoshiTextLayout.prepare(window.hoshiReader, true);
+            // Layout is an enhancement; a failure must not keep the page hidden for restore.
+            try { window.hoshiTextLayout.prepare(window.hoshiReader, true); } catch (error) { console.error('hoshiTextLayout', error); }
             window.hoshiReader.buildNodeOffsets();
             $restoreScripts
           });
@@ -1708,7 +1716,8 @@ internal object ReaderPaginationScripts {
             if (!images.length) return;
             return new Promise(function(resolve) { setTimeout(resolve, 50); });
           }).then(function() {
-            window.hoshiTextLayout.prepare(window.hoshiReader, false);
+            // Layout is an enhancement; a failure must not keep the page hidden for restore.
+            try { window.hoshiTextLayout.prepare(window.hoshiReader, false); } catch (error) { console.error('hoshiTextLayout', error); }
             window.hoshiReader.buildNodeOffsets();
             $restoreScripts
           });
