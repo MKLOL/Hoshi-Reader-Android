@@ -87,6 +87,88 @@ class SentenceRubyLayoutTest {
     }
 
     @Test
+    fun onlyKanjiRunsAreWrappingCompoundsNotPublisherWordsOrSingleReadings() {
+        val groups = sentenceRubyGroups("大丈夫は東京で字だ", listOf(
+            RubyAnnotation(4, 2, "とうきょう"),
+            RubyAnnotation(7, 1, "じ"),
+        ))
+
+        assertEquals(listOf("大丈夫", "東京", "字"), groups.map { it.base })
+        assertEquals(listOf(true, false, false), groups.map { it.compound })
+    }
+
+    @Test
+    fun aCompoundThatFitsThePaneStaysOneAtom() {
+        val groups = sentenceRubyGroups("原子力発電所の話。", emptyList())
+
+        assertEquals(groups, fitSentenceRubyGroups(groups, availableWidth = 120f) { it.base.length * 20f })
+        assertEquals(groups, fitSentenceRubyGroups(groups, availableWidth = 119f) { 119f })
+    }
+
+    @Test
+    fun aLongUnannotatedKanjiRunWiderThanThePaneWrapsAsTextInsteadOfShrinking() {
+        val text = "東京電力福島第一原子力発電所の話。"
+        val groups = sentenceRubyGroups(text, emptyList())
+        assertEquals(listOf("東京電力福島第一原子力発電所"), groups.map { it.base })
+
+        // 14 characters at 20 px cannot fit 100 px: no placeholder remains, so nothing shrinks.
+        assertTrue(fitSentenceRubyGroups(groups, availableWidth = 100f) { it.base.length * 20f }.isEmpty())
+    }
+
+    @Test
+    fun aWrappingRunKeepsEachSingleKanjiReadingOverItsOwnCharacter() {
+        val text = "は東京電力福島第一原子力発電所の"
+        val groups = sentenceRubyGroups(text, listOf(
+            RubyAnnotation(1, 1, "とう"),
+            RubyAnnotation(11, 1, "りょく"),
+            RubyAnnotation(15, 1, "の"), // Kana: a separate one-character publisher word.
+        ))
+
+        val fitted = fitSentenceRubyGroups(groups, availableWidth = 100f) { it.base.length * 20f }
+
+        assertEquals(
+            listOf(
+                SentenceRubyGroup(1, 2, "東", "とう"),
+                SentenceRubyGroup(11, 12, "力", "りょく"),
+                SentenceRubyGroup(15, 16, "の", "の"),
+            ),
+            fitted,
+        )
+        fitted.forEach { group ->
+            assertEquals(text.substring(group.start, group.end), group.base)
+            assertEquals(group.start, sentenceRubyHitOffset(group, 0))
+        }
+    }
+
+    @Test
+    fun publisherWordsAndWordSizedCompoundsKeepShrinkToFitInsteadOfWrapping() {
+        val word = "大丈夫大丈夫大丈夫"
+        val publisher = sentenceRubyGroups(word, listOf(RubyAnnotation(0, word.length, "だいじょうぶ")))
+        assertEquals(publisher, fitSentenceRubyGroups(publisher, availableWidth = 10f) { 1_000f })
+
+        val shortCompound = sentenceRubyGroups("大丈夫ですよ。", listOf(RubyAnnotation(0, 1, "だい")))
+        assertEquals(shortCompound, fitSentenceRubyGroups(shortCompound, availableWidth = 10f) { 1_000f })
+        assertTrue(sentenceRubyPlacement(1_000f, 32f, 0f, 16f, 10f).scale < 1f)
+
+        val fourKanji = sentenceRubyGroups("四字熟語", emptyList())
+        assertEquals(fourKanji, fitSentenceRubyGroups(fourKanji, availableWidth = 10f) { 1_000f })
+        val fiveKanji = sentenceRubyGroups("四字熟語集", emptyList())
+        assertTrue(fitSentenceRubyGroups(fiveKanji, availableWidth = 10f) { 1_000f }.isEmpty())
+    }
+
+    @Test
+    fun eachGroupIsFittedIndependentlyInSentenceOrder() {
+        val text = "東京へ原子力発電所から大丈夫。"
+        val groups = sentenceRubyGroups(text, listOf(RubyAnnotation(0, 2, "とうきょう")))
+        assertEquals(listOf("東京", "原子力発電所", "大丈夫"), groups.map { it.base })
+
+        val fitted = fitSentenceRubyGroups(groups, availableWidth = 80f) { it.base.length * 20f }
+
+        assertEquals(listOf("東京", "大丈夫"), fitted.map { it.base })
+        assertEquals(listOf(0, 11), fitted.map { it.start })
+    }
+
+    @Test
     fun readingWidthReservesSpaceAndNarrowPaneShrinksTheWholeGroup() {
         val full = sentenceRubyPlacement(90f, 32f, 110f, 16f, 300f)
         assertEquals(110f, full.width)

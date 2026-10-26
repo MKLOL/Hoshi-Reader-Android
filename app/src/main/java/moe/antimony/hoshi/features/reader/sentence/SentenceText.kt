@@ -82,7 +82,7 @@ internal fun SentenceText(
     BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
         val availableWidth = with(density) { maxWidth.toPx() }
         val measuredGroups = remember(groups, plainStyle, readingStyle, highlight, showFurigana, availableWidth, textMeasurer, density) {
-            groups.map { group ->
+            fun measure(group: SentenceRubyGroup): MeasuredSentenceRuby {
                 val readings = if (showFurigana) group.annotations.map { annotation ->
                     annotation to textMeasurer.measure(annotation.reading, readingStyle, softWrap = false, maxLines = 1)
                 } else emptyList()
@@ -125,17 +125,24 @@ internal fun SentenceText(
                     measuredReadings.maxOfOrNull { it.layout.size.height.toFloat() } ?: 0f,
                     availableWidth,
                 )
-                MeasuredSentenceRuby(
+                return MeasuredSentenceRuby(
                     group,
                     baseLayout,
                     measuredReadings,
                     placement.copy(baseLeft = placement.baseLeft - left * placement.scale),
+                    naturalWidth = right - left,
                 )
             }
+            // Measure each atom once: deciding whether a compound fits already measured it.
+            val cache = HashMap<SentenceRubyGroup, MeasuredSentenceRuby>()
+            fun measured(group: SentenceRubyGroup) = cache.getOrPut(group) { measure(group) }
+            fitSentenceRubyGroups(groups, availableWidth) { measured(it).naturalWidth }.map(::measured)
         }
         // The pointer handler lives for the sentence, but fonts, pane width and visibility change.
         val currentGroups by rememberUpdatedState(measuredGroups)
-        val annotated = remember(sentence.text, groups, highlight, foreground) {
+        // The atoms that fit this pane; placeholders below are numbered in this same order.
+        val fittedGroups = measuredGroups.map { it.group }
+        val annotated = remember(sentence.text, fittedGroups, highlight, foreground) {
             buildAnnotatedString {
                 var position = 0
                 fun appendPlain(end: Int) {
@@ -149,7 +156,7 @@ internal fun SentenceText(
                     }
                     position = end
                 }
-                groups.forEachIndexed { index, group ->
+                fittedGroups.forEachIndexed { index, group ->
                     appendPlain(group.start)
                     appendInlineContent("ruby-$index", group.base)
                     position = group.end
@@ -270,6 +277,8 @@ private data class MeasuredSentenceRuby(
     val base: TextLayoutResult,
     val readings: List<MeasuredSentenceReading>,
     val placement: SentenceRubyPlacement,
+    /** Unscaled width of the base plus any reading overhang, before fitting the pane. */
+    val naturalWidth: Float,
 )
 
 private data class MeasuredSentenceReading(val layout: TextLayoutResult, val left: Float)

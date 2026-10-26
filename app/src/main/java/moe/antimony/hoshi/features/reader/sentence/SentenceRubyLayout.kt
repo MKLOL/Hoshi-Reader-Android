@@ -12,6 +12,8 @@ internal data class SentenceRubyGroup(
     val base: String,
     val reading: String,
     val annotations: List<RubyAnnotation> = if (reading.isBlank()) emptyList() else listOf(RubyAnnotation(0, base.length, reading)),
+    /** A run of kanji kept together only for nicer wrapping, not a publisher's ruby word. */
+    val compound: Boolean = false,
 )
 
 /** Invalid or overlapping annotations must never replace or hide sentence characters. */
@@ -66,10 +68,40 @@ internal fun sentenceRubyGroups(text: String, annotations: List<RubyAnnotation>)
             characterCount += 1
         }
         if (characterCount >= 2 || children.isNotEmpty()) {
-            groups += SentenceRubyGroup(start, position, text.substring(start, position), children.joinToString("") { it.reading }, children)
+            groups += SentenceRubyGroup(
+                start, position, text.substring(start, position), children.joinToString("") { it.reading }, children,
+                compound = characterCount >= 2,
+            )
         }
     }
     return groups
+}
+
+/** A word-sized kanji compound (大丈夫, 四字熟語) stays whole and shrinks in an extremely narrow pane. */
+internal const val MAX_ATOMIC_COMPOUND_CHARACTERS = 4
+
+/**
+ * A longer kanji run stays one wrapping atom only while it fits the pane. Otherwise it would have
+ * to shrink, so it wraps like ordinary text instead: each single-kanji reading remains an atom over
+ * its own character and unannotated kanji become plain text. A publisher's ruby word and a short
+ * compound are never broken; they keep the shrink-to-fit fallback in [sentenceRubyPlacement].
+ *
+ * [naturalWidth] is the group's unscaled width including any readings it shows.
+ */
+internal fun fitSentenceRubyGroups(
+    groups: List<SentenceRubyGroup>,
+    availableWidth: Float,
+    naturalWidth: (SentenceRubyGroup) -> Float,
+): List<SentenceRubyGroup> = groups.flatMap { group ->
+    val word = !group.compound || group.base.codePointCount(0, group.base.length) <= MAX_ATOMIC_COMPOUND_CHARACTERS
+    if (word || naturalWidth(group) <= availableWidth) {
+        listOf(group)
+    } else {
+        group.annotations.map { child ->
+            val start = group.start + child.start
+            SentenceRubyGroup(start, start + child.length, group.base.substring(child.start, child.start + child.length), child.reading)
+        }
+    }
 }
 
 /** Physical pixel geometry of one atomic group, including an optional reading above it. */

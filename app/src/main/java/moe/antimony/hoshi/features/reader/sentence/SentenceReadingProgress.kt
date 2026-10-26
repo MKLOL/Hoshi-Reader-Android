@@ -76,6 +76,16 @@ internal class SentenceReadingProgress(
         return SentenceNavigation.clamp(book, SentencePosition(bookmark.chapterIndex, 0))
     }
 
+    /**
+     * A cursor from before sentence mode shared the bookmark is adopted once when it is further
+     * along than the bookmark, since that is where the reader last was in sentence mode.
+     */
+    fun separateCursorAhead(saved: SentencePosition?, bookmark: Bookmark?): SentencePosition? {
+        val position = saved?.let { SentenceNavigation.clamp(book, it) } ?: return null
+        val characterCount = at(position)?.characterCount ?: return null
+        return position.takeIf { bookmark == null || characterCount > bookmark.characterCount }
+    }
+
     private fun boundary(position: SentencePosition, after: Boolean): SentenceProgressPoint? {
         val chapter = book.chapters.getOrNull(position.chapter) ?: return null
         if (chapter.sentences.getOrNull(position.sentence) == null) return null

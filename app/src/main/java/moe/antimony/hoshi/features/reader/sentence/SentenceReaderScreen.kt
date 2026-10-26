@@ -327,6 +327,10 @@ private fun SentenceReaderContent(
             onBookmarkSaved = { currentOnBookmarkSaved() },
         )
     }
+    LaunchedEffect(progressSession) {
+        // Carry a place saved before sentence mode shared the bookmark into it and sync, once.
+        if (state.recordsInitialPosition) state.initialPosition?.let(progressSession::navigate)
+    }
     var bookFinished by rememberSaveable(bookId) {
         mutableStateOf(progressMapping.isFinished(state.initialPosition, state.readerState.bookmark))
     }
@@ -515,7 +519,9 @@ private fun SentenceReaderContent(
 
     var screenOrigin by remember { mutableStateOf(Offset.Zero) }
     val lookupTouchTarget = remember { ReaderLookupTouchTarget() }
-    val lookupTouchDensity = LocalDensity.current.density
+    // The popup overlay reports its bounds in platform dp (View px / displayMetrics.density), as
+    // in the normal reader's PlatformReaderUi; large-screen UI scaling must not shift this test.
+    val lookupTouchDensity = density.density
     val currentDismissLookup = rememberUpdatedState(::dismissPopups)
     val currentHasActiveLookup = rememberUpdatedState { popups.isNotEmpty() || lookupJob?.isActive == true }
     Box(

@@ -42,6 +42,8 @@ internal sealed interface SentenceReaderLoadState {
         val translations: SentenceTranslationSource?,
         val readerState: ReaderRouteLoadState.Ready,
         val progress: SentenceReadingProgress,
+        /** The initial position came from a separate-era cursor and must reach the bookmark. */
+        val recordsInitialPosition: Boolean = false,
     ) : SentenceReaderLoadState
 
     data class Error(val message: String) : SentenceReaderLoadState
@@ -76,13 +78,16 @@ internal class SentenceReaderLoader(
                 val translations = syncId
                     ?.takeIf { EpubTranslationStore.preload(state.bookRoot, it, state.book.spineCount) }
                     ?.let { SentenceTranslationSource(state.bookRoot, it, state.book.spineCount, book.chapters.flatMap { it.sentences }) }
+                val saved = positionStore.loadSaved(bookId)
+                val adopted = saved?.takeIf { it.separate }?.let { progress.separateCursorAhead(it.position, state.bookmark) }
                 SentenceReaderLoadState.Ready(
                     title = state.book.title,
                     book = book,
-                    initialPosition = progress.initialPosition(positionStore.load(bookId), state.bookmark),
+                    initialPosition = adopted ?: progress.initialPosition(saved?.position, state.bookmark),
                     translations = translations,
                     readerState = state,
                     progress = progress,
+                    recordsInitialPosition = adopted != null,
                 )
             }
         }

@@ -98,6 +98,17 @@ class SentenceReadingProgressTest {
     }
 
     @Test
+    fun aSeparateEraCursorIsAdoptedOnlyWhenItIsAheadOfTheBookmark() {
+        val epub = epub("<p>A。</p><p>BBBBBBBBB。</p>")
+        val progress = SentenceReadingProgress(SentenceReaderLoader.segmentBook(epub), epub)
+
+        assertEquals(SentencePosition(0, 1), progress.separateCursorAhead(SentencePosition(0, 1), Bookmark(0, 0.0, 0)))
+        assertEquals(SentencePosition(0, 1), progress.separateCursorAhead(SentencePosition(0, 1), null))
+        assertNull(progress.separateCursorAhead(SentencePosition(0, 0), Bookmark(0, 0.5, 5)))
+        assertNull(progress.separateCursorAhead(null, Bookmark(0, 0.5, 5)))
+    }
+
+    @Test
     fun navigationAndExplicitFinishUseNormalHistoryAndSupportReadingBackward() = runBlocking {
         val fixture = fixture()
         var refreshCount = 0

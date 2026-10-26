@@ -20,19 +20,27 @@ class SentenceReaderPositionStore(
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
 ) {
     private val file = File(filesDir, FILE_NAME)
+    /** 0.12.5 and earlier kept sentence mode's place apart from the bookmark, in this file. */
+    private val separateFile = File(filesDir, SEPARATE_FILE_NAME)
     private val json = Json { ignoreUnknownKeys = true }
     private val serializer = MapSerializer(String.serializer(), SentencePosition.serializer())
     // Saves are read-modify-write on one file: two quick swipes must not interleave and keep the
     // older position, and a save that has started must finish even if its effect is cancelled.
     private val mutex = Mutex()
 
-    suspend fun load(bookId: String): SentencePosition? = withContext(ioDispatcher) {
-        mutex.withLock { readAll()[bookId] }
+    suspend fun load(bookId: String): SentencePosition? = loadSaved(bookId)?.position
+
+    /** The cursor saved since sentence mode shares the bookmark, else one from the separate era. */
+    suspend fun loadSaved(bookId: String): SavedSentencePosition? = withContext(ioDispatcher) {
+        mutex.withLock {
+            readAll(file)[bookId]?.let { SavedSentencePosition(it, separate = false) }
+                ?: readAll(separateFile)[bookId]?.let { SavedSentencePosition(it, separate = true) }
+        }
     }
 
     suspend fun save(bookId: String, position: SentencePosition) = withContext(ioDispatcher + NonCancellable) {
         mutex.withLock {
-            val next = readAll() + (bookId to position)
+            val next = readAll(file) + (bookId to position)
             val temp = File(file.parentFile, "$FILE_NAME.tmp")
             temp.writeText(json.encodeToString(serializer, next))
             if (!temp.renameTo(file)) {
@@ -42,10 +50,14 @@ class SentenceReaderPositionStore(
         }
     }
 
-    private fun readAll(): Map<String, SentencePosition> =
-        runCatching { json.decodeFromString(serializer, file.readText()) }.getOrDefault(emptyMap())
+    private fun readAll(source: File): Map<String, SentencePosition> =
+        runCatching { json.decodeFromString(serializer, source.readText()) }.getOrDefault(emptyMap())
 
     private companion object {
-        const val FILE_NAME = "sentence_mode_positions.json"
+        const val FILE_NAME = "sentence_reader_positions.json"
+        const val SEPARATE_FILE_NAME = "sentence_mode_positions.json"
     }
 }
+
+/** [separate] marks a cursor that was never reflected in the normal bookmark. */
+data class SavedSentencePosition(val position: SentencePosition, val separate: Boolean)
