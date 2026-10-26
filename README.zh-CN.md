@@ -110,6 +110,8 @@ Hoshi Reader Android 会把导入的书籍、辞典、字体、有声书数据�
 
 Google Drive 同步使用由用户配置的 Google Cloud OAuth 设备代码流程。Anki 制卡会与 AnkiDroid 或已配置的 AnkiConnect 地址通信。更新检查会读取 GitHub Release 元数据。
 
+匿名使用统计默认开启，可在 **设置 → 高级 → 共享匿名使用统计** 中关闭。App 每天最多一次向 `https://dragos.games/api/book_sync/v1/stats` 发送随机安装 ID、App 与 Android 版本、设备型号、屏幕尺寸、语言、书籍 / 漫画 / 辞典数量，以及少量设置（同步是否开启、阅读排版）；不会发送到你的同步服务器，也不带同步令牌，不包含名称、书名或账号信息。安装或更新后的首次报告会等待一天；关闭后会删除安装 ID，该 ID 不会被备份。
+
 ## 鸣谢
 
 Hoshi Reader Android 基于以下生态：

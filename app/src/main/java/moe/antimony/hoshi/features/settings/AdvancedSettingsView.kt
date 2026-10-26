@@ -10,6 +10,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ShowChart
 import androidx.compose.material.icons.automirrored.rounded.VolumeUp
+import androidx.compose.material.icons.rounded.Analytics
 import androidx.compose.material.icons.rounded.Cloud
 import androidx.compose.material.icons.rounded.GraphicEq
 import androidx.compose.material.icons.rounded.Link
@@ -18,6 +19,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -30,6 +32,8 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.launch
+import moe.antimony.hoshi.LocalHoshiAppContainer
 import moe.antimony.hoshi.R
 import moe.antimony.hoshi.features.anki.AnkiConnectView
 import moe.antimony.hoshi.features.audio.AudioSettingsView
@@ -92,6 +96,8 @@ fun AdvancedSettingsView(
     }
 
     val colorScheme = MaterialTheme.colorScheme
+    val appContainer = LocalHoshiAppContainer.current
+    val anonymousStatsSettings = appContainer.anonymousStatsSettingsRepository.settings.collectAsLoadedSettings()
     SettingsDetailScaffold(
         title = stringResource(R.string.settings_advanced),
         onClose = onClose,
@@ -130,6 +136,30 @@ fun AdvancedSettingsView(
                         AppLanguageListItem(
                             selected = context.currentAppLanguageMode(),
                             onSelected = { mode -> context.setAppLanguageMode(mode) },
+                        )
+                    }
+                }
+            }
+            // Mounted once loaded, so the switch never flickers from the default.
+            val loadedAnonymousStatsSettings = anonymousStatsSettings
+            if (loadedAnonymousStatsSettings != null) {
+                item {
+                    GroupCard {
+                        ListItem(
+                            colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                            leadingContent = { Icon(Icons.Rounded.Analytics, contentDescription = null) },
+                            headlineContent = { Text(stringResource(R.string.anonymous_stats_share)) },
+                            supportingContent = { Text(stringResource(R.string.anonymous_stats_share_subtitle)) },
+                            trailingContent = {
+                                Switch(
+                                    checked = loadedAnonymousStatsSettings.enabled,
+                                    onCheckedChange = { enabled ->
+                                        // App scope: leaving the screen must not stop an opt-out
+                                        // before it has deleted the ID.
+                                        appContainer.appScope.launch { appContainer.anonymousStatsReporter.setEnabled(enabled) }
+                                    },
+                                )
+                            },
                         )
                     }
                 }

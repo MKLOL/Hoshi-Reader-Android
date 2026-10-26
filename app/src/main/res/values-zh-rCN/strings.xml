@@ -487,6 +487,8 @@
     <string name="advanced_ttu_sync">ッツ 同步</string>
     <string name="advanced_http_sync">HTTP 同步</string>
     <string name="advanced_http_sync_subtitle">将书籍、阅读进度、书架和阅读器数据同步到你自己的服务器</string>
+    <string name="anonymous_stats_share">共享匿名使用统计</string>
+    <string name="anonymous_stats_share_subtitle">随机安装 ID、应用与 Android 版本、设备型号、屏幕尺寸、语言、书库数量、同步开关与阅读排版，每天最多一次。不含个人数据。首次报告会等待一天；关闭后会删除该 ID。</string>
     <string name="http_sync_description">通过 HTTPS 将书籍内容、阅读进度、书架、阅读统计、使用记录（查词和漫画气泡）以及漫画聊天记录同步到你自己的服务器。同步也可能下载经过验证的 EPUB 句子和漫画气泡离线翻译。</string>
     <string name="audio_sources">来源</string>
     <string name="audio_add_source">添加来源</string>

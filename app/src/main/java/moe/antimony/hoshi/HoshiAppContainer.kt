@@ -11,10 +11,20 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import moe.antimony.hoshi.dictionary.DictionaryRepository
+import moe.antimony.hoshi.dictionary.DictionaryType
 import moe.antimony.hoshi.epub.BookRepository
 import moe.antimony.hoshi.epub.DeviceIdentity
 import moe.antimony.hoshi.features.ai.AiChatSettingsRepository
 import moe.antimony.hoshi.features.ai.aiChatSettingsRepository
+import moe.antimony.hoshi.features.anonymousstats.AnonymousStatsCollector
+import moe.antimony.hoshi.features.anonymousstats.AnonymousStatsInstall
+import moe.antimony.hoshi.features.anonymousstats.AnonymousStatsReporter
+import moe.antimony.hoshi.features.anonymousstats.AnonymousStatsSettingsRepository
+import moe.antimony.hoshi.features.anonymousstats.OkHttpAnonymousStatsTransport
+import moe.antimony.hoshi.features.anonymousstats.anonymousStatsSettingsRepository
+import moe.antimony.hoshi.features.anonymousstats.isTestAutomationRun
+import moe.antimony.hoshi.features.anonymousstats.packageFirstInstallTime
+import moe.antimony.hoshi.features.anonymousstats.readAnonymousStatsDevice
 import moe.antimony.hoshi.features.audio.AudioSettingsRepository
 import moe.antimony.hoshi.features.audio.LocalAudioRepository
 import moe.antimony.hoshi.features.audio.audioSettingsRepository
@@ -360,6 +370,30 @@ internal class HoshiAppContainer(context: Context) {
                 }
             },
         )
+
+    val anonymousStatsSettingsRepository: AnonymousStatsSettingsRepository =
+        appContext.anonymousStatsSettingsRepository()
+    /** The opt-out usage report: counts and device facts only, to a fixed endpoint (not the sync server). */
+    val anonymousStatsReporter: AnonymousStatsReporter by lazy {
+        val collector = AnonymousStatsCollector(
+            bookRepository = bookRepository,
+            cloudBooks = httpSyncCloudBooks,
+            dictionaryCount = { DictionaryType.entries.sumOf { dictionaryRepository.loadDictionaries(it).size } },
+            httpSyncSettings = httpSyncSettingsRepository.settings,
+            driveSyncSettings = syncSettingsRepository.settings,
+            readerSettings = readerSettingsRepository.settings,
+            device = { readAnonymousStatsDevice(appContext) },
+        )
+        AnonymousStatsReporter(
+            settingsRepository = anonymousStatsSettingsRepository,
+            install = AnonymousStatsInstall.inNoBackupDirectory { appContext.noBackupFilesDir },
+            collect = collector::collect,
+            transport = OkHttpAnonymousStatsTransport(),
+            isAutomatedRun = { isTestAutomationRun(appContext) },
+            installedAt = { packageFirstInstallTime(appContext) },
+            scope = appScope,
+        )
+    }
 
     val offlineTranslationSettingsRepository: OfflineTranslationSettingsRepository =
         appContext.offlineTranslationSettingsRepository()

@@ -39,15 +39,26 @@ class HoshiApplication : Application() {
         // HTTP sync polls only while a screen is visible, and pulls at once when one appears.
         registerActivityLifecycleCallbacks(object : ActivityLifecycleCallbacks {
             private var started = 0
+            private var inForeground = false
             private val handler = Handler(Looper.getMainLooper())
             private val leave = Runnable {
-                if (started == 0) appContainer.httpSyncBookmarkScheduler.setForeground(false)
+                if (started == 0) {
+                    inForeground = false
+                    appContainer.httpSyncBookmarkScheduler.setForeground(false)
+                }
             }
 
             override fun onActivityStarted(activity: Activity) {
                 started += 1
                 handler.removeCallbacks(leave)
                 appContainer.httpSyncBookmarkScheduler.setForeground(true)
+                // Each return from the background (not a rotation or a quick lookup round trip).
+                // Background-only starts (sync jobs, podcast playback) are not app use. The
+                // reporter waits and works on IO, gates itself and never throws.
+                if (!inForeground) {
+                    inForeground = true
+                    appContainer.anonymousStatsReporter.onForeground()
+                }
             }
 
             override fun onActivityStopped(activity: Activity) {

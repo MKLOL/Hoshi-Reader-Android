@@ -107,14 +107,23 @@ your own signing key, set `ANDROID_KEYSTORE_FILE`, `ANDROID_KEYSTORE_PASSWORD`,
 ## Privacy
 
 Sui Manga Reader stores imported EPUBs and manga, dictionaries, fonts, reading progress,
-ChatGPT history, and settings **locally in app storage**. No telemetry, no analytics.
+ChatGPT history, and settings **locally in app storage**. The only analytics is an anonymous
+usage report you can turn off (below).
 
 - **ChatGPT integration** is opt-in: you provide your own OpenAI API key, and the app
   posts directly to `api.openai.com`.
 - **HTTP sync** is opt-in and points at your own server. The protocol is documented in
   [docs/HTTP_SYNC_KV.md](docs/HTTP_SYNC_KV.md).
 - **Update checks** read GitHub release metadata from `api.github.com` (with optional
-  mirrors); no other network traffic happens by default.
+  mirrors).
+- **Anonymous usage statistics** are on by default and can be turned off in
+  **Settings → Advanced → Share anonymous usage statistics**. At most once a day the app
+  POSTs a random install ID, the app and Android version, device model, screen size,
+  language, book/manga/dictionary counts and a few settings (sync on/off, reader layout) to
+  `https://dragos.games/api/book_sync/v1/stats`, never to your sync server and without your
+  sync token. No names, titles or account details are sent. The first report waits a day
+  after you install or update; turning it off deletes the install ID, which is never backed
+  up. Apart from this report, no other network traffic happens by default.
 - **Reading statistics and the usage log** stay in app storage unless you set up HTTP
   sync. The usage log (a timestamped record of reading sessions, page turns, looked-up
   words and manga bubble actions, which powers Statistics → Today and Trends) is excluded

@@ -489,6 +489,8 @@
     <string name="advanced_ttu_sync">ッツ Sync</string>
     <string name="advanced_http_sync">HTTP Sync</string>
     <string name="advanced_http_sync_subtitle">Sync books, reading progress, shelves, and reader data to your own server</string>
+    <string name="anonymous_stats_share">Share anonymous usage statistics</string>
+    <string name="anonymous_stats_share_subtitle">A random install ID, app and Android version, device model, screen size, language, library counts, sync on/off and reader layout, at most once a day. No personal data. The first report waits a day; turning this off deletes the ID.</string>
     <string name="http_sync_description">Sync book content, reading progress, shelves, reading statistics, your usage log (lookups and manga bubbles) and manga chat history to your own server over HTTPS. Sync may also download validated offline translations for EPUB sentences and manga bubbles.</string>
     <string name="audio_sources">Sources</string>
     <string name="audio_add_source">Add Source</string>
