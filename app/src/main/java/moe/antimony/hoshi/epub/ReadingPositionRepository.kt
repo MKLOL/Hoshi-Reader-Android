@@ -231,8 +231,11 @@ class ReadingPositionRepository(
         }
     }
 
-    /** Existing clients/importers supply a projection; importing it never assigns a new time. */
-    suspend fun saveLegacy(root: File, bookmark: Bookmark) = withContext(Dispatchers.IO + NonCancellable) {
+    /**
+     * Existing clients/importers supply a projection; importing it never assigns a new time.
+     * @return whether it was adopted (it is not older than the current position).
+     */
+    suspend fun saveLegacy(root: File, bookmark: Bookmark): Boolean = withContext(Dispatchers.IO + NonCancellable) {
         val id = bookId(root)
         locks.getOrPut(id) { Mutex() }.withLock {
             val state = observedProjection(id, root, read(id))
@@ -241,8 +244,10 @@ class ReadingPositionRepository(
             if (current == null || positionWireMillis(time) > positionWireMillis(current.compatibilityAt) ||
                 (positionWireMillis(time) == positionWireMillis(current.compatibilityAt) && bookmark != current.bookmark())) {
                 persist(importLegacy(state, bookmark), root)
+                true
             } else {
                 persist(state, root)
+                false
             }
         }
     }

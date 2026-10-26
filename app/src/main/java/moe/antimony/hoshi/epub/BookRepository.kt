@@ -205,6 +205,16 @@ class BookRepository(
         readingPositions.open(bookRoot).navigate(bookmark, action)?.let { readingPositions.record(bookRoot, it) }
     }
 
+    /**
+     * A position the reader explicitly asked to import (ッツ "Import"). As on iOS it replaces the
+     * current one even when its source is older. A newer one keeps its source time; an older one
+     * becomes this device's navigation now, so HTTP sync and released map clients adopt it too.
+     */
+    suspend fun importReadingPosition(bookRoot: File, bookmark: Bookmark, action: String) {
+        if (readingPositions.saveLegacy(bookRoot, bookmark)) return
+        navigateReadingPosition(bookRoot, bookmark.copy(lastModified = currentAppleReferenceDateSeconds()), action)
+    }
+
     override suspend fun openReadingPosition(bookRoot: File): ReadingPositionSession = readingPositions.open(bookRoot)
 
     override suspend fun recordReadingPosition(bookRoot: File, event: ReadingPositionEvent) {

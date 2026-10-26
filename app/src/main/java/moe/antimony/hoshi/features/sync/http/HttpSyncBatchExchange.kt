@@ -258,7 +258,15 @@ class HttpSyncBatchState(
             // without fetching unchanged bodies.
             val listing = listAllMetadata(transport)
             val positionEntries = bookRepository.loadBookEntries()
-            val positions = positionSync.exchange(transport, listing.keys, positionEntries)
+            val positions = try {
+                positionSync.exchange(transport, listing.keys, positionEntries)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                // A local storage failure in the history lane: positions still travel through
+                // the bookmark maps below.
+                ReadingPositionExchange(emptySet(), emptySet(), listOf("positions: ${error.message ?: error.javaClass.simpleName}"))
+            }
             positionSyncErrors = positions.errors
             positions.moved.forEach { _remoteBookmarkUpdates.tryEmit(it) }
             val booksMeta = listing.keys.firstOrNull { it.key == BOOKS_MAP_KEY }
@@ -941,8 +949,17 @@ class HttpSyncBookmarkScheduler(
     private fun publishQueuedPositions() {
         scope.launch {
             runMaps(allowFullReconcile = false)
-            if (state.hasPendingBookmarks()) runMaps(allowFullReconcile = false)
+            if (pendingGeneration().getOrNull() != null) runMaps(allowFullReconcile = false)
         }
+    }
+
+    /** What is queued for this installation's keys; a failure to read it must not end the app. */
+    private suspend fun pendingGeneration(): Result<String?> = try {
+        Result.success(state.pendingBookmarkGeneration())
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (error: Exception) {
+        Result.failure(error)
     }
 
     fun start() = synchronized(jobLock) {
@@ -991,7 +1008,7 @@ class HttpSyncBookmarkScheduler(
 
     private suspend fun runMaps(allowFullReconcile: Boolean = true) {
         repeat(8) {
-            val requestedGeneration = state.pendingBookmarkGeneration()
+            val requestedGeneration = pendingGeneration().getOrNull()
             val (flight, generation) = synchronized(jobLock) {
                 val running = mapFlight?.takeIf { it.isActive }
                 if (running != null) running to mapFlightGeneration else {
@@ -1007,7 +1024,8 @@ class HttpSyncBookmarkScheduler(
                 }
             }
             flight.await()
-            val pending = state.pendingBookmarkGeneration()
+            // An unreadable queue waits for the next poll like a failed generation.
+            val pending = pendingGeneration().getOrElse { return }
             // A failed generation waits for the normal retry; a NEW generation queued after
             // this flight's snapshot gets another pass now, including on foreground close.
             if (pending == null || pending == generation) return

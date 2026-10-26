@@ -93,6 +93,8 @@ class SyncManager(
                 syncStats = syncStats,
                 statsSyncMode = statsSyncMode,
                 syncAudioBook = syncAudioBook,
+                // Chosen by the reader rather than by comparing timestamps.
+                explicit = direction == SyncDirection.ImportFromTtu,
             )
             SyncDirection.ExportToTtu -> exportToTtu(
                 title = displayTitle,
@@ -119,9 +121,10 @@ class SyncManager(
         syncStats: Boolean,
         statsSyncMode: StatisticsSyncMode,
         syncAudioBook: Boolean,
+        explicit: Boolean,
     ): SyncResult {
         val progress = progressFileId?.let { drive.getProgressFile(it) } ?: return SyncResult.Skipped
-        importProgress(entry, progress)
+        importProgress(entry, progress, explicit)
         if (syncStats) reconcileStatistics(entry, statsFileId, statsSyncMode)
         if (syncAudioBook) {
             audioBookFileId?.let { fileId ->
@@ -217,18 +220,22 @@ class SyncManager(
         return true
     }
 
-    private suspend fun importProgress(entry: BookEntry, progress: TtuProgress) {
+    private suspend fun importProgress(entry: BookEntry, progress: TtuProgress, explicit: Boolean) {
         val bookInfo = bookRepository.loadBookInfo(entry.root) ?: return
         val resolved = bookInfo.resolveTtuCharacterPosition(progress.exploredCharCount)
-        bookRepository.saveBookmark(
-            entry.root,
-            Bookmark(
-                chapterIndex = resolved?.spineIndex ?: 0,
-                progress = resolved?.progress ?: 0.0,
-                characterCount = progress.exploredCharCount,
-                lastModified = TtuSyncRules.unixMillisToAppleReferenceSeconds(progress.lastBookmarkModified),
-            ),
+        val bookmark = Bookmark(
+            chapterIndex = resolved?.spineIndex ?: 0,
+            progress = resolved?.progress ?: 0.0,
+            characterCount = progress.exploredCharCount,
+            lastModified = TtuSyncRules.unixMillisToAppleReferenceSeconds(progress.lastBookmarkModified),
         )
+        // An explicit Import applies ッツ's position even when it is older, as on iOS. The
+        // automatic import only ever adopts a newer one.
+        if (explicit) {
+            bookRepository.importReadingPosition(entry.root, bookmark, action = "ttuImport")
+        } else {
+            bookRepository.saveBookmark(entry.root, bookmark)
+        }
     }
 
     private suspend fun exportProgress(

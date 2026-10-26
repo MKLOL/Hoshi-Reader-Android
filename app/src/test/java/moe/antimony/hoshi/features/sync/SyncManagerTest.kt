@@ -232,6 +232,53 @@ class SyncManagerTest {
     }
 
     @Test
+    fun explicitImportAppliesAnOlderTtuPositionAsANewNavigation() = runBlocking {
+        val repository = BookRepository(tempFolder.newFolder(), deviceIdentity = DeviceIdentity("phone", "Phone"))
+        val entry = repository.createEntry()
+        val local = Bookmark(1, 0.9, 190, TtuSyncRules.unixMillisToAppleReferenceSeconds(5_000))
+        repository.saveBookmark(entry.root, local)
+        val drive = FakeDriveSyncDataSource(progress = TtuProgress(7, 150, 0.5, 2_000))
+
+        val result = SyncManager(repository, drive).syncBook(
+            entry, SyncDirection.ImportFromTtu, syncStats = false,
+            statsSyncMode = StatisticsSyncMode.Merge, syncAudioBook = false,
+        )
+
+        assertEquals(SyncResult.Imported("Title", 150), result)
+        val imported = repository.loadBookmark(entry.root)!!
+        assertEquals(listOf(1, 150), listOf(imported.chapterIndex, imported.characterCount))
+        assertEquals(0.5, imported.progress, 0.0)
+        // Newer than the position it replaced, so the bookmark maps and older clients take it too.
+        assertTrue(imported.lastModified!! > local.lastModified!!)
+        val state = repository.readingPositions.snapshot(entry.root)
+        assertEquals("ttuImport", state.winner()!!.action)
+        assertTrue("queued for HTTP sync", state.winner()!!.id in state.pending)
+    }
+
+    @Test
+    fun automaticImportNeverReplacesAPositionNewerThanTtu() = runBlocking {
+        val repository = BookRepository(tempFolder.newFolder(), deviceIdentity = DeviceIdentity("phone", "Phone"))
+        val entry = repository.createEntry()
+        repository.saveBookmark(entry.root, Bookmark(0, 0.1, 10, TtuSyncRules.unixMillisToAppleReferenceSeconds(1_000)))
+        val pageTurn = Bookmark(0, 0.3, 30, TtuSyncRules.unixMillisToAppleReferenceSeconds(3_000))
+        // ッツ is newer when the direction is decided; a page turn lands before its file is read.
+        val drive = FakeDriveSyncDataSource(
+            progress = TtuProgress(7, 150, 0.5, 2_000),
+            beforeGetProgress = { repository.navigateReadingPosition(entry.root, pageTurn, "pageTurn") },
+        )
+
+        val result = SyncManager(repository, drive).syncBook(
+            entry, direction = null, syncStats = false,
+            statsSyncMode = StatisticsSyncMode.Merge, syncAudioBook = false, importOnly = true,
+        )
+
+        assertEquals(SyncResult.Imported("Title", 150), result)
+        val bookmark = repository.loadBookmark(entry.root)!!
+        assertEquals(0, bookmark.chapterIndex)
+        assertEquals(0.3, bookmark.progress, 0.0)
+    }
+
+    @Test
     fun importingCompletedBookKeepsFullCompletionIncludingTrailingEmptySpines() = runBlocking {
         val repository = BookRepository(tempFolder.root)
         val entry = repository.createEntry()
@@ -539,6 +586,7 @@ private class FakeDriveSyncDataSource(
     private val staleOnFirstList: Boolean = false,
     private val beforeFindRoot: suspend () -> Unit = {},
     private val beforeUpdateStats: suspend (List<ReadingStatistics>) -> Unit = {},
+    private val beforeGetProgress: suspend () -> Unit = {},
 ) : DriveSyncDataSource {
     private val progressFile = progress?.let { DriveFile("progress", TtuSyncRules.progressFileName(it)) }
     private val statisticsFile = statistics?.let { DriveFile("statistics", TtuSyncRules.statisticsFileName(it)) }
@@ -582,6 +630,7 @@ private class FakeDriveSyncDataSource(
     }
 
     override suspend fun getProgressFile(fileId: String): TtuProgress {
+        beforeGetProgress()
         getProgressFileCalls += 1
         return progressById.getValue(fileId)
     }

@@ -228,6 +228,7 @@ The Android client uses this layout under one shared root prefix `books/`:
 |---|---|---|---|---|
 | `sync/maps/books.json` | `application/json` | `{BookID: "sha256:..."}` | overwrite after book reconcile | O(number of books) |
 | `sync/maps/bookmarks/{deviceId}.json` | `application/json` | `{BookID: {etag, lastModified, value}}` | that installation's five-second batches | O(books read on device) |
+| `sync/maps/positions/v1/{syncId}/{deviceId}.json` | `application/json` | `{version: 1, bookId, deviceId, events: [Event…], heads: [Event…]}`; an Event is `{id, deviceId, deviceName, originId, sequence, sessionId, action, from?, position: {chapterIndex, progress, characterCount}, occurredAt, compatibilityAt, basedOn?, seen: {originId: sequence}, missingTimestamp, bookId}` (Apple reference seconds: `occurredAt` is when the reader moved, `compatibilityAt` the stamp released clients order by, at least one wire millisecond after the session's previous stamp, which starts at the position it opened on). `events` are that device's latest 50 by `compatibilityAt` plus unsent ones, sorted; `heads` its newest event per `originId` (one causal counter per install, replaced when its history is lost) | written only by `{deviceId}` (builds after 0.12.5; released builds ignore `sync/maps/` keys they do not know): readers GET a key whose ETag changed, only for books on that device (a book installed later reads its keys then), at most 32 per pass with an open book's first; another device's unreadable key is passed over until it changes and a `version` above 1 is skipped; the writer reads its own key back before replacing it (reinstall) and replaces one it cannot read or that a newer build wrote | ~0.5 KB per event, ~30 KB |
 | `sync/maps/stats/{deviceId}/{yyyy-MM}.json` | `application/json` | `{version: 1, deviceId, month, books: {syncId: {title?, contentType?, reading: [ReadingStatistics…], mangaText: [MangaTextStatistic…]}}}` — that device's **own** entries whose `dateKey` falls in `month`, canonical (books and days sorted) so the ETag identifies the content | written only by `{deviceId}`: a plain PUT never loses another device's day; readers GET only shards whose ETag changed and accept only rows of that device and month; a `version` above 1 is skipped | ~250 B per book-day |
 | `sync/maps/stats/{deviceId}/settings.json` | `application/json` | `{version: 1, streakMinimumMinutes, dayResetHour, updatedAt, timeZone?}` (epoch ms; `1` marks a choice made before settings synced; `timeZone` is the IANA zone every device counts reading days in; absent until one is chosen, which means America/New_York, and from 0.12.2) | written only by `{deviceId}`; every device applies the newest `updatedAt`, the larger device id breaking a tie; the zone comes from the newest choice that names one, so a choice 0.12.2 republished without it never undoes it | ~120 B |
 | `sync/maps/usage/{deviceId}/{yyyy-MM-dd}.ndjson.gz`, `…/{yyyy-MM}.ndjson.gz` | `application/gzip` | that device's usage log (gzip without a timestamp, so equal content has an equal ETag), one JSON event per line — lookups, bubbles, translations, page turns, reading spans: one key per day of the current month, then one per month once it is over (its day keys are then deleted; receivers split it by each line's `at` + `utcOffset`) | written and deleted only by `{deviceId}`: past days when they change, today's at most every two minutes while it changes and at once on leaving the reader, Statistics or the app; its own copy is read back and merged before it is replaced (reinstall), and re-sent if the server lost it; other devices fetch a key whose ETag changed | ~2–30 KB per day |
@@ -285,9 +286,12 @@ book-map mismatch, or a changed non-map metadata ETag.
   compared by their content hash rather than size alone. Reading stats for existing books
   are reconciled ahead of unrelated payload imports.
 - Any number of local bookmark changes: the list above plus one
-  `PUT /v1/kv/sync/maps/bookmarks/{deviceId}.json` containing the device shard.
-- Remote bookmark shard changed: the list plus one GET for that changed shard. Concurrent
-  devices never overwrite each other because their physical keys differ.
+  `PUT /v1/kv/sync/maps/bookmarks/{deviceId}.json` containing the device shard, and one
+  `PUT …/positions/v1/{syncId}/{deviceId}.json` per book with unsent navigation (none when the
+  listed ETag is already the body's SHA-256).
+- Remote bookmark shard or position history changed: the list plus one GET for each changed
+  shard, and for each changed history of a book on this device (at most 32 histories a pass).
+  Concurrent devices never overwrite each other because their physical keys differ.
 - Book map changed: the small preflight returns immediately to the UI and launches the
   existing binary/metadata reconcile in the background.
 
@@ -384,6 +388,12 @@ is what keeps any number of bookmark changes to one shard PUT instead of N compa
 Conflicts are resolved client-side:
 - Bookmark shards merge per BookID by event timestamp, with revision and content hash as
   deterministic tie-breakers. No whole-map writer can erase another device's position.
+- Position histories keep each origin's head (highest `sequence`). The position shown is a head
+  no other head observes (same origin and a higher `sequence`, or `seen[origin] >= sequence`);
+  among concurrent heads the largest `compatibilityAt`, then `occurredAt`, then `id` wins. The
+  winner is what `bookmark.json` and the bookmark shard carry, so map clients converge on it; a
+  newer map or ッツ position enters as a synthetic head that observes everything known. Opening a
+  book never creates an event, and a deliberate move back still gets a later `compatibilityAt`.
 - Chat keys never conflict (unique nonce).
 - Payload conflicts are essentially "re-imported the same book on two devices at the
   same time" — even rarer; the second writer wins, both copies are effectively

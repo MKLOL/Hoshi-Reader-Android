@@ -244,4 +244,119 @@ class ReadingPositionSyncTest {
         assertTrue(journal.events.any { it.position.chapterIndex == 101 })
         assertTrue(journal.events.any { it.position.chapterIndex == 102 })
     }
+
+    @Test fun anotherDevicesHistoryWaitsUntilTheBookIsOnThisDevice() = runBlocking {
+        val server = ContentAddressedKv()
+        val (tablet, t) = fixture("tablet")
+        move(tablet, t, 120, 200.0)
+        exchange(tablet, server)
+        val phone = BookRepository(temporary.newFolder("phone"), deviceIdentity = DeviceIdentity("phone", "phone"))
+        server.resetCounts()
+        exchange(phone, server)
+        assertEquals("a book that is not on this device is not fetched", 0, server.gets)
+        val root = phone.createBookDirectoryForImportedTitle("Example")
+        phone.saveMetadata(root, BookMetadata("phone", "Example", null, root.name, 0.0, "example"))
+        exchange(phone, server)
+        assertEquals(120, phone.loadBookmark(root)!!.chapterIndex)
+    }
+
+    @Test fun aPassReadsABoundedNumberOfHistoriesWithoutHoldingBackItsOwn() = runBlocking {
+        val server = ContentAddressedKv()
+        val tablet = BookRepository(temporary.newFolder("tablet"), deviceIdentity = DeviceIdentity("tablet", "tablet"))
+        val phone = BookRepository(temporary.newFolder("phone"), deviceIdentity = DeviceIdentity("phone", "phone"))
+        val phoneRoots = (1..3).map { number ->
+            val id = "book$number"
+            val tabletRoot = tablet.createBookDirectoryForImportedTitle("Book $number")
+            tablet.saveMetadata(tabletRoot, BookMetadata(id, "Book $number", null, tabletRoot.name, 0.0, id))
+            move(tablet, tabletRoot, 120, 200.0)
+            phone.createBookDirectoryForImportedTitle("Book $number").also {
+                phone.saveMetadata(it, BookMetadata(id, "Book $number", null, it.name, 0.0, id))
+            }
+        }
+        exchange(tablet, server)
+        move(phone, phoneRoots.first(), 101, 150.0)
+        val sync = ReadingPositionSync(phone, maxReadsPerPass = 2)
+        server.resetCounts()
+        sync.exchange(server, server.listing(), phone.loadBookEntries())
+        assertEquals(2, server.gets)
+        assertEquals(listOf("${READING_POSITION_PREFIX}book1/phone.json"), server.putKeys)
+        server.resetCounts()
+        sync.exchange(server, server.listing(), phone.loadBookEntries())
+        assertEquals("the rest follow on the next pass", 1, server.gets)
+        assertEquals(listOf(120, 120, 120), phoneRoots.map { phone.loadBookmark(it)!!.chapterIndex })
+    }
+
+    @Test fun anUnreadableOwnHistoryIsReplacedInsteadOfBlockingTheBook() =
+        ownHistoryThisBuildCannotUseIsReplaced("{\"truncated")
+
+    @Test fun aNewerBuildsOwnHistoryIsSkippedUntilItChangesAndThenReplaced() =
+        ownHistoryThisBuildCannotUseIsReplaced("""{"version":2,"bookId":"example","deviceId":"phone"}""")
+
+    private fun ownHistoryThisBuildCannotUseIsReplaced(body: String) = runBlocking {
+        val server = ContentAddressedKv()
+        val (repository, root) = fixture("phone")
+        val key = "${READING_POSITION_PREFIX}example/phone.json"
+        server.put(key, "application/json", body.toByteArray())
+        server.resetCounts()
+        assertTrue(exchange(repository, server).errors.isEmpty())
+        assertEquals(1, server.gets)
+        server.resetCounts()
+        exchange(repository, server)
+        assertEquals("an unchanged key is not fetched on every poll", 0, server.gets)
+        move(repository, root, 101, 150.0)
+        assertTrue(exchange(repository, server).errors.isEmpty())
+        val replaced = json.decodeFromString<ReadingPositionJournal>(server.body(key).toString(Charsets.UTF_8))
+        assertEquals(101, replaced.heads.single().position.chapterIndex)
+        assertTrue(repository.readingPositions.snapshot(root).pending.isEmpty())
+    }
+
+    @Test fun anInterruptedPassKeepsWhatItHadAlreadyAcknowledged() = runBlocking {
+        val server = ContentAddressedKv()
+        val (phone, p) = fixture("phone")
+        val (tablet, t) = fixture("tablet")
+        move(tablet, t, 120, 200.0)
+        exchange(tablet, server)
+        move(phone, p, 101, 150.0)
+        val interrupting = object : HttpSyncKvTransport by server {
+            override suspend fun getBounded(key: String, maxBytes: Int): HttpSyncKvFetched? =
+                if (key.endsWith("/tablet.json")) throw kotlinx.coroutines.CancellationException("The app was left")
+                else server.getBounded(key, maxBytes)
+        }
+        try {
+            ReadingPositionSync(phone).exchange(interrupting, server.listing(), phone.loadBookEntries())
+            fail("the pass was interrupted")
+        } catch (_: kotlinx.coroutines.CancellationException) {
+        }
+        server.resetCounts()
+        exchange(phone, server)
+        assertEquals("only the interrupted history is read", 1, server.gets)
+        assertEquals(emptyList<String>(), server.putKeys)
+        assertEquals(120, phone.loadBookmark(p)!!.chapterIndex)
+    }
+
+    @Test fun anUnwritablePositionStoreNeitherEndsThePollNorTheBookmarkMaps() = runBlocking {
+        val server = ContentAddressedKv()
+        val files = temporary.newFolder("phone")
+        val repository = BookRepository(files, deviceIdentity = DeviceIdentity("phone", "phone"),
+            positionDirectory = temporary.newFile("not-a-directory"))
+        val root = repository.createBookDirectoryForImportedTitle("Example")
+        repository.saveMetadata(root, BookMetadata("phone", "Example", null, root.name, 0.0, "example"))
+        root.resolve("bookmark.json").writeText(json.encodeToString(Bookmark(100, 0.0, 101, 100.0)))
+        val state = HttpSyncBatchState(repository)
+        state.publishMaps(server)
+        assertTrue(state.syncMaps(server).positionErrors.isNotEmpty())
+        val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Default)
+        try {
+            val scheduler = HttpSyncBookmarkScheduler(
+                state, currentSettings = { HttpSyncSettings("https://example.invalid", "token") },
+                syncBooksNow = { _, _, _ -> error("no full reconcile expected") },
+                fullCycleRunner = HttpSyncFullCycleRunner(scope), scope = scope,
+                transportFactory = { server },
+            )
+            // Reading what is queued fails too; the poll must survive it.
+            assertTrue(scheduler.refreshBeforeOpen(10_000))
+        } finally {
+            scope.coroutineContext[kotlinx.coroutines.Job]?.cancel()
+        }
+    }
 }
