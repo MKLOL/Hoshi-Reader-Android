@@ -15,6 +15,8 @@ import moe.antimony.hoshi.epub.ReadingPositionEvent
 import moe.antimony.hoshi.epub.ReadingPositionSession
 import moe.antimony.hoshi.epub.ReadingPositionState
 import moe.antimony.hoshi.epub.ReadingStatistics
+import moe.antimony.hoshi.features.sync.ResolvedBookPosition
+import moe.antimony.hoshi.features.sync.resolveTtuCharacterPosition
 import moe.antimony.hoshi.navigation.ReaderRouteLoadState
 import moe.antimony.hoshi.navigation.ReaderRouteStateHolder
 import org.junit.Assert.assertEquals
@@ -63,6 +65,71 @@ class SentenceReadingProgressTest {
         assertEquals(10, point.characterCount)
         assertEquals(point.characterCount, epub.characterCountAt(point.chapterIndex, point.progress))
         assertEquals(100, progress.endOf(SentencePosition(0, 1))?.characterCount)
+    }
+
+    @Test
+    fun theNormalReaderRestoresASentenceBookmarkToTheSentencesFirstCharacter() {
+        val epub = epub("<p>A。</p><p>BBBBBBBBB。</p>")
+        val progress = SentenceReadingProgress(SentenceReaderLoader.segmentBook(epub), epub)
+
+        val point = progress.at(SentencePosition(0, 1))!!
+
+        assertEquals("BBBBBBBBB begins after one reader character", 1, point.characterCount)
+        assertEquals(1, normalReaderRestoreTarget(point.progress, chapterCount = 10))
+    }
+
+    @Test
+    fun everySentenceBoundaryUsesTheNormalReadersOwnCoordinatesForThatCharacter() {
+        val epub = EpubBook("Book", listOf(
+            EpubChapter("c0", "c0.xhtml", "application/xhtml+xml", "<body><p>A。</p><p>BBBBBBBBB。</p><p>CCC。</p></body>"),
+            EpubChapter("c1", "c1.xhtml", "application/xhtml+xml", "<body><p>DDDDDDD。</p><p>E。</p><p>FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF。</p><p>G。</p></body>"),
+        ))
+        val book = SentenceReaderLoader.segmentBook(epub)
+        val progress = SentenceReadingProgress(book, epub)
+
+        book.chapters.forEachIndexed { chapterIndex, chapter ->
+            val info = epub.bookInfo.chapterInfo.getValue(epub.chapters[chapterIndex].href)
+            var characters = 0
+            chapter.sentences.forEachIndexed { sentenceIndex, sentence ->
+                val point = progress.at(SentencePosition(chapterIndex, sentenceIndex))!!
+                val label = "sentence $chapterIndex/$sentenceIndex"
+                // A normal page that begins here reports exploredChars / totalChars, and a ッツ or
+                // chapter-list jump to this character resolves to the same plain fraction (iOS too).
+                assertEquals(label, characters.toDouble() / info.chapterCount, point.progress, 0.0)
+                assertEquals(label, info.currentTotal + characters, point.characterCount)
+                assertEquals(
+                    label,
+                    ResolvedBookPosition(chapterIndex, point.progress),
+                    epub.bookInfo.resolveTtuCharacterPosition(point.characterCount),
+                )
+                characters += sentence.text.count { it.isLetter() }
+            }
+        }
+    }
+
+    @Test
+    fun characterCountsStayExactWhenTheirFractionWouldFloorOneCharacterShort() {
+        val epub = epub49()
+        val point = SentenceReadingProgress(SentenceReaderLoader.segmentBook(epub), epub).at(SentencePosition(0, 1))!!
+
+        // 49 * (4 / 49.0) is 3.9999999999999996: flooring it back would lose the boundary.
+        assertEquals(4, point.characterCount)
+        assertEquals(4.0 / 49, point.progress, 0.0)
+        assertEquals(4, normalReaderRestoreTarget(point.progress, chapterCount = 49))
+    }
+
+    @Test
+    fun savedSentenceBookmarksKeepTheExactCharacterWithAndWithoutAPositionJournal() = runBlocking {
+        for (journal in listOf(true, false)) {
+            val fixture = fixture(epub49(), journal)
+            val session = SentenceReaderProgressSession(fixture.state, fixture.progress, fixture.holder, this, { fixture.repository.now }, {})
+
+            session.navigate(SentencePosition(0, 1))?.join()
+
+            val saved = fixture.repository.bookmarks.single()
+            assertEquals("journal=$journal", 4, saved.characterCount)
+            assertEquals("journal=$journal", 4.0 / 49, saved.progress, 0.0)
+        }
     }
 
     @Test
@@ -174,6 +241,18 @@ class SentenceReadingProgressTest {
         EpubChapter("c0", "c0.xhtml", "application/xhtml+xml", "<body>$html</body>"),
     ))
 
+    /** A cached 49-character chapter whose second sentence begins at reader character 4. */
+    private fun epub49() = epub("<p>A。</p><p>BBBBBBBBB。</p>").let { original ->
+        original.copy(bookInfo = BookInfo(49, mapOf("c0.xhtml" to BookInfo.ChapterInfo(0, 0, 49))))
+    }
+
+    /**
+     * The normal reader's page restore (`restoreProgress`, the same on iOS) shows the page holding
+     * character `ceil(totalChars * progress)` of the chapter.
+     */
+    private fun normalReaderRestoreTarget(progress: Double, chapterCount: Int): Int =
+        kotlin.math.ceil(chapterCount * progress).toInt()
+
     private data class Fixture(
         val state: ReaderRouteLoadState.Ready,
         val progress: SentenceReadingProgress,
@@ -181,11 +260,11 @@ class SentenceReadingProgressTest {
         val repository: ProgressRepository,
     )
 
-    private fun fixture(): Fixture {
-        val epub = epub("<p>A。</p><p>BBBBBBBBB。</p>")
+    private fun fixture(epub: EpubBook = epub("<p>A。</p><p>BBBBBBBBB。</p>"), journal: Boolean = true): Fixture {
         val progress = SentenceReadingProgress(SentenceReaderLoader.segmentBook(epub), epub)
         val root = File("book-a")
         val session = ReadingPositionSession(null, DeviceIdentity("device", "Android"), "origin", AtomicLong(), ReadingPositionState("book-a"))
+            .takeIf { journal }
         val state = ReaderRouteLoadState.Ready(
             BookEntry(root, BookMetadata("book-a", "Book", null, "book-a", 0.0)), root, epub, null, session,
         )

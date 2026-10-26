@@ -92,21 +92,22 @@ internal class SentenceReadingProgress(
         val offsets = boundaries[position.chapter]
         val count = offsets[position.sentence + if (after) 1 else 0]
         val total = offsets.last()
-        val chapterCount = epubBook.chapters.getOrNull(chapter.chapterIndex)?.let { epubBook.bookInfo.chapterInfo[it.href]?.chapterCount } ?: return null
-        val progress = if (chapterCount > 0 && total > 0) {
+        val info = epubBook.chapters.getOrNull(chapter.chapterIndex)?.let { epubBook.bookInfo.chapterInfo[it.href] } ?: return null
+        val chapterCount = info.chapterCount
+        if (chapterCount > 0 && total > 0) {
             val normalOffset = (count.toLong() * chapterCount / total).toInt()
-            when (normalOffset) {
-                0 -> 0.0
-                chapterCount -> 1.0
-                // characterCountAt floors the product; one ulp keeps exact integer boundaries
-                // from falling a character behind due to floating-point division.
-                else -> Math.nextUp(normalOffset.toDouble() / chapterCount)
-            }
-        } else {
-            val boundary = position.sentence + if (after) 1 else 0
-            boundary.toDouble() / chapter.sentences.size
+            // A boundary is a reader character, so use the normal reader's own coordinates for it,
+            // as iOS does: the plain fraction a page starting there reports (and a ッツ or chapter
+            // jump resolves to), with the exact character count beside it. Deriving the count back
+            // out of the fraction would force rounding one way, and page restore rounds the other.
+            return SentenceProgressPoint(
+                chapterIndex = chapter.chapterIndex,
+                progress = normalOffset.toDouble() / chapterCount,
+                characterCount = (info.currentTotal + normalOffset).coerceIn(0, epubBook.bookInfo.characterCount),
+            )
         }
-        return point(chapter.chapterIndex, progress)
+        val boundary = position.sentence + if (after) 1 else 0
+        return point(chapter.chapterIndex, boundary.toDouble() / chapter.sentences.size)
     }
 
     private fun point(chapterIndex: Int, progress: Double) = SentenceProgressPoint(

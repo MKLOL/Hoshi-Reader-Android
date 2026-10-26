@@ -80,12 +80,14 @@ internal class ReaderRouteStateHolder(
         occurredAt: Double = repository.currentAppleReferenceDateSeconds(),
         event: moe.antimony.hoshi.epub.ReadingPositionEvent? = null,
         captureAlreadyDone: Boolean = false,
+        /** The exact character when the caller knows it, rather than one floored from [progress]. */
+        characterCount: Int? = null,
     ) {
         val positionWritten = withContext(ioDispatcher) {
             val bookmark = Bookmark(
                 chapterIndex = chapterIndex,
                 progress = progress,
-                characterCount = state.book.characterCountAt(chapterIndex, progress),
+                characterCount = characterCount ?: state.book.characterCountAt(chapterIndex, progress),
                 lastModified = occurredAt,
             )
             val navigation = if (captureAlreadyDone) event else event ?: state.positionSession?.navigate(bookmark)

@@ -54,6 +54,7 @@ internal class SentenceReaderProgressSession(
                 state = state,
                 chapterIndex = point.chapterIndex,
                 progress = point.progress,
+                characterCount = point.characterCount,
                 onBookmarkSaved = onBookmarkSaved,
                 occurredAt = occurredAt,
                 event = event,
