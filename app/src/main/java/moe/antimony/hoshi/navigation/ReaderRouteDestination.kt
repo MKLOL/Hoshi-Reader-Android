@@ -13,10 +13,12 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.key
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -97,6 +99,18 @@ internal fun ReaderRouteDestination(
             if (remoteUpdateGate.shouldReload(changedId)) reloadReader()
         }
     }
+    // The entry of the reader a reload retires; its queued export is for this entry.
+    var lastLoadedEntry by remember(bookId) { mutableStateOf<BookEntry?>(null) }
+    suspend fun importOnOpen(entry: BookEntry, syncState: ReaderRouteAutoSyncState) {
+        appContainer.syncManager.syncBook(
+            entry = entry,
+            direction = null,
+            syncStats = readerSettings.statisticsSyncEnabled,
+            statsSyncMode = readerSettings.statisticsSyncMode,
+            syncAudioBook = syncState.shouldSyncAudioBook,
+            importOnly = true,
+        )
+    }
     val routeState by produceState<ReaderRouteLoadState>(
         ReaderRouteLoadState.Loading,
         bookId,
@@ -122,22 +136,30 @@ internal fun ReaderRouteDestination(
                     sasayakiSettings = sasayakiSettings ?: appContainer.sasayakiSettingsRepository.settings.first(),
                 )
                 if (initialAutoSyncState.shouldSyncOnOpen) {
-                    runCatching {
-                        appContainer.syncManager.syncBook(
-                            entry = entry,
-                            direction = null,
-                            syncStats = readerSettings.statisticsSyncEnabled,
-                            statsSyncMode = readerSettings.statisticsSyncMode,
-                            syncAudioBook = initialAutoSyncState.shouldSyncAudioBook,
-                            importOnly = true,
-                        )
-                    }.onFailure { if (it is CancellationException) throw it }
+                    runCatching { importOnOpen(entry, initialAutoSyncState) }
+                        .onFailure { if (it is CancellationException) throw it }
                 }
             },
         )
+        (loaded as? ReaderRouteLoadState.Ready)?.let { lastLoadedEntry = it.entry }
         loadedKey = requestedKey
         value = loaded
         autoSyncExportController.resumeExports(autoSyncState.isReaderAutoSyncEnabled)
+    }
+    // Leaving during a reload's spinner cancels the load before it resumes exports. The export
+    // the retired reader queued still goes out, after the import that reload never finished.
+    val releaseAbandonedReload by rememberUpdatedState<() -> Unit> {
+        // Only a loaded reader queues an export, so a held one always has its entry.
+        val entry = lastLoadedEntry ?: return@rememberUpdatedState
+        val syncState = autoSyncState
+        autoSyncExportController.releaseAbandonedReload(syncState.isReaderAutoSyncEnabled) {
+            sessionReloadBarrier.awaitWrites()
+            appContainer.bookRepository.awaitPendingStatisticsSaves(entry.root)
+            importOnOpen(entry, syncState)
+        }
+    }
+    DisposableEffect(bookId, autoSyncExportController) {
+        onDispose { releaseAbandonedReload() }
     }
 
     DisposableEffect(lifecycleOwner, bookId) {
@@ -255,6 +277,7 @@ internal fun ReaderRouteDestination(
                 onFlushAutoSyncExport = ::flushExport,
                 onForegroundAutoSyncImport = ::importOnForeground,
                 onPrepareSessionReloadChange = { sessionReloadBarrier.attach(it, autoSyncExportController::awaitSaves) },
+                onAudiobookPlayingQueryChange = remoteUpdateGate::setAudiobookPlaying,
                 onClose = onClose,
                 onOpenSentenceMode = onOpenSentenceMode,
                 modifier = modifier.fillMaxSize(),

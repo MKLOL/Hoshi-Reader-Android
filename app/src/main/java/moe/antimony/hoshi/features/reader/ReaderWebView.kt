@@ -130,6 +130,8 @@ fun ReaderWebView(
     /** True means this session is being replaced; its tracker must remain stopped. */
     onForegroundAutoSyncImport: () -> Boolean = { false },
     onPrepareSessionReloadChange: (((() -> Unit)?) -> Unit) = {},
+    /** Receives a query for whether this reader's audiobook is playing; `null` when it leaves. */
+    onAudiobookPlayingQueryChange: (((() -> Boolean)?) -> Unit) = {},
     onTextSelected: (ReaderSelectionData) -> Int? = { null },
     onClose: () -> Unit,
     /** Opens sentence mode for this book; `null` hides the menu entry. */
@@ -1350,6 +1352,11 @@ fun ReaderWebView(
             saveStatisticsWithoutBookmark()
             sessionRetired = true
         }
+    }
+    DisposableEffect(onAudiobookPlayingQueryChange) {
+        // Read at event time, so a remote reload can never slip in before a state update lands.
+        onAudiobookPlayingQueryChange { sasayakiPlayer?.isPlaying == true }
+        onDispose { onAudiobookPlayingQueryChange(null) }
     }
     DisposableEffect(onPrepareSessionReloadChange) {
         onPrepareSessionReloadChange { currentPrepareSessionReload.value() }

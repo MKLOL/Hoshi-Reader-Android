@@ -62,6 +62,67 @@ class ReaderAutoSyncExportControllerTest {
     }
 
     @Test
+    fun leavingDuringAReloadStillExportsTheRetiringReadersQueueOnlyAfterItsImport() = runBlocking {
+        val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        val routeJob = Job()
+        val routeScope = CoroutineScope(routeJob + Dispatchers.Unconfined)
+        val controller = ReaderAutoSyncExportController(appScope)
+        val events = mutableListOf<String>()
+        val finishRetiringSave = CompletableDeferred<Unit>()
+        // reloadReader(): hold, then the retiring reader saves its final state and queues it.
+        controller.holdExports()
+        controller.launchSave { finishRetiringSave.await(); events += "save" }
+        controller.scheduleExport(true) { events += "export" }
+        assertEquals(null, controller.flushExport(true))
+        // The reload's load starts, then the route is left while its spinner shows.
+        routeScope.launch {
+            controller.pauseExportsForImport()
+            kotlinx.coroutines.awaitCancellation()
+        }
+        routeJob.cancel()
+        val released = controller.releaseAbandonedReload(true) { events += "import" }
+        kotlinx.coroutines.yield()
+        assertEquals("the import reads the local base only after the retiring save", emptyList<String>(), events)
+        finishRetiringSave.complete(Unit)
+        withTimeout(1_000) { released!!.join() }
+        assertEquals(listOf("save", "import", "export"), events)
+        // The queue is drained: nothing is exported twice.
+        assertEquals(null, controller.flushExport(true))
+        appScope.cancel()
+    }
+
+    @Test
+    fun anAbandonedReloadWhoseImportFailsExportsNothing() = runBlocking {
+        val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        val controller = ReaderAutoSyncExportController(appScope)
+        var exports = 0
+        controller.holdExports()
+        controller.scheduleExport(true) { exports++ }
+        val released = controller.releaseAbandonedReload(true) { throw java.io.IOException("offline") }
+        withTimeout(1_000) { released!!.join() }
+        // Exporting without having read the external base could replace a newer one.
+        assertEquals(0, exports)
+        appScope.cancel()
+    }
+
+    @Test
+    fun leavingAShownReaderLeavesItsOwnFlushAloneAndImportsNothing() = runBlocking {
+        val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        val controller = ReaderAutoSyncExportController(appScope)
+        var exports = 0
+        var imports = 0
+        controller.pauseExportsForImport()
+        controller.resumeExports(true)
+        controller.scheduleExport(true) { exports++ }
+        // The shown reader's disposal flushes before the route's own disposal runs.
+        controller.flushExport(true)?.join()
+        assertEquals(null, controller.releaseAbandonedReload(true) { imports++ })
+        assertEquals(1, exports)
+        assertEquals(0, imports)
+        appScope.cancel()
+    }
+
+    @Test
     fun flushExportSurvivesCallerScopeCancellationAndWaitsForLatestSave() = runBlocking {
         val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
         val callerJob = Job()

@@ -18,6 +18,17 @@ import java.util.concurrent.atomic.AtomicReference
 internal class RemoteBookmarkUpdateGate {
     private val expectedSyncId = AtomicReference<String?>(null)
     private val open = AtomicBoolean(false)
+    private val audiobookPlaying = AtomicReference<(() -> Boolean)?>(null)
+
+    /**
+     * The shown reader's "is its audiobook playing" query, or null while none is shown. A reload
+     * releases the reader's player and stops the audio, so a remote winner does not reload the
+     * route while it plays: the playing audio drives this device's position, as it does when the
+     * app returns to the foreground (and on iOS, where an import never stops playback).
+     */
+    fun setAudiobookPlaying(query: (() -> Boolean)?) {
+        audiobookPlaying.set(query)
+    }
 
     fun expect(syncId: String?) {
         expectedSyncId.set(syncId)
@@ -32,5 +43,5 @@ internal class RemoteBookmarkUpdateGate {
     }
 
     fun shouldReload(changedSyncId: String): Boolean =
-        open.get() && changedSyncId == expectedSyncId.get()
+        open.get() && changedSyncId == expectedSyncId.get() && audiobookPlaying.get()?.invoke() != true
 }

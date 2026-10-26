@@ -41,6 +41,22 @@ class RemoteBookmarkUpdateGateTest {
     }
 
     @Test
+    fun aPlayingAudiobookKeepsTheReaderInsteadOfReloadingIt() {
+        val gate = RemoteBookmarkUpdateGate()
+        gate.expect("book-a")
+        gate.open()
+        var playing = true
+        gate.setAudiobookPlaying { playing }
+
+        assertFalse("a reload would release the player and stop the audio", gate.shouldReload("book-a"))
+        playing = false
+        assertTrue("once paused, a remote winner reloads as before", gate.shouldReload("book-a"))
+        playing = true
+        gate.setAudiobookPlaying(null)
+        assertTrue("a reader that left no longer holds reloads", gate.shouldReload("book-a"))
+    }
+
+    @Test
     fun aBookWithoutASyncIdNeverReloads() {
         val gate = RemoteBookmarkUpdateGate()
         gate.expect(null)

@@ -1,5 +1,6 @@
 package moe.antimony.hoshi.navigation
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -51,6 +52,34 @@ internal class ReaderAutoSyncExportController(
     fun resumeExports(enabled: Boolean) {
         importsInProgress = false
         pendingExport?.let { scheduleExport(enabled, it) }
+    }
+
+    /**
+     * For a route left while a reload still holds exports: [resumeExports] will never run, but
+     * the export the retiring reader queued must still go out. It runs only after [importFirst],
+     * the import that reload would have made, has read the external base, so the stale retiring
+     * state can never replace a newer base unread. If that import fails, nothing is exported.
+     * Returns null when no reload holds an export (a reader that was shown flushed its own).
+     */
+    fun releaseAbandonedReload(enabled: Boolean, importFirst: suspend () -> Unit): Job? {
+        if (!importsInProgress) return null
+        if (!enabled || pendingExport == null) {
+            importsInProgress = false
+            return null
+        }
+        return scope.launch {
+            exportJob?.join()
+            awaitSaves()
+            val imported = try {
+                importFirst()
+                true
+            } catch (error: Exception) {
+                if (error is CancellationException) throw error
+                false
+            }
+            importsInProgress = false
+            if (imported) runPendingExport()
+        }
     }
 
     fun scheduleExport(enabled: Boolean, export: suspend () -> Unit) {

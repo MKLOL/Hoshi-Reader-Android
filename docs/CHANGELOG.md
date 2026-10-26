@@ -24,6 +24,7 @@ Semantic Versioning.
 - **Keep imported reading history consistent across devices.** Importing the same ッツ history on several devices no longer counts it repeatedly, and importing while a reader is open no longer lets an older session overwrite the imported totals or position. Replacing cleared ッツ history also keeps it cleared after HTTP sync, and importing a finished book preserves 100% completion. Reading time synchronizes even when the bookmark has not moved or the book is still on its first page.
 - **Count reading time only while the reader is visible.** Finishing a slow book load after switching apps no longer starts a background reading session.
 - **Import usable audiobook subtitle cues even if a block is malformed.** A broken timestamp no longer stops the whole subtitle import.
+- **Keep audiobooks playing while your position syncs.** Returning to the app, or a newer position arriving from another device, no longer stops an audiobook that is playing.
 - **Keep word mining responsive with audiobook audio.** Preparing an audio clip for an Anki card now runs in the background instead of freezing the reader.
 - **Keep audiobook settings after quick changes.** Delayed saves no longer restore removed audio or older playback settings, including after reopening the same book.
 - **Preserve renamed manga titles during repair.** Rebuilding missing book information retains the title you chose.

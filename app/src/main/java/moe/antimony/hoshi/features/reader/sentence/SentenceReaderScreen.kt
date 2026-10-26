@@ -160,6 +160,18 @@ internal fun SentenceReaderScreen(
             if (remoteUpdateGate.shouldReload(changedId)) reloadReader()
         }
     }
+    // The entry of the content a reload retires; its queued export is for this entry.
+    var lastLoadedEntry by remember(bookId) { mutableStateOf<moe.antimony.hoshi.epub.BookEntry?>(null) }
+    suspend fun importOnOpen(entry: moe.antimony.hoshi.epub.BookEntry, sync: ReaderRouteAutoSyncState) {
+        appContainer.syncManager.syncBook(
+            entry = entry,
+            direction = null,
+            syncStats = readerSettings.statisticsSyncEnabled,
+            statsSyncMode = readerSettings.statisticsSyncMode,
+            syncAudioBook = sync.shouldSyncAudioBook,
+            importOnly = true,
+        )
+    }
     val loadState by produceState<SentenceReaderLoadState>(SentenceReaderLoadState.Loading, bookId, reloadKey) {
         val requestedKey = reloadKey
         remoteUpdateGate.close()
@@ -186,25 +198,33 @@ internal fun SentenceReaderScreen(
                         syncSettings ?: appContainer.syncSettingsRepository.settings.first(),
                         sasayakiSettings ?: appContainer.sasayakiSettingsRepository.settings.first(),
                     )
-                    if (initialSync.shouldSyncOnOpen) runCatching {
-                        appContainer.syncManager.syncBook(
-                            entry = entry,
-                            direction = null,
-                            syncStats = readerSettings.statisticsSyncEnabled,
-                            statsSyncMode = readerSettings.statisticsSyncMode,
-                            syncAudioBook = initialSync.shouldSyncAudioBook,
-                            importOnly = true,
-                        )
-                    }.onFailure { if (it is CancellationException) throw it }
+                    if (initialSync.shouldSyncOnOpen) runCatching { importOnOpen(entry, initialSync) }
+                        .onFailure { if (it is CancellationException) throw it }
                 },
             )
         }.getOrElse { error ->
             if (error is CancellationException) throw error
             SentenceReaderLoadState.Error(error.localizedMessage ?: error.javaClass.simpleName)
         }
+        (loaded as? SentenceReaderLoadState.Ready)?.let { lastLoadedEntry = it.readerState.entry }
         loadedKey = requestedKey
         value = loaded
         autoSyncExportController.resumeExports(autoSyncState.isReaderAutoSyncEnabled)
+    }
+    // Leaving during a reload's spinner cancels the load before it resumes exports. The export
+    // the retired content queued still goes out, after the import that reload never finished.
+    val releaseAbandonedReload by rememberUpdatedState<() -> Unit> {
+        // Only loaded content queues an export, so a held one always has its entry.
+        val entry = lastLoadedEntry ?: return@rememberUpdatedState
+        val sync = autoSyncState
+        autoSyncExportController.releaseAbandonedReload(sync.isReaderAutoSyncEnabled) {
+            sessionReloadBarrier.awaitWrites()
+            appContainer.bookRepository.awaitPendingStatisticsSaves(entry.root)
+            importOnOpen(entry, sync)
+        }
+    }
+    DisposableEffect(bookId, autoSyncExportController) {
+        onDispose { releaseAbandonedReload() }
     }
     var lastInactiveAtMillis by remember(bookId) { mutableStateOf<Long?>(null) }
     val lifecycleOwner = LocalLifecycleOwner.current
