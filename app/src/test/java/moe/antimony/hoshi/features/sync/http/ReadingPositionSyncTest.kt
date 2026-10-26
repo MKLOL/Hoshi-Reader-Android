@@ -359,4 +359,71 @@ class ReadingPositionSyncTest {
             scope.coroutineContext[kotlinx.coroutines.Job]?.cancel()
         }
     }
+    private suspend fun putShard(server: ContentAddressedKv, device: String, page: Int, time: Double, rev: Int = 1) {
+        val value = HttpSyncBookmarkBlob(page, 0.0, page + 1, appleSecondsToRfc3339(time), rev)
+        server.put("${BOOKMARKS_MAP_PREFIX}$device.json", "application/json",
+            json.encodeToString(mapOf("example" to HttpSyncBookmarkMapEntry("e$device$page", value.lastModified, value))).toByteArray())
+    }
+
+    /** A peer's history next to map entries, in the order one poll applies them. */
+    private suspend fun afterOnePoll(history: Pair<Int, Double>, shards: Map<String, Pair<Int, Double>>): Int {
+        val server = ContentAddressedKv()
+        val (phone, root) = fixture("phone")
+        val (tablet, t) = fixture("tablet")
+        move(tablet, t, history.first, history.second)
+        exchange(tablet, server)
+        val state = HttpSyncBatchState(phone)
+        state.publishMaps(server)
+        for ((device, entry) in shards) putShard(server, device, entry.first, entry.second)
+        state.syncMaps(server)
+        return phone.loadBookmark(root)!!.chapterIndex
+    }
+
+    @Test fun aPeersNewerHistoryBeatsTheOlderMapEntryItLeftBehind() = runBlocking {
+        // The tablet's shard still holds its previous position when its history has moved on.
+        assertEquals(130, afterOnePoll(130 to 300.0, mapOf("tablet" to (120 to 200.0))))
+    }
+
+    @Test fun aNewerMapEntryFromAnOlderBuildBeatsAnOlderHistory() = runBlocking {
+        assertEquals(140, afterOnePoll(130 to 300.0, mapOf("older" to (140 to 400.0))))
+    }
+
+    @Test fun aNewerHistoryBeatsAnOlderBuildsOlderMapEntry() = runBlocking {
+        assertEquals(130, afterOnePoll(130 to 300.0, mapOf("older" to (125 to 250.0))))
+    }
+
+    @Test fun historiesAreReadAfterTheMapsAndWithoutHoldingThem() = runBlocking {
+        val server = ContentAddressedKv()
+        val (phone, root) = fixture("phone")
+        val (tablet, t) = fixture("tablet")
+        move(tablet, t, 120, 200.0)
+        exchange(tablet, server)
+        val state = HttpSyncBatchState(phone)
+        state.publishMaps(server)
+        putShard(server, "older", 130, 300.0)
+        val reading = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val transport = object : HttpSyncKvTransport by server {
+            override suspend fun getBounded(key: String, maxBytes: Int): HttpSyncKvFetched? {
+                if (key.startsWith(READING_POSITION_PREFIX)) {
+                    reading.complete(Unit)
+                    release.await()
+                }
+                return server.getBounded(key, maxBytes)
+            }
+        }
+        var mapsApplied = false
+        val pass = async(kotlinx.coroutines.Dispatchers.Default) { state.syncMaps(transport) { mapsApplied = true } }
+        kotlinx.coroutines.withTimeout(5_000) { reading.await() }
+        // A history is still being read: the map position is already applied, and work that
+        // needs the maps (a downloaded cloud manga taking its position) does not wait for it.
+        assertTrue(mapsApplied)
+        assertEquals(130, phone.loadBookmark(root)!!.chapterIndex)
+        kotlinx.coroutines.withTimeout(5_000) { state.applyKnownBookmarks(listOf(root)) }
+        release.complete(Unit)
+        val changes = pass.await()
+        assertTrue(changes.positionErrors.isEmpty())
+        // The tablet's history is older than that map position.
+        assertEquals(130, phone.loadBookmark(root)!!.chapterIndex)
+    }
 }

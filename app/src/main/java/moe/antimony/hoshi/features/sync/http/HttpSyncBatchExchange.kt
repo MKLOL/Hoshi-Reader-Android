@@ -191,6 +191,8 @@ class HttpSyncBatchState(
     )
     private val statisticsMutex = Mutex()
     private val positionSync = ReadingPositionSync(bookRepository)
+    /** One history pass at a time; never held together with [syncMutex] (see [syncMaps]). */
+    private val positionMutex = Mutex()
     internal var positionSyncErrors: List<String> = emptyList()
         private set
     private val booksRoot: File get() = bookRepository.booksDirectory
@@ -244,180 +246,227 @@ class HttpSyncBatchState(
 
     internal fun hasPending(): Boolean = synchronized(stateLock) { loadPendingLocked().isNotEmpty() }
 
-    /** Poll and merge both maps without calling a custom backend endpoint. */
+    /**
+     * Poll and merge both maps without calling a custom backend endpoint, then exchange the
+     * position histories with the same listing.
+     *
+     * The history lane runs after the maps and outside [syncMutex], so it never delays the map
+     * positions every build reads, a statistics listing or the start of a full reconcile
+     * ([onMapsApplied] runs before it). Either order of the two lanes reaches the same winner:
+     * a map entry enters a history only when it is newer than the history's winner, and a peer's
+     * history head then wins or loses against it by the same timestamps.
+     */
     internal suspend fun syncMaps(
         transport: HttpSyncKvTransport,
         onProgress: suspend (HttpSyncProgress) -> Unit = {},
+        onMapsApplied: (HttpSyncMapChanges) -> Unit = {},
     ): HttpSyncMapChanges = withContext(ioDispatcher) {
         onProgress(HttpSyncProgress(messageResource = R.string.http_sync_checking_changes))
         val catalogueActive = cloudCatalogueActive()
-        syncMutex.withLock {
-            val before = synchronized(stateLock) { loadStateLocked() }
-            // The cached metadata index fetches only changed keys on routine checks. It also
-            // notices writes from per-book clients and changes to chats/settings/translations
-            // without fetching unchanged bodies.
-            val listing = listAllMetadata(transport)
-            val positionEntries = bookRepository.loadBookEntries()
-            val positions = try {
-                positionSync.exchange(transport, listing.keys, positionEntries)
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (error: Exception) {
-                // A local storage failure in the history lane: positions still travel through
-                // the bookmark maps below.
-                ReadingPositionExchange(emptySet(), emptySet(), listOf("positions: ${error.message ?: error.javaClass.simpleName}"))
+        var listed: List<HttpSyncKvKeyMeta>? = null
+        var entries: List<BookEntry>? = null
+        var mapMoved = emptySet<String>()
+        val maps = try {
+            syncMutex.withLock {
+                mapsLocked(transport, onProgress, catalogueActive,
+                    onListed = { listed = it }, onEntries = { entries = it }, onMoved = { mapMoved = it })
             }
-            positionSyncErrors = positions.errors
-            positions.moved.forEach { _remoteBookmarkUpdates.tryEmit(it) }
-            val booksMeta = listing.keys.firstOrNull { it.key == BOOKS_MAP_KEY }
-            val bookmarkMetas = listing.keys.filter {
-                it.key == BOOKMARKS_MAP_KEY || it.key.startsWith(BOOKMARKS_MAP_PREFIX)
-            }
-            val legacyKeyEtags = listing.keys
-                .filter { isReconcileKey(it.key) }
-                .associate { it.key to it.etag }.toMutableMap()
-            // Reading statistics have their own lane, decided per key against this listing, so a
-            // statistics write never waits for (or starts) a full reconcile.
-            suspend fun statisticsNeeded(entries: List<BookEntry>?): Boolean = try {
-                statisticsLane.needsRun(transport, listing.keys, entries).also { if (!it) statisticsLane.markChecked() }
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (error: Exception) {
-                statisticsLane.markFailed(error)
-                true
-            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            // The maps failed after the listing: histories are still exchanged with it.
+            listed?.let { exchangePositions(transport, it, entries) }
+            throw error
+        }
+        onMapsApplied(maps)
+        val positions = exchangePositions(transport, maps.listing, entries)
+        val uploaded = maps.uploadedBookmarkKeys + positions.published.map { bookmarkKey(it) }
+        maps.copy(
+            uploadedBookmarks = uploaded.size,
+            uploadedBookmarkKeys = uploaded,
+            downloadedBookmarks = (mapMoved + positions.moved).size,
+            positionErrors = positions.errors,
+        )
+    }
 
-            // Old accounts have per-book keys but no maps. Never publish local state over them:
-            // do the legacy bidirectional reconciliation once and then publishMaps().
-            if (booksMeta == null || bookmarkMetas.isEmpty()) {
-                return@withLock HttpSyncMapChanges(
-                    needsBootstrap = true,
-                    positionErrors = positions.errors,
-                    observedLegacyEtags = legacyKeyEtags,
-                    statisticsNeeded = statisticsNeeded(entries = null),
-                    listing = listing.keys,
-                )
-            }
+    /** The history lane of [syncMaps]; a local storage failure in it is reported, not thrown. */
+    private suspend fun exchangePositions(
+        transport: HttpSyncKvTransport,
+        listing: List<HttpSyncKvKeyMeta>,
+        entries: List<BookEntry>?,
+    ): ReadingPositionExchange = positionMutex.withLock {
+        val positions = try {
+            positionSync.exchange(transport, listing, entries ?: bookRepository.loadBookEntries())
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            ReadingPositionExchange(emptySet(), emptySet(), listOf("positions: ${error.message ?: error.javaClass.simpleName}"))
+        }
+        positionSyncErrors = positions.errors
+        positions.moved.forEach { _remoteBookmarkUpdates.tryEmit(it) }
+        positions
+    }
 
-            val remoteBooks = if (!before.initialized || before.booksEtag != booksMeta.etag) {
-                decodeBooksMap(transport.get(BOOKS_MAP_KEY))
-            } else {
-                before.books
-            }
-            val shardBodies = linkedMapOf<String, Map<String, HttpSyncBookmarkMapEntry>>()
-            val ownShardKey = bookmarkMapKey(loadDeviceIdLocked())
-            val acknowledgedShards = before.bookmarkEtags.filterKeys { key -> bookmarkMetas.any { it.key == key } }.toMutableMap()
-            for (meta in bookmarkMetas) {
-                shardBodies[meta.key] = if (!before.initialized || before.bookmarkEtags[meta.key] != meta.etag) {
-                    // A failed request aborts this poll, so the shard is fetched again. Only
-                    // another device's unreadable or just-deleted shard is passed over (until it
-                    // changes), so it cannot stop every other device's positions from applying.
-                    val fetched = transport.get(meta.key)
-                    try {
-                        // This installation's own shard deleted on the server: its owned
-                        // positions are merged below and published again.
-                        val decoded = if (fetched == null && meta.key == ownShardKey) emptyMap() else decodeBookmarksMap(fetched)
-                        acknowledgedShards[meta.key] = fetched?.etag ?: meta.etag
-                        decoded
-                    } catch (error: HttpSyncException) {
-                        if (meta.key == ownShardKey) throw error
-                        acknowledgedShards[meta.key] = meta.etag
-                        before.bookmarkShards[meta.key].orEmpty()
-                    }
-                } else {
-                    before.bookmarkShards[meta.key].orEmpty()
-                }
-            }
-            val remoteBookmarks = mergeShards(shardBodies.values)
-            val legacyFingerprint = legacyKeyEtags.toMap()
-            // Older builds acknowledged statistics and per-book bookmark keys too; they are not
-            // part of the comparison any more.
-            val legacyChangedBeforeWrites = before.initialized &&
-                before.legacyEtags.filterKeys(::isReconcileKey) != legacyFingerprint
+    private suspend fun mapsLocked(
+        transport: HttpSyncKvTransport,
+        onProgress: suspend (HttpSyncProgress) -> Unit,
+        catalogueActive: Boolean,
+        onListed: (List<HttpSyncKvKeyMeta>) -> Unit,
+        onEntries: (List<BookEntry>) -> Unit,
+        onMoved: (Set<String>) -> Unit,
+    ): HttpSyncMapChanges {
+        val before = synchronized(stateLock) { loadStateLocked() }
+        // The cached metadata index fetches only changed keys on routine checks. It also
+        // notices writes from per-book clients and changes to chats/settings/translations
+        // without fetching unchanged bodies.
+        val listing = listAllMetadata(transport)
+        onListed(listing.keys)
+        val booksMeta = listing.keys.firstOrNull { it.key == BOOKS_MAP_KEY }
+        val bookmarkMetas = listing.keys.filter {
+            it.key == BOOKMARKS_MAP_KEY || it.key.startsWith(BOOKMARKS_MAP_PREFIX)
+        }
+        val legacyKeyEtags = listing.keys
+            .filter { isReconcileKey(it.key) }
+            .associate { it.key to it.etag }.toMutableMap()
+        // Reading statistics have their own lane, decided per key against this listing, so a
+        // statistics write never waits for (or starts) a full reconcile.
+        suspend fun statisticsNeeded(entries: List<BookEntry>?): Boolean = try {
+            statisticsLane.needsRun(transport, listing.keys, entries).also { if (!it) statisticsLane.markChecked() }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            statisticsLane.markFailed(error)
+            true
+        }
 
-            val pendingSnapshot = synchronized(stateLock) { loadPendingLocked() }
-            onProgress(HttpSyncProgress(messageResource = R.string.http_sync_reading_local))
-            val localEntries = positionEntries
-            val localBookmarks = readLocalBookmarks(localEntries)
-            onProgress(HttpSyncProgress(messageResource = R.string.http_sync_updating_positions))
-            val downloaded = applyRemoteWinners(remoteBookmarks, localBookmarks, localEntries) + positions.moved.size
-
-            val deviceKey = bookmarkMapKey(loadDeviceIdLocked())
-            val ownRemote = shardBodies[deviceKey].orEmpty()
-            var owned = mergeBookmarkMaps(ownRemote, before.ownedBookmarks).toMutableMap()
-            // Recover edits made before the map hooks existed (or just before a crash). Equal
-            // remote values are not copied into this device's shard; only genuinely newer local
-            // events become this device's responsibility.
-            for ((syncId, local) in localBookmarks) {
-                val remote = remoteBookmarks[syncId]
-                if ((remote == null || compareBookmarkEntries(local, remote) > 0) &&
-                    (owned[syncId] == null || compareBookmarkEntries(local, owned.getValue(syncId)) > 0)
-                ) owned[syncId] = local
-            }
-            var uploadedKeys = positions.published.mapTo(mutableSetOf()) { bookmarkKey(it) }.toSet()
-            var ownEtag = bookmarkMetas.firstOrNull { it.key == deviceKey }?.etag
-            if (owned != ownRemote) {
-                val body = json.encodeToString(
-                    bookmarkMapSerializer,
-                    owned.toSortedMap(),
-                ).toByteArray(Charsets.UTF_8)
-                ownEtag = transport.put(deviceKey, JSON_CONTENT_TYPE, body).etag
-                uploadedKeys = uploadedKeys + pendingSnapshot.map { it.key }
-                shardBodies[deviceKey] = owned
-            }
-            // Remove only mutations captured by this pass. A page turn queued while the PUT was
-            // in flight remains durable for the next five-second pass.
-            val completed = pendingSnapshot.associate { it.key to it.mutationId }
-            synchronized(stateLock) {
-                val pending = loadPendingLocked()
-                savePendingLocked(pending.filterNot { completed[it.key] == it.mutationId }, pending)
-                val latest = loadStateLocked()
-                saveStateLocked(
-                    CachedMapState(
-                        booksEtag = booksMeta.etag,
-                        books = remoteBooks,
-                        bookmarkEtags = acknowledgedShards.apply {
-                            if (ownEtag != null) this[deviceKey] = ownEtag
-                        },
-                        bookmarkShards = shardBodies,
-                        ownedBookmarks = mergeBookmarkMaps(owned, latest.ownedBookmarks),
-                        // Do not acknowledge a changed legacy snapshot until the full reconcile
-                        // succeeds; a crash between preflight and reconcile must retry it.
-                        legacyEtags = if (legacyChangedBeforeWrites) {
-                            before.legacyEtags
-                        } else {
-                            legacyKeyEtags
-                        },
-                        initialized = before.initialized,
-                    ),
-                    previous = latest,
-                )
-            }
-
-            val localBookIds = localEntries.mapNotNull { syncIdForMetadata(it.metadata) }.toSet()
-            val cachedLocalHashes = readCachedLocalBookHashes(localEntries)
-            // A cloud manga still in the map counts as present; its archive changing is noticed
-            // by the next full sync, which reads its manifest.
-            val knownBookIds = localBookIds + cloudBookHashes(localBookIds, remoteBooks, catalogueActive).keys
-            val localBookMismatch = knownBookIds != remoteBooks.keys ||
-                (localBookIds - cachedLocalHashes.keys).any { !HttpSyncActiveBooks.contains(it) } ||
-                hasDirtyLocalPayload(localEntries) ||
-                cachedLocalHashes.any { (id, sha) ->
-                    !HttpSyncActiveBooks.contains(id) && remoteBooks[id] != sha
-                }
-            HttpSyncMapChanges(
-                needsBootstrap = !before.initialized,
-                booksChanged = localBookMismatch,
-                otherChanged = legacyChangedBeforeWrites,
-                uploadedBookmarks = uploadedKeys.size,
-                downloadedBookmarks = downloaded,
+        // Old accounts have per-book keys but no maps. Never publish local state over them:
+        // do the legacy bidirectional reconciliation once and then publishMaps().
+        if (booksMeta == null || bookmarkMetas.isEmpty()) {
+            return HttpSyncMapChanges(
+                needsBootstrap = true,
                 observedLegacyEtags = legacyKeyEtags,
-                statisticsNeeded = statisticsNeeded(localEntries),
+                statisticsNeeded = statisticsNeeded(entries = null),
                 listing = listing.keys,
-                uploadedBookmarkKeys = uploadedKeys,
-                positionErrors = positions.errors,
             )
         }
+
+        val remoteBooks = if (!before.initialized || before.booksEtag != booksMeta.etag) {
+            decodeBooksMap(transport.get(BOOKS_MAP_KEY))
+        } else {
+            before.books
+        }
+        val shardBodies = linkedMapOf<String, Map<String, HttpSyncBookmarkMapEntry>>()
+        val ownShardKey = bookmarkMapKey(loadDeviceIdLocked())
+        val acknowledgedShards = before.bookmarkEtags.filterKeys { key -> bookmarkMetas.any { it.key == key } }.toMutableMap()
+        for (meta in bookmarkMetas) {
+            shardBodies[meta.key] = if (!before.initialized || before.bookmarkEtags[meta.key] != meta.etag) {
+                // A failed request aborts this poll, so the shard is fetched again. Only
+                // another device's unreadable or just-deleted shard is passed over (until it
+                // changes), so it cannot stop every other device's positions from applying.
+                val fetched = transport.get(meta.key)
+                try {
+                    // This installation's own shard deleted on the server: its owned
+                    // positions are merged below and published again.
+                    val decoded = if (fetched == null && meta.key == ownShardKey) emptyMap() else decodeBookmarksMap(fetched)
+                    acknowledgedShards[meta.key] = fetched?.etag ?: meta.etag
+                    decoded
+                } catch (error: HttpSyncException) {
+                    if (meta.key == ownShardKey) throw error
+                    acknowledgedShards[meta.key] = meta.etag
+                    before.bookmarkShards[meta.key].orEmpty()
+                }
+            } else {
+                before.bookmarkShards[meta.key].orEmpty()
+            }
+        }
+        val remoteBookmarks = mergeShards(shardBodies.values)
+        val legacyFingerprint = legacyKeyEtags.toMap()
+        // Older builds acknowledged statistics and per-book bookmark keys too; they are not
+        // part of the comparison any more.
+        val legacyChangedBeforeWrites = before.initialized &&
+            before.legacyEtags.filterKeys(::isReconcileKey) != legacyFingerprint
+
+        val pendingSnapshot = synchronized(stateLock) { loadPendingLocked() }
+        onProgress(HttpSyncProgress(messageResource = R.string.http_sync_reading_local))
+        val localEntries = bookRepository.loadBookEntries().also(onEntries)
+        val localBookmarks = readLocalBookmarks(localEntries)
+        onProgress(HttpSyncProgress(messageResource = R.string.http_sync_updating_positions))
+        val downloaded = applyRemoteWinners(remoteBookmarks, localBookmarks, localEntries).also(onMoved)
+
+        val deviceKey = bookmarkMapKey(loadDeviceIdLocked())
+        val ownRemote = shardBodies[deviceKey].orEmpty()
+        var owned = mergeBookmarkMaps(ownRemote, before.ownedBookmarks).toMutableMap()
+        // Recover edits made before the map hooks existed (or just before a crash). Equal
+        // remote values are not copied into this device's shard; only genuinely newer local
+        // events become this device's responsibility.
+        for ((syncId, local) in localBookmarks) {
+            val remote = remoteBookmarks[syncId]
+            if ((remote == null || compareBookmarkEntries(local, remote) > 0) &&
+                (owned[syncId] == null || compareBookmarkEntries(local, owned.getValue(syncId)) > 0)
+            ) owned[syncId] = local
+        }
+        var uploadedKeys = emptySet<String>()
+        var ownEtag = bookmarkMetas.firstOrNull { it.key == deviceKey }?.etag
+        if (owned != ownRemote) {
+            val body = json.encodeToString(
+                bookmarkMapSerializer,
+                owned.toSortedMap(),
+            ).toByteArray(Charsets.UTF_8)
+            ownEtag = transport.put(deviceKey, JSON_CONTENT_TYPE, body).etag
+            uploadedKeys = uploadedKeys + pendingSnapshot.map { it.key }
+            shardBodies[deviceKey] = owned
+        }
+        // Remove only mutations captured by this pass. A page turn queued while the PUT was
+        // in flight remains durable for the next five-second pass.
+        val completed = pendingSnapshot.associate { it.key to it.mutationId }
+        synchronized(stateLock) {
+            val pending = loadPendingLocked()
+            savePendingLocked(pending.filterNot { completed[it.key] == it.mutationId }, pending)
+            val latest = loadStateLocked()
+            saveStateLocked(
+                CachedMapState(
+                    booksEtag = booksMeta.etag,
+                    books = remoteBooks,
+                    bookmarkEtags = acknowledgedShards.apply {
+                        if (ownEtag != null) this[deviceKey] = ownEtag
+                    },
+                    bookmarkShards = shardBodies,
+                    ownedBookmarks = mergeBookmarkMaps(owned, latest.ownedBookmarks),
+                    // Do not acknowledge a changed legacy snapshot until the full reconcile
+                    // succeeds; a crash between preflight and reconcile must retry it.
+                    legacyEtags = if (legacyChangedBeforeWrites) {
+                        before.legacyEtags
+                    } else {
+                        legacyKeyEtags
+                    },
+                    initialized = before.initialized,
+                ),
+                previous = latest,
+            )
+        }
+
+        val localBookIds = localEntries.mapNotNull { syncIdForMetadata(it.metadata) }.toSet()
+        val cachedLocalHashes = readCachedLocalBookHashes(localEntries)
+        // A cloud manga still in the map counts as present; its archive changing is noticed
+        // by the next full sync, which reads its manifest.
+        val knownBookIds = localBookIds + cloudBookHashes(localBookIds, remoteBooks, catalogueActive).keys
+        val localBookMismatch = knownBookIds != remoteBooks.keys ||
+            (localBookIds - cachedLocalHashes.keys).any { !HttpSyncActiveBooks.contains(it) } ||
+            hasDirtyLocalPayload(localEntries) ||
+            cachedLocalHashes.any { (id, sha) ->
+                !HttpSyncActiveBooks.contains(id) && remoteBooks[id] != sha
+            }
+        return HttpSyncMapChanges(
+            needsBootstrap = !before.initialized,
+            booksChanged = localBookMismatch,
+            otherChanged = legacyChangedBeforeWrites,
+            uploadedBookmarks = uploadedKeys.size,
+            downloadedBookmarks = downloaded.size,
+            observedLegacyEtags = legacyKeyEtags,
+            statisticsNeeded = statisticsNeeded(localEntries),
+            listing = listing.keys,
+            uploadedBookmarkKeys = uploadedKeys,
+        )
     }
 
     /**
@@ -510,7 +559,7 @@ class HttpSyncBatchState(
                 mergeShards(before.bookmarkShards.values),
                 readLocalBookmarks(localEntries),
                 localEntries,
-            )
+            ).size
             val localBookmarks = readLocalBookmarks(localEntries)
             val owned = mergeBookmarkMaps(before.ownedBookmarks, localBookmarks)
             // A successful full reconcile has materialized a SHA sidecar for every live payload.
@@ -573,7 +622,7 @@ class HttpSyncBatchState(
             val state = synchronized(stateLock) { loadStateLocked() }
             val wanted = roots.mapTo(mutableSetOf()) { it.canonicalPath }
             val entries = bookRepository.loadBookEntries().filter { it.root.canonicalPath in wanted }
-            applyRemoteWinners(mergeShards(state.bookmarkShards.values), readLocalBookmarks(entries), entries)
+            applyRemoteWinners(mergeShards(state.bookmarkShards.values), readLocalBookmarks(entries), entries).size
         }
     }
 
@@ -590,11 +639,11 @@ class HttpSyncBatchState(
         remote: Map<String, HttpSyncBookmarkMapEntry>,
         local: Map<String, HttpSyncBookmarkMapEntry>,
         localEntries: List<BookEntry>,
-    ): Int {
+    ): Set<String> {
         val roots = localEntries.mapNotNull { entry ->
             syncIdForMetadata(entry.metadata)?.let { it to entry.root }
         }.toMap()
-        var applied = 0
+        val applied = mutableSetOf<String>()
         for ((syncId, remoteEntry) in remote) {
             val localEntry = local[syncId]
             if (localEntry != null && compareBookmarkEntries(remoteEntry, localEntry) <= 0) continue
@@ -646,7 +695,7 @@ class HttpSyncBatchState(
                     current.progress != blob.progress || current.characterCount != blob.characterCount
                 if (moved) {
                     _remoteBookmarkUpdates.tryEmit(syncId)
-                    applied += 1
+                    applied += syncId
                 }
             }
         }
@@ -910,8 +959,7 @@ class HttpSyncBookmarkScheduler(
 ) {
     private val jobLock = Any()
     private var pollingJob: Job? = null
-    private var mapFlight: Deferred<Unit>? = null
-    private var mapFlightGeneration: String? = null
+    private var mapFlight: Deferred<MapPass>? = null
     private var backgroundFullJob: Job? = null
     private var statisticsFlight: Job? = null
     private var fullRetryDeferredForReader = false
@@ -933,6 +981,10 @@ class HttpSyncBookmarkScheduler(
     }
 
     suspend fun onBookmarkChanged(bookRoot: File, title: String?, persistedSyncId: String? = null) {
+        // Without a server nothing is queued or sent. Once sync is set up, its first map pass
+        // publishes every local position newer than the server's, and each history's unsent
+        // events; nothing waits in this queue for that.
+        if (!mayBeConfigured()) return
         state.queueBookmark(bookRoot, title, persistedSyncId)
         start()
         // While the app is visible the five-second poll sends every queued page turn in one pass.
@@ -951,6 +1003,15 @@ class HttpSyncBookmarkScheduler(
             runMaps(allowFullReconcile = false)
             if (pendingGeneration().getOrNull() != null) runMaps(allowFullReconcile = false)
         }
+    }
+
+    /** An unreadable setting is treated as set up: queueing a page turn is never lost work. */
+    private suspend fun mayBeConfigured(): Boolean = try {
+        currentSettings()?.isConfigured == true
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (_: Exception) {
+        true
     }
 
     /** What is queued for this installation's keys; a failure to read it must not end the app. */
@@ -1006,29 +1067,29 @@ class HttpSyncBookmarkScheduler(
 
     fun flushNow() = refreshNow()
 
+    /** One map pass: whether sync was set up, and the queue it started from. */
+    private class MapPass(val configured: Boolean, val generation: String?)
+
     private suspend fun runMaps(allowFullReconcile: Boolean = true) {
         repeat(8) {
-            val requestedGeneration = pendingGeneration().getOrNull()
-            val (flight, generation) = synchronized(jobLock) {
-                val running = mapFlight?.takeIf { it.isActive }
-                if (running != null) running to mapFlightGeneration else {
-                    val created = scope.async { runMapsOnce(allowFullReconcile) }
+            val flight = synchronized(jobLock) {
+                mapFlight?.takeIf { it.isActive } ?: scope.async { runMapsOnce(allowFullReconcile) }.also { created ->
                     mapFlight = created
-                    mapFlightGeneration = requestedGeneration
                     created.invokeOnCompletion {
                         synchronized(jobLock) {
                             if (mapFlight === created) mapFlight = null
                         }
                     }
-                    created to requestedGeneration
                 }
             }
-            flight.await()
+            val pass = flight.await()
+            // Sync is off: no queue is read and no pass follows until it is set up again.
+            if (!pass.configured) return
             // An unreadable queue waits for the next poll like a failed generation.
             val pending = pendingGeneration().getOrElse { return }
             // A failed generation waits for the normal retry; a NEW generation queued after
             // this flight's snapshot gets another pass now, including on foreground close.
-            if (pending == null || pending == generation) return
+            if (pending == null || pending == pass.generation) return
         }
     }
 
@@ -1076,30 +1137,41 @@ class HttpSyncBookmarkScheduler(
         }
     }
 
-    private suspend fun runMapsOnce(allowFullReconcile: Boolean = true) {
-        val settings = currentSettings() ?: return
-        if (!settings.isConfigured) return
+    private suspend fun runMapsOnce(allowFullReconcile: Boolean = true): MapPass {
+        val settings = try {
+            currentSettings()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            null
+        }
+        if (settings == null || !settings.isConfigured) return MapPass(configured = false, generation = null)
+        // Taken before the pass reads the queue: anything queued later gets another pass.
+        val generation = pendingGeneration().getOrNull()
         val client = HttpSyncWriteTrackingTransport(transportFactory(settings))
-        val changes = try {
-            state.syncMaps(client)
+        try {
+            state.syncMaps(client) { changes ->
+                // Started before the history lane, so statistics and book transfers never wait for it.
+                if (changes.statisticsNeeded) launchStatistics(client, changes.listing)
+                if (allowFullReconcile) {
+                    if (changes.needsBootstrap || changes.booksChanged || changes.otherChanged) {
+                        scheduleFullReconcile(changes, changes.reconcileSettings(settings), client)
+                    } else {
+                        synchronized(jobLock) {
+                            fullRetryDeferredForReader = false
+                            fullRetryAfterMillis = 0L
+                        }
+                    }
+                }
+            }
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (_: Exception) {
             // The bookmark maps could not be read. Reading statistics do not depend on them, so
             // they still get their own pass (it lists the server again and reports a failure).
             launchStatistics(client, listing = null)
-            return
         }
-        if (changes.statisticsNeeded) launchStatistics(client, changes.listing)
-        if (!allowFullReconcile) return
-        if (changes.needsBootstrap || changes.booksChanged || changes.otherChanged) {
-            scheduleFullReconcile(changes, changes.reconcileSettings(settings), client)
-        } else {
-            synchronized(jobLock) {
-                fullRetryDeferredForReader = false
-                fullRetryAfterMillis = 0L
-            }
-        }
+        return MapPass(configured = true, generation = generation)
     }
 
     /** One statistics pass at a time, never queued behind book transfers or their retry pause. */

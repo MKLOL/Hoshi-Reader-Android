@@ -12,6 +12,7 @@ import moe.antimony.hoshi.features.sync.http.deriveSyncId
 import moe.antimony.hoshi.features.sync.http.syncIdForMetadata
 import moe.antimony.hoshi.storage.writeSidecarAtomically
 import java.io.File
+import java.lang.ref.WeakReference
 import java.security.MessageDigest
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
@@ -121,7 +122,10 @@ data class ReadingPositionState(
     }
 }
 
-/** Frozen observed context: an old reader cannot claim it saw a later remote bookmark. */
+/**
+ * Frozen observed context: an old reader cannot claim it saw a later remote bookmark, except
+ * one at exactly the position it shows ([adoptSamePlace]), which reopening would show too.
+ */
 class ReadingPositionSession internal constructor(
     val initialBookmark: Bookmark?,
     private val device: DeviceIdentity,
@@ -134,7 +138,7 @@ class ReadingPositionSession internal constructor(
     private var parent = initialState.winner()?.id
     private var stamp = initialBookmark?.lastModified ?: 0.0
     private var seen = initialState.frontier().toMutableMap()
-    private val bookId = initialState.bookId
+    internal val bookId = initialState.bookId
 
     @Synchronized
     fun navigate(bookmark: Bookmark, action: String = "pageTurn"): ReadingPositionEvent? {
@@ -153,6 +157,24 @@ class ReadingPositionSession internal constructor(
         stamp = nextStamp
         seen[originId] = number
         return event
+    }
+
+    /**
+     * A newer winner from elsewhere landed exactly where this reader is (an older build
+     * re-saving the page it shows, another device stopping on it). Nothing moves on screen, so
+     * the reader is not reloaded; it continues from that winner as a reopened reader would:
+     * later moves observe it and are stamped after it, whatever this device's clock says.
+     */
+    @Synchronized
+    internal fun adoptSamePlace(state: ReadingPositionState) {
+        val winner = state.winner() ?: return
+        if (winner.originId == originId || (seen[winner.originId] ?: 0) >= winner.sequence) return
+        if (!winner.position.samePlace(previous)) return
+        // Superseded synthetic heads are never exported; a long session must not collect them.
+        seen.keys.removeAll { it.startsWith("legacy-") && it !in state.heads }
+        seen[winner.originId] = winner.sequence
+        parent = winner.id
+        stamp = maxOf(stamp, winner.compatibilityAt)
     }
 }
 
@@ -177,6 +199,8 @@ class ReadingPositionRepository(
     private val scanLock = Mutex()
     @Volatile private var scanned = false
     private val syncIndexFile = directory.resolve("sync-index.json")
+    /** Readers' sessions, by book; dropped once a reader lets go of its session. */
+    private val sessions = ConcurrentHashMap<String, MutableList<WeakReference<ReadingPositionSession>>>()
     private val syncIndexLock = Mutex()
     private var syncIndexGeneration = 0L
 
@@ -219,8 +243,24 @@ class ReadingPositionRepository(
             if (winner != null) persist(state, root)
             sequence.updateAndGet { maxOf(it, state.heads[origin]?.sequence ?: 0) }
             ReadingPositionSession(winner?.bookmark() ?: storage.loadBookmark(root),
-                device, origin, sequence, state)
+                device, origin, sequence, state).also { session ->
+                val open = sessions.getOrPut(id) { mutableListOf() }
+                synchronized(open) {
+                    open.removeAll { it.get() == null }
+                    open += WeakReference(session)
+                }
+            }
         }
+    }
+
+    /** Called with the per-book lock held, after every write of [state]. */
+    private fun adoptIntoOpenSessions(state: ReadingPositionState) {
+        val open = sessions[state.bookId] ?: return
+        val live = synchronized(open) {
+            open.removeAll { it.get() == null }
+            open.mapNotNull { it.get() }
+        }
+        for (session in live) session.adoptSamePlace(state)
     }
 
     suspend fun record(root: File, event: ReadingPositionEvent) = withContext(Dispatchers.IO + NonCancellable) {
@@ -398,6 +438,7 @@ class ReadingPositionRepository(
             val bookmark = winner.bookmark()
             if (storage.loadBookmark(root) != bookmark) storage.saveBookmark(root, bookmark)
         }
+        adoptIntoOpenSessions(state)
     }
 
     private fun fileFor(id: String) = directory.resolve("book-${digest(id)}.json")

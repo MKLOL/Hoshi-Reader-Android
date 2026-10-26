@@ -162,4 +162,96 @@ class HttpSyncBookmarkSchedulerTest {
             while (!server.body(shard).toString(Charsets.UTF_8).contains("\"chapterIndex\":3")) kotlinx.coroutines.delay(20)
         }
     }
+    private fun emptyResult() = HttpSyncResult(
+        uploadedBookmarks = 0, uploadedChatEntries = 0, uploadedMetadata = 0,
+        downloadedBookmarks = 0, downloadedChatEntries = 0, remoteOnlyBooks = 0, errors = emptyList(),
+    )
+
+    private suspend fun BookRepository.installedBook(): java.io.File {
+        val root = createBookDirectory("book")
+        saveMetadata(root, moe.antimony.hoshi.epub.BookMetadata(
+            id = "book", title = "Book", cover = null, folder = "book", lastAccess = 0.0, syncId = "book",
+        ))
+        return root
+    }
+
+    @Test
+    fun nothingIsQueuedOrSentWhileSyncIsOffAndTheFirstPassAfterSetupSendsIt() = runBlocking<Unit> {
+        val repository = BookRepository(temporaryFolder.newFolder())
+        val root = repository.installedBook()
+        val installation = "22222222-2222-2222-2222-222222222222"
+        val state = HttpSyncBatchState(repository, installationId = installation)
+        val server = ContentAddressedKv()
+        state.publishMaps(server)
+        server.resetCounts()
+        val listsBefore = server.lists
+        val settings = java.util.concurrent.atomic.AtomicReference(HttpSyncSettings(baseUrl = "https://example.invalid", bearerToken = ""))
+        val transports = java.util.concurrent.atomic.AtomicInteger()
+        val scheduler = HttpSyncBookmarkScheduler(
+            state = state,
+            currentSettings = { settings.get() },
+            syncBooksNow = { _, _, _ -> emptyResult() },
+            fullCycleRunner = HttpSyncFullCycleRunner(scope),
+            scope = scope,
+            transportFactory = { transports.incrementAndGet(); server },
+        )
+
+        // Reading with sync off: the position is kept on this device only.
+        scheduler.start()
+        val session = repository.openReadingPosition(root)
+        repository.recordReadingPosition(root, session.navigate(moe.antimony.hoshi.epub.Bookmark(3, 0.3, 30, 800_000_000.0))!!)
+        scheduler.onBookmarkChanged(root, "Book", "book")
+        assertTrue(scheduler.refreshBeforeOpen(timeoutMillis = 5_000))
+        kotlinx.coroutines.delay(200)
+        assertFalse("nothing is queued while sync is off", state.hasPending())
+        assertEquals("no request is made or prepared", 0, transports.get())
+        assertEquals(listsBefore, server.lists)
+
+        // Setting sync up again: the next pass sends the map position and the history.
+        settings.set(settings.get().copy(bearerToken = "token"))
+        val shard = "sync/maps/bookmarks/$installation.json"
+        withTimeout(10_000) {
+            // A poll that read the old setting may still be finishing; the next pass is set up.
+            while (shard !in server.keys() || !server.body(shard).toString(Charsets.UTF_8).contains("\"chapterIndex\":3") ||
+                repository.readingPositions.snapshot(root).pending.isNotEmpty()) {
+                scheduler.refreshBeforeOpen(timeoutMillis = 10_000)
+            }
+        }
+        assertTrue(server.keys().any { it.startsWith(READING_POSITION_PREFIX) })
+    }
+
+    @Test
+    fun bookTransfersStartWithoutWaitingForPositionHistories() = runBlocking<Unit> {
+        val tablet = BookRepository(temporaryFolder.newFolder(), deviceIdentity = moe.antimony.hoshi.epub.DeviceIdentity("tablet", "Tablet"))
+        val tabletRoot = tablet.installedBook()
+        val server = ContentAddressedKv()
+        tablet.recordReadingPosition(tabletRoot, tablet.openReadingPosition(tabletRoot)
+            .navigate(moe.antimony.hoshi.epub.Bookmark(3, 0.3, 30, 800_000_000.0))!!)
+        ReadingPositionSync(tablet).exchange(server, server.listing(), tablet.loadBookEntries())
+
+        val phone = BookRepository(temporaryFolder.newFolder())
+        phone.installedBook()
+        val release = CompletableDeferred<Unit>()
+        val stalling = object : HttpSyncKvTransport by server {
+            override suspend fun getBounded(key: String, maxBytes: Int): HttpSyncKvFetched? {
+                if (key.startsWith(READING_POSITION_PREFIX)) release.await()
+                return server.getBounded(key, maxBytes)
+            }
+        }
+        val transfers = CompletableDeferred<Unit>()
+        val scheduler = HttpSyncBookmarkScheduler(
+            state = HttpSyncBatchState(phone),
+            currentSettings = { configured },
+            syncBooksNow = { _, _, _ -> transfers.complete(Unit); emptyResult() },
+            fullCycleRunner = HttpSyncFullCycleRunner(scope),
+            scope = scope,
+            transportFactory = { stalling },
+        )
+
+        // A new install: the full reconcile starts while the tablet's history is still being read.
+        scheduler.refreshNow()
+        withTimeout(5_000) { transfers.await() }
+        release.complete(Unit)
+        assertTrue(scheduler.refreshBeforeOpen(timeoutMillis = 10_000))
+    }
 }

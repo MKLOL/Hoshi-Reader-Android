@@ -222,4 +222,56 @@ class ReadingPositionRepositoryTest {
         assertEquals(setOf("chapterIndex", "progress", "characterCount", "lastModified"), objectValue.keys)
         assertEquals(bookmark(120, 200.0), repository.loadBookmark(root))
     }
+    @Test fun aSamePageResaveFromAClockAheadDoesNotSwallowTheNextPageTurns() = runBlocking {
+        val (repository, root) = fixture("phone")
+        val session = repository.openReadingPosition(root)
+        repository.recordReadingPosition(root, session.navigate(bookmark(120, 200.0))!!)
+        // An older build whose clock runs ahead re-saves the page this reader is showing.
+        repository.saveBookmark(root, bookmark(120, 500.0))
+        // This device's clock is behind that stamp, yet the reader moved on from the page.
+        repository.recordReadingPosition(root, session.navigate(bookmark(121, 300.0))!!)
+        repository.recordReadingPosition(root, session.navigate(bookmark(122, 310.0))!!)
+        val saved = repository.loadBookmark(root)!!
+        assertEquals(122, saved.chapterIndex)
+        // The stamp older clients order by comes after the re-save, so they take the move too.
+        assertTrue(saved.lastModified!! > 500.0)
+        assertEquals(310.0, repository.readingPositions.snapshot(root).winner()!!.occurredAt, 0.0)
+    }
+
+    @Test fun anotherDeviceStoppingOnTheShownPageIsContinuedFromToo() = runBlocking {
+        val (phone, phoneRoot) = fixture("phone")
+        val (tablet, tabletRoot) = fixture("tablet")
+        val session = phone.openReadingPosition(phoneRoot)
+        phone.recordReadingPosition(phoneRoot, session.navigate(bookmark(120, 200.0))!!)
+        // The tablet, its clock ahead, reads on and comes back to the page the phone shows.
+        val tabletSession = tablet.openReadingPosition(tabletRoot)
+        tablet.recordReadingPosition(tabletRoot, tabletSession.navigate(bookmark(125, 400.0))!!)
+        tablet.recordReadingPosition(tabletRoot, tabletSession.navigate(bookmark(120, 500.0))!!)
+        phone.readingPositions.merge(tablet.readingPositions.export("example")!!, phoneRoot)
+        phone.recordReadingPosition(phoneRoot, session.navigate(bookmark(121, 300.0))!!)
+        assertEquals(121, phone.loadBookmark(phoneRoot)!!.chapterIndex)
+    }
+
+    @Test fun aNewerMoveToAnotherPageIsNotClaimedByAReaderThatNeverShowedIt() = runBlocking {
+        val (repository, root) = fixture("phone")
+        val session = repository.openReadingPosition(root)
+        repository.recordReadingPosition(root, session.navigate(bookmark(120, 200.0))!!)
+        // Another device moved elsewhere later; the open reader is reloaded to it, as before.
+        repository.saveBookmark(root, bookmark(130, 500.0))
+        repository.recordReadingPosition(root, session.navigate(bookmark(121, 300.0))!!)
+        assertEquals(130, repository.loadBookmark(root)!!.chapterIndex)
+    }
+
+    @Test fun aLongSessionDoesNotCollectEveryResavedPage() = runBlocking {
+        val (repository, root) = fixture("phone")
+        val session = repository.openReadingPosition(root)
+        repository.recordReadingPosition(root, session.navigate(bookmark(120, 200.0))!!)
+        // An older build re-saves the shown page on every close, each time with a later stamp.
+        for (step in 1..300) repository.saveBookmark(root, bookmark(120, 200.0 + step))
+        val next = session.navigate(bookmark(121, 600.0))!!
+        assertTrue(next.isValid())
+        assertTrue(next.seen.size < 5)
+        repository.recordReadingPosition(root, next)
+        assertEquals(121, repository.loadBookmark(root)!!.chapterIndex)
+    }
 }
