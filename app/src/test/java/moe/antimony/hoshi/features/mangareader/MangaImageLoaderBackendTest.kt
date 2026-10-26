@@ -99,6 +99,7 @@ class MangaImageLoaderBackendTest {
         backend.get(file).close()
         file.writeBytes(byteArrayOf(2, 3))
         backend.get(file).use { assertArrayEquals(byteArrayOf(2, 3), it.readBytes()) }
+        assertEquals(2L, backend.snapshot().bytes)
         assertNotEquals(oldUrl, backend.imageUrl(book.pages[1]))
     }
 

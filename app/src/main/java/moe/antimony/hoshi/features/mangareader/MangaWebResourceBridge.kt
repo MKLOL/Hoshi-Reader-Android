@@ -54,7 +54,9 @@ internal class MangaWebResourceBridge(
         val relative = relativePath.trimStart('/')
         if (relative.isEmpty() || relative !in knownImagePaths) return null
 
-        val file = canonicalRoot.resolve(relative).canonicalFile
+        // Canonicalization throws for an unresolvable path (e.g. over PATH_MAX); callers include
+        // the UI thread, so treat it like any other missing image.
+        val file = runCatching { canonicalRoot.resolve(relative).canonicalFile }.getOrNull() ?: return null
         if (!file.isWithin(canonicalRoot) || !file.isFile) return null
         return file
     }

@@ -113,8 +113,9 @@ internal class MangaImageLoaderBackend(
         synchronized(lock) {
             reads++
             if (admissibleLocked(key)) {
-                // A page can be requested by both the visible image and a superseded preload.
-                bytes.remove(key)?.let { retainedBytes -= it.size }
+                // A page can be requested by both the visible image and a superseded preload, and
+                // a replaced file leaves an older version of the same path that is never read again.
+                for (stale in sameFileLocked(key)) retainedBytes -= bytes.remove(stale)!!.size
                 for (evicted in evictableLocked(key)) {
                     if (retainedBytes + data.size <= policy.encodedBytes) break
                     retainedBytes -= bytes.remove(evicted)!!.size
@@ -211,9 +212,11 @@ internal class MangaImageLoaderBackend(
     private fun admissibleLocked(key: ImageKey): Boolean {
         if (closed || key.relativePath !in wantedPaths || key.length !in 1..policy.encodedBytes) return false
         val freeable = evictableLocked(key).sumOf { bytes.getValue(it).size.toLong() }
-        val replaced = bytes[key]?.size ?: 0
+        val replaced = sameFileLocked(key).sumOf { bytes.getValue(it).size.toLong() }
         return retainedBytes - replaced - freeable + key.length <= policy.encodedBytes
     }
+
+    private fun sameFileLocked(key: ImageKey) = bytes.keys.filter { it.relativePath == key.relativePath }
 
     private fun keyFor(file: File) = ImageKey(
         relativePath = file.canonicalFile.relativeTo(resolverRoot).invariantSeparatorsPath,
