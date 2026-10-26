@@ -131,6 +131,19 @@ internal class HoshiAppContainer(context: Context) {
         drive = googleDriveClient,
     )
     val httpSyncSettingsRepository: HttpSyncSettingsRepository = appContext.httpSyncSettingsRepository()
+    /** First-launch default dictionaries: leaving or recreating setup does not cut the download off. */
+    val defaultDictionaryDownload: moe.antimony.hoshi.features.dictionary.DefaultDictionaryDownload =
+        moe.antimony.hoshi.features.dictionary.DefaultDictionaryDownload(
+            appScope,
+            install = { onProgress ->
+                dictionaryRepository.importDefaultDictionaries(
+                    lowRamImport = dictionarySettingsRepository.settings.first().lowRamDictionaryImport,
+                    onProgress = onProgress,
+                )
+            },
+            onInstalled = { httpSyncSettingsRepository.update { it.copy(hasCompletedDictionaryOnboarding = true) } },
+            onRunning = { moe.antimony.hoshi.features.dictionary.DefaultDictionaryDownloadService.start(appContext) },
+        )
     /** Lazy: only the main shell needs podcasts; the text-lookup entry point must not start its polling. */
     val podcastRepository: moe.antimony.hoshi.features.podcasts.PodcastRepository by lazy {
         moe.antimony.hoshi.features.podcasts.PodcastRepository.getInstance(appContext)

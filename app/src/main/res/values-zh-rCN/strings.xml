@@ -821,6 +821,9 @@
     <string name="onboarding_dictionaries_download">下载辞典</string>
     <string name="onboarding_dictionaries_skip">暂时跳过</string>
     <string name="onboarding_dictionaries_failed">未能完成辞典安装。请检查网络连接，然后点按「下载辞典」重试。</string>
+    <string name="default_dictionary_download_channel_name">辞典下载</string>
+    <string name="default_dictionary_download_notification_title">正在下载辞典</string>
+    <string name="default_dictionary_download_notification_text">完成后即可使用 JMdict 和 Jiten 查词。</string>
     <string name="http_sync_now">立即同步</string>
     <string name="http_sync_running">正在同步…</string>
     <string name="http_sync_transfer_volume">%1$.1f MB / %2$.1f MB</string>

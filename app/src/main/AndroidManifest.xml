@@ -25,8 +25,12 @@
         <provider android:authorities="com.ichi2.anki.flashcards" />
     </queries>
 
+    <!-- HoshiBackupAgent only notes a finished restore; fullBackupOnly keeps the platform's
+         file-based Auto Backup and its include/exclude rules exactly as without an agent. -->
     <application
         android:allowBackup="true"
+        android:backupAgent=".HoshiBackupAgent"
+        android:fullBackupOnly="true"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:fullBackupContent="@xml/backup_rules"
         android:icon="@mipmap/ic_launcher"
@@ -74,6 +78,10 @@
             android:foregroundServiceType="dataSync" />
         <service
             android:name=".features.news.pretranslate.NewsPretranslationService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+        <service
+            android:name=".features.dictionary.DefaultDictionaryDownloadService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
 

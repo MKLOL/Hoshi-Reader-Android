@@ -34,7 +34,6 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import moe.antimony.hoshi.LocalHoshiAppContainer
 import moe.antimony.hoshi.R
-import kotlinx.coroutines.flow.first
 import moe.antimony.hoshi.ui.asString
 
 @Composable
@@ -47,12 +46,7 @@ internal fun HttpSyncOnboarding() {
                 HttpSyncOnboardingViewModel(
                     container.httpSyncSettingsRepository,
                     container.httpSyncManualSync::start,
-                    installDictionaries = { progress ->
-                        container.dictionaryRepository.importDefaultDictionaries(
-                            lowRamImport = container.dictionarySettingsRepository.settings.first().lowRamDictionaryImport,
-                            onProgress = progress,
-                        )
-                    },
+                    container.defaultDictionaryDownload,
                 ) as T
         },
     )

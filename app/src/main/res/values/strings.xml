@@ -823,6 +823,9 @@
     <string name="onboarding_dictionaries_download">Download dictionaries</string>
     <string name="onboarding_dictionaries_skip">Skip for now</string>
     <string name="onboarding_dictionaries_failed">Could not finish installing the dictionaries. Check your connection and tap Download dictionaries to retry.</string>
+    <string name="default_dictionary_download_channel_name">Dictionary downloads</string>
+    <string name="default_dictionary_download_notification_title">Downloading dictionaries</string>
+    <string name="default_dictionary_download_notification_text">JMdict and Jiten will be ready for word lookup.</string>
     <string name="http_sync_now">Sync now</string>
     <string name="http_sync_running">Syncing…</string>
     <string name="http_sync_transfer_volume">%1$.1f MB / %2$.1f MB</string>

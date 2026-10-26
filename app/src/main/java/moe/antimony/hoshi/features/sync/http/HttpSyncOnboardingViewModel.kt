@@ -3,14 +3,12 @@ package moe.antimony.hoshi.features.sync.http
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.CoroutineDispatcher
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import moe.antimony.hoshi.dictionary.DictionaryUpdateProgress
+import moe.antimony.hoshi.features.dictionary.DefaultDictionaryDownload
 import moe.antimony.hoshi.features.dictionary.message
 import moe.antimony.hoshi.ui.UiText
 
@@ -25,12 +23,15 @@ internal data class HttpSyncOnboardingUiState(
     val dictionaryInstallFailed: Boolean = false,
 )
 
-/** Owns first-launch setup across activity recreation; transfers use the existing app owner. */
+/**
+ * Owns first-launch setup across activity recreation. Transfers belong to app owners: the shared
+ * sync to [HttpSyncManualSync] and the default dictionaries to [DefaultDictionaryDownload], whose
+ * progress and result this shows whenever setup is open, including after the screen was recreated.
+ */
 internal class HttpSyncOnboardingViewModel(
     private val repository: HttpSyncSettingsRepository,
     private val startSync: () -> Unit,
-    private val installDictionaries: suspend ((DictionaryUpdateProgress) -> Unit) -> Unit = {},
-    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
+    private val dictionaries: DefaultDictionaryDownload,
 ) : ViewModel() {
     private val mutableState = MutableStateFlow(HttpSyncOnboardingUiState())
     val state = mutableState.asStateFlow()
@@ -41,13 +42,22 @@ internal class HttpSyncOnboardingViewModel(
         viewModelScope.launch {
             val settings = repository.settings.first()
             dictionarySetupCompleted = settings.hasCompletedDictionaryOnboarding
-            mutableState.value = HttpSyncOnboardingUiState(
-                step = if (settings.hasCompletedOnboarding || settings.isConfigured) {
-                    if (dictionarySetupCompleted) HttpSyncOnboardingStep.Hidden else HttpSyncOnboardingStep.Dictionaries
+            show(
+                if (settings.hasCompletedOnboarding || settings.isConfigured) {
+                    HttpSyncOnboardingStep.Dictionaries
                 } else HttpSyncOnboardingStep.Token,
             )
             if (settings.isConfigured && !settings.hasCompletedOnboarding) {
                 repository.update { it.copy(hasCompletedOnboarding = true) }
+            }
+            dictionaries.status.collect { download ->
+                if (download is DefaultDictionaryDownload.Status.Installed) {
+                    // The owner recorded the finished setup; any step still to come passes it over.
+                    dictionarySetupCompleted = true
+                    if (state.value.step == HttpSyncOnboardingStep.Dictionaries) show(HttpSyncOnboardingStep.Dictionaries)
+                } else {
+                    mutableState.update { it.following(download) }
+                }
             }
         }
     }
@@ -55,7 +65,7 @@ internal class HttpSyncOnboardingViewModel(
     fun useToken(token: String) {
         val current = state.value
         if (current.step != HttpSyncOnboardingStep.Token || current.saving || token.isBlank()) return
-        save(if (dictionarySetupCompleted) HttpSyncOnboardingStep.Status else HttpSyncOnboardingStep.Dictionaries) {
+        save(HttpSyncOnboardingStep.Dictionaries) {
             repository.update {
                 it.copy(
                     baseUrl = it.baseUrl.ifBlank { HttpSyncSettings.DEFAULT_BASE_URL },
@@ -71,7 +81,7 @@ internal class HttpSyncOnboardingViewModel(
 
     fun withoutToken() {
         if (state.value.step == HttpSyncOnboardingStep.Token && !state.value.saving) {
-            mutableState.value = HttpSyncOnboardingUiState(HttpSyncOnboardingStep.Later)
+            show(HttpSyncOnboardingStep.Later)
         }
     }
 
@@ -80,7 +90,7 @@ internal class HttpSyncOnboardingViewModel(
         // Reaching this after a saved token is only possible through Edit token, offered when that
         // token failed. Without a token, background sync must not keep retrying the abandoned one.
         val abandonedToken = startedSync
-        save(if (dictionarySetupCompleted) HttpSyncOnboardingStep.Hidden else HttpSyncOnboardingStep.Dictionaries) {
+        save(HttpSyncOnboardingStep.Dictionaries) {
             repository.update {
                 it.copy(bearerToken = if (abandonedToken) "" else it.bearerToken, hasCompletedOnboarding = true)
             }
@@ -88,51 +98,40 @@ internal class HttpSyncOnboardingViewModel(
         }
     }
 
+    /** Starts (or retries) the app-owned download; leaving setup while it runs does not stop it. */
     fun downloadDictionaries() {
         val current = state.value
         if (current.step != HttpSyncOnboardingStep.Dictionaries || current.installingDictionaries || current.saving) return
-        mutableState.value = current.copy(installingDictionaries = true, dictionaryInstallFailed = false, saveFailed = false)
-        viewModelScope.launch {
-            try {
-                withContext(ioDispatcher) {
-                    installDictionaries { progress ->
-                        mutableState.value = state.value.copy(dictionaryProgress = progress.message())
-                    }
-                }
-                finishDictionaries()
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (_: Exception) {
-                mutableState.value = state.value.copy(
-                    installingDictionaries = false, dictionaryProgress = null, dictionaryInstallFailed = true,
-                )
-            }
-        }
+        mutableState.value = current.copy(saveFailed = false)
+        dictionaries.start()
+        mutableState.update { it.following(dictionaries.status.value) }
     }
 
     fun skipDictionaries() {
-        if (state.value.step != HttpSyncOnboardingStep.Dictionaries || state.value.installingDictionaries || state.value.saving) return
-        save(afterDictionaries()) { finishDictionaries() }
-    }
-
-    private suspend fun finishDictionaries() {
-        repository.update { it.copy(hasCompletedDictionaryOnboarding = true) }
-        dictionarySetupCompleted = true
-        mutableState.value = HttpSyncOnboardingUiState(afterDictionaries())
+        val current = state.value
+        if (current.step != HttpSyncOnboardingStep.Dictionaries || current.installingDictionaries || current.saving) return
+        save(HttpSyncOnboardingStep.Dictionaries) {
+            repository.update { it.copy(hasCompletedDictionaryOnboarding = true) }
+            dictionarySetupCompleted = true
+        }
     }
 
     private fun afterDictionaries() = if (startedSync) HttpSyncOnboardingStep.Status else HttpSyncOnboardingStep.Hidden
 
     fun dismissStatus() {
-        if (state.value.step == HttpSyncOnboardingStep.Status) {
-            mutableState.value = HttpSyncOnboardingUiState(HttpSyncOnboardingStep.Hidden)
-        }
+        if (state.value.step == HttpSyncOnboardingStep.Status) show(HttpSyncOnboardingStep.Hidden)
     }
 
     fun editToken() {
-        if (state.value.step == HttpSyncOnboardingStep.Status) {
-            mutableState.value = HttpSyncOnboardingUiState(HttpSyncOnboardingStep.Token)
-        }
+        if (state.value.step == HttpSyncOnboardingStep.Status) show(HttpSyncOnboardingStep.Token)
+    }
+
+    /** Moves to [step]; a dictionary step that is already finished is passed over. */
+    private fun show(step: HttpSyncOnboardingStep) {
+        val download = dictionaries.status.value
+        if (download is DefaultDictionaryDownload.Status.Installed) dictionarySetupCompleted = true
+        val next = if (step == HttpSyncOnboardingStep.Dictionaries && dictionarySetupCompleted) afterDictionaries() else step
+        mutableState.value = HttpSyncOnboardingUiState(next).following(download)
     }
 
     private fun save(nextStep: HttpSyncOnboardingStep, action: suspend () -> Unit) {
@@ -140,12 +139,18 @@ internal class HttpSyncOnboardingViewModel(
         viewModelScope.launch {
             try {
                 action()
-                mutableState.value = HttpSyncOnboardingUiState(nextStep)
+                show(nextStep)
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Exception) {
-                mutableState.value = state.value.copy(saving = false, saveFailed = true)
+                mutableState.update { it.copy(saving = false, saveFailed = true) }
             }
         }
     }
 }
+
+private fun HttpSyncOnboardingUiState.following(download: DefaultDictionaryDownload.Status) = copy(
+    installingDictionaries = download is DefaultDictionaryDownload.Status.Running,
+    dictionaryProgress = (download as? DefaultDictionaryDownload.Status.Running)?.progress?.message(),
+    dictionaryInstallFailed = download is DefaultDictionaryDownload.Status.Failed,
+)

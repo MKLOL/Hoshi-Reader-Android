@@ -26,12 +26,17 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import java.io.IOException
+import kotlinx.coroutines.CompletableDeferred
+import moe.antimony.hoshi.RestoredInstallMarker
 import moe.antimony.hoshi.dictionary.DictionaryUpdateProgress
 import moe.antimony.hoshi.dictionary.DictionaryUpdateStage
+import moe.antimony.hoshi.features.dictionary.DefaultDictionaryDownload
+import moe.antimony.hoshi.features.dictionary.message
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class HttpSyncOnboardingViewModelTest {
     @get:Rule val temp = TemporaryFolder()
+    private val downloading = DictionaryUpdateProgress(DictionaryUpdateStage.Downloading, "JMdict")
 
     @Test
     fun freshInstallPromptsAndSkipShowsGuidanceBeforePersistingCompletion() = withRepository { repository, models ->
@@ -192,36 +197,200 @@ class HttpSyncOnboardingViewModelTest {
         assertFalse(model.state.value.saving)
     }
 
-    private fun withRepository(block: suspend TestScope.(HttpSyncSettingsRepository, Models) -> Unit) = runTest {
+    @Test
+    fun aDownloadKeepsGoingAfterSetupClosesAndRecordsItsResult() = withRepository { repository, models ->
+        val gate = CompletableDeferred<Unit>()
+        var attempts = 0
+        val download = models.download(repository) { progress ->
+            attempts++
+            progress(downloading)
+            gate.await()
+        }
+        val setup = models.create(repository, download) { fail("Dictionaries do not require sync") }
+        advanceUntilIdle()
+        setup.withoutToken()
+        setup.finishLater()
+        advanceUntilIdle()
+        setup.downloadDictionaries()
+        advanceUntilIdle()
+        assertTrue(setup.state.value.installingDictionaries)
+
+        // The activity finished (or was recreated) while the dictionaries were downloading.
+        models.close(setup)
+        gate.complete(Unit)
+        advanceUntilIdle()
+
+        assertEquals(DefaultDictionaryDownload.Status.Installed, download.status.value)
+        assertTrue(repository.settings.first().hasCompletedDictionaryOnboarding)
+        val relaunched = models.create(repository, download) { fail("Relaunch must not sync") }
+        advanceUntilIdle()
+        assertEquals(HttpSyncOnboardingStep.Hidden, relaunched.state.value.step)
+        assertEquals(1, attempts)
+    }
+
+    @Test
+    fun setupReopenedDuringTheDownloadShowsItsProgressAndMovesOnWhenItEnds() = withRepository { repository, models ->
+        val gate = CompletableDeferred<Unit>()
+        var attempts = 0
+        val download = models.download(repository) { progress ->
+            attempts++
+            progress(downloading)
+            gate.await()
+        }
+        val setup = models.create(repository, download) { fail("Dictionaries do not require sync") }
+        advanceUntilIdle()
+        setup.withoutToken()
+        setup.finishLater()
+        advanceUntilIdle()
+        setup.downloadDictionaries()
+        advanceUntilIdle()
+        models.close(setup)
+
+        val reopened = models.create(repository, download) { fail("Dictionaries do not require sync") }
+        advanceUntilIdle()
+        assertEquals(HttpSyncOnboardingStep.Dictionaries, reopened.state.value.step)
+        assertTrue(reopened.state.value.installingDictionaries)
+        assertEquals(downloading.message(), reopened.state.value.dictionaryProgress)
+        reopened.downloadDictionaries()
+        reopened.skipDictionaries()
+        advanceUntilIdle()
+        assertEquals(HttpSyncOnboardingStep.Dictionaries, reopened.state.value.step)
+
+        gate.complete(Unit)
+        advanceUntilIdle()
+        assertEquals(HttpSyncOnboardingStep.Hidden, reopened.state.value.step)
+        assertEquals(1, attempts)
+    }
+
+    @Test
+    fun setupReopenedAfterAFailedDownloadShowsTheFailureAndCanRetry() = withRepository { repository, models ->
+        var attempts = 0
+        val download = models.download(repository) { if (++attempts == 1) throw IOException("Offline") }
+        val setup = models.create(repository, download) { fail("Dictionaries do not require sync") }
+        advanceUntilIdle()
+        setup.withoutToken()
+        setup.finishLater()
+        advanceUntilIdle()
+        setup.downloadDictionaries()
+        advanceUntilIdle()
+        models.close(setup)
+
+        val reopened = models.create(repository, download) { fail("Dictionaries do not require sync") }
+        advanceUntilIdle()
+        assertEquals(HttpSyncOnboardingStep.Dictionaries, reopened.state.value.step)
+        assertTrue(reopened.state.value.dictionaryInstallFailed)
+        assertFalse(reopened.state.value.installingDictionaries)
+        reopened.downloadDictionaries()
+        advanceUntilIdle()
+        assertEquals(HttpSyncOnboardingStep.Hidden, reopened.state.value.step)
+        assertEquals(2, attempts)
+    }
+
+    @Test
+    fun anotherSetupPromptPassesOverDictionariesTheFirstOneInstalled() = withRepository { repository, models ->
+        val gate = CompletableDeferred<Unit>()
+        val download = models.download(repository) { gate.await() }
+        val other = models.create(repository, download) { fail("No token was entered") }
+        val setup = models.create(repository, download) { fail("No token was entered") }
+        advanceUntilIdle()
+        setup.withoutToken()
+        setup.finishLater()
+        advanceUntilIdle()
+        setup.downloadDictionaries()
+        gate.complete(Unit)
+        advanceUntilIdle()
+        assertEquals(HttpSyncOnboardingStep.Hidden, setup.state.value.step)
+
+        assertEquals(HttpSyncOnboardingStep.Token, other.state.value.step)
+        other.withoutToken()
+        other.finishLater()
+        advanceUntilIdle()
+        assertEquals(HttpSyncOnboardingStep.Hidden, other.state.value.step)
+    }
+
+    @Test
+    fun aRestoredLibraryIsAskedOnlyForTheTokenTheBackupCouldNotCarry() {
+        val marker = RestoredInstallMarker.inDirectory(temp.newFolder("no_backup")).apply { record() }
+        withRepository(restoredInstall = marker, isFreshInstall = false, hasTermDictionary = { true }) { repository, models ->
+            val setup = models.create(repository) { fail("No token was entered") }
+            advanceUntilIdle()
+            assertEquals(HttpSyncOnboardingStep.Token, setup.state.value.step)
+            setup.withoutToken()
+            setup.finishLater()
+            advanceUntilIdle()
+
+            assertEquals(HttpSyncOnboardingStep.Hidden, setup.state.value.step)
+            assertFalse(marker.isPresent)
+            val relaunched = models.create(repository) { fail("Relaunch must not sync") }
+            advanceUntilIdle()
+            assertEquals(HttpSyncOnboardingStep.Hidden, relaunched.state.value.step)
+        }
+    }
+
+    private fun withRepository(
+        restoredInstall: RestoredInstallMarker? = null,
+        isFreshInstall: Boolean = true,
+        hasTermDictionary: () -> Boolean = { false },
+        block: suspend TestScope.(HttpSyncSettingsRepository, Models) -> Unit,
+    ) = runTest {
         val dispatcher = StandardTestDispatcher(testScheduler)
         Dispatchers.setMain(dispatcher)
         val storeScope = CoroutineScope(SupervisorJob() + dispatcher)
-        val models = Models()
+        // Outlives every setup ViewModel, as the app scope does.
+        val appScope = CoroutineScope(SupervisorJob() + dispatcher)
+        val models = Models(appScope)
         try {
             val file = temp.newFolder().resolve("sync.preferences_pb")
             val store = PreferenceDataStoreFactory.create(scope = storeScope) { file }
-            block(HttpSyncSettingsRepository(store), models)
+            block(HttpSyncSettingsRepository(store, isFreshInstall, restoredInstall, hasTermDictionary), models)
         } finally {
             models.clear()
+            appScope.cancel()
             storeScope.cancel()
             Dispatchers.resetMain()
         }
     }
 
-    private class Models {
-        private val stores = mutableListOf<ViewModelStore>()
+    private class Models(private val appScope: CoroutineScope) {
+        private val stores = mutableMapOf<HttpSyncOnboardingViewModel, ViewModelStore>()
+
+        /** The app-owned download, wired to record its result as HoshiAppContainer does. */
+        fun download(
+            repository: HttpSyncSettingsRepository,
+            install: suspend ((DictionaryUpdateProgress) -> Unit) -> Unit = {},
+        ) = DefaultDictionaryDownload(
+            scope = appScope,
+            install = install,
+            onInstalled = { repository.update { it.copy(hasCompletedDictionaryOnboarding = true) } },
+            ioDispatcher = Dispatchers.Main,
+        )
+
         fun create(
             repository: HttpSyncSettingsRepository,
             install: suspend ((DictionaryUpdateProgress) -> Unit) -> Unit = {},
             start: () -> Unit,
+        ): HttpSyncOnboardingViewModel = create(repository, download(repository, install), start)
+
+        fun create(
+            repository: HttpSyncSettingsRepository,
+            download: DefaultDictionaryDownload,
+            start: () -> Unit,
         ): HttpSyncOnboardingViewModel {
-            val store = ViewModelStore().also(stores::add)
-            return ViewModelProvider.create(store, object : ViewModelProvider.Factory {
+            val store = ViewModelStore()
+            val model = ViewModelProvider.create(store, object : ViewModelProvider.Factory {
                 @Suppress("UNCHECKED_CAST")
                 override fun <T : ViewModel> create(modelClass: Class<T>): T =
-                    HttpSyncOnboardingViewModel(repository, start, install, Dispatchers.Main) as T
+                    HttpSyncOnboardingViewModel(repository, start, download) as T
             })[HttpSyncOnboardingViewModel::class.java]
+            stores[model] = store
+            return model
         }
-        fun clear() = stores.forEach(ViewModelStore::clear)
+
+        /** The setup screen went away: its activity finished or was recreated. */
+        fun close(model: HttpSyncOnboardingViewModel) {
+            stores.remove(model)?.clear()
+        }
+
+        fun clear() = stores.values.forEach(ViewModelStore::clear)
     }
 }

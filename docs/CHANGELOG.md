@@ -8,7 +8,7 @@ Semantic Versioning.
 ## [Unreleased]
 
 ### Added
-- **Set up reading on first launch.** Enter a shared sync token to start syncing without creating an account, and download the default JMdict and Jiten dictionaries for word lookup. Both steps can be skipped, with directions to finish setup in Settings later.
+- **Set up reading on first launch.** Enter a shared sync token to start syncing without creating an account, and download the default JMdict and Jiten dictionaries for word lookup. Both steps can be skipped, with directions to finish setup in Settings later. The dictionary download keeps going if you leave setup, and an app restored from a backup or moved to a new phone offers whichever step did not come back with it.
 - **Choose a sentence reading layout.** Put Japanese and its translation above and below each other or side by side, with separate scrolling for long text. Sentence mode remembers the layout on this device.
 
 ### Changed

@@ -2,6 +2,7 @@ package moe.antimony.hoshi.features.sync.http
 
 import android.content.Context
 import androidx.datastore.core.DataStore
+import androidx.datastore.preferences.core.MutablePreferences
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
@@ -11,7 +12,10 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onStart
 import moe.antimony.hoshi.HoshiApplication
+import moe.antimony.hoshi.RestoredInstallMarker
+import moe.antimony.hoshi.hasInstalledTermDictionary
 import moe.antimony.hoshi.hasPriorAppUse
+import moe.antimony.hoshi.onboardingSeed
 import java.io.IOException
 
 /**
@@ -81,34 +85,66 @@ private val Context.httpSyncSettingsDataStore by preferencesDataStore(name = "ht
 
 fun Context.httpSyncSettingsRepository(): HttpSyncSettingsRepository {
     val previouslyUsed = (applicationContext as? HoshiApplication)?.hadPreviousAppUse ?: hasPriorAppUse(filesDir)
+    val appFilesDir = filesDir
     return HttpSyncSettingsRepository(
         httpSyncSettingsDataStore,
         isFreshInstall = !previouslyUsed,
+        restoredInstall = RestoredInstallMarker.inDirectory(noBackupFilesDir),
+        // Startup reads this; an unreadable library offers the dictionaries instead of crashing.
+        hasTermDictionary = { runCatching { hasInstalledTermDictionary(appFilesDir) }.getOrDefault(false) },
     )
 }
 
 class HttpSyncSettingsRepository(
     private val dataStore: DataStore<Preferences>,
     private val isFreshInstall: Boolean = true,
+    /** Present after Android restored or transferred this app's data; see [onboardingSeed]. */
+    private val restoredInstall: RestoredInstallMarker? = null,
+    /** Read only while seeding a restored install's dictionary step. */
+    private val hasTermDictionary: () -> Boolean = { false },
 ) {
     val settings: Flow<HttpSyncSettings> = dataStore.data
         .onStart { initializeOnboarding() }
         .map { it.toHttpSyncSettings() }
 
-    /** Seed both defaults once; a later launch's storage evidence cannot complete a pending step. */
+    /** A restore's data cannot gain a marker later in the same process, so absence is remembered. */
+    @Volatile private var restorePending: Boolean? = null
+
+    /**
+     * Seed both steps once; a later launch's storage evidence cannot complete a pending step. A
+     * restore's marker is let go once both steps it re-offered are completed or skipped.
+     */
     suspend fun initializeOnboarding() {
         try {
-            dataStore.edit { preferences ->
-                if (preferences[KEY_ONBOARDING_COMPLETED] == null) {
-                    preferences[KEY_ONBOARDING_COMPLETED] = !isFreshInstall
-                }
-                if (preferences[KEY_DICTIONARY_ONBOARDING_COMPLETED] == null) {
-                    preferences[KEY_DICTIONARY_ONBOARDING_COMPLETED] = !isFreshInstall
-                }
-            }
+            releaseResolvedRestore(dataStore.edit { preferences -> preferences.seedOnboarding() })
         } catch (_: IOException) {
             // Startup runs this, so a full disk must not crash every launch. Until a later
             // attempt persists it, the unseeded defaults in toHttpSyncSettings decide.
+        }
+    }
+
+    private fun MutablePreferences.seedOnboarding() {
+        val tokenStep = this[KEY_ONBOARDING_COMPLETED]
+        val dictionaryStep = this[KEY_DICTIONARY_ONBOARDING_COMPLETED]
+        if (tokenStep != null && dictionaryStep != null) return
+        val seed = onboardingSeed(
+            isFreshInstall = isFreshInstall,
+            restored = isRestorePending(),
+            hasToken = this[KEY_TOKEN].orEmpty().isNotBlank(),
+            hasTermDictionary = hasTermDictionary,
+        )
+        if (tokenStep == null) this[KEY_ONBOARDING_COMPLETED] = seed.tokenCompleted
+        if (dictionaryStep == null) this[KEY_DICTIONARY_ONBOARDING_COMPLETED] = seed.dictionariesCompleted
+    }
+
+    private fun isRestorePending(): Boolean =
+        restorePending ?: (restoredInstall?.isPresent == true).also { restorePending = it }
+
+    private fun releaseResolvedRestore(preferences: Preferences) {
+        if (!isRestorePending()) return
+        if (preferences[KEY_ONBOARDING_COMPLETED] == true && preferences[KEY_DICTIONARY_ONBOARDING_COMPLETED] == true) {
+            restoredInstall?.consume()
+            restorePending = false
         }
     }
 
@@ -120,7 +156,9 @@ class HttpSyncSettingsRepository(
     }
 
     suspend fun update(transform: (HttpSyncSettings) -> HttpSyncSettings) {
-        dataStore.edit { preferences ->
+        val saved = dataStore.edit { preferences ->
+            // A step must start from its seed, not from toHttpSyncSettings' unseeded fallback.
+            preferences.seedOnboarding()
             val current = preferences.toHttpSyncSettings()
             val edited = transform(current)
             val next = edited.copy(baseUrl = edited.baseUrl.trim().trimEnd('/'), bearerToken = edited.bearerToken.trim())
@@ -137,6 +175,7 @@ class HttpSyncSettingsRepository(
                 preferences[KEY_LAST_SYNCED_AT] = cursor
             }
         }
+        releaseResolvedRestore(saved)
     }
 
     private fun Preferences.toHttpSyncSettings(): HttpSyncSettings =

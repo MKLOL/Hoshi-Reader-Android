@@ -31,7 +31,8 @@ class HoshiApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         // Persist both first-launch choices before any startup component creates app data.
-        // A process killed at the first prompt must stay pending even after an update.
+        // A process killed at the first prompt must stay pending even after an update, and a
+        // restored or transferred install re-offers what its backup could not carry.
         // Only this small preferences initialization gates startup; transfers stay async.
         runBlocking(Dispatchers.IO) { httpSyncSettingsRepository().initializeOnboarding() }
         installCrashDiagnostics(this)
