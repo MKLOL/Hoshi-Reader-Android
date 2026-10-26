@@ -27,12 +27,20 @@ internal class MangaImageLoaderBackend(
     bookRoot: File,
     private val book: MokuroBook,
     private val policy: MangaImageCachePolicy = MangaImageCachePolicy(),
+    /** Test hook: runs at each point where encoded preparation of a page path may stop. */
+    private val onPreparationCheck: (String) -> Unit = {},
 ) : Closeable {
     private val resolver = MangaWebResourceBridge(bookRoot, book)
     private val namespace = UUID.randomUUID().toString()
     private val lock = Any()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var preloadJob: Job? = null
+    /**
+     * Bumped by every page request and preparation pass. An older pass is superseded: it finishes
+     * an image the current window still wants, but starts nothing new and stops reading anything
+     * the window no longer holds.
+     */
+    private var preloadGeneration = 0L
     private val bytes = LinkedHashMap<ImageKey, ByteArray>()
     private val readers = ConcurrentHashMap<String, Any>()
     private var retainedBytes = 0L
@@ -55,13 +63,15 @@ internal class MangaImageLoaderBackend(
     }
 
     fun onPageRequested(pageIndex: Int) {
-        preloadJob?.cancel()
         val paths = (listOf(pageIndex + 1, pageIndex) + mangaAdjacentPreloadIndexes(pageIndex, book.pages.size))
             .mapNotNull { book.pages.getOrNull(it)?.imagePath?.trimStart('/') }
             .distinct()
         synchronized(lock) {
             if (closed) return
             wantedPaths = paths
+            // Supersede rather than cancel: a turn to the next page usually lands while that page
+            // is being prepared, and cancelling would make the visible request read it again.
+            preloadGeneration++
             val iterator = bytes.iterator()
             while (iterator.hasNext()) {
                 val entry = iterator.next()
@@ -139,18 +149,33 @@ internal class MangaImageLoaderBackend(
 
     /** Encoded preparation is independent of the much larger decoded-pixel budget. */
     private fun preloadEncodedImages(pageIndex: Int) {
-        preloadJob?.cancel()
+        val previous = preloadJob
+        val generation = synchronized(lock) { ++preloadGeneration }
         preloadJob = scope.launch {
+            // One pass reads at a time. A superseded pass may still be finishing an image this
+            // window wants; waiting for it keeps the transient buffers bounded and makes this pass
+            // find that image cached instead of reading it alongside.
+            previous?.join()
             var plannedBytes = 0L
             for (index in mangaAdjacentPreloadIndexes(pageIndex, book.pages.size)) {
                 ensureActive()
+                if (synchronized(lock) { closed || generation != preloadGeneration }) return@launch
                 val page = book.pages.getOrNull(index) ?: continue
+                val path = page.imagePath.trimStart('/')
+                val shouldContinue = {
+                    ensureActive()
+                    onPreparationCheck(path)
+                    if (!preparationMayContinue(generation, path)) {
+                        this@launch.cancel()
+                        ensureActive()
+                    }
+                }
                 try {
                     val file = resolver.resolveDeclaredImageFile(page.imagePath) ?: continue
                     val length = file.length()
                     if (length in 1..(policy.encodedBytes - plannedBytes)) {
                         plannedBytes += length
-                        get(file) { ensureActive() }.close()
+                        get(file, shouldContinue).close()
                     } else {
                         // A huge original still benefits from bounded OS file-cache warming.
                         // This does not allocate a bitmap or retain an oversized byte array.
@@ -158,7 +183,7 @@ internal class MangaImageLoaderBackend(
                         var remaining = 8L shl 20
                         file.inputStream().use { input ->
                             while (remaining > 0) {
-                                ensureActive()
+                                shouldContinue()
                                 val count = input.read(buffer, 0, minOf(buffer.size.toLong(), remaining).toInt())
                                 if (count < 0) break
                                 remaining -= count
@@ -217,6 +242,11 @@ internal class MangaImageLoaderBackend(
     }
 
     private fun sameFileLocked(key: ImageKey) = bytes.keys.filter { it.relativePath == key.relativePath }
+
+    /** The current pass reads its window; a superseded one only what the current window still holds. */
+    private fun preparationMayContinue(generation: Long, path: String): Boolean = synchronized(lock) {
+        !closed && (generation == preloadGeneration || path in wantedPaths)
+    }
 
     private fun keyFor(file: File) = ImageKey(
         relativePath = file.canonicalFile.relativeTo(resolverRoot).invariantSeparatorsPath,

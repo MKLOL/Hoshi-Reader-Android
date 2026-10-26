@@ -169,4 +169,91 @@ class MangaImageLoaderBackendTest {
             backend.get(file).use { assertEquals(128 * 1024, it.readBytes().size) }
         } finally { backend.close() }
     }
+
+    @Test fun turningToThePageBeingPreparedServesItFromThatRead() = kotlinx.coroutines.runBlocking {
+        val pause = PausedPreparation(temporary.newFolder())
+        val backend = pause.backend()
+        try {
+            backend.onPageRequested(0)
+            backend.preloadScript(0)
+            pause.awaitMidRead()
+            // The reader turns to page 1 while page 1 is half read into the cache.
+            backend.onPageRequested(1)
+            pause.resume()
+            // The visible request waits for that read instead of reading the file again.
+            backend.get(pause.files[1]).use { assertArrayEquals(pause.files[1].readBytes(), it.readBytes()) }
+            backend.awaitEncodedPreload()
+            assertEquals(1L, backend.snapshot().reads)
+            assertEquals(1L, backend.snapshot().hits)
+            // The superseded pass finished what the new window wants and started nothing else.
+            assertEquals(setOf("1.jpg"), pause.checkedPaths())
+        } finally { backend.close() }
+    }
+
+    @Test fun aPageBeingPreparedThatLeavesTheWindowStopsAtItsNextCheck() = kotlinx.coroutines.runBlocking {
+        val pause = PausedPreparation(temporary.newFolder())
+        val backend = pause.backend()
+        try {
+            backend.onPageRequested(0)
+            backend.preloadScript(0)
+            pause.awaitMidRead()
+            // A jump far ahead: page 1 is no longer worth finishing.
+            backend.onPageRequested(6)
+            pause.resume()
+            backend.awaitEncodedPreload()
+            assertEquals(MangaImageCacheSnapshot(0, 0, 0, 0), backend.snapshot())
+            assertEquals(setOf("1.jpg"), pause.checkedPaths())
+            // The check that was paused is the last one: no further chunk of page 1 was read.
+            assertEquals(PAUSE_AT_CHECK, pause.checks("1.jpg"))
+        } finally { backend.close() }
+    }
+
+    @Test fun theNextPassWaitsForTheSupersededReadInsteadOfReadingAlongside() = kotlinx.coroutines.runBlocking {
+        val pause = PausedPreparation(temporary.newFolder())
+        val backend = pause.backend()
+        try {
+            backend.onPageRequested(0)
+            backend.preloadScript(0)
+            pause.awaitMidRead()
+            backend.onPageRequested(1)
+            // Page 1 became visible: its own pass (pages 2, 0 and 3) is started at once.
+            backend.preloadScript(1)
+            pause.resume()
+            backend.awaitEncodedPreload()
+            // Page 1 was read once, then each of the new window's pages once.
+            assertEquals(4L, backend.snapshot().reads)
+            assertEquals(4, backend.snapshot().entries)
+            // Only one preparation read was in flight at a time.
+            assertEquals(pause.checks("1.jpg"), pause.checksOfPage1WhenPage2Started())
+        } finally { backend.close() }
+    }
+
+    /** Pauses encoded preparation of 1.jpg partway through until [resume]. */
+    private inner class PausedPreparation(private val root: java.io.File) {
+        val files = (0..3).map { index ->
+            root.resolve("$index.jpg").apply { writeBytes(ByteArray(1 shl 20) { index.toByte() }) }
+        }
+        private val counts = java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.atomic.AtomicInteger>()
+        private val midRead = java.util.concurrent.CountDownLatch(1)
+        private val resumed = java.util.concurrent.CountDownLatch(1)
+        private val page1AtPage2Start = java.util.concurrent.atomic.AtomicInteger(-1)
+
+        fun backend() = MangaImageLoaderBackend(root, book, MangaImageCachePolicy(8L shl 20, 0)) { path ->
+            val count = counts.getOrPut(path) { java.util.concurrent.atomic.AtomicInteger() }.incrementAndGet()
+            if (path == "2.jpg" && count == 1) page1AtPage2Start.set(checks("1.jpg"))
+            if (path == "1.jpg" && count == PAUSE_AT_CHECK) {
+                midRead.countDown()
+                check(resumed.await(5, java.util.concurrent.TimeUnit.SECONDS)) { "Test never resumed preparation" }
+            }
+        }
+
+        fun awaitMidRead() = assertTrue(midRead.await(5, java.util.concurrent.TimeUnit.SECONDS))
+        fun resume() = resumed.countDown()
+        fun checks(path: String) = counts[path]?.get() ?: 0
+        fun checkedPaths(): Set<String> = counts.keys.toSet()
+        fun checksOfPage1WhenPage2Started() = page1AtPage2Start.get()
+    }
 }
+
+/** A 1 MiB page is read in sixteen 64 KiB chunks, each preceded by a check: this is mid-file. */
+private const val PAUSE_AT_CHECK = 10
