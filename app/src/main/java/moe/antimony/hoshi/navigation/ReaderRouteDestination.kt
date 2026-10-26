@@ -60,6 +60,9 @@ internal fun ReaderRouteDestination(
     val activeBookLease = remember(bookId) { HttpSyncActiveBooks.Lease() }
     val lifecycleOwner = LocalLifecycleOwner.current
     var reloadKey by remember(bookId) { mutableIntStateOf(0) }
+    // The reader is keyed by the load that produced its state, not by the reload request: keying
+    // by the request composes a throwaway reader from the retired state until Loading arrives.
+    var loadedKey by remember(bookId) { mutableIntStateOf(0) }
     val sessionReloadBarrier = remember(bookId) { ReaderSessionReloadBarrier() }
     val autoSyncExportController = remember(bookId, appContainer) {
         ReaderAutoSyncExportController(appContainer.appScope)
@@ -84,6 +87,7 @@ internal fun ReaderRouteDestination(
     fun reloadReader() {
         // Retire the tracker before any asynchronous import can update its base. Disposal
         // then cannot write the old running day over newly imported statistics.
+        autoSyncExportController.holdExports()
         sessionReloadBarrier.retire()
         remoteUpdateGate.close()
         reloadKey += 1
@@ -99,11 +103,12 @@ internal fun ReaderRouteDestination(
         stateHolder,
         reloadKey,
     ) {
+        val requestedKey = reloadKey
         remoteUpdateGate.close()
         value = ReaderRouteLoadState.Loading
         sessionReloadBarrier.awaitWrites()
         autoSyncExportController.pauseExportsForImport()
-        value = stateHolder.load(
+        val loaded = stateHolder.load(
             bookId = bookId,
             beforeBookmarkRead = remoteUpdateGate::open,
             beforeBookmarkLoad = { entry ->
@@ -130,6 +135,8 @@ internal fun ReaderRouteDestination(
                 }
             },
         )
+        loadedKey = requestedKey
+        value = loaded
         autoSyncExportController.resumeExports(autoSyncState.isReaderAutoSyncEnabled)
     }
 
@@ -220,7 +227,7 @@ internal fun ReaderRouteDestination(
                     scheduleExport(state.entry)
                 }
             }
-            key(reloadKey) {
+            key(loadedKey) {
             ReaderWebView(
                 book = state.book,
                 bookRoot = state.bookRoot,

@@ -1300,7 +1300,11 @@ fun ReaderWebView(
             event = ReaderLifecycleAutoSyncEvent.Resume,
             inactiveElapsedMillis = inactiveAt?.let { SystemClock.elapsedRealtime() - it },
         )
-        if (plan.importOnForeground && onForegroundAutoSyncImport()) return@rememberUpdatedState
+        // The import reloads the reader, which releases its audiobook player. Never stop audio
+        // that kept playing in the background; while it plays, it drives the position anyway.
+        if (plan.importOnForeground && sasayakiPlayer?.isPlaying != true && onForegroundAutoSyncImport()) {
+            return@rememberUpdatedState
+        }
         resumeStatisticsForLifecycleStartIfNeeded()
     }
     val currentLifecyclePause = rememberUpdatedState {

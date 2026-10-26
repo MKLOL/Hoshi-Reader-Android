@@ -45,6 +45,23 @@ class ReaderAutoSyncExportControllerTest {
     }
 
     @Test
+    fun aRequestedReloadKeepsTheRetiringReadersFlushFromExportingBeforeTheImport() = runBlocking {
+        val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        val controller = ReaderAutoSyncExportController(appScope)
+        var exports = 0
+        controller.holdExports()
+        // Retirement saves statistics and disposal flushes, all before the reload coroutine runs.
+        controller.scheduleExport(true) { exports++ }
+        assertEquals(null, controller.flushExport(true))
+        controller.pauseExportsForImport()
+        assertEquals(0, exports)
+        controller.resumeExports(true)
+        controller.flushExport(true)?.join()
+        assertEquals(1, exports)
+        appScope.cancel()
+    }
+
+    @Test
     fun flushExportSurvivesCallerScopeCancellationAndWaitsForLatestSave() = runBlocking {
         val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
         val callerJob = Job()

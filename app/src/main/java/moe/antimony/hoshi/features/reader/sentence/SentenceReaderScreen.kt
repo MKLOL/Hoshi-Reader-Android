@@ -147,7 +147,10 @@ internal fun SentenceReaderScreen(
     val sessionReloadBarrier = remember(bookId) { ReaderSessionReloadBarrier() }
     val autoSyncExportController = remember(bookId, appContainer) { ReaderAutoSyncExportController(appContainer.appScope) }
     var reloadKey by remember(bookId) { mutableIntStateOf(0) }
+    // Keyed by the load that produced the content, never by the request (see ReaderRouteDestination).
+    var loadedKey by remember(bookId) { mutableIntStateOf(0) }
     fun reloadReader() {
+        autoSyncExportController.holdExports()
         sessionReloadBarrier.retire()
         remoteUpdateGate.close()
         reloadKey += 1
@@ -158,11 +161,12 @@ internal fun SentenceReaderScreen(
         }
     }
     val loadState by produceState<SentenceReaderLoadState>(SentenceReaderLoadState.Loading, bookId, reloadKey) {
+        val requestedKey = reloadKey
         remoteUpdateGate.close()
         value = SentenceReaderLoadState.Loading
         sessionReloadBarrier.awaitWrites()
         autoSyncExportController.pauseExportsForImport()
-        value = runCatching {
+        val loaded = runCatching {
             withContext(Dispatchers.IO) { appContainer.dictionaryRepository.rebuildLookupQuery() }
             SentenceReaderLoader(
                 readerStateHolder,
@@ -198,6 +202,8 @@ internal fun SentenceReaderScreen(
             if (error is CancellationException) throw error
             SentenceReaderLoadState.Error(error.localizedMessage ?: error.javaClass.simpleName)
         }
+        loadedKey = requestedKey
+        value = loaded
         autoSyncExportController.resumeExports(autoSyncState.isReaderAutoSyncEnabled)
     }
     var lastInactiveAtMillis by remember(bookId) { mutableStateOf<Long?>(null) }
@@ -265,7 +271,7 @@ internal fun SentenceReaderScreen(
                 Text(state.message, color = foreground, textAlign = TextAlign.Center)
                 TextButton(onClick = onClose) { Text(stringResource(R.string.action_close)) }
             }
-            is SentenceReaderLoadState.Ready -> key(reloadKey) { SentenceReaderContent(
+            is SentenceReaderLoadState.Ready -> key(loadedKey) { SentenceReaderContent(
                 bookId = bookId,
                 state = state,
                 readerSettings = readerSettings,
@@ -347,7 +353,9 @@ private fun SentenceReaderContent(
         session?.statisticsForPersistenceOrNull()?.let { statistics ->
             val save = progressSession.saveStatistics(statistics, flush)
             appContainer.bookRepository.trackStatisticsSave(state.readerState.bookRoot, save)
-            onScheduleExport()
+            // Like normal mode, idle time reaches ッツ when the reader is left, not every 30 s;
+            // sentence moves schedule their own export with the bookmark.
+            if (flush) onScheduleExport()
         }
     }
     val prepareSessionReload by rememberUpdatedState {

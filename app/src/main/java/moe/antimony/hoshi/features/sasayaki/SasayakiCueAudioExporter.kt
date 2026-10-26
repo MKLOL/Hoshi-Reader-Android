@@ -37,6 +37,7 @@ internal class SasayakiCueAudioExporter(
         range: SasayakiCueAudioRange,
     ): File? = runCatching {
         outputRoot.mkdirs()
+        pruneConsumedOutputs()
         val output = outputRoot.resolve(outputFileName(cue))
         val transformerOutput = outputRoot.resolve("${output.name}.tmp.m4a")
         if (output.exists()) output.delete()
@@ -136,12 +137,20 @@ internal class SasayakiCueAudioExporter(
     private val SasayakiCueAudioRange.endPositionMs: Long
         get() = (endTime * 1000.0).toLong().coerceAtLeast(startPositionMs + 1L)
 
+    /** Unique names no longer overwrite earlier clips; Anki copies each within seconds. */
+    private fun pruneConsumedOutputs() {
+        val cutoff = System.currentTimeMillis() - ConsumedOutputAgeMs
+        outputRoot.listFiles { file -> file.name.startsWith("hoshi_sasayaki_") && file.lastModified() < cutoff }
+            ?.forEach { it.delete() }
+    }
+
     private fun outputFileName(cue: SasayakiMatch): String =
         // Independent popup mining requests may encode the same cue concurrently. Keep
         // their files distinct until Anki has consumed and named them by content hash.
         "hoshi_sasayaki_${cue.id.hashCode().toLong().and(0xffffffffL)}_${UUID.randomUUID()}.aac"
 
     private companion object {
+        const val ConsumedOutputAgeMs = 60L * 60L * 1_000L
         const val ExportTimeoutMs = 30_000L
     }
 }

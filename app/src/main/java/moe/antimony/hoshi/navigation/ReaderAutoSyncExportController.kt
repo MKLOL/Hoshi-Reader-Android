@@ -30,11 +30,20 @@ internal class ReaderAutoSyncExportController(
         latestSaveJob?.join()
     }
 
-    /** A pending export must never replace the external base while an import reads it. */
-    suspend fun pauseExportsForImport() {
+    /**
+     * Called synchronously when a reload is requested, before the old reader is retired: its
+     * retirement and disposal save and flush, and that stale state must not be exported over a
+     * newer external base before the import reads it. The queued export runs after [resumeExports].
+     */
+    fun holdExports() {
         importsInProgress = true
         debounceJob?.cancel()
         debounceJob = null
+    }
+
+    /** A pending export must never replace the external base while an import reads it. */
+    suspend fun pauseExportsForImport() {
+        holdExports()
         exportJob?.join()
         awaitSaves()
     }
