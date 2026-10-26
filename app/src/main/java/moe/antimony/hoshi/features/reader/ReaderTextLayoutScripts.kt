@@ -4,6 +4,9 @@ package moe.antimony.hoshi.features.reader
 internal fun readerTextLayoutScript(): String = """
 (function () {
   'use strict';
+  // One layout per document. A second copy would wrap the words again and place a second set
+  // of sentence breaks over the first set.
+  if (window.hoshiTextLayout) return;
   // Reuse one live Range: thousands of detached ranges make every later DOM mutation quadratic.
   // Park it in a detached node while editing the page, so no mutation has to update its
   // boundary offsets (each update walks the children of a possibly very long paragraph).
@@ -555,6 +558,10 @@ internal fun readerTextLayoutScript(): String = """
       setBreak(sentence, on);
       if (!changes++) next = before;
     }
+    function requireBreak(sentence) {
+      sentence.required = true;
+      if (sentence.dropped) sentence.settled = true;
+    }
     // WebView 133 makes a paragraph's first line taller when it carries ruby, but places it as
     // if it were not: the line overhangs the end of its page, or its ruby stays at the end of
     // one page while its text opens the next. A forced break right after such a line skips a
@@ -646,8 +653,10 @@ internal fun readerTextLayoutScript(): String = """
       var fitsPage = !isOversized(sentence) && end - start <= bottom - sentence.inset + tolerance;
       var crosses = measurement.first !== measurement.last;
       // A required break opening a page that holds less than half a page is stale. One is
-      // dropped per correction; later ones still stop the estimate so that it settles.
-      var stale = sentence.required && !droppedStale && fitsWithRoom && start - pageTop < bottom / 2;
+      // dropped per correction; later ones still stop the estimate so that it settles. A break
+      // the layout required again after one was dropped is kept: dropping it again would only
+      // repeat the same two passes.
+      var stale = sentence.required && !sentence.settled && !droppedStale && fitsWithRoom && start - pageTop < bottom / 2;
       var previousLast = page;
       if (synced) {
         if (crosses && !hasBreak(sentence) && !isOversized(sentence) && leavesBlankPage(measurement.first, previousLast)) {
@@ -664,7 +673,7 @@ internal fun readerTextLayoutScript(): String = """
           var line = strandedLine(measurement.boxes, measurement.first, false);
           var opener = (line && lineOpener(index, line)) || sentence;
           change(opener, true);
-          opener.required = true;
+          requireBreak(opener);
           synced = false;
           anchor(opener);
         } else if (measurement.first > page && hasBreak(sentence) && leavesBlankPage(measurement.first - 1, previousLast)) {
@@ -676,7 +685,7 @@ internal fun readerTextLayoutScript(): String = """
           synced = false;
           if (opening) {
             change(opening, true);
-            opening.required = true;
+            requireBreak(opening);
             anchor(opening);
           } else {
             sentence.start.dataset.oversized = 'true';
@@ -690,6 +699,7 @@ internal fun readerTextLayoutScript(): String = """
           if (hasBreak(sentence) && (sentence.required ? stale : fitsWithRoom || short)) {
             change(sentence, false);
             droppedStale = sentence.required;
+            sentence.dropped = sentence.dropped || sentence.required;
             sentence.required = false;
             synced = false;
             // Keep estimating from where the real layout puts this sentence on that page.
@@ -712,7 +722,7 @@ internal fun readerTextLayoutScript(): String = """
       } else if (fits) {
         if (hasBreak(sentence)) {
           change(sentence, false);
-          if (sentence.required) droppedStale = true;
+          if (sentence.required) droppedStale = sentence.dropped = true;
           sentence.required = false;
         }
       } else if (fitsPage) {
@@ -790,7 +800,7 @@ internal fun readerTextLayoutScript(): String = """
     sentences.forEach(function (sentence) {
       setBreak(sentence, false);
       delete sentence.start.dataset.oversized;
-      sentence.required = false;
+      sentence.required = sentence.dropped = sentence.settled = false;
     });
     try {
       placeSentenceBreaks(sentences, reader.getScrollContext());
@@ -825,6 +835,21 @@ internal fun readerTextLayoutScript(): String = """
     }
   }
   function visibleText() { return runs().map(function (run) { return run.text; }).join(''); }
+  // What the breaks were placed for: the page box and how the body text's font renders. A web
+  // font that finishes loading after the layout changes it.
+  var fontProbe = null;
+  function layoutSignature(reader) {
+    var style = getComputedStyle(document.body);
+    fontProbe = fontProbe || document.createElement('canvas').getContext('2d');
+    var signature = [reader.pageWidth, reader.pageHeight, document.body.clientWidth, document.body.clientHeight,
+      style.paddingTop, style.paddingRight, style.paddingBottom, style.paddingLeft, style.fontSize, style.lineHeight];
+    if (fontProbe) {
+      fontProbe.font = style.fontStyle + ' ' + style.fontWeight + ' ' + style.fontSize + ' ' + style.fontFamily;
+      var metrics = fontProbe.measureText('永あア漢字。「」Aa1');
+      signature.push(metrics.width, metrics.fontBoundingBoxAscent, metrics.fontBoundingBoxDescent);
+    }
+    return signature.join('|');
+  }
   var textBefore = null;
   window.hoshiTextLayout = {
     prepare: function (reader, paginated) {
@@ -835,21 +860,46 @@ internal fun readerTextLayoutScript(): String = """
       wrapWords();
       this.sentences = paginated ? sentenceAnchors() : [];
       this.buttons = translationButtons();
-      if (paginated) placeBreaksSafely(this.sentences, reader);
+      if (!paginated) return;
+      placeBreaksSafely(this.sentences, reader);
+      this.signature = layoutSignature(reader);
+      this.watch(reader);
     },
     // The characters before the shown page, read before the buttons are added to it.
     position: function (reader) { return this.prepared && this.paginated ? charactersBeforePage(reader) : null; },
+    // Places the breaks again and shows the page holding the character at [position].
+    relayout: function (reader, position) {
+      if (position == null) position = charactersBeforePage(reader);
+      placeBreaksSafely(this.sentences, reader);
+      this.signature = layoutSignature(reader);
+      reader.paginationMetrics = null;
+      showCharacter(reader, position);
+    },
     // Sentence translation buttons can arrive after the breaks were placed; each takes room in
     // a line. Places the breaks again for the new buttons and shows the page holding the
     // character at [position], the reader's place before the buttons moved the text.
     refresh: function (reader, position) {
       if (!this.prepared || !this.paginated || translationButtons() === this.buttons) return false;
       this.buttons = translationButtons();
-      if (position == null) position = charactersBeforePage(reader);
-      placeBreaksSafely(this.sentences, reader);
-      reader.paginationMetrics = null;
-      showCharacter(reader, position);
+      this.relayout(reader, position);
       return true;
+    },
+    // Breaks placed for one layout leave short pages in another: places them again when the
+    // page box or the body text's font no longer match the layout they were placed for.
+    revalidate: function (reader) {
+      if (!this.prepared || !this.paginated || layoutSignature(reader) === this.signature) return false;
+      this.relayout(reader);
+      return true;
+    },
+    // Checks again whenever a font finishes loading: the layout can start before the reader's
+    // web font has loaded. A new viewport reloads the chapter instead.
+    watch: function (reader) {
+      var layout = this, pending = null;
+      if (!document.fonts || !document.fonts.addEventListener) return;
+      document.fonts.addEventListener('loadingdone', function () {
+        if (pending !== null) return;
+        pending = setTimeout(function () { pending = null; layout.revalidate(reader); }, 100);
+      });
     },
     // Checked on demand: reading the whole chapter again is only needed for verification.
     get textPreserved() { return textBefore !== null && textBefore === visibleText(); }

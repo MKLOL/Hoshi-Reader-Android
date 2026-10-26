@@ -798,8 +798,18 @@ private fun readerSetupScript(
         highlightsJson = highlightsJson,
         restoreToken = restoreToken,
     ).scriptTagBody()
+    val restoreTokenLiteral = readerJavaScriptStringLiteral(restoreToken)
     return """
         (function() {
+          // One setup per chapter document. Two loads can race: a mode switch in vertical
+          // writing reloads for the new settings and again for the WebView's new width, and the
+          // first load's finished page can reach the second document. A second setup would lay
+          // the chapter out again over the first; the later load's token still completes restore.
+          if (window.hoshiReaderSetUp) {
+            window.hoshiReader?.adoptRestoreToken?.($restoreTokenLiteral);
+            return;
+          }
+          window.hoshiReaderSetUp = true;
           document.documentElement.dataset.hoshiReaderEinkMode = $eInkMode;
           var style = document.createElement('style');
           style.textContent = $css;

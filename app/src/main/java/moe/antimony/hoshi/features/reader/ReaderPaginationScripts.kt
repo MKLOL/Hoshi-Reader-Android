@@ -135,10 +135,20 @@ internal object ReaderPaginationScripts {
             return fallbackOffset;
           },
 	          notifyRestoreComplete: function() {
+	            this.notifiedRestoreToken = this.restoreToken || $restoreTokenLiteral;
 	            if (window.HoshiReaderRestore && window.HoshiReaderRestore.postMessage) {
-	              window.HoshiReaderRestore.postMessage($restoreTokenLiteral);
+	              window.HoshiReaderRestore.postMessage(this.notifiedRestoreToken);
 	            }
 	            this.warmPaginationMetrics();
+	          },
+	          // A later load whose setup found this document already set up hands over its token.
+	          adoptRestoreToken: function(token) {
+	            this.restoreToken = token;
+	            if (this.notifiedRestoreToken === undefined || this.notifiedRestoreToken === token) return;
+	            this.notifiedRestoreToken = token;
+	            if (window.HoshiReaderRestore && window.HoshiReaderRestore.postMessage) {
+	              window.HoshiReaderRestore.postMessage(token);
+	            }
 	          },
           createWalker: function(rootNode) {
             var root = rootNode || document.body;
@@ -1151,8 +1161,18 @@ internal object ReaderPaginationScripts {
             return fallbackOffset;
           },
 	          notifyRestoreComplete: function() {
+	            this.notifiedRestoreToken = this.restoreToken || $restoreTokenLiteral;
 	            if (window.HoshiReaderRestore && window.HoshiReaderRestore.postMessage) {
-	              window.HoshiReaderRestore.postMessage($restoreTokenLiteral);
+	              window.HoshiReaderRestore.postMessage(this.notifiedRestoreToken);
+	            }
+	          },
+	          // A later load whose setup found this document already set up hands over its token.
+	          adoptRestoreToken: function(token) {
+	            this.restoreToken = token;
+	            if (this.notifiedRestoreToken === undefined || this.notifiedRestoreToken === token) return;
+	            this.notifiedRestoreToken = token;
+	            if (window.HoshiReaderRestore && window.HoshiReaderRestore.postMessage) {
+	              window.HoshiReaderRestore.postMessage(token);
 	            }
 	          },
           scrollToChapterStart: function() {

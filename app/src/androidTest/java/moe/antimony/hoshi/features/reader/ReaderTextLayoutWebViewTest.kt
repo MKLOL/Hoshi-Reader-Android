@@ -361,6 +361,63 @@ class ReaderTextLayoutWebViewTest {
     }
 
     @Test
+    fun aSecondCopyOfTheLayoutScriptLeavesTheDocumentsLayoutAlone() {
+        val content = regularFixture()
+        val again = """
+            (function() {
+              var before = document.querySelectorAll('.hoshi-sentence-start').length;
+              var breaks = document.querySelectorAll('.hoshi-sentence-page-break,.hoshi-sentence-block-break').length;
+              ${readerTextLayoutScript()}
+              window.hoshiTextLayout.prepare(window.hoshiReader, true);
+              return JSON.stringify({before: before, after: document.querySelectorAll('.hoshi-sentence-start').length, breaks: breaks,
+                breaksAfter: document.querySelectorAll('.hoshi-sentence-page-break,.hoshi-sentence-block-break').length});
+            })();
+        """.trimIndent()
+        for (vertical in listOf(false, true)) {
+            val result = render(ReaderSettings(verticalWriting = vertical, fontSize = 20), content, again)
+            assertPreserved(result)
+            val second = result.getJSONObject("beforeInspect")
+            assertEquals("a second layout added sentence markers: $second", second.getInt("before"), second.getInt("after"))
+            assertEquals("a second layout changed the breaks: $second", second.getInt("breaks"), second.getInt("breaksAfter"))
+        }
+    }
+
+    @Test
+    fun breaksArePlacedAgainWhenThePageBoxChangesAfterLayout() {
+        val lengths = listOf(9, 31, 14, 47, 22, 6, 38, 17, 26, 11, 43, 19)
+        val content = (0 until 70).joinToString("") { paragraph ->
+            "<p>" + (0..paragraph % 5).joinToString("") { sentence ->
+                "あ".repeat(lengths[(paragraph * 3 + sentence) % lengths.size]) + "大丈夫です。"
+            } + "</p>"
+        }
+        // The page's padding grows after layout, as when a viewport changes without a reload.
+        val change = """
+            (function() {
+              var unchanged = window.hoshiTextLayout.revalidate(window.hoshiReader);
+              document.documentElement.style.setProperty('--hoshi-vertical-padding-block', '24px');
+              document.documentElement.style.setProperty('--hoshi-vertical-padding-gap', '48px');
+              var changed = window.hoshiTextLayout.revalidate(window.hoshiReader);
+              var again = window.hoshiTextLayout.revalidate(window.hoshiReader);
+              return JSON.stringify({unchanged: unchanged, changed: changed, again: again});
+            })();
+        """.trimIndent()
+        for (vertical in listOf(false, true)) {
+            val result = render(ReaderSettings(verticalWriting = vertical, fontSize = 20), content, change)
+            assertPreserved(result)
+            val revalidated = result.getJSONObject("beforeInspect")
+            assertFalse("an unchanged layout placed its breaks again: $revalidated", revalidated.getBoolean("unchanged"))
+            assertTrue("a changed page box kept the old breaks: $revalidated", revalidated.getBoolean("changed"))
+            assertFalse("the new layout placed its breaks again: $revalidated", revalidated.getBoolean("again"))
+            val sentences = result.getJSONArray("sentences")
+            for (index in 0 until sentences.length()) {
+                val sentence = sentences.getJSONObject(index)
+                assertEquals("a fitting sentence crosses a page after the change: $sentence", sentence.getInt("first"), sentence.getInt("last"))
+            }
+            assertEquals("a forced break leaves a short page its sentence fits on: $result", "[]", result.getJSONArray("staleBreaks").toString())
+        }
+    }
+
+    @Test
     fun translationButtonsArrivingAfterLayoutPlaceTheBreaksAgainAtTheSamePosition() {
         val lengths = listOf(9, 31, 14, 47, 22, 6, 38, 17, 26, 11, 43, 19)
         val buttonCss = ".hoshi-tl { display: inline-block; width: .6em; height: .6em; margin-inline-end: .45em; }"
