@@ -293,7 +293,7 @@ class HttpSyncKvClient(
                 context.ensureActive()
                 val (code, raw) = readBody(connection)
                 context.ensureActive()
-                if (code !in 200..299) throw HttpSyncException(parseError(code, raw))
+                if (code !in 200..299) throw HttpSyncException(parseError(code, raw), httpCode = code)
                 json.decodeFromString(HttpSyncKvWriteResponse.serializer(), raw)
             }
         } catch (e: HttpSyncException) {
@@ -350,7 +350,7 @@ class HttpSyncKvClient(
                 context.ensureActive()
                 val (code, raw) = readBody(connection)
                 context.ensureActive()
-                if (code !in 200..299) throw HttpSyncException(parseError(code, raw))
+                if (code !in 200..299) throw HttpSyncException(parseError(code, raw), httpCode = code)
                 json.decodeFromString(HttpSyncKvWriteResponse.serializer(), raw)
             }
         } catch (e: HttpSyncException) {
@@ -409,7 +409,7 @@ class HttpSyncKvClient(
                 context.ensureActive()
                 val (code, raw) = readBody(connection)
                 context.ensureActive()
-                if (code !in 200..299) throw HttpSyncException(parseError(code, raw))
+                if (code !in 200..299) throw HttpSyncException(parseError(code, raw), httpCode = code)
                 json.decodeFromString(HttpSyncMultipartStartResponse.serializer(), raw).uploadId
             }
         } finally {
@@ -492,7 +492,7 @@ class HttpSyncKvClient(
                 context.ensureActive()
                 val (code, raw) = readBody(connection)
                 context.ensureActive()
-                if (code !in 200..299) throw HttpSyncException(parseError(code, raw))
+                if (code !in 200..299) throw HttpSyncException(parseError(code, raw), httpCode = code)
             }
         } finally {
             connection.disconnect()
@@ -521,7 +521,7 @@ class HttpSyncKvClient(
                 context.ensureActive()
                 val (code, raw) = readBody(connection)
                 context.ensureActive()
-                if (code !in 200..299) throw HttpSyncException(parseError(code, raw))
+                if (code !in 200..299) throw HttpSyncException(parseError(code, raw), httpCode = code)
                 val response = json.decodeFromString(HttpSyncMultipartCompleteResponse.serializer(), raw)
                 HttpSyncKvWriteResponse(
                     key = response.key,
@@ -563,7 +563,7 @@ class HttpSyncKvClient(
                 val raw = (connection.errorStream ?: connection.inputStream)
                     ?.bufferedReader()?.use { it.readText() }
                     .orEmpty()
-                throw HttpSyncException(parseError(code, raw))
+                throw HttpSyncException(parseError(code, raw), httpCode = code)
             }
             // Defensive null check: per HTTP spec a 2xx with a body always has a non-null
             // inputStream, but a misbehaving proxy / Cloudflare worker could return 200 with
@@ -631,7 +631,7 @@ class HttpSyncKvClient(
                 val raw = (connection.errorStream ?: connection.inputStream)
                     ?.bufferedReader()?.use { it.readText() }
                     .orEmpty()
-                throw HttpSyncException(parseError(code, raw))
+                throw HttpSyncException(parseError(code, raw), httpCode = code)
             }
             val range = connection.getHeaderField("Content-Range")
                 ?.let { CONTENT_RANGE.matchEntire(it.trim()) }
@@ -682,7 +682,7 @@ class HttpSyncKvClient(
         val connection = openConnection("GET", "/v1/kv$query", contentType = null)
         try {
             val (code, raw) = readBody(connection)
-            if (code !in 200..299) throw HttpSyncException(parseError(code, raw))
+            if (code !in 200..299) throw HttpSyncException(parseError(code, raw), httpCode = code)
             json.decodeFromString(HttpSyncKvList.serializer(), raw)
         } catch (e: HttpSyncException) {
             throw e
@@ -703,7 +703,7 @@ class HttpSyncKvClient(
                 val raw = (connection.errorStream ?: connection.inputStream)
                     ?.bufferedReader()?.use { it.readText() }
                     .orEmpty()
-                throw HttpSyncException(parseError(code, raw))
+                throw HttpSyncException(parseError(code, raw), httpCode = code)
             } catch (e: HttpSyncException) {
                 throw e
             } catch (e: Exception) {

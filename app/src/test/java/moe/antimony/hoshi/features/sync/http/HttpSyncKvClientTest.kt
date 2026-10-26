@@ -79,6 +79,17 @@ class HttpSyncKvClientTest {
     }
 
     @Test
+    fun aRefusedTokenFailsWithItsHttpStatusSoSetupCanOfferToEditIt() {
+        val error = TestKvServer().use { server ->
+            val client = clientFor(server, bearerToken = "revoked-token")
+            assertThrows(HttpSyncException::class.java) {
+                runBlocking { client.list(prefix = "books/", since = null, cursor = null, limit = null) }
+            }
+        }
+        assertEquals(401, error.httpCode)
+    }
+
+    @Test
     fun putFileCancelsMultipartUploadWhenAPartFails() {
         val error = TestKvServer(failingPart = 2).use { server ->
             val client = clientFor(server, ioDispatcher = Dispatchers.IO)
@@ -283,10 +294,11 @@ class HttpSyncKvClientTest {
         server: TestKvServer,
         trailingSlashBaseUrl: Boolean = false,
         ioDispatcher: kotlinx.coroutines.CoroutineDispatcher = Dispatchers.Unconfined,
+        bearerToken: String = "test-token",
     ): HttpSyncKvClient =
         HttpSyncKvClient(
             baseUrl = if (trailingSlashBaseUrl) "${server.baseUrl}/" else server.baseUrl,
-            bearerToken = "test-token",
+            bearerToken = bearerToken,
             ioDispatcher = ioDispatcher,
             multipartPartSizeBytes = 4,
             multipartThresholdBytes = 4,

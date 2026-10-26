@@ -152,6 +152,25 @@ class HttpSyncManualSyncTest {
     }
 
     @Test
+    fun onlyAServerRefusingTheTokenCountsAsARejectedToken() = runBlocking {
+        val outcomes = listOf<() -> HttpSyncResult>(
+            { throw HttpSyncException("Server rejected the bearer token (HTTP 401).", httpCode = 401) },
+            { throw HttpSyncException("Server forbids this request (HTTP 403).", httpCode = 403) },
+            { throw HttpSyncException("Server is having trouble (HTTP 503).", httpCode = 503) },
+            { throw java.io.IOException("No network") },
+            { throw HttpSyncException(moe.antimony.hoshi.R.string.http_sync_invalid_pagination) },
+            { emptyResult().copy(errors = listOf("Shared book: download failed (HTTP 500).")) },
+        )
+        val rejected = outcomes.map { outcome ->
+            val sync = HttpSyncManualSync(this) { outcome() }
+            sync.start()
+            yield()
+            sync.status.value.rejectsToken
+        }
+        assertEquals(listOf(true, true, false, false, false, false), rejected)
+    }
+
+    @Test
     fun protocolFailuresKeepTheLocalizedMessageForTheUi() = runBlocking {
         val resource = moe.antimony.hoshi.R.string.http_sync_invalid_pagination
         val sync = HttpSyncManualSync(this) { throw HttpSyncException(resource) }

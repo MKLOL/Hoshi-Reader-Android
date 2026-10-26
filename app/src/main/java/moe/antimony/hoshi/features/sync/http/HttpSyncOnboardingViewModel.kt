@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
@@ -32,6 +33,8 @@ internal class HttpSyncOnboardingViewModel(
     private val repository: HttpSyncSettingsRepository,
     private val startSync: () -> Unit,
     private val dictionaries: DefaultDictionaryDownload,
+    /** The shared sync's outcome; only a token the server refused may be edited or dropped. */
+    private val syncStatus: StateFlow<SyncStatus>,
 ) : ViewModel() {
     private val mutableState = MutableStateFlow(HttpSyncOnboardingUiState())
     val state = mutableState.asStateFlow()
@@ -87,12 +90,14 @@ internal class HttpSyncOnboardingViewModel(
 
     fun finishLater() {
         if (state.value.step != HttpSyncOnboardingStep.Later || state.value.saving) return
-        // Reaching this after a saved token is only possible through Edit token, offered when that
-        // token failed. Without a token, background sync must not keep retrying the abandoned one.
-        val abandonedToken = startedSync
+        // A token saved here reaches this only through Edit token, offered when the server refused
+        // it: without a token, background sync must not keep retrying a refused one. A token whose
+        // latest sync was not refused (it ran, even with errors, or is still running) is kept.
+        val savedHere = startedSync
         save(HttpSyncOnboardingStep.Dictionaries) {
             repository.update {
-                it.copy(bearerToken = if (abandonedToken) "" else it.bearerToken, hasCompletedOnboarding = true)
+                val refused = savedHere && syncStatus.value.rejectsToken
+                it.copy(bearerToken = if (refused) "" else it.bearerToken, hasCompletedOnboarding = true)
             }
             startedSync = false
         }
@@ -122,8 +127,11 @@ internal class HttpSyncOnboardingViewModel(
         if (state.value.step == HttpSyncOnboardingStep.Status) show(HttpSyncOnboardingStep.Hidden)
     }
 
+    /** Offered only when the server refused the token: a sync that ran with errors keeps it. */
     fun editToken() {
-        if (state.value.step == HttpSyncOnboardingStep.Status) show(HttpSyncOnboardingStep.Token)
+        if (state.value.step == HttpSyncOnboardingStep.Status && syncStatus.value.rejectsToken) {
+            show(HttpSyncOnboardingStep.Token)
+        }
     }
 
     /** Moves to [step]; a dictionary step that is already finished is passed over. */

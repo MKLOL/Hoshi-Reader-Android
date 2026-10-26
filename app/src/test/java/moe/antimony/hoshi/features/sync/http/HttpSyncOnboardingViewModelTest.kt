@@ -14,6 +14,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import androidx.datastore.preferences.core.stringPreferencesKey
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
@@ -73,7 +74,7 @@ class HttpSyncOnboardingViewModelTest {
                 downloadedBookmarks = 0, downloadedChatEntries = 0, remoteOnlyBooks = 0, errors = emptyList(),
             )
         }
-        val model = models.create(repository, start = manualSync::start)
+        val model = models.create(repository, manualSync)
         advanceUntilIdle()
         model.useToken("   ")
         assertEquals(HttpSyncOnboardingStep.Token, model.state.value.step)
@@ -95,13 +96,13 @@ class HttpSyncOnboardingViewModelTest {
     }
 
     @Test
-    fun aFailedSyncCanEditAndRetryItsToken() = withRepository { repository, models ->
+    fun aRejectedTokenCanBeEditedAndRetried() = withRepository { repository, models ->
         val attemptedTokens = mutableListOf<String>()
         val manualSync = HttpSyncManualSync(this) {
             attemptedTokens += repository.settings.first().bearerToken
-            throw IOException("Unable to connect")
+            throw rejected()
         }
-        val model = models.create(repository, start = manualSync::start)
+        val model = models.create(repository, manualSync)
         advanceUntilIdle()
         model.useToken("invalid")
         advanceUntilIdle()
@@ -116,9 +117,9 @@ class HttpSyncOnboardingViewModelTest {
     }
 
     @Test
-    fun choosingNoTokenAfterAFailedOneStopsSyncingWithIt() = withRepository { repository, models ->
-        val manualSync = HttpSyncManualSync(this) { throw IOException("Unauthorized") }
-        val model = models.create(repository, start = manualSync::start)
+    fun choosingNoTokenAfterARejectedOneStopsSyncingWithIt() = withRepository { repository, models ->
+        val manualSync = HttpSyncManualSync(this) { throw rejected() }
+        val model = models.create(repository, manualSync)
         advanceUntilIdle()
         model.useToken("rejected")
         advanceUntilIdle()
@@ -132,6 +133,71 @@ class HttpSyncOnboardingViewModelTest {
         assertEquals(HttpSyncOnboardingStep.Hidden, model.state.value.step)
         assertFalse(repository.settings.first().isConfigured)
         assertTrue(repository.settings.first().hasCompletedOnboarding)
+    }
+
+    @Test
+    fun aSyncThatRanWithSomeErrorsKeepsItsWorkingTokenAndOffersNoEdit() = withRepository { repository, models ->
+        val manualSync = HttpSyncManualSync(this) {
+            synced().copy(errors = listOf("Shared book: download failed (HTTP 500).", "positions: unreadable history"))
+        }
+        val model = models.create(repository, manualSync)
+        advanceUntilIdle()
+        model.useToken("friend-token")
+        advanceUntilIdle()
+        model.skipDictionaries()
+        advanceUntilIdle()
+        assertTrue(manualSync.status.value is SyncStatus.Done)
+
+        model.editToken()
+        assertEquals(HttpSyncOnboardingStep.Status, model.state.value.step)
+        model.withoutToken()
+        model.finishLater()
+        model.dismissStatus()
+        advanceUntilIdle()
+        assertEquals(HttpSyncOnboardingStep.Hidden, model.state.value.step)
+        assertEquals("friend-token", repository.settings.first().bearerToken)
+        assertTrue(repository.settings.first().isConfigured)
+    }
+
+    @Test
+    fun aSyncThatCouldNotReachTheServerDoesNotOfferToReplaceTheToken() = withRepository { repository, models ->
+        val manualSync = HttpSyncManualSync(this) { throw IOException("No network") }
+        val model = models.create(repository, manualSync)
+        advanceUntilIdle()
+        model.useToken("friend-token")
+        advanceUntilIdle()
+        model.skipDictionaries()
+        advanceUntilIdle()
+        assertTrue(manualSync.status.value is SyncStatus.Failed)
+
+        model.editToken()
+        assertEquals(HttpSyncOnboardingStep.Status, model.state.value.step)
+        assertEquals("friend-token", repository.settings.first().bearerToken)
+    }
+
+    @Test
+    fun aRejectedTokenThatLaterSyncsIsKeptWhenSetupIsLeftWithoutAToken() = withRepository { repository, models ->
+        var refuse = true
+        val manualSync = HttpSyncManualSync(this) { if (refuse) throw rejected() else synced() }
+        val model = models.create(repository, manualSync)
+        advanceUntilIdle()
+        model.useToken("friend-token")
+        advanceUntilIdle()
+        model.skipDictionaries()
+        advanceUntilIdle()
+        model.editToken()
+        model.withoutToken()
+        assertEquals(HttpSyncOnboardingStep.Later, model.state.value.step)
+
+        // The server accepted the token on another pass before setup was left.
+        refuse = false
+        manualSync.start()
+        advanceUntilIdle()
+        model.finishLater()
+        advanceUntilIdle()
+        assertEquals(HttpSyncOnboardingStep.Hidden, model.state.value.step)
+        assertEquals("friend-token", repository.settings.first().bearerToken)
+        assertTrue(repository.settings.first().isConfigured)
     }
 
     @Test
@@ -327,6 +393,14 @@ class HttpSyncOnboardingViewModelTest {
         }
     }
 
+    /** What the server answers a token it refuses. */
+    private fun rejected() = HttpSyncException("Server rejected the bearer token (HTTP 401).", httpCode = 401)
+
+    private fun synced() = HttpSyncResult(
+        uploadedBookmarks = 0, uploadedChatEntries = 0, uploadedMetadata = 0,
+        downloadedBookmarks = 0, downloadedChatEntries = 0, remoteOnlyBooks = 0, errors = emptyList(),
+    )
+
     private fun withRepository(
         restoredInstall: RestoredInstallMarker? = null,
         isFreshInstall: Boolean = true,
@@ -371,16 +445,27 @@ class HttpSyncOnboardingViewModelTest {
             start: () -> Unit,
         ): HttpSyncOnboardingViewModel = create(repository, download(repository, install), start)
 
+        /** Setup wired to a real shared sync owner, as the app wires it. */
+        fun create(repository: HttpSyncSettingsRepository, sync: HttpSyncManualSync): HttpSyncOnboardingViewModel =
+            create(repository, download(repository), sync::start, sync.status)
+
         fun create(
             repository: HttpSyncSettingsRepository,
             download: DefaultDictionaryDownload,
             start: () -> Unit,
+        ): HttpSyncOnboardingViewModel = create(repository, download, start, MutableStateFlow(SyncStatus.Idle))
+
+        private fun create(
+            repository: HttpSyncSettingsRepository,
+            download: DefaultDictionaryDownload,
+            start: () -> Unit,
+            status: StateFlow<SyncStatus>,
         ): HttpSyncOnboardingViewModel {
             val store = ViewModelStore()
             val model = ViewModelProvider.create(store, object : ViewModelProvider.Factory {
                 @Suppress("UNCHECKED_CAST")
                 override fun <T : ViewModel> create(modelClass: Class<T>): T =
-                    HttpSyncOnboardingViewModel(repository, start, download) as T
+                    HttpSyncOnboardingViewModel(repository, start, download, status) as T
             })[HttpSyncOnboardingViewModel::class.java]
             stores[model] = store
             return model

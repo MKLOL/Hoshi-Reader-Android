@@ -69,7 +69,7 @@ class HttpSyncManualSync(
                 mutableStatus.value = SyncStatus.Idle
                 throw cancelled
             } catch (error: Exception) {
-                mutableStatus.value = SyncStatus.Failed(error.message, (error as? HttpSyncException)?.messageResource)
+                mutableStatus.value = error.toSyncFailure()
             }
         }
     }
@@ -107,14 +107,32 @@ class HttpSyncManualSync(
             mutableStatus.value = SyncStatus.Idle
             throw cancelled
         } catch (error: Exception) {
-            mutableStatus.value = SyncStatus.Failed(error.message, (error as? HttpSyncException)?.messageResource)
+            mutableStatus.value = error.toSyncFailure()
         }
     }
 }
+
+/**
+ * A token the server refuses (HTTP 401/403) fails a pass's first request, so the pass ends as
+ * [SyncStatus.Failed]. A pass that ran with some errors is [SyncStatus.Done]: its token works.
+ */
+private fun Exception.toSyncFailure(): SyncStatus.Failed {
+    val sync = this as? HttpSyncException
+    return SyncStatus.Failed(message, sync?.messageResource, tokenRejected = sync?.httpCode == 401 || sync?.httpCode == 403)
+}
+
+/** The server refused the sync token itself, not one book or one request's content. */
+internal val SyncStatus.rejectsToken: Boolean
+    get() = this is SyncStatus.Failed && tokenRejected
 
 sealed interface SyncStatus {
     data object Idle : SyncStatus
     data class Running(val progress: HttpSyncProgress? = null) : SyncStatus
     data class Done(val result: HttpSyncResult) : SyncStatus
-    data class Failed(val message: String?, val messageResource: Int? = null) : SyncStatus
+    data class Failed(
+        val message: String?,
+        val messageResource: Int? = null,
+        /** The server answered HTTP 401 or 403: the token, not the network or one book, failed. */
+        val tokenRejected: Boolean = false,
+    ) : SyncStatus
 }

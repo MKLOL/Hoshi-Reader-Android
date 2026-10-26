@@ -47,6 +47,7 @@ internal fun HttpSyncOnboarding() {
                     container.httpSyncSettingsRepository,
                     container.httpSyncManualSync::start,
                     container.defaultDictionaryDownload,
+                    syncStatus = container.httpSyncManualSync.status,
                 ) as T
         },
     )
@@ -145,9 +146,8 @@ internal fun HttpSyncOnboardingContent(
         )
         HttpSyncOnboardingStep.Status -> HttpSyncStatusDialog(
             status, onDismissStatus, onStop,
-            onEditToken = onEditToken.takeIf {
-                status is SyncStatus.Failed || (status is SyncStatus.Done && status.result.errors.isNotEmpty())
-            },
+            // Only a token the server refused: a sync that ran with some errors kept a working one.
+            onEditToken = onEditToken.takeIf { status.rejectsToken },
         )
         HttpSyncOnboardingStep.Dictionaries -> AlertDialog(
             onDismissRequest = { if (!state.installingDictionaries && !state.saving) onSkipDictionaries() },

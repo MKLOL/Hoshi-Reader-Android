@@ -11,7 +11,6 @@ import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
 import androidx.core.app.NotificationCompat
-import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -27,6 +26,11 @@ import moe.antimony.hoshi.R
  * setup does not lose the download: Android cuts a background app's network within seconds. The
  * download itself runs in the app owner; this `dataSync` foreground service (the same pattern as
  * [moe.antimony.hoshi.features.ai.AiChatRequestService]) only lives until it ends.
+ *
+ * It is started only while the app is visible, with `startService`, and promotes itself. A start
+ * made with `startForegroundService` obliges the service to call `startForeground` before it
+ * stops, so stopping after a refused promotion would crash the app; a plain start has no such
+ * obligation, and the visible app may still promote the service it started.
  */
 class DefaultDictionaryDownloadService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -41,7 +45,8 @@ class DefaultDictionaryDownloadService : Service() {
         try {
             startForegroundCompat(buildNotification())
         } catch (_: Exception) {
-            // Not allowed now (the app is already in the background): the download runs anyway.
+            // Refused (the app already left, or the dataSync time limit is used up): the download
+            // runs anyway, without the keep-alive. Safe to stop: this start never asked for one.
             stopSelf(startId)
             return START_NOT_STICKY
         }
@@ -60,6 +65,17 @@ class DefaultDictionaryDownloadService : Service() {
             // Refused when a newer start is still on its way; its onStartCommand watches again.
             stopSelfResult(latestStartId)
         }
+    }
+
+    /**
+     * Android 15+ allows `dataSync` services a few hours a day; past that the service must stop
+     * within seconds or the app crashes. The download carries on without the keep-alive.
+     */
+    override fun onTimeout(startId: Int, fgsType: Int) {
+        watcher?.cancel()
+        releaseWakeLock()
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        stopSelf()
     }
 
     override fun onDestroy() {
@@ -118,10 +134,10 @@ class DefaultDictionaryDownloadService : Service() {
         private const val WAKE_LOCK_TAG = "hoshi:default-dictionary-download"
         private const val WAKE_LOCK_TIMEOUT_MS = 30L * 60L * 1000L
 
-        /** Called while the app is visible, when the download starts. */
+        /** Called while the app is visible, when the download starts; the service promotes itself. */
         fun start(context: Context) {
             try {
-                ContextCompat.startForegroundService(context, Intent(context, DefaultDictionaryDownloadService::class.java))
+                context.startService(Intent(context, DefaultDictionaryDownloadService::class.java))
             } catch (_: Exception) {
                 // A start Android refuses (for example from the background) changes nothing else.
             }

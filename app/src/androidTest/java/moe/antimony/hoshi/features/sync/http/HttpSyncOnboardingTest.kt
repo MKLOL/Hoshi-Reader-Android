@@ -2,10 +2,12 @@ package moe.antimony.hoshi.features.sync.http
 
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.performClick
@@ -44,7 +46,7 @@ class HttpSyncOnboardingTest {
     }
 
     @Test
-    fun failureShowsEditAndPreservesTheTokenDraftForRetry() {
+    fun aRejectedTokenShowsEditAndPreservesTheTokenDraftForRetry() {
         val state = mutableStateOf(HttpSyncOnboardingUiState(HttpSyncOnboardingStep.Token))
         val status = mutableStateOf<SyncStatus>(SyncStatus.Idle)
         val submissions = mutableListOf<String>()
@@ -55,7 +57,9 @@ class HttpSyncOnboardingTest {
                     onUseToken = {
                         submissions += it
                         state.value = HttpSyncOnboardingUiState(HttpSyncOnboardingStep.Status)
-                        status.value = SyncStatus.Failed(null, moe.antimony.hoshi.R.string.http_sync_no_network)
+                        status.value = SyncStatus.Failed(
+                            "Server rejected the bearer token (HTTP 401).", tokenRejected = true,
+                        )
                     },
                     onWithoutToken = {}, onFinishLater = {}, onDismissStatus = {},
                     onEditToken = { state.value = HttpSyncOnboardingUiState(HttpSyncOnboardingStep.Token) },
@@ -71,6 +75,26 @@ class HttpSyncOnboardingTest {
         compose.onNodeWithText("Bearer token").assertTextContains("first-token")
         compose.onNodeWithText("Sync now").performClick()
         compose.runOnIdle { assertEquals(listOf("first-token", "first-token"), submissions) }
+    }
+
+    @Test
+    fun aSyncThatRanWithSomeErrorsOffersNoTokenEdit() {
+        val partlyFailed = HttpSyncResult(
+            uploadedBookmarks = 0, uploadedChatEntries = 0, uploadedMetadata = 0,
+            downloadedBookmarks = 0, downloadedChatEntries = 0, remoteOnlyBooks = 0,
+            errors = listOf("Shared book: download failed (HTTP 500)."),
+        )
+        compose.setContent {
+            MaterialTheme {
+                HttpSyncOnboardingContent(
+                    HttpSyncOnboardingUiState(HttpSyncOnboardingStep.Status), SyncStatus.Done(partlyFailed),
+                    onUseToken = {}, onWithoutToken = {}, onFinishLater = {}, onDismissStatus = {},
+                    onEditToken = { error("A working token must not be offered for editing") }, onStop = {},
+                )
+            }
+        }
+        compose.onNodeWithText("Done").assertIsDisplayed()
+        compose.onAllNodesWithText("Edit token").assertCountEquals(0)
     }
 
     @Test
