@@ -106,6 +106,7 @@ import moe.antimony.hoshi.features.sasayaki.SasayakiAudioRepository
 import moe.antimony.hoshi.features.sasayaki.SasayakiCueRange
 import moe.antimony.hoshi.features.sasayaki.SasayakiPlayer
 import moe.antimony.hoshi.features.sasayaki.SasayakiSettings
+import moe.antimony.hoshi.features.sasayaki.launchSasayakiMining
 import moe.antimony.hoshi.features.sync.http.syncIdForMetadata
 import moe.antimony.hoshi.features.sasayaki.SasayakiSheet
 import kotlin.math.roundToInt
@@ -951,22 +952,23 @@ fun ReaderWebView(
                 val messageId = message.messageId ?: return
                 val cue = popup.sasayakiCue?.takeIf { ankiUiState.popupSettings.needsSasayakiAudio }
                 val player = sasayakiPlayer
-                scope.launch {
-                    val ankiContext = try {
-                        cue?.let {
-                            popup.state.ankiContext.copy(
-                                sasayakiAudioPath = player?.exportCueAudio(it, popup.state.selection.sentence)?.absolutePath,
-                            )
-                        } ?: popup.state.ankiContext
-                    } catch (error: Exception) {
-                        if (error is kotlinx.coroutines.CancellationException) throw error
-                        replyReaderPopupMessage(message.popupId, messageId, "false")
-                        return@launch
-                    }
-                    ankiViewModel.mineEntryAsync(message.payloadJson, ankiContext) { mined ->
-                        replyReaderPopupMessage(message.popupId, messageId, mined.toString())
-                    }
-                }
+                val baseContext = popup.state.ankiContext
+                val sentence = popup.state.selection.sentence
+                // The clip export can take 30 s. It and the mining run in the app scope, so closing
+                // or reloading the reader meanwhile still adds the note; only the reply needs it shown.
+                launchSasayakiMining(
+                    scope = appContainer.appScope,
+                    exportCueAudio = if (cue != null) suspend { player?.exportCueAudio(cue, sentence) } else null,
+                    mine = { audioPath, onResult ->
+                        val ankiContext = if (cue != null) baseContext.copy(sasayakiAudioPath = audioPath) else baseContext
+                        ankiViewModel.mineEntryAsync(message.payloadJson, ankiContext, onResult)
+                    },
+                    onResult = { mined ->
+                        if (scope.coroutineContext[kotlinx.coroutines.Job]?.isActive == true) {
+                            replyReaderPopupMessage(message.popupId, messageId, mined.toString())
+                        }
+                    },
+                )
             }
             is ReaderLookupPopupBridgeMessage.DuplicateCheck -> {
                 ankiViewModel.duplicateCheckAsync(message.expression) { isDuplicate ->
