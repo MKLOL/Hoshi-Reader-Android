@@ -11,7 +11,6 @@ import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
 import androidx.core.app.NotificationCompat
-import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -28,6 +27,9 @@ import moe.antimony.hoshi.R
  * runs in [AiChatRequests]; this `dataSync` foreground service (the same type as the offline
  * model download and news pretranslation) only lives until no request is running. Android shows
  * its notification only when that takes more than a few seconds.
+ *
+ * It is started only while the app is visible, with `startService`, and promotes itself: a
+ * `startForegroundService` start would crash the app if a refused promotion stopped the service.
  */
 class AiChatRequestService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -42,7 +44,8 @@ class AiChatRequestService : Service() {
         try {
             startForegroundCompat(buildNotification())
         } catch (_: Exception) {
-            // Not allowed now (the app is already in the background): the request runs anyway.
+            // Refused (the app already left, or the dataSync time limit is used up): the request
+            // runs anyway, without the keep-alive. Safe to stop: this start never asked for one.
             stopSelf(startId)
             return START_NOT_STICKY
         }
@@ -61,6 +64,14 @@ class AiChatRequestService : Service() {
             // Refused when a newer start is still on its way; its onStartCommand watches again.
             stopSelfResult(latestStartId)
         }
+    }
+
+    /** Android 15+ ends `dataSync` time after its daily limit: stop within seconds, or the app crashes. */
+    override fun onTimeout(startId: Int, fgsType: Int) {
+        watcher?.cancel()
+        releaseWakeLock()
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        stopSelf()
     }
 
     override fun onDestroy() {
@@ -119,10 +130,10 @@ class AiChatRequestService : Service() {
         private const val WAKE_LOCK_TAG = "hoshi:ai-chat-request"
         private const val WAKE_LOCK_TIMEOUT_MS = 10L * 60L * 1000L
 
-        /** Called while the app is visible, when a request starts running. */
+        /** Called while the app is visible, when a request starts running; the service promotes itself. */
         fun start(context: Context) {
             try {
-                ContextCompat.startForegroundService(context, Intent(context, AiChatRequestService::class.java))
+                context.startService(Intent(context, AiChatRequestService::class.java))
             } catch (_: Exception) {
                 // A start Android refuses (for example from the background) changes nothing else.
             }

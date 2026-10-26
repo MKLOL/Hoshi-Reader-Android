@@ -27,6 +27,7 @@ Semantic Versioning.
 - **Keep audiobooks playing while your position syncs.** Returning to the app, or a newer position arriving from another device, no longer stops an audiobook that is playing.
 - **Keep word mining responsive with audiobook audio.** Preparing an audio clip for an Anki card now runs in the background instead of freezing the reader.
 - **Keep audiobook settings after quick changes.** Delayed saves no longer restore removed audio or older playback settings, including after reopening the same book.
+- **Avoid a rare crash while a ChatGPT request runs.** Leaving the app just as a request starts, or reaching Android 15's daily limit for background work, no longer closes the app.
 - **Preserve renamed manga titles during repair.** Rebuilding missing book information retains the title you chose.
 - **Avoid accidental EPUB page turns.** Fast gestures that move mostly up or down no longer turn pages because of a small sideways movement.
 - **Open external book links in your browser.** Following a web link no longer replaces the EPUB page inside the reader.
