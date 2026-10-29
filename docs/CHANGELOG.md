@@ -7,6 +7,8 @@ Semantic Versioning.
 
 ## [Unreleased]
 
+## [v1.0.0] - 2026-10-29
+
 ### Added
 - Show automatically generated furigana when revealing manga OCR text, with offline readings enabled by default and a **Manga: Show Furigana** toggle in Settings → Behavior.
 
