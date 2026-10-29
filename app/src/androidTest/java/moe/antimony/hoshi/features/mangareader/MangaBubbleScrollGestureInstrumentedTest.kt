@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import android.os.SystemClock
 import android.view.InputDevice
 import android.view.MotionEvent
+import android.view.ViewTreeObserver
 import android.webkit.WebView
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxSize
@@ -52,6 +53,7 @@ class MangaBubbleScrollGestureInstrumentedTest {
             furiganaGenerator = { source -> (source.indices step 2).map { MangaFuriganaSpan(it, 2, "がっこう") } },
         )
         val ready = AtomicInteger(-1)
+        val revealedCallbacks = AtomicInteger()
         val navigations = mutableListOf<ReaderNavigationDirection>()
         lateinit var webView: WebView
         compose.setContent {
@@ -63,18 +65,36 @@ class MangaBubbleScrollGestureInstrumentedTest {
                     pageRenderCache = cache,
                     onNavigate = { navigations.add(it) },
                     onTextSelected = { _, _ -> }, onSelectionCleared = {}, onAskAi = { _, _ -> },
+                    // JS publishes the scroll regions through the same bridge immediately
+                    // before this callback. Its arrival acknowledges the native UI update.
+                    onBubbleRevealed = { _, _ -> revealedCallbacks.incrementAndGet() },
                     onPageReady = ready::set, onWebViewReady = { webView = it },
                     modifier = Modifier.fillMaxSize(),
                 )
             }
         }
         compose.waitUntil(15_000) { ready.get() == 0 }
-        val state = evaluate(webView, """
+        evaluate(webView, """
             var box = document.querySelector('.ocr-box');
             var range = document.createRange();
             range.setStart(box.querySelector('ruby').firstChild, 0); range.setEnd(box.querySelector('ruby').firstChild, 1);
             var r = range.getBoundingClientRect();
             window.hoshiManga.handleTap(r.left+r.width/2, r.top+r.height/2, 16);
+            var p = box.querySelector('p');
+            window.gestureProbe = {starts:0, moves:0, scrolls:0};
+            document.addEventListener('touchstart', function(e) {
+              gestureProbe.starts++; gestureProbe.tag=e.target.tagName;
+              gestureProbe.className=e.target.className; gestureProbe.x=e.touches[0].clientX;
+              gestureProbe.y=e.touches[0].clientY;
+            }, {capture:true, passive:true});
+            document.addEventListener('touchmove', function() { gestureProbe.moves++; }, {capture:true, passive:true});
+            p.addEventListener('scroll', function() { gestureProbe.scrolls++; }, {passive:true});
+            return {};
+        """)
+        compose.waitUntil(5_000) { revealedCallbacks.get() == 1 }
+        awaitRenderedDom(webView)
+        val state = evaluate(webView, """
+            var box = document.querySelector('.ocr-box');
             var p = box.querySelector('p'), rect = window.hoshiManga.hostRectFromViewportRect(p.getBoundingClientRect());
             return {x:rect.x, y:rect.y, width:rect.width, height:rect.height,
               scrollable:box.classList.contains('furigana-scroll'), scrollWidth:p.scrollWidth, clientWidth:p.clientWidth};
@@ -88,7 +108,12 @@ class MangaBubbleScrollGestureInstrumentedTest {
         val endX = webView.width - density
         val y = ((state.getDouble("y") + state.getDouble("height") * 0.5) * density).toFloat()
         swipe(webView, startX, endX, y)
-        compose.waitUntil(5_000) { evaluate(webView, "return {left:document.querySelector('.ocr-box p').scrollLeft};").getDouble("left") < -5 }
+        try {
+            compose.waitUntil(5_000) { evaluate(webView, "return {left:document.querySelector('.ocr-box p').scrollLeft};").getDouble("left") < -5 }
+        } catch (failure: androidx.compose.ui.test.ComposeTimeoutException) {
+            throw AssertionError("Native bubble swipe did not scroll. fixture=$state; " +
+                diagnostics(webView, navigations, revealedCallbacks.get(), startX, y), failure)
+        }
         compose.runOnIdle { assertTrue("scrolling text must not turn the page", navigations.isEmpty()) }
 
         // Start below the expanded paragraph: ordinary artwork navigation stays available.
@@ -96,9 +121,67 @@ class MangaBubbleScrollGestureInstrumentedTest {
         compose.runOnIdle { assertEquals(listOf(ReaderNavigationDirection.Forward), navigations) }
 
         evaluate(webView, "window.hoshiManga.clearRevealed(); return {};")
-        InstrumentationRegistry.getInstrumentation().waitForIdleSync()
+        awaitRenderedDom(webView)
         swipe(webView, startX, endX, y)
         compose.runOnIdle { assertEquals(listOf(ReaderNavigationDirection.Forward, ReaderNavigationDirection.Forward), navigations) }
+    }
+
+    /** DOM geometry precedes Chromium's scroll-layer hit-test update. Wait for a draw of
+     * the ready visual state, then the next frame, before injecting a native gesture. */
+    private fun awaitRenderedDom(view: WebView) {
+        val drawn = CountDownLatch(1)
+        onMain {
+            assertTrue("Gesture fixture must be visible and focused", view.isShown && view.hasWindowFocus())
+            view.postVisualStateCallback(1, object : WebView.VisualStateCallback() {
+                override fun onComplete(requestId: Long) {
+                    val observer = view.viewTreeObserver
+                    val listener = object : ViewTreeObserver.OnDrawListener {
+                        private var observed = false
+                        override fun onDraw() {
+                            if (observed) return
+                            observed = true
+                            view.post {
+                                if (observer.isAlive) observer.removeOnDrawListener(this)
+                                view.postOnAnimation { drawn.countDown() }
+                            }
+                        }
+                    }
+                    observer.addOnDrawListener(listener)
+                    view.invalidate()
+                }
+            })
+        }
+        assertTrue("Chromium did not draw the updated gesture fixture", drawn.await(10, TimeUnit.SECONDS))
+        InstrumentationRegistry.getInstrumentation().waitForIdleSync()
+    }
+
+    private fun diagnostics(
+        view: WebView,
+        navigations: List<ReaderNavigationDirection>,
+        revealCallbacks: Int,
+        startX: Float,
+        startY: Float,
+    ): String {
+        var native = ""
+        onMain {
+            @Suppress("DEPRECATION")
+            val zoom = view.scale / view.resources.displayMetrics.density
+            native = "native(shown=${view.isShown},focused=${view.hasWindowFocus()},size=${view.width}x${view.height}," +
+                "zoom=$zoom,scroll=${view.scrollX},${view.scrollY},bridgeReveals=$revealCallbacks,navigations=${navigations.toList()})"
+        }
+        val density = view.resources.displayMetrics.density
+        val dom = runCatching { evaluate(view, """
+            var box=document.querySelector('.ocr-box'), p=box.querySelector('p');
+            var vv=window.visualViewport, scale=window.hoshiManga.hostScale();
+            var x=${startX / density}/scale+(vv?vv.offsetLeft:0), y=${startY / density}/scale+(vv?vv.offsetTop:0);
+            var hit=document.elementFromPoint(x,y), r=p.getBoundingClientRect();
+            return {className:box.className,left:p.scrollLeft,top:p.scrollTop,scrollWidth:p.scrollWidth,
+              clientWidth:p.clientWidth,scrollHeight:p.scrollHeight,clientHeight:p.clientHeight,
+              rect:{x:r.x,y:r.y,width:r.width,height:r.height},hit:hit&&hit.tagName,hitClass:hit&&hit.className,
+              hostScale:scale,viewport:{scale:vv.scale,x:vv.offsetLeft,y:vv.offsetTop,width:vv.width,height:vv.height},
+              probe:window.gestureProbe};
+        """) }.fold({ it.toString() }, { "unavailable: $it" })
+        return "$native; dom=$dom"
     }
 
     private fun swipe(view: WebView, startX: Float, endX: Float, y: Float) {
