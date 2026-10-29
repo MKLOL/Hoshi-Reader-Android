@@ -121,6 +121,8 @@ data class ReaderSettings(
     val mangaShowCopyButton: Boolean = false,
     /** Keep the current reveal-size boost by default; off uses the original OCR glyph size. */
     val mangaEnlargeSmallText: Boolean = true,
+    /** Generate readings for recognized manga text when revealing a bubble. */
+    val mangaShowFurigana: Boolean = true,
 ) {
     val bottomOverlapPx: Int
         get() = if (verticalWriting) fontSize else 0
@@ -329,6 +331,7 @@ class ReaderSettingsStore(context: Context) : ReaderSettingsLegacySource {
         mangaUseNotoSansJp = preferences.getBoolean("mangaUseNotoSansJp", false),
         mangaShowCopyButton = preferences.getBoolean("mangaShowCopyButton", false),
         mangaEnlargeSmallText = preferences.getBoolean("mangaEnlargeSmallText", true),
+        mangaShowFurigana = preferences.getBoolean("mangaShowFurigana", true),
     )
 
     fun save(settings: ReaderSettings) {
@@ -389,6 +392,7 @@ class ReaderSettingsStore(context: Context) : ReaderSettingsLegacySource {
             .putBoolean("mangaUseNotoSansJp", settings.mangaUseNotoSansJp)
             .putBoolean("mangaShowCopyButton", settings.mangaShowCopyButton)
             .putBoolean("mangaEnlargeSmallText", settings.mangaEnlargeSmallText)
+            .putBoolean("mangaShowFurigana", settings.mangaShowFurigana)
             .apply()
     }
 }
@@ -494,6 +498,7 @@ class ReaderSettingsRepository(
             mangaUseNotoSansJp = this[KEY_MANGA_USE_NOTO_SANS_JP] ?: false,
             mangaShowCopyButton = this[KEY_MANGA_SHOW_COPY_BUTTON] ?: false,
             mangaEnlargeSmallText = this[KEY_MANGA_ENLARGE_SMALL_TEXT] ?: true,
+            mangaShowFurigana = this[KEY_MANGA_SHOW_FURIGANA] ?: true,
         )
 
     private fun MutablePreferences.writeReaderSettings(settings: ReaderSettings) {
@@ -557,6 +562,7 @@ class ReaderSettingsRepository(
         this[KEY_MANGA_USE_NOTO_SANS_JP] = settings.mangaUseNotoSansJp
         this[KEY_MANGA_SHOW_COPY_BUTTON] = settings.mangaShowCopyButton
         this[KEY_MANGA_ENLARGE_SMALL_TEXT] = settings.mangaEnlargeSmallText
+        this[KEY_MANGA_SHOW_FURIGANA] = settings.mangaShowFurigana
     }
 
     companion object {
@@ -626,6 +632,7 @@ class ReaderSettingsRepository(
         private val KEY_MANGA_USE_NOTO_SANS_JP = booleanPreferencesKey("mangaUseNotoSansJp")
         private val KEY_MANGA_SHOW_COPY_BUTTON = booleanPreferencesKey("mangaShowCopyButton")
         private val KEY_MANGA_ENLARGE_SMALL_TEXT = booleanPreferencesKey("mangaEnlargeSmallText")
+        private val KEY_MANGA_SHOW_FURIGANA = booleanPreferencesKey("mangaShowFurigana")
     }
 }
 

@@ -131,6 +131,13 @@ fun ReaderBehaviorScreen(
                     )
                     BehaviorDivider()
                     BehaviorSwitchRow(
+                        label = stringResource(ReaderBehaviorRow.MangaShowFurigana.labelRes),
+                        checked = settings.mangaShowFurigana,
+                        onCheckedChange = { onSettingsChange(settings.copy(mangaShowFurigana = it)) },
+                        description = stringResource(R.string.reader_behavior_manga_show_furigana_desc),
+                    )
+                    BehaviorDivider()
+                    BehaviorSwitchRow(
                         label = stringResource(ReaderBehaviorRow.MangaUseNotoSansJp.labelRes),
                         checked = settings.mangaUseNotoSansJp,
                         onCheckedChange = {
@@ -191,6 +198,7 @@ private enum class ReaderBehaviorRow(val labelRes: Int) {
     KeepScreenOn(R.string.reader_behavior_keep_screen_on),
     EInkMode(R.string.reader_appearance_eink_mode),
     MangaSingleTapLookup(R.string.reader_behavior_manga_single_tap_lookup),
+    MangaShowFurigana(R.string.reader_behavior_manga_show_furigana),
     MangaUseNotoSansJp(R.string.reader_behavior_manga_use_noto_sans_jp),
     MangaEnlargeSmallText(R.string.reader_behavior_manga_enlarge_small_text),
     MangaShowCopyButton(R.string.reader_behavior_manga_show_copy_button),

@@ -13,6 +13,7 @@ import android.webkit.JavascriptInterface
 internal class MangaTapBridge(
     private val onSelectedNothing: () -> Unit,
     private val onBubbleRevealed: (String, String?) -> Unit = { _, _ -> },
+    private val onScrollableBubbleRegions: (Int, String) -> Unit = { _, _ -> },
 ) {
     @JavascriptInterface
     fun selectedNothing() {
@@ -23,6 +24,12 @@ internal class MangaTapBridge(
     @JavascriptInterface
     fun bubbleRevealed(text: String, blockId: String) {
         mainHandler.post { onBubbleRevealed(text, blockId.ifEmpty { null }) }
+    }
+
+    /** Visible paragraph rectangles in the same host CSS coordinates as selection geometry. */
+    @JavascriptInterface
+    fun scrollableBubbleRegions(pageIndex: Int, json: String) {
+        mainHandler.post { onScrollableBubbleRegions(pageIndex, json) }
     }
 
     private companion object {

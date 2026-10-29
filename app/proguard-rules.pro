@@ -42,3 +42,7 @@
 
 # JNA also ships desktop AWT integration classes that are unused on Android.
 -dontwarn java.awt.**
+
+# Kuromoji resolves its packaged dictionary resources relative to Builder.class.
+# Renaming/repackaging this class changes getResourceAsStream's lookup directory.
+-keep class com.atilika.kuromoji.ipadic.Tokenizer$Builder { *; }

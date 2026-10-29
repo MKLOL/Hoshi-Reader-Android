@@ -67,8 +67,10 @@ internal object ReaderSelectionScripts {
           ...FULLWIDTH_CHARACTER_RANGES,
         ];
         window.hoshiRubyGeometry = window.hoshiRubyGeometry || {
-          isVertical: function() {
-            return window.getComputedStyle(document.body).writingMode === "vertical-rl";
+          isVertical: function(node) {
+            node = node || (window.hoshiSelection && window.hoshiSelection.selection && window.hoshiSelection.selection.startNode);
+            var element = node && (node.nodeType === Node.TEXT_NODE ? node.parentElement : node);
+            return window.getComputedStyle(element || document.body).writingMode === "vertical-rl";
           },
           rectObject: function(rect) {
             var x = rect.x !== undefined ? rect.x : rect.left;
@@ -115,10 +117,10 @@ internal object ReaderSelectionScripts {
             });
             return rects;
           },
-          rubyRectMatchesBase: function(baseRect, rubyRect) {
+          rubyRectMatchesBase: function(baseRect, rubyRect, node) {
             var ruby = this.rectWithBounds(rubyRect);
             var tolerance = 1;
-            if (this.isVertical()) {
+            if (this.isVertical(node)) {
               return this.rangesOverlap(baseRect.top, baseRect.bottom, ruby.top, ruby.bottom, tolerance);
             }
             return this.rangesOverlap(baseRect.left, baseRect.right, ruby.left, ruby.right, tolerance);
@@ -130,7 +132,7 @@ internal object ReaderSelectionScripts {
             }
             var result = this.rectWithBounds(rect);
             rubyRects.forEach(function(rubyRect) {
-              if (this.rubyRectMatchesBase(result, rubyRect)) {
+              if (this.rubyRectMatchesBase(result, rubyRect, node)) {
                 result = this.unionRect(result, this.rectWithBounds(rubyRect));
               }
             }, this);

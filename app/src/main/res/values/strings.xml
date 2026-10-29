@@ -217,6 +217,8 @@
     <string name="reader_behavior_auto_check_updates">Automatically Check for Updates</string>
     <string name="reader_behavior_manga_single_tap_lookup">Manga: Single-Tap to Look Up</string>
     <string name="reader_behavior_manga_single_tap_lookup_desc">First tap on a speech bubble reveals AND looks the word up. Default reveals first; the second tap looks up so the dictionary popup doesn\'t cover the bubble\'s action buttons.</string>
+    <string name="reader_behavior_manga_show_furigana">Manga: Show Furigana</string>
+    <string name="reader_behavior_manga_show_furigana_desc">Adds generated readings to recognized Japanese when revealing a bubble. Names and readings may differ from the original manga.</string>
     <string name="reader_behavior_manga_use_noto_sans_jp">Manga: Use Noto Sans JP Font</string>
     <string name="reader_behavior_manga_show_copy_button">Manga: Show Copy Button</string>
     <string name="reader_behavior_manga_show_copy_button_desc">Adds a Copy button next to Translate on a revealed bubble. Off shows only a larger Translate button.</string>

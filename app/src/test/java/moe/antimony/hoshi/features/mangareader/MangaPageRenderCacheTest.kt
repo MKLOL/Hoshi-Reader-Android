@@ -2,6 +2,7 @@ package moe.antimony.hoshi.features.mangareader
 
 import moe.antimony.hoshi.mokuro.MokuroBook
 import moe.antimony.hoshi.mokuro.MokuroPage
+import moe.antimony.hoshi.mokuro.MokuroTextBox
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
@@ -134,4 +135,47 @@ class MangaPageRenderCacheTest {
         val cache = MangaPageRenderCache()
         assertEquals(cache.htmlFor(page(0), config), cache.knownHtmlFor(page(0), config))
     }
+
+    @Test
+    fun aCacheMissNeverGeneratesReadingsOnTheMainThreadFastPath() {
+        var generationCount = 0
+        val cache = MangaPageRenderCache(furiganaGenerator = {
+            generationCount += 1
+            emptyList()
+        })
+        val page = annotatedPage()
+
+        assertNull(cache.knownHtmlFor(page, config))
+        assertEquals(0, generationCount)
+        val prepared = cache.htmlFor(page, config)
+        assertEquals(1, generationCount)
+        assertTrue(prepared === cache.knownHtmlFor(page, config))
+        assertTrue(prepared === cache.htmlFor(page, config))
+        assertEquals(1, generationCount)
+    }
+
+    @Test
+    fun disablingFuriganaSkipsGenerationAndChangingTheSettingRebuildsHtml() {
+        val inputs = mutableListOf<String>()
+        val cache = MangaPageRenderCache(furiganaGenerator = { text ->
+            inputs += text
+            listOf(MangaFuriganaSpan(0, 2, "かんじ"))
+        })
+        val page = annotatedPage()
+        val disabled = config.copy(showFurigana = false)
+
+        val plain = cache.htmlFor(page, disabled)
+        assertTrue(inputs.isEmpty())
+        assertNull(cache.knownHtmlFor(page, config))
+        val annotated = cache.htmlFor(page, config)
+        assertEquals(listOf("漢字\nを読む"), inputs)
+        assertNotEquals(plain, annotated)
+        assertTrue(plain === cache.htmlFor(page, disabled))
+        assertEquals(1, inputs.size)
+    }
+
+    private fun annotatedPage(): MokuroPage = page(0).copy(
+        textBoxes = listOf(MokuroTextBox(20, 20, 150, 300, 24, true,
+            listOf("漢字", "を読む"), blockIndex = 7)),
+    )
 }

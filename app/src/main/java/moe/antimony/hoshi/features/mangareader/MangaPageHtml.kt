@@ -92,6 +92,7 @@ internal object MangaPageHtml {
         showCopyButton: Boolean = false,
         enlargeSmallText: Boolean = true,
         imageUrl: String = encodeImagePath(page.imagePath),
+        furigana: Map<Int, List<MangaFuriganaSpan>> = emptyMap(),
     ): String {
         val imageWidth = page.imageWidth.coerceAtLeast(1)
         val imageHeight = page.imageHeight.coerceAtLeast(1)
@@ -108,7 +109,8 @@ internal object MangaPageHtml {
         val frameHeightCss = formatNumber(imageHeight * fitScale)
         val actionButtons = actionButtonsHtml(showCopyButton)
         val boxes = page.textBoxes.joinToString("\n") { box ->
-            textBoxHtml(box, imageWidth, imageHeight, actionButtons, page.index, enlargeSmallText)
+            textBoxHtml(box, imageWidth, imageHeight, actionButtons, page.index, enlargeSmallText,
+                furigana[box.blockIndex].orEmpty())
         }
         return """
             <!DOCTYPE html>
@@ -150,20 +152,43 @@ internal object MangaPageHtml {
               // Exposed on window so it can be exercised directly in the instrumented
               // WebView test (a real layout engine is the only way to reproduce the
               // text-overflow this guards against).
-              window.hoshiOcrBoxExtent = function(box) {
-                var r = box.getBoundingClientRect();
-                var left = r.left, top = r.top, right = r.right, bottom = r.bottom;
+              window.hoshiOcrTextExtent = function(box) {
+                var text = box.querySelector('p');
+                var left = Infinity, top = Infinity, right = -Infinity, bottom = -Infinity;
                 try {
                   var range = document.createRange();
-                  range.selectNodeContents(box);
-                  var cr = range.getBoundingClientRect();
-                  if (cr && (cr.width > 0 || cr.height > 0)) {
+                  range.selectNodeContents(text);
+                  var rects = [range.getBoundingClientRect()];
+                  text.querySelectorAll('rt').forEach(function(rt) {
+                    Array.from(rt.getClientRects()).forEach(function(rect) { rects.push(rect); });
+                  });
+                  rects.forEach(function(cr) {
+                    if (!cr || !(cr.width > 0 || cr.height > 0)) return;
                     left = Math.min(left, cr.left);
                     top = Math.min(top, cr.top);
                     right = Math.max(right, cr.right);
                     bottom = Math.max(bottom, cr.bottom);
-                  }
+                  });
                 } catch (e) {}
+                if (!isFinite(left)) return text.getBoundingClientRect();
+                if (box.classList.contains('furigana-scroll')) {
+                  var clip = text.getBoundingClientRect();
+                  left = Math.max(left, clip.left); top = Math.max(top, clip.top);
+                  right = Math.min(right, clip.right); bottom = Math.min(bottom, clip.bottom);
+                }
+                return {left:left, top:top, right:right, bottom:bottom};
+              }
+              window.hoshiOcrBoxExtent = function(box) {
+                var r = box.getBoundingClientRect();
+                var text = window.hoshiOcrTextExtent(box);
+                var left = Math.min(r.left, text.left), top = Math.min(r.top, text.top);
+                var right = Math.max(r.right, text.right), bottom = Math.max(r.bottom, text.bottom);
+                box.querySelectorAll('.ocr-actions').forEach(function(actions) {
+                  if (getComputedStyle(actions).display === 'none') return;
+                  var rect = actions.getBoundingClientRect();
+                  left = Math.min(left, rect.left); top = Math.min(top, rect.top);
+                  right = Math.max(right, rect.right); bottom = Math.max(bottom, rect.bottom);
+                });
                 return { x: left, y: top, width: right - left, height: bottom - top };
               }
               var native = window.HoshiTextSelection;
@@ -327,6 +352,7 @@ internal object MangaPageHtml {
              as a safety net for anything that still pokes past the plate. */
           color: #000;
           background: #fff;
+          z-index: 1;
           text-shadow:
             1px 1px 1px #fff, -1px 1px 1px #fff, 1px -1px 1px #fff, -1px -1px 1px #fff,
             2px 0 2px #fff, -2px 0 2px #fff, 0 2px 2px #fff, 0 -2px 2px #fff;
@@ -338,6 +364,28 @@ internal object MangaPageHtml {
         .ocr-box p {
           margin: 0;
         }
+        /* Ruby inherits transparency until reveal. A taller line box reserves room above
+           each horizontal row, or to the right of each vertical column, for the reading. */
+        .ocr-box.has-furigana {
+          line-height: 1.7;
+          padding: 0.5em 0.15em 0.15em;
+        }
+        .ocr-box.has-furigana.vertical { padding: 0.15em 0.5em 0.15em 0.15em; }
+        /* Hidden OCR remains hit-testable only in its original mokuro rectangle. Ruby
+           and long base text must not create invisible targets over nearby artwork. */
+        .ocr-box.has-furigana:not(.revealed) { overflow: hidden; }
+        .ocr-box.has-furigana ruby { ruby-position: over; }
+        .ocr-box.has-furigana rt {
+          font-size: 0.5em;
+          line-height: 1;
+          -webkit-user-select: none;
+          user-select: none;
+        }
+        .ocr-box.revealed.has-furigana p,
+        .ocr-box.revealed.has-furigana rt { background: #fff; }
+        /* A pathological OCR bubble may exceed a whole screen at its original glyph size.
+           Keep it readable and scroll only its text; the action row stays outside the clip. */
+        .ocr-box.furigana-scroll p { width: 100%; height: 100%; overflow: auto; }
         /* Action buttons (copy, ChatGPT): shown only on a revealed box, in a row floated
            just *above* the box's top-right corner — never over the text. (A box tightly
            bounds its OCR text, and a vertical-rl bubble even starts in the top-right
@@ -424,6 +472,7 @@ internal object MangaPageHtml {
         actionButtons: String,
         pageIndex: Int? = null,
         enlargeSmallText: Boolean = true,
+        furigana: List<MangaFuriganaSpan> = emptyList(),
     ): String {
         val leftPct = percent(box.left, imageWidth)
         val topPct = percent(box.top, imageHeight)
@@ -440,7 +489,9 @@ internal object MangaPageHtml {
         // line break — `<br>` would render the same but produces a separate text node
         // that the scanner's `TreeWalker(SHOW_TEXT)` skips, which would let it scan
         // tokens *across* mokuro line boundaries.
-        val text = box.lines.joinToString("\n") { escapeHtmlText(it) }
+        val canonicalText = box.lines.joinToString("\n")
+        val text = rubyHtml(canonicalText, furigana)
+        val furiganaClass = if (text.hasFurigana) " has-furigana" else ""
         // Fixed width/height (not `min-*`) so the wrap-fallback can detect text overflow
         // via `scrollWidth > clientWidth`. The parser's font-size clamp (see
         // MokuroBookParser.clampMokuroFontSize) guarantees the un-wrapped text already
@@ -456,10 +507,40 @@ internal object MangaPageHtml {
         } else {
             ""
         }
-        return """    <div class="ocr-box$verticalClass"$blockAttribute role="button" tabindex="0" """ +
+        return """    <div class="ocr-box$verticalClass$furiganaClass"$blockAttribute role="button" tabindex="0" """ +
+            """data-ocr-text="${escapeAttribute(canonicalText)}" aria-label="${escapeAttribute(canonicalText)}" """ +
             """aria-pressed="false" style="left: $leftPct%; top: $topPct%; """ +
             """width: $widthPct%; height: $heightPct%; font-size: ${fontCqw}cqw;">""" +
-            """<p>$text</p>$actionButtons</div>"""
+            """<p>${text.html}</p>$actionButtons</div>"""
+    }
+
+    private data class RubyHtml(val html: String, val hasFurigana: Boolean)
+
+    /** Treat readings as data: offsets must preserve complete Unicode characters and lines. */
+    private fun rubyHtml(text: String, spans: List<MangaFuriganaSpan>): RubyHtml {
+        fun validBoundary(offset: Int): Boolean = offset == 0 || offset == text.length ||
+            !(text[offset].isLowSurrogate() && text[offset - 1].isHighSurrogate())
+        var cursor = 0
+        var annotated = false
+        val html = buildString {
+            for (span in spans.sortedBy { it.start }) {
+                val end = span.start.toLong() + span.length.toLong()
+                if (span.start < cursor || span.start < 0 || span.length <= 0 || end > text.length ||
+                    !validBoundary(span.start) || !validBoundary(end.toInt()) ||
+                    span.reading.isBlank() || span.reading.any { it.isISOControl() } ||
+                    text.substring(span.start, end.toInt()).any { it == '\n' || it == '\r' }) continue
+                append(escapeHtmlText(text.substring(cursor, span.start)))
+                append("<ruby>")
+                append(escapeHtmlText(text.substring(span.start, end.toInt())))
+                append("<rt>")
+                append(escapeHtmlText(span.reading))
+                append("</rt></ruby>")
+                cursor = end.toInt()
+                annotated = true
+            }
+            append(escapeHtmlText(text.substring(cursor)))
+        }
+        return RubyHtml(html, annotated)
     }
 
     /**
@@ -523,6 +604,7 @@ internal object MangaPageHtml {
             setHostScale: function(scale) {
               if (typeof scale === 'number' && isFinite(scale) && scale > 0) {
                 this.hostScaleValue = scale;
+                this.notifyScrollableBubbleRegions();
               }
             },
             setSingleTapLookup: function(enabled) {
@@ -604,10 +686,143 @@ internal object MangaPageHtml {
               for (var i = 0; i < revealed.length; i++) {
                 revealed[i].classList.remove('revealed');
                 revealed[i].setAttribute('aria-pressed', 'false');
+                if (typeof revealed[i].dataset.furiganaOriginalStyle === 'string') {
+                  revealed[i].setAttribute('style', revealed[i].dataset.furiganaOriginalStyle);
+                  revealed[i].classList.toggle('wrap', revealed[i].dataset.furiganaOriginalWrap === '1');
+                  revealed[i].classList.remove('furigana-scroll');
+                  delete revealed[i].dataset.furiganaOriginalStyle;
+                  delete revealed[i].dataset.furiganaOriginalWrap;
+                  delete revealed[i].dataset.furiganaFitted;
+                  delete revealed[i].dataset.wrapTried;
+                }
               }
               if (window.hoshiSelection) {
                 window.hoshiSelection.clearSelection();
               }
+              this.notifyScrollableBubbleRegions();
+            },
+            notifyScrollableBubbleRegions: function() {
+              if (!window.HoshiMangaTap || !window.HoshiMangaTap.scrollableBubbleRegions) return;
+              var frame = document.querySelector('.frame');
+              if (!frame) return;
+              var vv = window.visualViewport;
+              var left = vv ? vv.offsetLeft : 0, top = vv ? vv.offsetTop : 0;
+              var right = left + (vv ? vv.width : window.innerWidth);
+              var bottom = top + (vv ? vv.height : window.innerHeight);
+              var regions = [];
+              document.querySelectorAll('.ocr-box.revealed.furigana-scroll p').forEach(function(p) {
+                if (p.scrollWidth <= p.clientWidth + 1 && p.scrollHeight <= p.clientHeight + 1) return;
+                var rect = p.getBoundingClientRect();
+                var x = Math.max(left, rect.left), y = Math.max(top, rect.top);
+                var r = Math.min(right, rect.right), b = Math.min(bottom, rect.bottom);
+                if (r > x && b > y) regions.push(window.hoshiManga.hostRectFromViewportRect({x:x,y:y,width:r-x,height:b-y}));
+              });
+              window.HoshiMangaTap.scrollableBubbleRegions(parseInt(frame.dataset.pageIndex, 10), JSON.stringify(regions));
+            },
+            bubbleText: function(box) {
+              if (!box) return '';
+              if (typeof box.dataset.ocrText === 'string') return box.dataset.ocrText;
+              var paragraph = box.querySelector('p');
+              if (!paragraph) return '';
+              var walker = window.hoshiSelection.createWalker(paragraph);
+              var result = '', node;
+              while (node = walker.nextNode()) result += node.textContent;
+              return result;
+            },
+            // Ruby takes extra block space. Grow the revealed plate instead of shrinking
+            // the parser's glyph size; only wrap when the text would leave the viewport.
+            // This also applies with Enlarge small text off, preserving the original font.
+            fitFurigana: function(box) {
+              if (!box.classList.contains('has-furigana') || box.dataset.furiganaFitted === '1') return;
+              box.dataset.furiganaFitted = '1';
+              var text = box.querySelector('p');
+              var vv = window.visualViewport;
+              var viewLeft = (vv ? vv.offsetLeft : 0) + 2;
+              var viewTop = (vv ? vv.offsetTop : 0) + 2;
+              var viewWidth = Math.max(1, (vv ? vv.width : window.innerWidth) - 4);
+              var actions = box.querySelector('.ocr-actions');
+              var previousDisplay = actions.style.display;
+              actions.style.display = 'flex';
+              var actionHeight = actions.getBoundingClientRect().height;
+              actions.style.display = previousDisplay;
+              // Leave one action row available even when text needs the whole screen.
+              var viewHeight = Math.max(1, (vv ? vv.height : window.innerHeight) - 10 - actionHeight);
+              var vertical = box.classList.contains('vertical');
+              var range = document.createRange();
+              range.selectNodeContents(text);
+              function paintedRect() {
+                var r = range.getBoundingClientRect();
+                var result = { left:r.left, top:r.top, right:r.right, bottom:r.bottom };
+                text.querySelectorAll('rt').forEach(function(rt) {
+                  Array.from(rt.getClientRects()).forEach(function(rect) {
+                    result.left = Math.min(result.left, rect.left);
+                    result.top = Math.min(result.top, rect.top);
+                    result.right = Math.max(result.right, rect.right);
+                    result.bottom = Math.max(result.bottom, rect.bottom);
+                  });
+                });
+                return result;
+              }
+              var painted = paintedRect();
+              if ((!vertical && painted.right - painted.left > viewWidth) ||
+                  (vertical && painted.bottom - painted.top > viewHeight)) {
+                box.classList.add('wrap');
+                if (vertical) box.style.height = viewHeight + 'px';
+                else box.style.width = viewWidth + 'px';
+              }
+              // Resizing a vertical plate moves its right-anchored text, so remeasure
+              // after each axis settles. The number of passes is bounded.
+              for (var i = 0; i < 3; i++) {
+                var rect = box.getBoundingClientRect();
+                painted = paintedRect();
+                var style = window.getComputedStyle(box);
+                var width = Math.max(rect.width, vertical
+                  ? rect.right - painted.left + parseFloat(style.paddingLeft)
+                  : painted.right - rect.left + parseFloat(style.paddingRight));
+                var height = Math.max(rect.height, painted.bottom - rect.top + parseFloat(style.paddingBottom));
+                box.style.width = Math.min(viewWidth, width) + 'px';
+                box.style.height = Math.min(viewHeight, height) + 'px';
+              }
+              var rect = box.getBoundingClientRect();
+              var left = Math.max(viewLeft, Math.min(rect.left, viewLeft + viewWidth - rect.width));
+              var top = Math.max(viewTop, Math.min(rect.top, viewTop + viewHeight - rect.height));
+              box.style.left = (box.offsetLeft + left - rect.left) + 'px';
+              box.style.top = (box.offsetTop + top - rect.top) + 'px';
+              painted = paintedRect();
+              rect = box.getBoundingClientRect();
+              if (painted.left < rect.left - 0.5 || painted.top < rect.top - 0.5 ||
+                  painted.right > rect.right + 0.5 || painted.bottom > rect.bottom + 0.5) {
+                box.classList.add('furigana-scroll');
+              }
+            },
+            // A reading belongs to its base word. Keep rt out of sentence scanning and
+            // forward annotation taps to the first base character of that same ruby.
+            annotationBaseHit: function(box, x, y) {
+              var annotations = box.querySelectorAll('rt');
+              for (var i = 0; i < annotations.length; i++) {
+                var rects = annotations[i].getClientRects();
+                for (var j = 0; j < rects.length; j++) {
+                  var r = rects[j];
+                  if (x < r.left || x > r.right || y < r.top || y > r.bottom) continue;
+                  var ruby = annotations[i].closest('ruby');
+                  var walker = window.hoshiSelection.createWalker(ruby);
+                  var node = walker.nextNode();
+                  if (!node || !node.textContent) continue;
+                  return {node:node, offset:0};
+                }
+              }
+              return null;
+            },
+            selectBubbleText: function(box, x, y, maxLength) {
+              var hit = this.annotationBaseHit(box, x, y);
+              if (hit) {
+                var range = document.createRange();
+                range.setStart(hit.node, hit.offset);
+                range.setEnd(hit.node, hit.offset + String.fromCodePoint(hit.node.textContent.codePointAt(hit.offset)).length);
+                var base = range.getBoundingClientRect();
+                return window.hoshiSelection.selectText(base.left + base.width / 2, base.top + base.height / 2, maxLength);
+              }
+              return window.hoshiSelection.selectText(x, y, maxLength);
             },
             // Anchor to rendered text as well as the OCR rectangle. In particular, trailing
             // vertical glyphs can extend below that rectangle. Exclude the actions from the
@@ -620,9 +835,7 @@ internal object MangaPageHtml {
               actions.style.transform = '';
               box.classList.remove('actions-below');
               var rect = box.getBoundingClientRect();
-              var range = document.createRange();
-              range.selectNodeContents(text);
-              var painted = range.getBoundingClientRect();
+              var painted = window.hoshiOcrTextExtent(box);
               var top = Math.min(rect.top, painted.top);
               var bottom = Math.max(rect.bottom, painted.bottom);
               var left = Math.min(rect.left, painted.left);
@@ -776,7 +989,7 @@ internal object MangaPageHtml {
                 var aiText = aiBox && aiBox.querySelector('p');
                 if (aiText && window.HoshiMangaAi) {
                   var aiBlockId = (aiBox && aiBox.dataset && aiBox.dataset.hoshiBlock) || '';
-                  window.HoshiMangaAi.askAboutBubble(aiText.textContent || '', aiBlockId);
+                  window.HoshiMangaAi.askAboutBubble(window.hoshiManga.bubbleText(aiBox), aiBlockId);
                 }
                 return '__ai__';
               }
@@ -785,26 +998,33 @@ internal object MangaPageHtml {
                 var copyBox = copyBtn.closest('.ocr-box');
                 var copyText = copyBox && copyBox.querySelector('p');
                 if (copyText && window.HoshiMangaClipboard) {
-                  window.HoshiMangaClipboard.copyBubbleText(copyText.textContent || '');
+                  window.HoshiMangaClipboard.copyBubbleText(window.hoshiManga.bubbleText(copyBox));
                 }
                 return '__copied__';
               }
               var box = el && el.closest && el.closest('.ocr-box');
               if (box) {
                 var alreadyRevealed = box.classList.contains('revealed');
+                var initialHit = !alreadyRevealed && window.hoshiManga.singleTapLookupValue
+                  ? (window.hoshiManga.annotationBaseHit(box, x, y) || window.hoshiSelection.getCharacterAtPoint(x, y)) : null;
                 if (!alreadyRevealed) {
+                  if (box.classList.contains('has-furigana')) {
+                    box.dataset.furiganaOriginalStyle = box.getAttribute('style') || '';
+                    box.dataset.furiganaOriginalWrap = box.classList.contains('wrap') ? '1' : '0';
+                  }
                   // Run the wrap-fallback before reveal in both tap modes; no-op for
                   // bubbles where mokuro got the geometry right, promotes the broken
                   // cases (e.g. mokuro tagging a tall narrow box as horizontal) to a
                   // wrap layout that fits a meaningfully larger glyph than nowrap can.
                   window.hoshiManga.tryWrapFallback(box);
+                  window.hoshiManga.fitFurigana(box);
                   box.classList.add('revealed');
                   box.setAttribute('aria-pressed', 'true');
                   window.hoshiManga.updateActionPlacement(box);
+                  window.hoshiManga.notifyScrollableBubbleRegions();
                   if (window.HoshiMangaTap && window.HoshiMangaTap.bubbleRevealed) {
-                    var revealedText = box.querySelector('p');
                     var revealedBlock = (box.dataset && box.dataset.hoshiBlock) || '';
-                    window.HoshiMangaTap.bubbleRevealed(revealedText ? (revealedText.textContent || '') : '', revealedBlock);
+                    window.HoshiMangaTap.bubbleRevealed(window.hoshiManga.bubbleText(box), revealedBlock);
                   }
                 }
                 // Default two-tap mode: first tap on an unrevealed bubble just reveals
@@ -813,7 +1033,16 @@ internal object MangaPageHtml {
                 // both into the first tap — the popup may overlap the buttons in that
                 // mode, which is the trade-off the user opts in to.
                 if (alreadyRevealed || window.hoshiManga.singleTapLookupValue) {
-                  return window.hoshiSelection.selectText(x, y, maxLength);
+                  // Fitting ruby can move a vertical column or an edge bubble. Keep the
+                  // original tapped base character when reveal and lookup share one tap.
+                  if (initialHit) {
+                    var range = document.createRange();
+                    range.setStart(initialHit.node, initialHit.offset);
+                    range.setEnd(initialHit.node, initialHit.offset + String.fromCodePoint(initialHit.node.textContent.codePointAt(initialHit.offset)).length);
+                    var rect = range.getBoundingClientRect();
+                    return window.hoshiSelection.selectText(rect.left + rect.width / 2, rect.top + rect.height / 2, maxLength);
+                  }
+                  return window.hoshiManga.selectBubbleText(box, x, y, maxLength);
                 }
                 return '__revealed__';
               }
@@ -829,13 +1058,16 @@ internal object MangaPageHtml {
               document.querySelectorAll('.ocr-box.revealed').forEach(function(box) {
                 window.hoshiManga.updateActionPlacement(box);
               });
+              window.hoshiManga.notifyScrollableBubbleRegions();
             });
           }
           window.addEventListener('resize', refreshActions);
+          document.addEventListener('scroll', refreshActions, true);
           if (window.visualViewport) {
             window.visualViewport.addEventListener('resize', refreshActions);
             window.visualViewport.addEventListener('scroll', refreshActions);
           }
+          window.hoshiManga.notifyScrollableBubbleRegions();
           if (document.fonts) document.fonts.ready.then(refreshActions);
         })();
     """.trimIndent()

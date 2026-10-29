@@ -1,6 +1,9 @@
 package moe.antimony.hoshi.features.reader
 
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
+import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.booleanPreferencesKey
+import androidx.datastore.preferences.core.mutablePreferencesOf
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -90,6 +93,7 @@ class ReaderSettingsRepositoryTest {
             assertFalse(settings.reverseVolumeKeyDirection)
             assertFalse(settings.keepScreenOnWhileReading)
             assertTrue(settings.mangaEnlargeSmallText)
+            assertTrue(settings.mangaShowFurigana)
         }
     }
 
@@ -114,6 +118,7 @@ class ReaderSettingsRepositoryTest {
                 volumeKeysTurnPages = true,
                 volumeKeysSeekSasayaki = true,
                 keepScreenOnWhileReading = true,
+                mangaShowFurigana = false,
             ),
         )
 
@@ -137,9 +142,11 @@ class ReaderSettingsRepositoryTest {
             assertTrue(migrated.volumeKeysTurnPages)
             assertTrue(migrated.volumeKeysSeekSasayaki)
             assertTrue(migrated.keepScreenOnWhileReading)
+            assertFalse(migrated.mangaShowFurigana)
 
             repository.update { it.copy(fontSize = 31) }
             assertEquals(31, repository.settings.first().fontSize)
+            assertFalse(repository.settings.first().mangaShowFurigana)
             assertEquals(1, legacy.loadCount)
         }
     }
@@ -193,6 +200,7 @@ class ReaderSettingsRepositoryTest {
                     reverseVolumeKeyDirection = true,
                     keepScreenOnWhileReading = true,
                     mangaEnlargeSmallText = false,
+                    mangaShowFurigana = false,
                 )
             }
 
@@ -242,6 +250,7 @@ class ReaderSettingsRepositoryTest {
             assertTrue(saved.reverseVolumeKeyDirection)
             assertTrue(saved.keepScreenOnWhileReading)
             assertFalse(saved.mangaEnlargeSmallText)
+            assertFalse(saved.mangaShowFurigana)
         }
     }
 
@@ -261,14 +270,45 @@ class ReaderSettingsRepositoryTest {
         }
     }
 
-    private fun repository(
+    @Test
+    fun existingDataStoreWithoutFuriganaPreferenceDefaultsOnAndPreservesItDuringUpdates() = runBlocking {
+        repository(
+            initialPreferences = mutablePreferencesOf(
+                booleanPreferencesKey("readerSettingsMigratedFromSharedPreferences") to true,
+            ),
+        ).use { repository ->
+            assertTrue(repository.settings.first().mangaShowFurigana)
+            repository.update { it.copy(mangaShowCopyButton = true) }
+            assertTrue(repository.settings.first().mangaShowFurigana)
+        }
+    }
+
+    @Test
+    fun existingDataStoreWithFuriganaDisabledPreservesChoiceDuringUpdates() = runBlocking {
+        repository(
+            initialPreferences = mutablePreferencesOf(
+                booleanPreferencesKey("readerSettingsMigratedFromSharedPreferences") to true,
+                booleanPreferencesKey("mangaShowFurigana") to false,
+            ),
+        ).use { repository ->
+            assertFalse(repository.settings.first().mangaShowFurigana)
+            repository.update { it.copy(mangaShowCopyButton = true) }
+            assertFalse(repository.settings.first().mangaShowFurigana)
+            repository.update { it.copy(mangaShowFurigana = true) }
+            assertTrue(repository.settings.first().mangaShowFurigana)
+        }
+    }
+
+    private suspend fun repository(
         legacySource: ReaderSettingsLegacySource? = null,
+        initialPreferences: Preferences? = null,
     ): RepositoryHandle {
         val scope = CoroutineScope(Dispatchers.IO + Job())
         val dataStore = PreferenceDataStoreFactory.create(
             scope = scope,
             produceFile = { tempFolder.newFile("reader-settings.preferences_pb") },
         )
+        initialPreferences?.let { preferences -> dataStore.updateData { preferences } }
         return RepositoryHandle(
             repository = ReaderSettingsRepository(
                 dataStore = dataStore,

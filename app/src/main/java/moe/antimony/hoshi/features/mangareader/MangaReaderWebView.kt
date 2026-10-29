@@ -154,6 +154,7 @@ internal fun MangaReaderWebView(
                     MangaTapBridge(
                         onSelectedNothing = { currentOnSelectionCleared.value() },
                         onBubbleRevealed = { text, blockId -> currentOnBubbleRevealed.value(text, blockId) },
+                        onScrollableBubbleRegions = bubbleScrollRegions::update,
                     ),
                     "HoshiMangaTap",
                 )
@@ -182,6 +183,7 @@ internal fun MangaReaderWebView(
             if (webView.tag != loadToken) {
                 imageLoader?.onPageRequested(page.index)
                 webView.tag = loadToken
+                webView.bubbleScrollRegions.reset(page.index)
                 // Keep WebView's default initial scale. Rounding density to a whole percent
                 // can slightly magnify a fitted page and make it horizontally pannable.
                 webView.loadDataWithBaseURL(
@@ -197,6 +199,8 @@ internal fun MangaReaderWebView(
 }
 
 private class MangaWebView(context: Context) : WebView(context) {
+    val bubbleScrollRegions = MangaBubbleScrollRegions()
+
     fun mangaZoomScale(): Float {
         // The fitted document uses initial/minimum-scale=1. Never adopt a restored zoom as
         // the baseline: it would make a zoomed page look fitted to the swipe/selection code.
@@ -210,7 +214,7 @@ private data class MangaPageLoadToken(
 )
 
 @SuppressLint("ClickableViewAccessibility")
-private fun WebView.attachMangaTouchListener(
+private fun MangaWebView.attachMangaTouchListener(
     onNavigate: androidx.compose.runtime.State<(ReaderNavigationDirection) -> Unit>,
 ) {
     val webView = this
@@ -218,14 +222,26 @@ private fun WebView.attachMangaTouchListener(
         object : View.OnTouchListener {
             private val tracker = ReaderSwipeGestureTracker(minDistance = MANGA_SWIPE_MIN_DISTANCE)
             private val navigationGate = MangaTouchNavigationGate()
+            private var scrollingBubbleGesture = false
 
             override fun onTouch(view: View, event: MotionEvent): Boolean {
+                if (event.actionMasked == MotionEvent.ACTION_DOWN) {
+                    scrollingBubbleGesture = webView.bubbleScrollRegions.containsTouch(
+                        event.x, event.y, webView.resources.displayMetrics.density,
+                    )
+                }
                 val decision = navigationGate.onTouch(
                     action = event.toMangaTouchAction(),
                     pointerCount = event.pointerCount,
                 )
-                if (decision == MangaTouchNavigationDecision.CancelTracking) {
+                val suppressBubbleNavigation = scrollingBubbleGesture
+                if (event.actionMasked == MotionEvent.ACTION_UP || event.actionMasked == MotionEvent.ACTION_CANCEL) {
+                    scrollingBubbleGesture = false
+                }
+                if (suppressBubbleNavigation || decision == MangaTouchNavigationDecision.CancelTracking) {
                     tracker.onCancel()
+                    // WebView still receives the complete gesture for paragraph scrolling,
+                    // selection and pinch zoom. Suppression lasts even after leaving its rect.
                     return false
                 }
 

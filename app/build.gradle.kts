@@ -164,6 +164,13 @@ android {
     androidResources {
         generateLocaleConfig = true
     }
+    packaging {
+        resources.merges += setOf(
+            "META-INF/LICENSE.md",
+            "META-INF/NOTICE.md",
+            "META-INF/CONTRIBUTORS.md",
+        )
+    }
     lint {
         disable += "DirectSystemCurrentTimeMillisUsage"
         // The fork's EPUB strip collapses two distinct import code paths into the same
@@ -217,6 +224,7 @@ dependencies {
     implementation(libs.commonmark)
     implementation(libs.commonmark.ext.gfm.tables)
     implementation(libs.commonmark.ext.gfm.strikethrough)
+    implementation(libs.kuromoji.ipadic)
     implementation("net.java.dev.jna:jna:${libs.versions.jna.get()}@aar")
     testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2")

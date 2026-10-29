@@ -62,6 +62,10 @@ ANDROID_CLASSES = tuple(PREFIX + name for name in (
     "features.sync.http.HttpSyncSettingsInputTest",
     "features.sync.http.HttpSyncStatisticsCacheDeviceTest",
     "features.reader.ReaderSelectionUnicodeWebViewTest",
+    "features.reader.MangaFuriganaSettingsInstrumentedTest",
+    "features.mangareader.MangaFuriganaRuntimeInstrumentedTest",
+    "features.mangareader.MangaFuriganaInstrumentedTest",
+    "features.mangareader.MangaBubbleScrollGestureInstrumentedTest",
 ))
 
 

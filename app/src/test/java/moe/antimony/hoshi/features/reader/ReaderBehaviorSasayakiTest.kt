@@ -21,6 +21,7 @@ class ReaderBehaviorSasayakiTest {
                 // Manga-specific toggles, moved here from the reader's overflow (⋯)
                 // menu so they live with the other durable reader preferences.
                 R.string.reader_behavior_manga_single_tap_lookup,
+                R.string.reader_behavior_manga_show_furigana,
                 R.string.reader_behavior_manga_use_noto_sans_jp,
                 R.string.reader_behavior_manga_enlarge_small_text,
                 R.string.reader_behavior_manga_show_copy_button,

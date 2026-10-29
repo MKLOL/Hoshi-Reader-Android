@@ -36,6 +36,7 @@ class ReaderSettingsTest {
         assertEquals(10, settings.statisticsStreakMinimumMinutes)
         assertTrue(settings.popupSwipeToDismiss)
         assertEquals(30, settings.popupSwipeThreshold)
+        assertTrue(settings.mangaShowFurigana)
     }
 
     @Test

@@ -22,6 +22,7 @@ internal data class MangaPageRenderConfig(
     val showCopyButton: Boolean = false,
     val enlargeSmallText: Boolean = true,
     val selectionScript: String = ReaderSelectionScripts.source(),
+    val showFurigana: Boolean = true,
 )
 
 /**
@@ -34,6 +35,7 @@ internal data class MangaPageRenderConfig(
 internal class MangaPageRenderCache(
     private val maxEntries: Int = 6,
     val imageLoader: MangaImageLoaderBackend? = null,
+    private val furiganaGenerator: (String) -> List<MangaFuriganaSpan> = MangaFurigana::annotations,
 ) {
     private val lock = Any()
     private val entries = object : LinkedHashMap<MangaPageRenderKey, String>(16, 0.75f, true) {
@@ -49,9 +51,9 @@ internal class MangaPageRenderCache(
         htmlFor(page, config, imageLoader?.imageUrl(page) ?: MangaPageHtml.encodeImagePath(page.imagePath))
 
     /**
-     * The page's HTML without touching the disk: built from the image version last read off the
-     * main thread, or null when this page's image has not been looked at yet. Callers revalidate
-     * with [htmlFor] in the background, so a replaced image still gets its new URL.
+     * Previously prepared HTML, without disk access, HTML generation or tokenization. Returns
+     * null on a cache miss; callers prepare it with [htmlFor] in the background. This also keeps
+     * the tokenizer's first dictionary load off the Compose/main-thread path.
      */
     fun knownHtmlFor(page: MokuroPage, config: MangaPageRenderConfig): String? {
         val imageUrl = if (imageLoader == null) {
@@ -59,7 +61,7 @@ internal class MangaPageRenderCache(
         } else {
             imageLoader.knownImageUrl(page) ?: return null
         }
-        return htmlFor(page, config, imageUrl)
+        return synchronized(lock) { entries[MangaPageRenderKey(page.index, config, imageUrl)] }
     }
 
     private fun htmlFor(page: MokuroPage, config: MangaPageRenderConfig, imageUrl: String): String {
@@ -68,6 +70,13 @@ internal class MangaPageRenderCache(
             entries[key]?.let { return it }
         }
 
+        val furigana = if (config.showFurigana) {
+            page.textBoxes.associate { box ->
+                box.blockIndex to furiganaGenerator(box.lines.joinToString("\n"))
+            }
+        } else {
+            emptyMap()
+        }
         val html = MangaPageHtml.build(
             page = page,
             backgroundCssColor = config.backgroundCssColor,
@@ -81,6 +90,7 @@ internal class MangaPageRenderCache(
             showCopyButton = config.showCopyButton,
             enlargeSmallText = config.enlargeSmallText,
             imageUrl = imageUrl,
+            furigana = furigana,
         )
 
         synchronized(lock) {

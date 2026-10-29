@@ -1021,6 +1021,7 @@ internal fun MangaReaderScreen(
                 readerSettings.mangaUseNotoSansJp,
                 readerSettings.mangaShowCopyButton,
                 readerSettings.mangaEnlargeSmallText,
+                readerSettings.mangaShowFurigana,
             ) {
                 MangaPageRenderConfig(
                     backgroundCssColor = backgroundCssColor,
@@ -1032,6 +1033,7 @@ internal fun MangaReaderScreen(
                     useNotoSansJpFont = readerSettings.mangaUseNotoSansJp,
                     showCopyButton = readerSettings.mangaShowCopyButton,
                     enlargeSmallText = readerSettings.mangaEnlargeSmallText,
+                    showFurigana = readerSettings.mangaShowFurigana,
                 )
             }
             LaunchedEffect(book, pageIndex, renderConfig) {
