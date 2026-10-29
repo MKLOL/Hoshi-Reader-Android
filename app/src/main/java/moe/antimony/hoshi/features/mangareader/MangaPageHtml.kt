@@ -684,6 +684,14 @@ internal object MangaPageHtml {
             clearRevealed: function() {
               var revealed = document.querySelectorAll('.ocr-box.revealed');
               for (var i = 0; i < revealed.length; i++) {
+                // Chromium can retain a paragraph's offset after overflow is removed.
+                // Reset while it still has scrollable layout so the next reveal starts
+                // at its first word and single-tap lookup keeps that word on screen.
+                if (revealed[i].classList.contains('furigana-scroll')) {
+                  var paragraph = revealed[i].querySelector('p');
+                  paragraph.scrollLeft = 0;
+                  paragraph.scrollTop = 0;
+                }
                 revealed[i].classList.remove('revealed');
                 revealed[i].setAttribute('aria-pressed', 'false');
                 if (typeof revealed[i].dataset.furiganaOriginalStyle === 'string') {
@@ -793,6 +801,8 @@ internal object MangaPageHtml {
               if (painted.left < rect.left - 0.5 || painted.top < rect.top - 0.5 ||
                   painted.right > rect.right + 0.5 || painted.bottom > rect.bottom + 0.5) {
                 box.classList.add('furigana-scroll');
+                text.scrollLeft = 0;
+                text.scrollTop = 0;
               }
             },
             // A reading belongs to its base word. Keep rt out of sentence scanning and

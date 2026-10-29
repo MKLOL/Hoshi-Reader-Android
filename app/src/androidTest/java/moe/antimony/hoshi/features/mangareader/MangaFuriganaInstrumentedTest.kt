@@ -325,6 +325,50 @@ class MangaFuriganaInstrumentedTest {
         }
     }
 
+    @Test fun reopeningAScrolledBubbleStartsAtItsFirstWordInSingleTapMode() {
+        val text = "学校".repeat(500)
+        for (vertical in listOf(false, true)) {
+            val state = evaluate(
+                enlarge = false, singleTap = true,
+                boxes = listOf(box(text, vertical).copy(left = 20, top = 20, width = 150,
+                    height = 150, fontSize = 80, originalFontSize = 80)),
+                furigana = mapOf(5 to (text.indices step 2).map { MangaFuriganaSpan(it, 2, "がっこう") }),
+                script = """
+                    var box = document.querySelector('.ocr-box');
+                    var firstNode = box.querySelector('ruby').firstChild;
+                    var range = document.createRange(); range.setStart(firstNode,0); range.setEnd(firstNode,1);
+                    var original = range.getBoundingClientRect();
+                    var x = original.left + original.width/2, y = original.top + original.height/2;
+                    var first = window.hoshiManga.handleTap(x,y,16);
+                    var paragraph = box.querySelector('p');
+                    paragraph.scrollLeft = -paragraph.scrollWidth;
+                    paragraph.scrollTop = paragraph.scrollHeight;
+                    var scrolled = Math.abs(paragraph.scrollLeft) + Math.abs(paragraph.scrollTop);
+                    window.hoshiManga.clearRevealed();
+                    var hiddenOffset = Math.abs(paragraph.scrollLeft) + Math.abs(paragraph.scrollTop);
+                    var reopened = window.hoshiManga.handleTap(x,y,16);
+                    var base = range.getBoundingClientRect();
+                    var clip = paragraph.getBoundingClientRect();
+                    return {first:first, reopened:reopened, scrolled:scrolled, hiddenOffset:hiddenOffset,
+                      revealedOffset:Math.abs(paragraph.scrollLeft)+Math.abs(paragraph.scrollTop),
+                      visible:base.left>=clip.left-0.1 && base.right<=clip.right+0.1 &&
+                        base.top>=clip.top-0.1 && base.bottom<=clip.bottom+0.1,
+                      payload:testEvents.lookup.text, sentence:testEvents.lookup.sentence,
+                      canonical:window.hoshiManga.bubbleText(box)};
+                """,
+            )
+            assertTrue("fixture must scroll away from the first word: $state", state.getDouble("scrolled") > 1)
+            assertEquals("学校".repeat(8), state.getString("first"))
+            assertEquals("学校".repeat(8), state.getString("reopened"))
+            assertEquals(state.getString("reopened"), state.getString("payload"))
+            assertEquals(text, state.getString("sentence"))
+            assertEquals(text, state.getString("canonical"))
+            assertEquals(0.0, state.getDouble("hiddenOffset"), 0.01)
+            assertEquals(0.0, state.getDouble("revealedOffset"), 0.01)
+            assertTrue("reopened first word must be on screen: $state", state.getBoolean("visible"))
+        }
+    }
+
     @Test fun zoomedRevealAndAnnotationLookupPreserveTextAndHostPopupCoordinates() {
         val state = evaluate(zoomFactor = 1.5f, script = """
             var box = document.querySelector('.ocr-box');
