@@ -973,4 +973,20 @@
     <string name="reader_settings_updates">应用更新</string>
     <string name="reader_epub_show_furigana">显示振假名</string>
     <string name="reader_epub_show_furigana_desc">显示 EPUB 原有的注音。漫画使用独立的生成振假名设置。</string>
+    <string name="http_sync_reader_settings_up">阅读设置已上传</string>
+    <string name="http_sync_reader_settings_down">阅读设置已下载</string>
+    <string name="http_sync_reader_error_local_read">阅读设置：无法读取本机偏好。</string>
+    <string name="http_sync_reader_error_identity">阅读设置：本机设备标识无效。</string>
+    <string name="http_sync_reader_error_listing">阅读设置：无法获取设备设置列表。</string>
+    <string name="http_sync_reader_error_device_limit">阅读设置：待同步设备过多。</string>
+    <string name="http_sync_reader_error_invalid_key">阅读设置：某个设备设置键无效。</string>
+    <string name="http_sync_reader_error_version">阅读设置：某个设备使用了不支持的设置版本。</string>
+    <string name="http_sync_reader_error_invalid_remote">阅读设置：某个设备的设置无效。</string>
+    <string name="http_sync_reader_error_remote_read">阅读设置：无法读取设备设置。</string>
+    <string name="http_sync_reader_error_field_limit">阅读设置：待同步的偏好项目过多。</string>
+    <string name="http_sync_reader_error_apply">阅读设置：无法应用设备设置。</string>
+    <string name="http_sync_reader_error_invalid_local">阅读设置：本机偏好无效。</string>
+    <string name="http_sync_reader_error_upload_limit">阅读设置超出上传大小限制。</string>
+    <string name="http_sync_reader_error_upload">阅读设置：无法上传本机偏好。</string>
+    <string name="http_sync_reader_error_exchange">阅读设置同步失败。更改已保存，稍后将重试。</string>
 </resources>

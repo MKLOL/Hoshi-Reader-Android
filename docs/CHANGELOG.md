@@ -8,7 +8,7 @@ Semantic Versioning.
 ## [Unreleased]
 
 ### Changed
-- Find reading options in dedicated **Manga** and **EPUB** settings. Manga furigana is first under Manga; EPUB text, layout and reading controls are together. Shared theme, e-ink and volume-button controls live in **App & reading**, and both readers link to the same **Popup Cards** editor. Existing choices are preserved.
+- Find reading options in dedicated **Manga** and **EPUB** settings. Manga furigana is first under Manga; EPUB text, layout and reading controls are together. Shared theme, e-ink and volume-button controls live in **App & reading**, and both readers link to the same **Popup Cards** editor. Existing choices are preserved. With HTTP sync set up, these preferences and Sasayaki reading options carry across your devices, including resetting a choice to its default; custom font files still need importing on each device.
 
 ## [v1.0.0] - 2026-10-29
 

@@ -787,13 +787,16 @@ fun ReaderWebView(
         closeLookupPopupsAndSelection()
         fullscreenImage = ReaderFullscreenImage(sourceUrl, resource)
     }
+    val renderedSasayakiSettings = sasayakiSettings
     fun updateSasayakiSettings(settings: SasayakiSettings) {
-        sasayakiSettings = settings
+        sasayakiSettings = applySasayakiSettingsEdit(sasayakiSettings, renderedSasayakiSettings, settings)
         scope.launch {
-            sasayakiSettingsRepository.update { settings }
+            sasayakiSettingsRepository.update { current ->
+                applySasayakiSettingsEdit(current, renderedSasayakiSettings, settings)
+            }
         }
-        sasayakiPlayer?.autoScroll = settings.autoScroll
-        sasayakiPlayer?.readerSkipButtonAction = settings.readerSkipButtonAction
+        sasayakiPlayer?.autoScroll = sasayakiSettings.autoScroll
+        sasayakiPlayer?.readerSkipButtonAction = sasayakiSettings.readerSkipButtonAction
     }
     fun goToNextChapter(): Boolean {
         if (!stateHolder.canAcceptReaderNavigationInput()) return false

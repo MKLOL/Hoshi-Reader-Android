@@ -100,6 +100,7 @@ import moe.antimony.hoshi.features.reader.ReaderAppearanceSheet
 import moe.antimony.hoshi.features.reader.ReaderLookupTouchTarget
 import moe.antimony.hoshi.features.reader.dismissReaderLookupOnOutsideTouch
 import moe.antimony.hoshi.features.reader.ReaderSettings
+import moe.antimony.hoshi.features.reader.applySasayakiSettingsEdit
 import moe.antimony.hoshi.features.reader.ReaderLifecycleAutoSyncEvent
 import moe.antimony.hoshi.features.reader.readerLifecycleAutoSyncPlan
 import moe.antimony.hoshi.features.settings.collectAsLoadedSettings
@@ -749,12 +750,17 @@ private fun SentenceReaderContent(
         )
         if (showAppearance) {
             // Use the same EPUB settings as the main Settings page, including shared-settings links.
+            val previousSasayakiSettings = sasayakiSettings
             ReaderAppearanceSheet(
                 settings = readerSettings,
                 onSettingsChange = onReaderSettingsChange,
                 sasayakiSettings = sasayakiSettings,
                 onSasayakiSettingsChange = { updated ->
-                    scope.launch { appContainer.sasayakiSettingsRepository.update { updated } }
+                    scope.launch {
+                        appContainer.sasayakiSettingsRepository.update { current ->
+                            applySasayakiSettingsEdit(current, previousSasayakiSettings, updated)
+                        }
+                    }
                 },
                 fontManager = appContainer.readerFontManager,
                 onDismiss = { showAppearance = false },

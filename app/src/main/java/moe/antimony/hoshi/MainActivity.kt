@@ -19,6 +19,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import kotlinx.coroutines.launch
 import moe.antimony.hoshi.features.reader.ReaderSettings
+import moe.antimony.hoshi.features.reader.applyReaderSettingsEdit
 import moe.antimony.hoshi.features.reader.usesDarkInterface
 import moe.antimony.hoshi.features.reader.usesDarkSystemBarIcons
 import moe.antimony.hoshi.features.update.DownloadedUpdatePrompt
@@ -74,9 +75,13 @@ class MainActivity : ComponentActivity() {
                         onPendingNewsUrlConsumed = { pendingNewsUrl = null },
                         readerSettings = loadedReaderSettings,
                         onReaderSettingsChange = { settings ->
-                            readerSettings = settings
+                            readerSettings = applyReaderSettingsEdit(
+                                readerSettings ?: loadedReaderSettings, loadedReaderSettings, settings,
+                            )
                             scope.launch {
-                                readerSettingsRepository.update { settings }
+                                readerSettingsRepository.update { current ->
+                                    applyReaderSettingsEdit(current, loadedReaderSettings, settings)
+                                }
                             }
                         },
                         onReaderKeyEventHandlerChange = { handler ->

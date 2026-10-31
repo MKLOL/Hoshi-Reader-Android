@@ -57,7 +57,7 @@ object HttpSyncEngineDispatcher {
         v3 = { s, p -> v3Engine.syncOnce(s, transport, p) },
         onProgress = onProgress,
     ).also { result ->
-        if (result.errors.isEmpty()) HttpSyncDownloadSpool.pruneAfterSync(reconciler.booksDirectory)
+        if (!result.hasErrors) HttpSyncDownloadSpool.pruneAfterSync(reconciler.booksDirectory)
     }
 
     /**

@@ -13,11 +13,13 @@ import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onStart
 import moe.antimony.hoshi.R
 import moe.antimony.hoshi.features.sync.StatisticsSyncMode
 import java.util.Locale
+import java.util.UUID
 
 /** Streak goals the settings keep, in minutes. */
 val STATISTICS_STREAK_MINIMUM_MINUTES_RANGE: IntRange = 1..600
@@ -399,34 +401,121 @@ class ReaderSettingsStore(context: Context) : ReaderSettingsLegacySource {
 
 private val Context.readerSettingsDataStore by preferencesDataStore(name = ReaderSettingsRepository.DataStoreName)
 
-fun Context.readerSettingsRepository(): ReaderSettingsRepository =
+fun Context.readerSettingsRepository(syncDeviceId: String = ""): ReaderSettingsRepository =
     ReaderSettingsRepository(
         dataStore = readerSettingsDataStore,
         legacySource = ReaderSettingsStore(this),
+        syncDeviceId = syncDeviceId,
     )
 
 class ReaderSettingsRepository(
     private val dataStore: DataStore<Preferences>,
     private val legacySource: ReaderSettingsLegacySource? = null,
-) {
+    private val syncDeviceId: String = "",
+    private val nowMillis: () -> Long = System::currentTimeMillis,
+) : ReaderSettingsSyncStore {
+    /** Invoked after an actual local edit commits; remote merges never enqueue an echo. */
+    var onSyncRelevantEdit: (() -> Unit)? = null
+
     val settings: Flow<ReaderSettings> = dataStore.data
         .onStart { migrateLegacySettingsIfNeeded() }
         .map { preferences -> preferences.toReaderSettings() }
 
     suspend fun update(transform: (ReaderSettings) -> ReaderSettings) {
         migrateLegacySettingsIfNeeded()
+        var syncChanged = false
         dataStore.edit { preferences ->
             val current = preferences.toReaderSettings()
+            val before = ReaderSettingsSyncCodec.values(current)
             preferences.writeReaderSettings(transform(current))
+            val after = ReaderSettingsSyncCodec.values(preferences.toReaderSettings())
+            val changes = after.filter { (name, value) -> value != before[name] }
+            if (changes.isNotEmpty()) {
+                val records = ReaderSettingsSyncCodec.decode(preferences[KEY_SYNC_JOURNAL]).toMutableMap()
+                val editedAt = ReaderSettingsSyncCodec.nextTimestamp(nowMillis(), records)
+                val deviceId = requireNotNull(preferences[KEY_SYNC_DEVICE_ID])
+                changes.forEach { (name, value) ->
+                    val record = ReaderSettingRecord(value, editedAt, deviceId)
+                    require(ReaderSettingsSyncCodec.isValidRecord(name, record)) { "Invalid local reader preference" }
+                    records[name] = record
+                    syncChanged = true
+                }
+                if (syncChanged) preferences[KEY_SYNC_JOURNAL] = ReaderSettingsSyncCodec.encode(
+                    ReaderSettingsSyncCodec.validatedRecords(records),
+                )
+            }
             preferences[KEY_MIGRATED_FROM_SHARED_PREFERENCES] = true
         }
+        if (syncChanged) onSyncRelevantEdit?.invoke()
+    }
+
+    override suspend fun snapshot(): ReaderSettingsSyncSnapshot {
+        migrateLegacySettingsIfNeeded()
+        val preferences = dataStore.data.first()
+        return ReaderSettingsSyncSnapshot(
+            deviceId = requireNotNull(preferences[KEY_SYNC_DEVICE_ID]),
+            records = ReaderSettingsSyncCodec.decode(preferences[KEY_SYNC_JOURNAL]),
+        )
+    }
+
+    override suspend fun merge(remote: Map<String, ReaderSettingRecord>): Boolean = merge(remote) { true }
+
+    override suspend fun merge(
+        remote: Map<String, ReaderSettingRecord>,
+        stillCurrent: suspend () -> Boolean,
+    ): Boolean {
+        migrateLegacySettingsIfNeeded()
+        val accepted = ReaderSettingsSyncCodec.validateIncomingRecords(remote, nowMillis())
+            .filterKeys { !it.startsWith("sasayaki.") }
+        var changed = false
+        dataStore.edit { preferences ->
+            // A transaction can wait behind local writes after the HTTP layer checked its
+            // account. Check again here; no suspension follows before the values are changed.
+            if (!stillCurrent()) return@edit
+            val records = ReaderSettingsSyncCodec.decode(preferences[KEY_SYNC_JOURNAL]).toMutableMap()
+            require((records.keys + accepted.keys).size <= ReaderSettingsSyncCodec.MAX_RECORDS) {
+                "Reader settings sync field limit exceeded"
+            }
+            var settings = preferences.toReaderSettings()
+            accepted.forEach { (name, record) ->
+                if (ReaderSettingsSyncCodec.isNewer(record, records[name])) {
+                    records[name] = record
+                    settings = ReaderSettingsSyncCodec.apply(settings, name, record.value)
+                    changed = true
+                }
+            }
+            if (changed) {
+                preferences.writeReaderSettings(settings)
+                preferences[KEY_SYNC_JOURNAL] = ReaderSettingsSyncCodec.encode(records)
+            }
+        }
+        return changed
     }
 
     private suspend fun migrateLegacySettingsIfNeeded() {
         dataStore.edit { preferences ->
-            if (preferences[KEY_MIGRATED_FROM_SHARED_PREFERENCES] == true) return@edit
-            preferences.writeReaderSettings(legacySource?.load() ?: ReaderSettings())
-            preferences[KEY_MIGRATED_FROM_SHARED_PREFERENCES] = true
+            if (preferences[KEY_MIGRATED_FROM_SHARED_PREFERENCES] != true) {
+                preferences.writeReaderSettings(legacySource?.load() ?: ReaderSettings())
+                preferences[KEY_MIGRATED_FROM_SHARED_PREFERENCES] = true
+            }
+            val suppliedId = syncDeviceId.takeIf(ReaderSettingsSyncCodec::isValidDeviceId)
+            if (suppliedId != null) preferences[KEY_SYNC_DEVICE_ID] = suppliedId
+            if (!ReaderSettingsSyncCodec.isValidDeviceId(preferences[KEY_SYNC_DEVICE_ID].orEmpty())) {
+                preferences[KEY_SYNC_DEVICE_ID] = UUID.randomUUID().toString()
+            }
+            if (preferences[KEY_SYNC_JOURNAL] == null) {
+                val deviceId = requireNotNull(preferences[KEY_SYNC_DEVICE_ID])
+                val defaults = ReaderSettingsSyncCodec.values(DEFAULTS)
+                // Existing explicit choices enter at a baseline, below any subsequently edited preference.
+                // An untouched new installation contributes no defaults that could replace another device.
+                val records = ReaderSettingsSyncCodec.values(preferences.toReaderSettings())
+                    .filter { (name, value) -> value != defaults[name] }
+                    .mapValues { (_, value) -> ReaderSettingRecord(value, 0L, deviceId) }
+                    .filter { (name, record) -> ReaderSettingsSyncCodec.isValidRecord(name, record) }
+                preferences[KEY_SYNC_JOURNAL] = ReaderSettingsSyncCodec.encode(
+                    ReaderSettingsSyncCodec.validatedRecords(records),
+                )
+            }
         }
     }
 
@@ -568,6 +657,8 @@ class ReaderSettingsRepository(
     companion object {
         const val DataStoreName = "reader-settings"
         private val DEFAULTS = ReaderSettings()
+        private val KEY_SYNC_DEVICE_ID = stringPreferencesKey("readerSettingsSyncDeviceIdV1")
+        private val KEY_SYNC_JOURNAL = stringPreferencesKey("readerSettingsSyncJournalV1")
 
         private val KEY_MIGRATED_FROM_SHARED_PREFERENCES =
             booleanPreferencesKey("readerSettingsMigratedFromSharedPreferences")

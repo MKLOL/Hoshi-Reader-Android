@@ -120,11 +120,11 @@ internal class HoshiAppContainer(context: Context) {
     // Shared between the bookshelf's metadata-sidecar write and the manga reader's load
     // path so opening a book parses mokuro.json once instead of twice. See MokuroBookParser.
     val mokuroParser: MokuroBookParser = MokuroBookParser()
-    val readerSettingsRepository: ReaderSettingsRepository = appContext.readerSettingsRepository()
+    val readerSettingsRepository: ReaderSettingsRepository = appContext.readerSettingsRepository(syncDeviceId = installationId)
     val dictionarySettingsRepository: DictionarySettingsRepository = appContext.dictionarySettingsRepository()
     val audioSettingsRepository: AudioSettingsRepository = appContext.audioSettingsRepository()
     val ankiSettingsRepository: AnkiSettingsRepository = appContext.ankiSettingsRepository()
-    val sasayakiSettingsRepository: SasayakiSettingsRepository = appContext.sasayakiSettingsRepository()
+    val sasayakiSettingsRepository: SasayakiSettingsRepository = appContext.sasayakiSettingsRepository(syncDeviceId = installationId)
     val syncSettingsRepository: SyncSettingsRepository = appContext.syncSettingsRepository()
     val bookshelfSettingsRepository: BookshelfSettingsRepository = appContext.bookshelfSettingsRepository()
     val updateSettingsRepository: UpdateSettingsRepository = appContext.updateSettingsRepository()
@@ -218,6 +218,14 @@ internal class HoshiAppContainer(context: Context) {
         usageLog = usageLog,
         cloudBooks = httpSyncCloudBooks,
         cloudCatalogueActive = { httpSyncSettingsRepository.settings.first().useV3Sync },
+        readerSettings = moe.antimony.hoshi.features.reader.CompositeReaderSettingsSyncStore(
+            readerSettingsRepository, sasayakiSettingsRepository,
+        ),
+        readerSettingsAccountIsCurrent = { transport ->
+            val current = httpSyncSettingsRepository.settings.first()
+            current.isConfigured && transport.cacheIdentity ==
+                moe.antimony.hoshi.features.sync.http.HttpSyncKvClient(current.baseUrl, current.bearerToken).cacheIdentity
+        },
     )
     val httpSyncFullCycleRunner: HttpSyncFullCycleRunner = HttpSyncFullCycleRunner(appScope)
     val httpSyncFastSync: HttpSyncFastSync = HttpSyncFastSync(
@@ -282,7 +290,7 @@ internal class HoshiAppContainer(context: Context) {
         result.newLastSyncedAt?.let { cursor ->
             httpSyncSettingsRepository.recordSyncCursor(settings, cursor)
         }
-        if (result.errors.isEmpty()) {
+        if (!result.hasErrors) {
             httpSyncManualSyncSuccessAt.value = System.currentTimeMillis()
         }
         result
@@ -320,6 +328,8 @@ internal class HoshiAppContainer(context: Context) {
         // AI chat settings edits sync immediately (debounced inside the hook; no-op when
         // sync is off). Mirrors iOS AiChatSettingsStore → HttpSyncManager.onAiSettingsChanged.
         aiChatSettingsRepository.onSyncRelevantEdit = { httpSyncAutoPush.onAiSettingsChanged() }
+        readerSettingsRepository.onSyncRelevantEdit = httpSyncBookmarkScheduler::onReaderSettingsChanged
+        sasayakiSettingsRepository.onSyncRelevantEdit = httpSyncBookmarkScheduler::onReaderSettingsChanged
         // Prime the remote ETag/body cache before reading and retry durable bookmarks
         // left by a process death. With no changes this is one small HTTP request.
         httpSyncBookmarkScheduler.start()

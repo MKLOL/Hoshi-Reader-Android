@@ -90,7 +90,8 @@ private fun isLegacyBookmarkKey(key: String): Boolean = key.startsWith("books/")
  * devices trigger each other's full passes for as long as someone was reading.
  */
 internal fun isReconcileKey(key: String): Boolean =
-    !key.startsWith(SYNC_MAP_PREFIX) && !isStatisticsKey(key) && !isLegacyBookmarkKey(key)
+    !key.startsWith(SYNC_MAP_PREFIX) && !key.startsWith(READER_SETTINGS_PREFIX) &&
+        !isStatisticsKey(key) && !isLegacyBookmarkKey(key)
 
 /** Tracks exact legacy-key mutations authored by one full reconcile. */
 private class HttpSyncWriteTrackingTransport(
@@ -181,6 +182,9 @@ class HttpSyncBatchState(
      * so under it a listed manga is missing like any other and must start a full sync.
      */
     private val cloudCatalogueActive: suspend () -> Boolean = { true },
+    /** Shared by both manual engines and the small automatic exchange. */
+    readerSettings: moe.antimony.hoshi.features.reader.ReaderSettingsSyncStore? = null,
+    readerSettingsAccountIsCurrent: suspend (HttpSyncKvTransport) -> Boolean = { true },
 ) {
     internal val booksDirectory: java.io.File get() = bookRepository.booksDirectory
 
@@ -191,6 +195,20 @@ class HttpSyncBatchState(
         bookRepository, bookLocks, statisticsPreferences, usageLane = usageLog?.let { HttpSyncUsageLane(it) },
     )
     private val statisticsMutex = Mutex()
+    private val readerPreferences = readerSettings?.let { HttpSyncReaderSettings(it, readerSettingsAccountIsCurrent) }
+
+    internal suspend fun syncReaderSettings(
+        transport: HttpSyncKvTransport,
+        listing: List<HttpSyncKvKeyMeta>? = null,
+    ): ReaderSettingsSyncResult = withContext(ioDispatcher) {
+        try {
+            readerPreferences?.sync(transport, listing) ?: ReaderSettingsSyncResult()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            ReaderSettingsSyncResult(errors = listOf(ReaderSettingsSyncError.Exchange))
+        }
+    }
     private val positionSync = ReadingPositionSync(bookRepository)
     /** One history pass at a time; never held together with [syncMutex] (see [syncMaps]). */
     private val positionMutex = Mutex()
@@ -891,6 +909,7 @@ class HttpSyncFastSync(
         val maps = state.syncMaps(client, onProgress)
         var uploadedKeys = maps.uploadedBookmarkKeys
         var bookmarkErrors = maps.positionErrors
+        val preferences = state.syncReaderSettings(client, maps.listing)
         // A tap sends this device's reading at once and takes every other device's, before and
         // independently of any book transfer.
         onProgress(HttpSyncProgress(messageResource = R.string.http_sync_reading_history))
@@ -926,7 +945,10 @@ class HttpSyncFastSync(
             downloadedBookmarks = positionsAfter.count { (syncId, position) -> positionsBefore[syncId] != position },
             uploadedStatistics = result.uploadedStatistics + statistics.uploadedBooks,
             downloadedStatistics = result.downloadedStatistics + statistics.downloadedBooks,
+            uploadedReaderSettings = result.uploadedReaderSettings || preferences.uploaded,
+            downloadedReaderSettings = result.downloadedReaderSettings || preferences.downloaded,
             errors = (bookmarkErrors + statistics.errors + result.errors).distinct(),
+            readerSettingsErrors = (result.readerSettingsErrors + preferences.errors).distinct(),
         )
     }
 
@@ -967,6 +989,8 @@ class HttpSyncBookmarkScheduler(
     private var mapFlight: MapFlight? = null
     private var backgroundFullJob: Job? = null
     private var statisticsFlight: Job? = null
+    private var readerSettingsFlight: Job? = null
+    private var readerSettingsEditJob: Job? = null
     private var fullRetryDeferredForReader = false
     private var fullRetryAfterMillis = 0L
 
@@ -1040,6 +1064,15 @@ class HttpSyncBookmarkScheduler(
                 foreground.first { it }
                 runMaps()
             }
+        }
+    }
+
+    /** Persisted local edits are coalesced; an offline failure is retried by normal polling. */
+    fun onReaderSettingsChanged() = synchronized(jobLock) {
+        readerSettingsEditJob?.cancel()
+        readerSettingsEditJob = scope.launch {
+            delay(1_000)
+            refreshNow()
         }
     }
 
@@ -1174,6 +1207,7 @@ class HttpSyncBookmarkScheduler(
             state.syncMaps(client, onMapsEnded = onMapsEnded) { changes ->
                 // Started before the history lane, so statistics and book transfers never wait for it.
                 if (changes.statisticsNeeded) launchStatistics(client, changes.listing)
+                launchReaderSettings(client, changes.listing)
                 if (allowFullReconcile) {
                     if (changes.needsBootstrap || changes.booksChanged || changes.otherChanged) {
                         scheduleFullReconcile(changes, changes.reconcileSettings(settings), client)
@@ -1191,8 +1225,17 @@ class HttpSyncBookmarkScheduler(
             // The bookmark maps could not be read. Reading statistics do not depend on them, so
             // they still get their own pass (it lists the server again and reports a failure).
             launchStatistics(client, listing = null)
+            launchReaderSettings(client, listing = null)
         }
         return MapPass(configured = true, generation = generation)
+    }
+
+    /** Preferences never wait behind book archives; their durable journals survive process death. */
+    private fun launchReaderSettings(client: HttpSyncKvTransport, listing: List<HttpSyncKvKeyMeta>?) = synchronized(jobLock) {
+        if (readerSettingsFlight?.isActive == true) return
+        readerSettingsFlight = scope.launch {
+            state.syncReaderSettings(client, listing)
+        }
     }
 
     /** One statistics pass at a time, never queued behind book transfers or their retry pause. */
@@ -1222,7 +1265,7 @@ class HttpSyncBookmarkScheduler(
             val outcome = runCatching {
                 fullCycleRunner.run { report ->
                     val result = syncBooksNow(settings, client, report)
-                    if (result.errors.isEmpty()) {
+                    if (!result.hasErrors) {
                         report(HttpSyncProgress(messageResource = R.string.http_sync_finishing_maps))
                         val after = state.observeLegacyEtags(client)
                         val expected = client.expectedLegacyEtags(changes.observedLegacyEtags)

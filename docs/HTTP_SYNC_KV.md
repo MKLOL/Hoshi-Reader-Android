@@ -1,7 +1,9 @@
 # Hoshi Sync — existing-KV map protocol
 
-**Status:** implemented by the Android and iOS clients. No sync-specific backend endpoint
-or backend deployment is required; the clients use the existing generic `/v1/kv` API.
+**Status:** the book/map protocol is implemented by the Android and iOS clients. The reader
+preferences extension below is implemented by Android; older clients ignore its keys. No
+sync-specific backend endpoint or backend deployment is required; clients use the existing
+generic `/v1/kv` API.
 
 The fast path adds two logical opaque per-user maps to the original per-book KV layout:
 `BookID -> static-content SHA256` and `BookID -> bookmark state`. The bookmark map is
@@ -222,7 +224,7 @@ sync ids contain underscores, so a SQL `LIKE`-based implementation over-matches.
 
 ## Client-side conventions (informative; server doesn't enforce)
 
-The Android client uses this layout under one shared root prefix `books/`:
+The Android client uses the `books/`, `sync/maps/`, and `app/` namespaces:
 
 | Key | Content-Type | Schema | Mutability | Approx size |
 |---|---|---|---|---|
@@ -232,6 +234,7 @@ The Android client uses this layout under one shared root prefix `books/`:
 | `sync/maps/stats/{deviceId}/{yyyy-MM}.json` | `application/json` | `{version: 1, deviceId, month, books: {syncId: {title?, contentType?, reading: [ReadingStatistics…], mangaText: [MangaTextStatistic…]}}}` — that device's **own** entries whose `dateKey` falls in `month`, canonical (books and days sorted) so the ETag identifies the content | written only by `{deviceId}`: a plain PUT never loses another device's day; readers GET only shards whose ETag changed and accept only rows of that device and month; a `version` above 1 is skipped | ~250 B per book-day |
 | `sync/maps/stats/{deviceId}/settings.json` | `application/json` | `{version: 1, streakMinimumMinutes, dayResetHour, updatedAt, timeZone?}` (epoch ms; `1` marks a choice made before settings synced; `timeZone` is the IANA zone every device counts reading days in; absent until one is chosen, which means America/New_York, and from 0.12.2) | written only by `{deviceId}`; every device applies the newest `updatedAt`, the larger device id breaking a tie; the zone comes from the newest choice that names one, so a choice 0.12.2 republished without it never undoes it | ~120 B |
 | `sync/maps/usage/{deviceId}/{yyyy-MM-dd}.ndjson.gz`, `…/{yyyy-MM}.ndjson.gz` | `application/gzip` | that device's usage log (gzip without a timestamp, so equal content has an equal ETag), one JSON event per line — lookups, bubbles, translations, page turns, reading spans: one key per day of the current month, then one per month once it is over (its day keys are then deleted; receivers split it by each line's `at` + `utcOffset`) | written and deleted only by `{deviceId}`: past days when they change, today's at most every two minutes while it changes and at once on leaving the reader, Statistics or the app; its own copy is read back and merged before it is replaced (reinstall), and re-sent if the server lost it; other devices fetch a key whose ETag changed | ~2–30 KB per day |
+| `app/reader_settings/{deviceId}` | `application/json` | `{version: 1, deviceId, records: {fieldName: {value, editedAt, deviceId}}}` (`editedAt`: logical epoch milliseconds; `value`: typed JSON) | written only by the installation named in the key; merge each field by `editedAt`, then the larger originating `deviceId`; retain original clocks when mirroring | at most 64 KiB |
 | `books/{syncId}/metadata` | `application/json` | `{title, contentType, shelfName?, shelfUpdatedAt?, importedAt, deletedAt?}` | overwrite | ~250 B |
 | `books/{syncId}/bookmark` | `application/json` | legacy bookmark read during migration | old clients only | ~250 B |
 | `books/{syncId}/chat/{ts}-{nonce}` | `application/json` | `{bubbleText, prompt, model, response, timestampSeconds, screenshotImage?}` | **write-once** | ~500 B – 2 KB text-only; screenshot entries include the cropped PNG as base64 |
@@ -292,6 +295,9 @@ book-map mismatch, or a changed non-map metadata ETag.
 - Remote bookmark shard or position history changed: the list plus one GET for each changed
   shard, and for each changed history of a book on this device (at most 32 histories a pass).
   Concurrent devices never overwrite each other because their physical keys differ.
+- Reader preferences changed: a bounded GET of each device settings key, including the
+  writer's own key, then at most one PUT of the merged preferences under this installation's
+  key. An unchanged account, settings-key listing and local record set add no GET or PUT.
 - Book map changed: the small preflight returns immediately to the UI and launches the
   existing binary/metadata reconcile in the background.
 
@@ -320,7 +326,8 @@ On app resume, reader open, manual sync, and every five seconds while the app is
    revision and content hash only as deterministic tie-breakers, and apply newer remote
    positions to the active EPUB or manga reader.
 3. PUT this installation's bookmark shard once if any number of local positions need publishing.
-4. If the books map or any non-map ETag changed, run the existing per-book reconcile:
+4. If the books map or another reconcile-relevant ETag changed (excluding the independent
+   reader-preference, position and statistics lanes), run the existing per-book reconcile:
    - `chat/{ts}-{nonce}` → if the local chat log doesn't have that exact key, fetch
      and append. Order in-memory by `timestampSeconds`.
    - `metadata` with `deletedAt` set → if local copy exists, delete it locally and do
@@ -338,6 +345,63 @@ On app resume, reader open, manual sync, and every five seconds while the app is
      normalized sentence addresses and hashes, then atomically install
      `sentence_translations.json`.
 5. Advance `lastSyncedAt` and publish the authoritative maps after the full reconcile succeeds.
+
+### Reader preferences exchange (Android)
+
+`HttpSyncReaderSettings` runs through the shared fast-sync wrapper for both V2 and V3.
+It runs on manual sync and alongside the foreground metadata poll, independently of book
+archive transfers. Persisting a local reader preference schedules a coalesced refresh after
+one second; failed or interrupted exchanges retain the local journal and retry on a later
+poll or manual sync. A settings-key change never triggers a full book reconcile.
+
+The allowlist covers Manga recognized-text/bubble/page-turn options (including generated
+furigana), EPUB typography, reading aids, layout, display and controls, shared themes/e-ink
+and volume-button controls, and dictionary/translation Popup Card overrides. Sasayaki reader
+controls, cue-following, auto-pause and highlight colors use `sasayaki.*` field names in the
+same document. The selected font family syncs by name; custom font files must be imported
+on each device, and a missing font uses the reader's existing fallback. Credentials, HTTP
+connection details/cursors, private file paths, and Sasayaki sync/private-copy choices stay
+local. Streak goals, reset time and time zone retain their existing statistics lane.
+
+For example:
+
+```json
+{
+  "version": 1,
+  "deviceId": "phone-a",
+  "records": {
+    "mangaShowFurigana": {"value": false, "editedAt": 1793433600000, "deviceId": "phone-a"},
+    "dictionaryCard.width": {"value": null, "editedAt": 1793433600001, "deviceId": "phone-a"}
+  }
+}
+```
+
+- **Field merge.** Values and their revisions persist atomically in each preferences store.
+  Only a real local value change creates a revision, stamped after every revision that store
+  knows about. Receivers compare each field inside the current store transaction, so unrelated
+  offline edits and edits made during network requests survive. A received value retains its
+  original revision and never becomes a new local edit. Explicit defaults and nullable Popup
+  Card resets are records too; `null` restores that device's adaptive card default.
+- **First exchange.** A new untouched installation publishes no defaults. Existing nondefault
+  choices are seeded once with `editedAt: 0`, below subsequent edits. The writer reads its own
+  server key before any changed publication, even if a stale listing omitted it, then mirrors
+  the merged records only under its own installation key. It never overwrites a peer's shard.
+- **Compatibility and bounds.** Safe unknown fields retain their values and original revisions
+  for newer clients. Incoming known fields must have valid types/ranges; IDs, field counts,
+  bodies and clocks are bounded (256 device shards, 256 fields, 64 KiB per body, no incoming
+  clock more than 24 hours ahead). Unreadable or invalid data is reported and blocks publication
+  for that pass; an unsupported own version is never overwritten. An unsupported peer version
+  is skipped and reported. No malformed record is silently replaced with local defaults.
+- **Account changes.** Request memoization is scoped to the configured server and token.
+  In-flight responses are checked against the current connection before applying records and
+  inside the preferences transaction after queued storage work, and again before publishing.
+  Local preferences remain local preferences when switching accounts; a later successful
+  exchange uses the newly configured account.
+
+Regression entry points: `ReaderSettingsSyncRepositoryTest`,
+`SasayakiSettingsSyncRepositoryTest`, `HttpSyncReaderSettingsTest`,
+`HttpSyncReaderSettingsIntegrationTest`, `HttpSyncReaderSettingsInstrumentedTest`,
+`ReaderSettingsSyncAccountGuardTest`, `ReaderSettingsEditTest`, and `PopupCardsSettingsSyncEditTest`.
 
 ### Reading statistics lane
 

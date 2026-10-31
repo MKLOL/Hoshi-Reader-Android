@@ -51,11 +51,26 @@ internal fun PopupCardsSettingsScreen(
     // The drag state is immediate. Commit once at the end of a gesture, or on leaving,
     // instead of letting asynchronous disk emissions pull the thumb back mid-drag.
     var draft by rememberSaveable(stateSaver = cardEditorSaver(settings)) { mutableStateOf(settings) }
+    var savedDraft by rememberSaveable(stateSaver = cardEditorSaver(settings)) { mutableStateOf(settings) }
     var dictionary by rememberSaveable { mutableStateOf(true) }
     var fullPreview by rememberSaveable { mutableStateOf(false) }
     val latestSave by rememberUpdatedState(onSettingsChange)
-    val save = { onSettingsChange(draft) }
-    DisposableEffect(Unit) { onDispose { latestSave(draft) } }
+    val latestSettings by rememberUpdatedState(settings)
+    LaunchedEffect(settings) {
+        // Remote changes refresh untouched controls; keep only the gesture's unsaved delta.
+        draft = applyReaderSettingsEdit(settings, savedDraft, draft)
+        savedDraft = settings
+    }
+    val save = {
+        val previous = savedDraft
+        val edited = draft
+        if (edited != previous) {
+            savedDraft = edited
+            latestSave(applyReaderSettingsEdit(latestSettings, previous, edited))
+        }
+    }
+    val latestSaveDraft by rememberUpdatedState(save)
+    DisposableEffect(Unit) { onDispose { latestSaveDraft() } }
     val defaults = currentPopupReadability()
     val density = LocalDensity.current
     val window = LocalWindowInfo.current.containerSize

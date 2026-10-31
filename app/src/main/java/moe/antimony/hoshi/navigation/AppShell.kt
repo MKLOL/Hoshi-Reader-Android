@@ -49,6 +49,7 @@ import moe.antimony.hoshi.features.reader.EpubReaderSettingsScreen
 import moe.antimony.hoshi.features.reader.MangaReaderSettingsScreen
 import moe.antimony.hoshi.features.reader.ReaderFontManager
 import moe.antimony.hoshi.features.reader.ReaderSettings
+import moe.antimony.hoshi.features.reader.applySasayakiSettingsEdit
 import moe.antimony.hoshi.features.reader.sentence.SentenceReaderScreen
 import moe.antimony.hoshi.features.sasayaki.SasayakiMatchView
 import moe.antimony.hoshi.features.sasayaki.SasayakiSettings
@@ -117,10 +118,15 @@ fun AppShell(
         }
     }
 
+    val renderedSasayakiSettings = sasayakiSettings
     fun updateSasayakiSettings(settings: SasayakiSettings) {
-        sasayakiSettings = settings
+        sasayakiSettings = applySasayakiSettingsEdit(
+            sasayakiSettings, renderedSasayakiSettings, settings,
+        )
         scope.launch {
-            sasayakiSettingsRepository.update { settings }
+            sasayakiSettingsRepository.update { current ->
+                applySasayakiSettingsEdit(current, renderedSasayakiSettings, settings)
+            }
         }
     }
 

@@ -186,18 +186,22 @@ internal fun HttpSyncStatusLine(status: SyncStatus) {
         SyncStatus.Idle -> "" to MaterialTheme.colorScheme.onSurfaceVariant
         is SyncStatus.Running -> "" to MaterialTheme.colorScheme.onSurfaceVariant
         is SyncStatus.Done -> {
-            val errors = status.result.errors
+            val errors = status.result.errors + status.result.readerSettingsErrors.map { stringResource(it.messageResource) }
+            val summaryParts = status.result.summaryParts().toMutableList()
+            if (status.result.uploadedReaderSettings) summaryParts += stringResource(R.string.http_sync_reader_settings_up)
+            if (status.result.downloadedReaderSettings) summaryParts += stringResource(R.string.http_sync_reader_settings_down)
+            val summary = summaryParts.takeIf { it.isNotEmpty() }?.joinToString(", ") ?: status.result.summary()
             val errorBullets = errors.joinToString("\n") { " • $it" }
             val cloudLine = status.result.newCloudBooks.takeIf { it > 0 }?.let { count ->
                 pluralStringResource(R.plurals.http_sync_new_cloud_books, count, count)
             }
-            val nothingMoved = status.result.summaryParts().isEmpty()
+            val nothingMoved = summaryParts.isEmpty()
             // New manga, or the errors, are the news when nothing else moved: "nothing to sync"
             // would contradict them.
             val text = when {
                 cloudLine != null && nothingMoved -> cloudLine
                 nothingMoved && errors.isNotEmpty() -> null
-                else -> stringResource(R.string.http_sync_complete_format, status.result.summary()) +
+                else -> stringResource(R.string.http_sync_complete_format, summary) +
                     cloudLine?.let { "\n" + it }.orEmpty()
             }
             val errorText = when {

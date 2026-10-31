@@ -1843,7 +1843,12 @@ data class HttpSyncResult(
     val newLastSyncedAt: String? = null,
     /** Manga newly listed in the cloud catalogue; they download when tapped on the shelf. */
     val newCloudBooks: Int = 0,
+    val uploadedReaderSettings: Boolean = false,
+    val downloadedReaderSettings: Boolean = false,
+    val readerSettingsErrors: List<ReaderSettingsSyncError> = emptyList(),
 ) {
+    val hasErrors: Boolean get() = errors.isNotEmpty() || readerSettingsErrors.isNotEmpty()
+
     fun summary(): String = summaryParts().ifEmpty { listOf("nothing to sync") }.joinToString(", ")
 
     /** What this sync moved, one phrase each; empty when nothing changed. */
@@ -1891,6 +1896,9 @@ internal fun HttpSyncResult.followedBy(next: HttpSyncResult): HttpSyncResult = H
     errors = (errors + next.errors).distinct(),
     newLastSyncedAt = next.newLastSyncedAt ?: newLastSyncedAt,
     newCloudBooks = newCloudBooks + next.newCloudBooks,
+    uploadedReaderSettings = uploadedReaderSettings || next.uploadedReaderSettings,
+    downloadedReaderSettings = downloadedReaderSettings || next.downloadedReaderSettings,
+    readerSettingsErrors = (readerSettingsErrors + next.readerSettingsErrors).distinct(),
 )
 
 private fun plural(n: Int): String = if (n == 1) "" else "s"

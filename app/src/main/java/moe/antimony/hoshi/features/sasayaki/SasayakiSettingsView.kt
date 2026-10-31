@@ -42,6 +42,7 @@ import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 import moe.antimony.hoshi.LocalHoshiAppContainer
 import moe.antimony.hoshi.R
+import moe.antimony.hoshi.features.reader.applySasayakiSettingsEdit
 import moe.antimony.hoshi.features.settings.collectAsLoadedSettings
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -58,8 +59,11 @@ fun SasayakiSettingsView(
     var skipActionMenuExpanded by remember { mutableStateOf(false) }
 
     fun save(next: SasayakiSettings) {
+        val previous = settings ?: return
         scope.launch {
-            repository.update { next }
+            repository.update { current ->
+                applySasayakiSettingsEdit(current, previous, next)
+            }
         }
     }
 

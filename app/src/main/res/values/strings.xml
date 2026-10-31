@@ -975,4 +975,20 @@
     <string name="reader_settings_updates">App updates</string>
     <string name="reader_epub_show_furigana">Show furigana</string>
     <string name="reader_epub_show_furigana_desc">Shows readings included in the EPUB. Manga uses its own generated furigana setting.</string>
+    <string name="http_sync_reader_settings_up">Reader settings up</string>
+    <string name="http_sync_reader_settings_down">Reader settings down</string>
+    <string name="http_sync_reader_error_local_read">Reader settings: could not read local choices.</string>
+    <string name="http_sync_reader_error_identity">Reader settings: invalid local device identity.</string>
+    <string name="http_sync_reader_error_listing">Reader settings: could not list device settings.</string>
+    <string name="http_sync_reader_error_device_limit">Reader settings: too many devices to sync.</string>
+    <string name="http_sync_reader_error_invalid_key">Reader settings: a device settings key is invalid.</string>
+    <string name="http_sync_reader_error_version">Reader settings: a device uses an unsupported settings version.</string>
+    <string name="http_sync_reader_error_invalid_remote">Reader settings: a device has invalid settings.</string>
+    <string name="http_sync_reader_error_remote_read">Reader settings: could not read device settings.</string>
+    <string name="http_sync_reader_error_field_limit">Reader settings: too many preference fields to sync.</string>
+    <string name="http_sync_reader_error_apply">Reader settings: could not apply device settings.</string>
+    <string name="http_sync_reader_error_invalid_local">Reader settings: local choices are invalid.</string>
+    <string name="http_sync_reader_error_upload_limit">Reader settings exceed the upload size limit.</string>
+    <string name="http_sync_reader_error_upload">Reader settings: could not upload local choices.</string>
+    <string name="http_sync_reader_error_exchange">Reader settings could not sync. Your changes are saved and will retry.</string>
 </resources>
