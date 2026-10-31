@@ -662,7 +662,7 @@ private fun ReaderMenuCard(
                 }
                 when (destination) {
                     ReaderMenuDestination.Appearance -> ReaderMenuItem(
-                        text = stringResource(R.string.settings_appearance),
+                        text = stringResource(R.string.epub_reader_settings),
                         icon = {
                             Icon(
                                 imageVector = Icons.Rounded.Palette,

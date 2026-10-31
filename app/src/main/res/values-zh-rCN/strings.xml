@@ -213,14 +213,14 @@
     <string name="reader_behavior_keep_screen_on">保持屏幕常亮</string>
     <string name="reader_behavior_eink_mode_desc">针对墨水屏优化：纯黑白显示、无翻页动画。应用无法自动检测墨水屏，请手动开启。</string>
     <string name="reader_behavior_auto_check_updates">自动检查更新</string>
-    <string name="reader_behavior_manga_single_tap_lookup">漫画：单击查词</string>
-    <string name="reader_behavior_manga_single_tap_lookup_desc">第一次点击对话气泡时同时显示文字并查词。默认行为是先显示文字，第二次点击才查词，这样查词弹窗不会遮挡气泡上的操作按钮。</string>
-    <string name="reader_behavior_manga_show_furigana">漫画：显示振假名</string>
-    <string name="reader_behavior_manga_show_furigana_desc">显示气泡文字时，为识别出的日文生成读音。人名和读音可能与原漫画不同。</string>
-    <string name="reader_behavior_manga_use_noto_sans_jp">漫画：使用 Noto Sans JP 字体</string>
-    <string name="reader_behavior_manga_show_copy_button">漫画：显示复制按钮</string>
-    <string name="reader_behavior_manga_show_copy_button_desc">在显示出的气泡上，于“翻译”旁加一个“复制”按钮。关闭时只显示更大的“翻译”按钮。</string>
-    <string name="reader_behavior_manga_use_noto_sans_jp_desc">使用 Noto Sans JP 渲染显示出的 OCR 文字。关闭时使用平台自带的日文无衬线字体。</string>
+    <string name="reader_behavior_manga_single_tap_lookup">单击查词</string>
+    <string name="reader_behavior_manga_single_tap_lookup_desc">显示气泡文字时立即查词。关闭后需再次点击才能查词。</string>
+    <string name="reader_behavior_manga_show_furigana">显示振假名</string>
+    <string name="reader_behavior_manga_show_furigana_desc">为识别出的日文生成注音，读音可能与原漫画不同。</string>
+    <string name="reader_behavior_manga_use_noto_sans_jp">使用 Noto Sans JP 字体</string>
+    <string name="reader_behavior_manga_show_copy_button">显示复制按钮</string>
+    <string name="reader_behavior_manga_show_copy_button_desc">在“翻译”旁显示“复制”。关闭后显示更大的“翻译”按钮。</string>
+    <string name="reader_behavior_manga_use_noto_sans_jp_desc">使用 Noto Sans JP 显示气泡文字。关闭后使用系统字体。</string>
     <string name="reader_statistics_pause">暂停统计</string>
     <string name="reader_statistics_start">开始统计</string>
     <string name="reader_jump_back">返回上一个跳转位置</string>
@@ -928,8 +928,8 @@
     <string name="podcasts_transcript_hide_english">隐藏翻译</string>
     <string name="podcasts_transcript_follow">跟随播放</string>
     <string name="podcasts_transcript_play_from">从 %1$s 开始播放</string>
-    <string name="reader_behavior_manga_enlarge_small_text">漫画：放大小字</string>
-    <string name="reader_behavior_manga_enlarge_small_text_desc">放大漫画中显示的小字，便于点击。关闭后保留原始 OCR 字号。此设置不影响翻译和辞典弹窗的字号。</string>
+    <string name="reader_behavior_manga_enlarge_small_text">放大小字</string>
+    <string name="reader_behavior_manga_enlarge_small_text_desc">放大显示出的小字，便于阅读和点击。关闭后保留原始字号。</string>
 
     <!-- Live card appearance editor -->
     <string name="settings_popup_cards">弹出卡片</string>
@@ -953,4 +953,24 @@
     <string name="http_sync_download_failed">服务器无法提供此下载。请检查同步设置后重试。</string>
     <string name="http_sync_no_network">没有网络连接。请在恢复联网后重试。</string>
     <string name="http_sync_stop">停止同步</string>
+
+    <!-- Format-specific reader settings and the shared settings home. -->
+    <string name="settings_manga">漫画</string>
+    <string name="settings_epub">EPUB</string>
+    <string name="settings_app_and_reading">应用与阅读</string>
+    <string name="manga_reader_settings">漫画设置</string>
+    <string name="epub_reader_settings">EPUB 设置</string>
+    <string name="reader_settings_recognized_text">识别文字</string>
+    <string name="reader_settings_bubble_actions">气泡操作</string>
+    <string name="reader_settings_page_turning">翻页</string>
+    <string name="reader_settings_related">相关设置</string>
+    <string name="reader_settings_shared_description">漫画与 EPUB 共用，更改会应用到两个阅读器。</string>
+    <string name="reader_settings_popup_description">两个阅读器共用的辞典与翻译卡片外观及手势。</string>
+    <string name="reader_settings_reading_aids">阅读辅助</string>
+    <string name="reader_settings_reading_controls">阅读控制</string>
+    <string name="reader_settings_reverse_volume_desc">反转音量键翻页和 Sasayaki 跳转的方向。</string>
+    <string name="reader_settings_sasayaki_volume_desc">有 Sasayaki 音频时，音量键优先跳转音频而非翻页。按键方向可在“应用与阅读”中统一设置。</string>
+    <string name="reader_settings_updates">应用更新</string>
+    <string name="reader_epub_show_furigana">显示振假名</string>
+    <string name="reader_epub_show_furigana_desc">显示 EPUB 原有的注音。漫画使用独立的生成振假名设置。</string>
 </resources>

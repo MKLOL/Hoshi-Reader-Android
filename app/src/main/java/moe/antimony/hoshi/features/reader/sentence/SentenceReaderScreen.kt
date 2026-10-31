@@ -748,8 +748,7 @@ private fun SentenceReaderContent(
             },
         )
         if (showAppearance) {
-            // The reader's own appearance sheet: font, size, theme and spacing are shared settings,
-            // so a change here also changes the reader, exactly as the user would expect.
+            // Use the same EPUB settings as the main Settings page, including shared-settings links.
             ReaderAppearanceSheet(
                 settings = readerSettings,
                 onSettingsChange = onReaderSettingsChange,
@@ -818,7 +817,7 @@ private fun SentenceHeader(
         IconButton(onClick = onAppearance) {
             Icon(
                 imageVector = Icons.Rounded.Palette,
-                contentDescription = stringResource(R.string.settings_appearance),
+                contentDescription = stringResource(R.string.epub_reader_settings),
                 tint = foreground,
             )
         }

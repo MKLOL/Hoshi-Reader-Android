@@ -57,8 +57,8 @@ import androidx.compose.material.icons.rounded.Done
 import androidx.compose.material.icons.rounded.FolderOpen
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.Inventory2
-import androidx.compose.material.icons.rounded.Keyboard
 import androidx.compose.material.icons.rounded.Palette
+import androidx.compose.material.icons.rounded.Photo
 import androidx.compose.material.icons.rounded.RadioButtonUnchecked
 import androidx.compose.material.icons.rounded.QueryStats
 import androidx.compose.material.icons.rounded.ReportProblem
@@ -2031,8 +2031,9 @@ private fun SettingsGlyph(destination: SettingsDestination, color: Color, modifi
         SettingsDestination.Dictionaries -> Icons.AutoMirrored.Rounded.MenuBook
         SettingsDestination.Anki -> Icons.Rounded.Inventory2
         SettingsDestination.ChatGpt -> Icons.Rounded.SmartToy
-        SettingsDestination.Appearance -> Icons.Rounded.Palette
-        SettingsDestination.Behavior -> Icons.Rounded.Keyboard
+        SettingsDestination.Manga -> Icons.Rounded.Photo
+        SettingsDestination.Epub -> Icons.AutoMirrored.Rounded.MenuBook
+        SettingsDestination.AppAndReading -> Icons.Rounded.Palette
         SettingsDestination.PopupCards -> Icons.Rounded.Tune
         SettingsDestination.Statistics -> Icons.Rounded.QueryStats
         SettingsDestination.Advanced -> Icons.Rounded.Settings

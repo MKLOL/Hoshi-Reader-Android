@@ -45,12 +45,14 @@ import moe.antimony.hoshi.features.news.NewsFeedView
 import moe.antimony.hoshi.features.dictionary.DictionaryView
 import moe.antimony.hoshi.features.reader.ReaderAppearanceScreen
 import moe.antimony.hoshi.features.reader.PopupCardsSettingsScreen
-import moe.antimony.hoshi.features.reader.ReaderBehaviorScreen
+import moe.antimony.hoshi.features.reader.EpubReaderSettingsScreen
+import moe.antimony.hoshi.features.reader.MangaReaderSettingsScreen
 import moe.antimony.hoshi.features.reader.ReaderFontManager
 import moe.antimony.hoshi.features.reader.ReaderSettings
 import moe.antimony.hoshi.features.reader.sentence.SentenceReaderScreen
 import moe.antimony.hoshi.features.sasayaki.SasayakiMatchView
 import moe.antimony.hoshi.features.sasayaki.SasayakiSettings
+import moe.antimony.hoshi.features.sasayaki.SasayakiSettingsView
 import moe.antimony.hoshi.features.statistics.BookStatisticsScreen
 import moe.antimony.hoshi.features.statistics.StatisticsScreen
 import moe.antimony.hoshi.features.settings.AdvancedSettingsView
@@ -247,6 +249,8 @@ fun AppShell(
                     is AppRoute.SettingsDetailRoute -> SettingsDetailDestination(
                         route = route,
                         onOpenCards = { openSettingsDetail(SettingsDetailSection.PopupCards) },
+                        onOpenSharedSettings = { openSettingsDetail(SettingsDetailSection.AppAndReading) },
+                        onOpenSasayaki = { openSettingsDetail(SettingsDetailSection.Sasayaki) },
                         readerSettings = currentReaderSettings,
                         onReaderSettingsChange = currentOnReaderSettingsChange,
                         sasayakiSettings = sasayakiSettings,
@@ -306,6 +310,7 @@ fun AppShell(
                             onReaderKeyEventHandlerChange = currentOnReaderKeyEventHandlerChange,
                             onBookmarkSaved = readerBookmarkRefreshState::markDirty,
                             onClose = ::closeReaderRoute,
+                            onOpenSettings = { openSettingsDetail(SettingsDetailSection.Manga) },
                             modifier = Modifier.fillMaxSize(),
                         )
                     }
@@ -432,6 +437,8 @@ private fun SettingsDetailDestination(
     onBooksRestored: () -> Unit,
     onSelectedTabChange: (MainTab) -> Unit,
     onOpenCards: () -> Unit,
+    onOpenSharedSettings: () -> Unit,
+    onOpenSasayaki: () -> Unit,
 ) {
     when (route.section) {
         SettingsDetailSection.Dictionaries -> DictionaryView(
@@ -446,7 +453,9 @@ private fun SettingsDetailDestination(
             onClose = onClose,
             modifier = Modifier.fillMaxSize(),
         )
-        SettingsDetailSection.Appearance -> ReaderAppearanceScreen(
+        SettingsDetailSection.Appearance,
+        SettingsDetailSection.Behavior,
+        SettingsDetailSection.AppAndReading -> ReaderAppearanceScreen(
             settings = readerSettings,
             onSettingsChange = onReaderSettingsChange,
             sasayakiSettings = sasayakiSettings,
@@ -458,12 +467,26 @@ private fun SettingsDetailDestination(
         SettingsDetailSection.PopupCards -> PopupCardsSettingsScreen(
             settings = readerSettings, onSettingsChange = onReaderSettingsChange, onClose = onClose,
         )
-        SettingsDetailSection.Behavior -> ReaderBehaviorScreen(
-            onOpenCards = onOpenCards,
+        SettingsDetailSection.Manga -> MangaReaderSettingsScreen(
             settings = readerSettings,
             onSettingsChange = onReaderSettingsChange,
             onClose = onClose,
-            modifier = Modifier.fillMaxSize(),
+            onOpenSharedSettings = onOpenSharedSettings,
+            onOpenCards = onOpenCards,
+        )
+        SettingsDetailSection.Epub -> EpubReaderSettingsScreen(
+            settings = readerSettings,
+            onSettingsChange = onReaderSettingsChange,
+            sasayakiSettings = sasayakiSettings,
+            onSasayakiSettingsChange = onSasayakiSettingsChange,
+            fontManager = readerFontManager,
+            onClose = onClose,
+            onOpenSharedSettings = onOpenSharedSettings,
+            onOpenCards = onOpenCards,
+            onOpenSasayaki = onOpenSasayaki,
+        )
+        SettingsDetailSection.Sasayaki -> SasayakiSettingsView(
+            onClose = onClose,
         )
         SettingsDetailSection.Advanced -> AdvancedSettingsView(
             readerSettings = readerSettings,
@@ -495,8 +518,9 @@ private fun SettingsDestination.toSection(): SettingsDetailSection = when (this)
     SettingsDestination.Dictionaries -> SettingsDetailSection.Dictionaries
     SettingsDestination.Anki -> SettingsDetailSection.Anki
     SettingsDestination.ChatGpt -> SettingsDetailSection.ChatGpt
-    SettingsDestination.Appearance -> SettingsDetailSection.Appearance
-    SettingsDestination.Behavior -> SettingsDetailSection.Behavior
+    SettingsDestination.Manga -> SettingsDetailSection.Manga
+    SettingsDestination.Epub -> SettingsDetailSection.Epub
+    SettingsDestination.AppAndReading -> SettingsDetailSection.AppAndReading
     SettingsDestination.PopupCards -> SettingsDetailSection.PopupCards
     SettingsDestination.Statistics -> error("Statistics is its own route (see openStatisticsRoute).")
     SettingsDestination.Advanced -> SettingsDetailSection.Advanced

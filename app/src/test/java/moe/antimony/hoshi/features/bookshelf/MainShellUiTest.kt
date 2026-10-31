@@ -38,21 +38,38 @@ class MainShellUiTest {
 
         assertEquals(
             listOf(
+                R.string.settings_manga,
+                R.string.settings_epub,
+                R.string.settings_app_and_reading,
+                R.string.settings_popup_cards,
+            ),
+            groups.first().map { it.labelRes },
+        )
+        assertEquals(
+            listOf(
+                SettingsDestination.Manga,
+                SettingsDestination.Epub,
+                SettingsDestination.AppAndReading,
+                SettingsDestination.PopupCards,
+            ),
+            groups.first().map { it.destination },
+        )
+        assertEquals(
+            listOf(
                 R.string.settings_dictionaries,
                 R.string.settings_anki,
                 R.string.settings_chatgpt,
-                R.string.settings_appearance,
-                R.string.settings_behavior,
-                R.string.settings_popup_cards,
                 R.string.settings_statistics,
                 R.string.settings_advanced,
             ),
-            groups.first().map { it.labelRes },
+            groups[1].map { it.labelRes },
         )
         assertEquals(
             listOf(R.string.settings_report_issue, R.string.settings_diagnostics, R.string.settings_about),
             groups.last().map { it.labelRes },
         )
+        assertEquals(SettingsDestination.entries.toSet(), groups.flatten().map { it.destination }.toSet())
+        assertEquals(SettingsDestination.entries.size, groups.flatten().size)
     }
 
     @Test

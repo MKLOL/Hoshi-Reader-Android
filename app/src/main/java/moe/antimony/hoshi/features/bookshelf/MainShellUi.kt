@@ -143,8 +143,9 @@ enum class SettingsDestination {
     Dictionaries,
     Anki,
     ChatGpt,
-    Appearance,
-    Behavior,
+    Manga,
+    Epub,
+    AppAndReading,
     PopupCards,
     Statistics,
     Advanced,
@@ -182,12 +183,15 @@ data class BookshelfSectionModel(
 
 fun settingsGroups(): List<List<SettingsRowModel>> = listOf(
     listOf(
+        SettingsRowModel(R.string.settings_manga, SettingsDestination.Manga),
+        SettingsRowModel(R.string.settings_epub, SettingsDestination.Epub),
+        SettingsRowModel(R.string.settings_app_and_reading, SettingsDestination.AppAndReading),
+        SettingsRowModel(R.string.settings_popup_cards, SettingsDestination.PopupCards),
+    ),
+    listOf(
         SettingsRowModel(R.string.settings_dictionaries, SettingsDestination.Dictionaries),
         SettingsRowModel(R.string.settings_anki, SettingsDestination.Anki),
         SettingsRowModel(R.string.settings_chatgpt, SettingsDestination.ChatGpt),
-        SettingsRowModel(R.string.settings_appearance, SettingsDestination.Appearance),
-        SettingsRowModel(R.string.settings_behavior, SettingsDestination.Behavior),
-        SettingsRowModel(R.string.settings_popup_cards, SettingsDestination.PopupCards),
         SettingsRowModel(R.string.settings_statistics, SettingsDestination.Statistics),
         SettingsRowModel(R.string.settings_advanced, SettingsDestination.Advanced),
     ),

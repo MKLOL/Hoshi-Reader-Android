@@ -42,7 +42,7 @@ import moe.antimony.hoshi.features.sync.http.HttpSyncActiveBooks
  * [moe.antimony.hoshi.mokuro.MokuroBook] to [MangaReaderScreen], which renders the page
  * WebView, RTL navigation, dictionary lookup and bookmark persistence.
  *
- * The signature is fixed by [AppShell] and must not change.
+ * Settings are pushed above this route so Back returns to the same manga.
  */
 @Composable
 internal fun MangaReaderRouteDestination(
@@ -53,6 +53,7 @@ internal fun MangaReaderRouteDestination(
     onBookmarkSaved: () -> Unit,
     onClose: () -> Unit,
     modifier: Modifier = Modifier,
+    onOpenSettings: () -> Unit = {},
 ) {
     val appContainer = LocalHoshiAppContainer.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -152,6 +153,7 @@ internal fun MangaReaderRouteDestination(
                 onReaderKeyEventHandlerChange = onReaderKeyEventHandlerChange,
                 onBookmarkSaved = onBookmarkSaved,
                 onClose = onClose,
+                onOpenSettings = onOpenSettings,
                 modifier = modifier.fillMaxSize(),
             )
         }

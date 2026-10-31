@@ -192,6 +192,7 @@ internal fun MangaReaderScreen(
     onClose: () -> Unit,
     modifier: Modifier = Modifier,
     positionSession: moe.antimony.hoshi.epub.ReadingPositionSession? = null,
+    onOpenSettings: () -> Unit = {},
 ) = PlatformReaderUi {
     val systemDark = androidx.compose.foundation.isSystemInDarkTheme()
     val backgroundColor = Color(readerSettings.backgroundColor(systemDark))
@@ -1185,6 +1186,7 @@ internal fun MangaReaderScreen(
                         aiRequestRunning = backgroundAiRequests.any { it.status == AiChatRequest.Status.Running },
                         onShowStatistics = { showStatistics = true },
                         onShowGoToPage = { showGoToPageDialog = true },
+                        onOpenSettings = onOpenSettings,
                     )
                 }
 
@@ -1378,8 +1380,8 @@ private fun MangaReaderCloseButton(
  * "Take screenshot" only appears here when [showTakeScreenshot] is true — i.e. no ChatGPT key
  * is configured yet. Once a key exists the screenshot action is promoted to its own button
  * (see [MangaReaderScreenshotButton]). ChatGPT settings live in the main Settings tab.
- * Single-tap-lookup and Noto-Sans-JP-font are durable preferences and live in
- * Settings → Behavior, not here — both are stable choices, not per-session knobs.
+ * Durable manga preferences are reached through the same Manga settings screen
+ * as the main Settings tab.
  */
 @Composable
 private fun MangaReaderOverflowMenu(
@@ -1391,6 +1393,7 @@ private fun MangaReaderOverflowMenu(
     aiRequestRunning: Boolean,
     onShowStatistics: () -> Unit,
     onShowGoToPage: () -> Unit,
+    onOpenSettings: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val contentColor = if (darkInterface) Color.White else Color.Black
@@ -1410,6 +1413,13 @@ private fun MangaReaderOverflowMenu(
             expanded = menuExpanded,
             onDismissRequest = { menuExpanded = false },
         ) {
+            DropdownMenuItem(
+                text = { Text(stringResource(R.string.manga_reader_settings)) },
+                onClick = {
+                    menuExpanded = false
+                    onOpenSettings()
+                },
+            )
             if (showTakeScreenshot) {
                 DropdownMenuItem(
                     text = { Text(stringResource(R.string.manga_reader_take_screenshot)) },

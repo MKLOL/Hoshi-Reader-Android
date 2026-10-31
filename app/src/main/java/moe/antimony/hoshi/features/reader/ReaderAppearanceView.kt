@@ -5,6 +5,7 @@ import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.annotation.StringRes
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.rememberScrollState
@@ -39,7 +40,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -49,6 +49,10 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
+import moe.antimony.hoshi.features.sasayaki.SasayakiSettingsView
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -86,7 +90,7 @@ internal fun ReaderAppearanceScreen(
 ) {
     val palette = appearancePalette()
     SettingsDetailScaffold(
-        title = stringResource(R.string.settings_appearance),
+        title = stringResource(R.string.settings_app_and_reading),
         onClose = onClose,
         modifier = modifier.fillMaxSize(),
         containerColor = palette.background,
@@ -105,6 +109,32 @@ internal fun ReaderAppearanceScreen(
                 bottom = 128.dp,
             ),
             showTitle = false,
+            settingsScope = ReaderSettingsScope.App,
+            modifier = Modifier.fillMaxSize(),
+        )
+    }
+}
+
+@Composable
+internal fun EpubReaderSettingsScreen(
+    settings: ReaderSettings,
+    onSettingsChange: (ReaderSettings) -> Unit,
+    sasayakiSettings: SasayakiSettings,
+    onSasayakiSettingsChange: (SasayakiSettings) -> Unit,
+    fontManager: ReaderFontManager,
+    onClose: () -> Unit,
+    onOpenSharedSettings: () -> Unit,
+    onOpenCards: () -> Unit,
+    onOpenSasayaki: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    SettingsDetailScaffold(title = stringResource(R.string.settings_epub), onClose = onClose, modifier = modifier) { padding ->
+        ReaderAppearanceContent(
+            settings, onSettingsChange, sasayakiSettings, onSasayakiSettingsChange, fontManager,
+            contentPadding = PaddingValues(start = 16.dp, end = 16.dp,
+                top = padding.calculateTopPadding() + 12.dp, bottom = padding.calculateBottomPadding() + 24.dp),
+            showTitle = false, onOpenSharedSettings = onOpenSharedSettings,
+            onOpenCards = onOpenCards, onOpenSasayaki = onOpenSasayaki,
             modifier = Modifier.fillMaxSize(),
         )
     }
@@ -120,30 +150,32 @@ internal fun ReaderAppearanceSheet(
     onDismiss: () -> Unit,
 ) {
     val palette = appearancePalette()
-    val sheetStyle = readerSheetStyle().copy(
-        containerColor = palette.background,
-        contentColor = palette.onBackground,
-    )
+    var relatedPage by rememberSaveable { mutableStateOf<String?>(null) }
+    val epubScrollState = rememberScrollState()
+    val backToEpub = { relatedPage = null }
     ReaderBottomPanel(
-        sheetStyle = sheetStyle,
+        sheetStyle = readerSheetStyle().copy(containerColor = palette.background, contentColor = palette.onBackground),
         onDismiss = onDismiss,
     ) {
-        ReaderAppearanceContent(
-            settings = settings,
-            onSettingsChange = onSettingsChange,
-            sasayakiSettings = sasayakiSettings,
-            onSasayakiSettingsChange = onSasayakiSettingsChange,
-            fontManager = fontManager,
-            contentPadding = PaddingValues(start = 20.dp, end = 20.dp, bottom = 24.dp),
-            showTitle = false,
-            showDone = true,
-            onDone = onDismiss,
-            modifier = Modifier
-                .fillMaxWidth()
-                .weight(1f),
-        )
+        when (relatedPage) {
+            "shared" -> ReaderAppearanceScreen(settings, onSettingsChange, sasayakiSettings,
+                onSasayakiSettingsChange, fontManager, onClose = backToEpub)
+            "cards" -> PopupCardsSettingsScreen(settings, onSettingsChange, onClose = backToEpub)
+            "sasayaki" -> SasayakiSettingsView(onClose = backToEpub)
+            else -> ReaderAppearanceContent(
+                settings, onSettingsChange, sasayakiSettings, onSasayakiSettingsChange, fontManager,
+                contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 24.dp),
+                showTitle = true, showDone = true, onDone = onDismiss,
+                onOpenSharedSettings = { relatedPage = "shared" },
+                onOpenCards = { relatedPage = "cards" }, onOpenSasayaki = { relatedPage = "sasayaki" },
+                scrollState = epubScrollState,
+                modifier = Modifier.fillMaxWidth().weight(1f),
+            )
+        }
     }
 }
+
+private enum class ReaderSettingsScope { App, Epub }
 
 @Composable
 private fun ReaderAppearanceContent(
@@ -157,6 +189,11 @@ private fun ReaderAppearanceContent(
     showTitle: Boolean = true,
     showDone: Boolean = false,
     onDone: () -> Unit = {},
+    settingsScope: ReaderSettingsScope = ReaderSettingsScope.Epub,
+    scrollState: ScrollState = rememberScrollState(),
+    onOpenSharedSettings: () -> Unit = {},
+    onOpenCards: () -> Unit = {},
+    onOpenSasayaki: () -> Unit = {},
 ) {
     val context = LocalContext.current
     val resources = LocalResources.current
@@ -204,308 +241,317 @@ private fun ReaderAppearanceContent(
             Column(
                 modifier = Modifier
                     .fillMaxSize()
-                    .verticalScroll(rememberScrollState())
+                    .verticalScroll(scrollState)
                     .padding(contentPadding),
                 verticalArrangement = Arrangement.spacedBy(metrics.appearanceSectionSpacingDp.dp),
             ) {
                 if (showTitle) {
                     Text(
-                        text = stringResource(R.string.settings_appearance),
+                        text = stringResource(if (settingsScope == ReaderSettingsScope.App) R.string.settings_app_and_reading else R.string.settings_epub),
                         style = MaterialTheme.typography.headlineMedium,
                         fontWeight = FontWeight.SemiBold,
                         color = palette.onBackground,
                         modifier = Modifier.padding(top = 6.dp, bottom = 2.dp),
                     )
                 }
-                AppearanceSection(title = stringResource(R.string.reader_appearance_theme), palette = palette) {
-                    val themeLabels = ReaderTheme.entries.associateWith { stringResource(it.labelRes) }
-                    SegmentedRow(
-                        label = stringResource(R.string.settings_appearance),
-                        options = ReaderTheme.entries.map { themeLabels.getValue(it) },
-                        selected = themeLabels.getValue(settings.theme),
-                        onSelected = { label ->
-                            ReaderTheme.entries.firstOrNull { themeLabels.getValue(it) == label }?.let {
-                                onSettingsChange(settings.copy(theme = it))
-                            }
-                        },
-                        palette = palette,
-                    )
-                    AppearanceDivider(palette)
-                    SwitchRow(
-                        label = stringResource(R.string.reader_appearance_eink_mode),
-                        checked = settings.eInkMode,
-                        onCheckedChange = { onSettingsChange(settings.copy(eInkMode = it)) },
-                        description = "Optimizes the app for e-ink screens: pure black & white. " +
-                            "Enable it yourself — the app " +
-                            "can't detect an e-ink display on its own.",
-                    )
-                    if (settings.theme == ReaderTheme.System) {
-                        AppearanceDivider(palette)
-                        SwitchRow(
-                            label = stringResource(R.string.reader_appearance_use_sepia_light_theme),
-                            checked = settings.systemLightSepia,
-                            onCheckedChange = { onSettingsChange(settings.copy(systemLightSepia = it)) },
-                        )
-                    }
-                    if (settings.theme == ReaderTheme.Sepia) {
-                        AppearanceDivider(palette)
-                        SwitchRow(
-                            label = stringResource(R.string.reader_appearance_invert_sepia_dark),
-                            checked = settings.sepiaInvertInDark,
-                            onCheckedChange = { onSettingsChange(settings.copy(sepiaInvertInDark = it)) },
-                        )
-                    }
-                    if (readerAppearanceShowsCustomInterfaceTheme(settings)) {
-                        AppearanceDivider(palette)
-                        val interfaceLabels = ReaderInterfaceTheme.entries.associateWith { stringResource(it.labelRes) }
+                if (settingsScope == ReaderSettingsScope.App) {
+                    AppearanceSection(title = stringResource(R.string.reader_appearance_theme), palette = palette) {
+                        val themeLabels = ReaderTheme.entries.associateWith { stringResource(it.labelRes) }
                         SegmentedRow(
-                            label = stringResource(R.string.reader_appearance_interface),
-                            options = ReaderInterfaceTheme.entries.map { interfaceLabels.getValue(it) },
-                            selected = interfaceLabels.getValue(settings.uiTheme),
+                            label = stringResource(R.string.settings_appearance),
+                            options = ReaderTheme.entries.map { themeLabels.getValue(it) },
+                            selected = themeLabels.getValue(settings.theme),
                             onSelected = { label ->
-                                ReaderInterfaceTheme.entries.firstOrNull { interfaceLabels.getValue(it) == label }?.let {
-                                    onSettingsChange(settings.copy(uiTheme = it))
+                                ReaderTheme.entries.firstOrNull { themeLabels.getValue(it) == label }?.let {
+                                    onSettingsChange(settings.copy(theme = it))
                                 }
                             },
                             palette = palette,
                         )
-                        readerAppearanceCustomColorRows(settings).forEach { row ->
-                            AppearanceDivider(palette)
-                            ColorRow(
-                                label = stringResource(row.labelRes),
-                                color = row.color(settings),
-                                onClick = { colorDialogRow = row },
-                            )
-                        }
-                    }
-                }
-                AppearanceSection(title = stringResource(R.string.reader_appearance_text), palette = palette) {
-                    val verticalLabel = stringResource(R.string.reader_appearance_vertical)
-                    val horizontalLabel = stringResource(R.string.reader_appearance_horizontal)
-                    SegmentedRow(
-                        label = stringResource(R.string.reader_appearance_text_orientation),
-                        options = listOf(verticalLabel, horizontalLabel),
-                        selected = if (settings.verticalWriting) verticalLabel else horizontalLabel,
-                        onSelected = { label ->
-                            onSettingsChange(settings.copy(verticalWriting = label == verticalLabel))
-                        },
-                        palette = palette,
-                    )
-                    AppearanceDivider(palette)
-                    ReaderFontRow(
-                        settings = settings,
-                        fontOptions = fontOptions,
-                        fontMenuExpanded = fontMenuExpanded,
-                        onFontMenuExpandedChange = { fontMenuExpanded = it },
-                        onFontSelected = { fontName ->
-                            fontMenuExpanded = false
-                            onSettingsChange(settings.copy(selectedFont = fontName))
-                        },
-                        canDeleteFont = !fontManager.isDefaultFont(settings.selectedFont),
-                        onDeleteFont = { fontToDelete = settings.selectedFont },
-                    )
-                    AppearanceDivider(palette)
-                    ActionRow(
-                        label = stringResource(R.string.reader_appearance_import_font),
-                        button = if (isImportingFont) {
-                            stringResource(R.string.reader_appearance_importing)
-                        } else {
-                            stringResource(R.string.action_import)
-                        },
-                        enabled = !isImportingFont,
-                        onClick = { fontImporter.launch(ImportFileType.ReaderFont.mimeTypes) },
-                    )
-                    AppearanceDivider(palette)
-                    StepperRow(
-                        label = stringResource(R.string.reader_appearance_font_size),
-                        value = settings.fontSize.toString(),
-                        onDecrease = { onSettingsChange(settings.copy(fontSize = (settings.fontSize - 1).coerceAtLeast(16))) },
-                        onIncrease = { onSettingsChange(settings.copy(fontSize = (settings.fontSize + 1).coerceAtMost(60))) },
-                        palette = palette,
-                    )
-                    AppearanceDivider(palette)
-                    SwitchRow(
-                        label = stringResource(R.string.reader_appearance_hide_furigana),
-                        checked = settings.hideFurigana,
-                        onCheckedChange = { onSettingsChange(settings.copy(hideFurigana = it)) },
-                    )
-                    AppearanceDivider(palette)
-                    SwitchRow(
-                        label = stringResource(R.string.reader_appearance_sentence_translations),
-                        checked = settings.showSentenceTranslations,
-                        onCheckedChange = { onSettingsChange(settings.copy(showSentenceTranslations = it)) },
-                    )
-                }
-                AppearanceSection(title = stringResource(R.string.reader_appearance_layout), palette = palette) {
-                    val paginatedLabel = stringResource(R.string.reader_appearance_paginated)
-                    val continuousLabel = stringResource(R.string.reader_appearance_continuous)
-                    SegmentedRow(
-                        label = stringResource(R.string.reader_appearance_mode),
-                        options = listOf(paginatedLabel, continuousLabel),
-                        selected = if (settings.continuousMode) continuousLabel else paginatedLabel,
-                        onSelected = { label ->
-                            onSettingsChange(settings.copy(continuousMode = label == continuousLabel))
-                        },
-                        palette = palette,
-                    )
-                    if (settings.continuousMode) {
-                        AppearanceDivider(palette)
-                        SliderRow(
-                            label = stringResource(R.string.reader_appearance_chapter_swipe_distance),
-                            value = settings.chapterSwipeDistance.toString(),
-                            sliderValue = settings.chapterSwipeDistance.toFloat(),
-                            valueRange = 10f..60f,
-                            steps = 9,
-                            onValueChange = { value ->
-                                onSettingsChange(settings.copy(chapterSwipeDistance = (round(value / 5) * 5).toInt()))
-                            },
-                        )
-                    }
-                    AppearanceDivider(palette)
-                    StepperRow(
-                        label = stringResource(R.string.reader_appearance_horizontal_padding),
-                        value = "${settings.horizontalPadding}%",
-                        onDecrease = { onSettingsChange(settings.copy(horizontalPadding = (settings.horizontalPadding - 1).coerceAtLeast(0))) },
-                        onIncrease = { onSettingsChange(settings.copy(horizontalPadding = (settings.horizontalPadding + 1).coerceAtMost(50))) },
-                        palette = palette,
-                    )
-                    AppearanceDivider(palette)
-                    StepperRow(
-                        label = stringResource(R.string.reader_appearance_vertical_padding),
-                        value = "${settings.verticalPadding}%",
-                        onDecrease = { onSettingsChange(settings.copy(verticalPadding = (settings.verticalPadding - 1).coerceAtLeast(0))) },
-                        onIncrease = { onSettingsChange(settings.copy(verticalPadding = (settings.verticalPadding + 1).coerceAtMost(50))) },
-                        palette = palette,
-                    )
-                    AppearanceDivider(palette)
-                    SwitchRow(
-                        label = stringResource(R.string.reader_appearance_avoid_page_break),
-                        checked = settings.avoidPageBreak,
-                        onCheckedChange = { onSettingsChange(settings.copy(avoidPageBreak = it)) },
-                    )
-                    AppearanceDivider(palette)
-                    SwitchRow(
-                        label = stringResource(R.string.reader_appearance_justify_text),
-                        checked = settings.justifyText,
-                        onCheckedChange = { onSettingsChange(settings.copy(justifyText = it)) },
-                    )
-                    AppearanceDivider(palette)
-                    SwitchRow(
-                        label = stringResource(R.string.reader_appearance_blur_images),
-                        checked = settings.blurImages,
-                        onCheckedChange = { onSettingsChange(settings.copy(blurImages = it)) },
-                    )
-                    AppearanceDivider(palette)
-                    SwitchRow(
-                        label = stringResource(R.string.settings_advanced),
-                        checked = settings.layoutAdvanced,
-                        onCheckedChange = { onSettingsChange(settings.copy(layoutAdvanced = it)) },
-                    )
-                    if (settings.layoutAdvanced) {
-                        AppearanceDivider(palette)
-                        SliderRow(
-                            label = stringResource(R.string.reader_appearance_line_height),
-                            value = String.format(Locale.US, "%.2f", settings.lineHeight),
-                            sliderValue = settings.lineHeight.toFloat(),
-                            valueRange = 1.0f..2.5f,
-                            steps = 29,
-                            onValueChange = { value ->
-                                onSettingsChange(settings.copy(lineHeight = round(value * 20) / 20.0))
-                            },
-                        )
-                        AppearanceDivider(palette)
-                        SliderRow(
-                            label = stringResource(R.string.reader_appearance_character_spacing),
-                            value = "${settings.characterSpacing.toInt()}%",
-                            sliderValue = settings.characterSpacing.toFloat(),
-                            valueRange = -10f..10f,
-                            steps = 19,
-                            onValueChange = { value ->
-                                onSettingsChange(settings.copy(characterSpacing = round(value).toDouble()))
-                            },
-                        )
-                        AppearanceDivider(palette)
-                        SliderRow(
-                            label = stringResource(R.string.reader_appearance_paragraph_spacing),
-                            value = String.format(Locale.US, "%.1fem", settings.paragraphSpacing),
-                            sliderValue = settings.paragraphSpacing.toFloat(),
-                            valueRange = 0f..3f,
-                            steps = 29,
-                            onValueChange = { value ->
-                                onSettingsChange(settings.copy(paragraphSpacing = round(value * 10) / 10.0))
-                            },
-                        )
-                    }
-                }
-                AppearanceSection(title = stringResource(R.string.reader_appearance_display), palette = palette) {
-                    SwitchRow(
-                        label = stringResource(R.string.reader_appearance_show_title),
-                        checked = settings.showTitle,
-                        onCheckedChange = { onSettingsChange(settings.copy(showTitle = it)) },
-                    )
-                    AppearanceDivider(palette)
-                    SwitchRow(
-                        label = stringResource(R.string.reader_appearance_show_character_count),
-                        checked = settings.showCharacters,
-                        onCheckedChange = { onSettingsChange(settings.copy(showCharacters = it)) },
-                    )
-                    AppearanceDivider(palette)
-                    SwitchRow(
-                        label = stringResource(R.string.reader_appearance_show_percentage),
-                        checked = settings.showPercentage,
-                        onCheckedChange = { onSettingsChange(settings.copy(showPercentage = it)) },
-                    )
-                    if (readerAppearanceShowsAlwaysShowProgress(settings)) {
                         AppearanceDivider(palette)
                         SwitchRow(
-                            label = stringResource(R.string.reader_appearance_always_show_progress),
-                            checked = settings.alwaysShowProgress,
-                            onCheckedChange = { onSettingsChange(settings.copy(alwaysShowProgress = it)) },
+                            label = stringResource(R.string.reader_appearance_eink_mode),
+                            checked = settings.eInkMode,
+                            onCheckedChange = { onSettingsChange(settings.copy(eInkMode = it)) },
+                            description = stringResource(R.string.reader_behavior_eink_mode_desc),
                         )
+                        if (settings.theme == ReaderTheme.System) {
+                            AppearanceDivider(palette)
+                            SwitchRow(
+                                label = stringResource(R.string.reader_appearance_use_sepia_light_theme),
+                                checked = settings.systemLightSepia,
+                                onCheckedChange = { onSettingsChange(settings.copy(systemLightSepia = it)) },
+                            )
+                        }
+                        if (settings.theme == ReaderTheme.Sepia) {
+                            AppearanceDivider(palette)
+                            SwitchRow(
+                                label = stringResource(R.string.reader_appearance_invert_sepia_dark),
+                                checked = settings.sepiaInvertInDark,
+                                onCheckedChange = { onSettingsChange(settings.copy(sepiaInvertInDark = it)) },
+                            )
+                        }
+                        if (readerAppearanceShowsCustomInterfaceTheme(settings)) {
+                            AppearanceDivider(palette)
+                            val interfaceLabels = ReaderInterfaceTheme.entries.associateWith { stringResource(it.labelRes) }
+                            SegmentedRow(
+                                label = stringResource(R.string.reader_appearance_interface),
+                                options = ReaderInterfaceTheme.entries.map { interfaceLabels.getValue(it) },
+                                selected = interfaceLabels.getValue(settings.uiTheme),
+                                onSelected = { label ->
+                                    ReaderInterfaceTheme.entries.firstOrNull { interfaceLabels.getValue(it) == label }?.let {
+                                        onSettingsChange(settings.copy(uiTheme = it))
+                                    }
+                                },
+                                palette = palette,
+                            )
+                            readerAppearanceCustomColorRows(settings).forEach { row ->
+                                AppearanceDivider(palette)
+                                ColorRow(
+                                    label = stringResource(row.labelRes),
+                                    color = row.color(settings),
+                                    onClick = { colorDialogRow = row },
+                                )
+                            }
+                        }
                     }
-                    if (readerAppearanceShowsProgressPosition(settings)) {
-                        AppearanceDivider(palette)
-                        val topLabel = stringResource(R.string.reader_appearance_progress_top)
-                        val bottomLabel = stringResource(R.string.reader_appearance_progress_bottom)
+                    SharedReadingControls(settings, onSettingsChange)
+                } else {
+                    AppearanceSection(title = stringResource(R.string.reader_appearance_text), palette = palette) {
+                        val verticalLabel = stringResource(R.string.reader_appearance_vertical)
+                        val horizontalLabel = stringResource(R.string.reader_appearance_horizontal)
                         SegmentedRow(
-                            label = stringResource(R.string.reader_appearance_progress_position),
-                            options = listOf(topLabel, bottomLabel),
-                            selected = if (settings.showProgressTop) topLabel else bottomLabel,
-                            onSelected = { label -> onSettingsChange(settings.copy(showProgressTop = label == topLabel)) },
+                            label = stringResource(R.string.reader_appearance_text_orientation),
+                            options = listOf(verticalLabel, horizontalLabel),
+                            selected = if (settings.verticalWriting) verticalLabel else horizontalLabel,
+                            onSelected = { label ->
+                                onSettingsChange(settings.copy(verticalWriting = label == verticalLabel))
+                            },
+                            palette = palette,
+                        )
+                        AppearanceDivider(palette)
+                        ReaderFontRow(
+                            settings = settings,
+                            fontOptions = fontOptions,
+                            fontMenuExpanded = fontMenuExpanded,
+                            onFontMenuExpandedChange = { fontMenuExpanded = it },
+                            onFontSelected = { fontName ->
+                                fontMenuExpanded = false
+                                onSettingsChange(settings.copy(selectedFont = fontName))
+                            },
+                            canDeleteFont = !fontManager.isDefaultFont(settings.selectedFont),
+                            onDeleteFont = { fontToDelete = settings.selectedFont },
+                        )
+                        AppearanceDivider(palette)
+                        ActionRow(
+                            label = stringResource(R.string.reader_appearance_import_font),
+                            button = if (isImportingFont) {
+                                stringResource(R.string.reader_appearance_importing)
+                            } else {
+                                stringResource(R.string.action_import)
+                            },
+                            enabled = !isImportingFont,
+                            onClick = { fontImporter.launch(ImportFileType.ReaderFont.mimeTypes) },
+                        )
+                        AppearanceDivider(palette)
+                        StepperRow(
+                            label = stringResource(R.string.reader_appearance_font_size),
+                            value = settings.fontSize.toString(),
+                            onDecrease = { onSettingsChange(settings.copy(fontSize = (settings.fontSize - 1).coerceAtLeast(16))) },
+                            onIncrease = { onSettingsChange(settings.copy(fontSize = (settings.fontSize + 1).coerceAtMost(60))) },
                             palette = palette,
                         )
                     }
-                    AppearanceDivider(palette)
-                    SwitchRow(
-                        label = stringResource(R.string.reader_appearance_show_back_button),
-                        checked = settings.showReaderBackButton,
-                        onCheckedChange = { onSettingsChange(settings.copy(showReaderBackButton = it)) },
-                    )
-                    readerAppearanceStatisticsRows().forEach { row ->
+                    AppearanceSection(title = stringResource(R.string.reader_settings_reading_aids), palette = palette) {
+                        SwitchRow(
+                            label = stringResource(R.string.reader_epub_show_furigana),
+                            checked = !settings.hideFurigana,
+                            onCheckedChange = { onSettingsChange(settings.copy(hideFurigana = !it)) },
+                            description = stringResource(R.string.reader_epub_show_furigana_desc),
+                        )
                         AppearanceDivider(palette)
                         SwitchRow(
-                            label = stringResource(row.labelRes),
-                            checked = row.checked(settings),
-                            onCheckedChange = { checked ->
-                                onSettingsChange(row.updated(settings, checked))
-                            },
+                            label = stringResource(R.string.reader_appearance_sentence_translations),
+                            checked = settings.showSentenceTranslations,
+                            onCheckedChange = { onSettingsChange(settings.copy(showSentenceTranslations = it)) },
                         )
                     }
-                    readerAppearanceSasayakiRows(sasayakiSettings).forEach { labelRes ->
+                    AppearanceSection(title = stringResource(R.string.reader_appearance_layout), palette = palette) {
+                        val paginatedLabel = stringResource(R.string.reader_appearance_paginated)
+                        val continuousLabel = stringResource(R.string.reader_appearance_continuous)
+                        SegmentedRow(
+                            label = stringResource(R.string.reader_appearance_mode),
+                            options = listOf(paginatedLabel, continuousLabel),
+                            selected = if (settings.continuousMode) continuousLabel else paginatedLabel,
+                            onSelected = { label ->
+                                onSettingsChange(settings.copy(continuousMode = label == continuousLabel))
+                            },
+                            palette = palette,
+                        )
+                        if (settings.continuousMode) {
+                            AppearanceDivider(palette)
+                            SliderRow(
+                                label = stringResource(R.string.reader_appearance_chapter_swipe_distance),
+                                value = settings.chapterSwipeDistance.toString(),
+                                sliderValue = settings.chapterSwipeDistance.toFloat(),
+                                valueRange = 10f..60f,
+                                steps = 9,
+                                onValueChange = { value ->
+                                    onSettingsChange(settings.copy(chapterSwipeDistance = (round(value / 5) * 5).toInt()))
+                                },
+                            )
+                        }
+                        AppearanceDivider(palette)
+                        StepperRow(
+                            label = stringResource(R.string.reader_appearance_horizontal_padding),
+                            value = "${settings.horizontalPadding}%",
+                            onDecrease = { onSettingsChange(settings.copy(horizontalPadding = (settings.horizontalPadding - 1).coerceAtLeast(0))) },
+                            onIncrease = { onSettingsChange(settings.copy(horizontalPadding = (settings.horizontalPadding + 1).coerceAtMost(50))) },
+                            palette = palette,
+                        )
+                        AppearanceDivider(palette)
+                        StepperRow(
+                            label = stringResource(R.string.reader_appearance_vertical_padding),
+                            value = "${settings.verticalPadding}%",
+                            onDecrease = { onSettingsChange(settings.copy(verticalPadding = (settings.verticalPadding - 1).coerceAtLeast(0))) },
+                            onIncrease = { onSettingsChange(settings.copy(verticalPadding = (settings.verticalPadding + 1).coerceAtMost(50))) },
+                            palette = palette,
+                        )
                         AppearanceDivider(palette)
                         SwitchRow(
-                            label = stringResource(labelRes),
-                            checked = sasayakiSettings.showReaderToggle,
-                            onCheckedChange = {
-                                onSasayakiSettingsChange(sasayakiSettings.copy(showReaderToggle = it))
-                            },
+                            label = stringResource(R.string.reader_appearance_avoid_page_break),
+                            checked = settings.avoidPageBreak,
+                            onCheckedChange = { onSettingsChange(settings.copy(avoidPageBreak = it)) },
                         )
+                        AppearanceDivider(palette)
+                        SwitchRow(
+                            label = stringResource(R.string.reader_appearance_justify_text),
+                            checked = settings.justifyText,
+                            onCheckedChange = { onSettingsChange(settings.copy(justifyText = it)) },
+                        )
+                        AppearanceDivider(palette)
+                        SwitchRow(
+                            label = stringResource(R.string.reader_appearance_blur_images),
+                            checked = settings.blurImages,
+                            onCheckedChange = { onSettingsChange(settings.copy(blurImages = it)) },
+                        )
+                        AppearanceDivider(palette)
+                        SwitchRow(
+                            label = stringResource(R.string.settings_advanced),
+                            checked = settings.layoutAdvanced,
+                            onCheckedChange = { onSettingsChange(settings.copy(layoutAdvanced = it)) },
+                        )
+                        if (settings.layoutAdvanced) {
+                            AppearanceDivider(palette)
+                            SliderRow(
+                                label = stringResource(R.string.reader_appearance_line_height),
+                                value = String.format(Locale.US, "%.2f", settings.lineHeight),
+                                sliderValue = settings.lineHeight.toFloat(),
+                                valueRange = 1.0f..2.5f,
+                                steps = 29,
+                                onValueChange = { value ->
+                                    onSettingsChange(settings.copy(lineHeight = round(value * 20) / 20.0))
+                                },
+                            )
+                            AppearanceDivider(palette)
+                            SliderRow(
+                                label = stringResource(R.string.reader_appearance_character_spacing),
+                                value = "${settings.characterSpacing.toInt()}%",
+                                sliderValue = settings.characterSpacing.toFloat(),
+                                valueRange = -10f..10f,
+                                steps = 19,
+                                onValueChange = { value ->
+                                    onSettingsChange(settings.copy(characterSpacing = round(value).toDouble()))
+                                },
+                            )
+                            AppearanceDivider(palette)
+                            SliderRow(
+                                label = stringResource(R.string.reader_appearance_paragraph_spacing),
+                                value = String.format(Locale.US, "%.1fem", settings.paragraphSpacing),
+                                sliderValue = settings.paragraphSpacing.toFloat(),
+                                valueRange = 0f..3f,
+                                steps = 29,
+                                onValueChange = { value ->
+                                    onSettingsChange(settings.copy(paragraphSpacing = round(value * 10) / 10.0))
+                                },
+                            )
+                        }
                     }
-                }
-                AppearanceSection(title = stringResource(R.string.reader_appearance_popup), palette = palette) {
-                    val card = settings.dictionaryCardStyle(moe.antimony.hoshi.ui.theme.currentPopupReadability())
-                    CardStyleSliders(card, settings.dictionaryCard, { onSettingsChange(settings.copy(dictionaryCard = it)) })
-                    DictionaryCardBehaviorControls(settings, onSettingsChange)
+                    AppearanceSection(title = stringResource(R.string.reader_appearance_display), palette = palette) {
+                        SwitchRow(
+                            label = stringResource(R.string.reader_appearance_show_title),
+                            checked = settings.showTitle,
+                            onCheckedChange = { onSettingsChange(settings.copy(showTitle = it)) },
+                        )
+                        AppearanceDivider(palette)
+                        SwitchRow(
+                            label = stringResource(R.string.reader_appearance_show_character_count),
+                            checked = settings.showCharacters,
+                            onCheckedChange = { onSettingsChange(settings.copy(showCharacters = it)) },
+                        )
+                        AppearanceDivider(palette)
+                        SwitchRow(
+                            label = stringResource(R.string.reader_appearance_show_percentage),
+                            checked = settings.showPercentage,
+                            onCheckedChange = { onSettingsChange(settings.copy(showPercentage = it)) },
+                        )
+                        if (readerAppearanceShowsAlwaysShowProgress(settings)) {
+                            AppearanceDivider(palette)
+                            SwitchRow(
+                                label = stringResource(R.string.reader_appearance_always_show_progress),
+                                checked = settings.alwaysShowProgress,
+                                onCheckedChange = { onSettingsChange(settings.copy(alwaysShowProgress = it)) },
+                            )
+                        }
+                        if (readerAppearanceShowsProgressPosition(settings)) {
+                            AppearanceDivider(palette)
+                            val topLabel = stringResource(R.string.reader_appearance_progress_top)
+                            val bottomLabel = stringResource(R.string.reader_appearance_progress_bottom)
+                            SegmentedRow(
+                                label = stringResource(R.string.reader_appearance_progress_position),
+                                options = listOf(topLabel, bottomLabel),
+                                selected = if (settings.showProgressTop) topLabel else bottomLabel,
+                                onSelected = { label -> onSettingsChange(settings.copy(showProgressTop = label == topLabel)) },
+                                palette = palette,
+                            )
+                        }
+                        AppearanceDivider(palette)
+                        SwitchRow(
+                            label = stringResource(R.string.reader_appearance_show_back_button),
+                            checked = settings.showReaderBackButton,
+                            onCheckedChange = { onSettingsChange(settings.copy(showReaderBackButton = it)) },
+                        )
+                        readerAppearanceStatisticsRows().forEach { row ->
+                            AppearanceDivider(palette)
+                            SwitchRow(
+                                label = stringResource(row.labelRes),
+                                checked = row.checked(settings),
+                                onCheckedChange = { checked ->
+                                    onSettingsChange(row.updated(settings, checked))
+                                },
+                            )
+                        }
+                        readerAppearanceSasayakiRows(sasayakiSettings).forEach { labelRes ->
+                            AppearanceDivider(palette)
+                            SwitchRow(
+                                label = stringResource(labelRes),
+                                checked = sasayakiSettings.showReaderToggle,
+                                onCheckedChange = {
+                                    onSasayakiSettingsChange(sasayakiSettings.copy(showReaderToggle = it))
+                                },
+                            )
+                        }
+                    }
+                    EpubReadingControls(settings, onSettingsChange)
+                    ReaderSettingsSection(stringResource(R.string.reader_settings_related)) {
+                        ReaderSettingsLinkRow(stringResource(R.string.settings_app_and_reading), onOpenSharedSettings,
+                            stringResource(R.string.reader_settings_shared_description))
+                        AppearanceDivider(palette)
+                        ReaderSettingsLinkRow(stringResource(R.string.settings_popup_cards), onOpenCards,
+                            stringResource(R.string.reader_settings_popup_description))
+                        AppearanceDivider(palette)
+                        ReaderSettingsLinkRow(stringResource(R.string.advanced_sasayaki_audiobooks), onOpenSasayaki)
+                    }
                 }
                 if (showDone) {
                     Button(
@@ -657,7 +703,7 @@ private fun AppearanceSection(
             style = MaterialTheme.typography.titleSmall,
             fontWeight = FontWeight.SemiBold,
             color = palette.onMuted,
-            modifier = Modifier.padding(start = 10.dp),
+            modifier = Modifier.padding(start = 10.dp).semantics { heading() },
         )
         Surface(
             modifier = Modifier.fillMaxWidth(),
@@ -1062,38 +1108,7 @@ private fun SwitchRow(
     onCheckedChange: (Boolean) -> Unit,
     description: String? = null,
 ) {
-    val metrics = readerSheetDensityMetrics()
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 14.dp, vertical = metrics.appearanceRowVerticalPaddingDp.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Column(
-            modifier = Modifier
-                .weight(1f)
-                .padding(end = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(2.dp),
-        ) {
-            Text(
-                text = label,
-                style = MaterialTheme.typography.bodyLarge,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            if (description != null) {
-                Text(
-                    text = description,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
-        CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides metrics.appearanceSwitchMinimumInteractiveSizeDp.dp) {
-            Switch(checked = checked, onCheckedChange = onCheckedChange)
-        }
-    }
+    ReaderSettingsSwitchRow(label, checked, onCheckedChange, description)
 }
 
 @Composable

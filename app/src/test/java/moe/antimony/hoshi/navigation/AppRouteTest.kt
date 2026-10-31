@@ -1,6 +1,7 @@
 package moe.antimony.hoshi.navigation
 
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -56,10 +57,32 @@ class AppRouteTest {
                 "Advanced",
                 "Diagnostics",
                 "About",
+                "Manga",
+                "Epub",
+                "AppAndReading",
+                "Sasayaki",
             ),
             sectionClass.enumConstants.orEmpty().map { (it as Enum<*>).name },
         )
         assertRouteConstructor("SettingsDetailRoute", sectionClass)
+    }
+
+    @Test
+    fun readerSettingsRoutesRestoreBothLegacyAndFormatSectionNames() {
+        listOf(
+            SettingsDetailSection.Appearance,
+            SettingsDetailSection.Behavior,
+            SettingsDetailSection.Manga,
+            SettingsDetailSection.Epub,
+            SettingsDetailSection.AppAndReading,
+            SettingsDetailSection.Sasayaki,
+        ).forEach { section ->
+            val restored = Json.decodeFromString(
+                AppRoute.SettingsDetailRoute.serializer(),
+                """{"section":"${section.name}"}""",
+            )
+            assertEquals(AppRoute.SettingsDetailRoute(section), restored)
+        }
     }
 
     private fun assertRouteConstructor(routeName: String, vararg parameterTypes: Class<*>) {

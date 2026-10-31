@@ -71,10 +71,15 @@ enum class SettingsDetailSection {
     Dictionaries,
     Anki,
     ChatGpt,
+    // Preserve these names so saved Navigation3 routes from older builds still restore.
     Appearance,
     Behavior,
     PopupCards,
     Advanced,
     Diagnostics,
     About,
+    Manga,
+    Epub,
+    AppAndReading,
+    Sasayaki,
 }
