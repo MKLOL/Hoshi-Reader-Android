@@ -44,6 +44,13 @@ data class ReadingStatistics(
     /** Collapsed TTU history has one shared origin, even when imported on several devices. */
     @EncodeDefault(EncodeDefault.Mode.NEVER)
     val importedBaseline: ImportedReadingBaseline? = null,
+    /**
+     * Completed manga pages by active reading duration, rounded to seconds. A histogram keeps
+     * the median reproducible across openings/devices without retaining a record per turn.
+     * Like the other counters, this is cumulative for this (calendar day, device) only.
+     */
+    @EncodeDefault(EncodeDefault.Mode.NEVER)
+    val mangaPageSeconds: Map<Int, Int> = emptyMap(),
 )
 
 /** The device counters already included in one external day total. Never used by a tracker. */
@@ -138,6 +145,8 @@ fun List<ReadingStatistics>.collapsedByDay(): List<ReadingStatistics> =
                 // Hours added up from several zones would be no single zone's wall clock.
                 timeZone = entries.map { it.timeZone }.distinct().singleOrNull(),
                 importedBaseline = null,
+                // TTU's shared imported baseline cannot own a device's page samples.
+                mangaPageSeconds = emptyMap(),
             )
         }
 
@@ -180,9 +189,10 @@ fun List<ReadingStatistics>.deduplicateReadingStatistics(): List<ReadingStatisti
         // Older sync clients strip fields they do not understand. On an otherwise identical
         // equal-stamp entry, retain the more complete timing evidence instead of erasing it:
         // more located hours, or the same hours with the zone they were recorded in.
-        val richerTiming = existing != null && statistic.lastStatisticModified == existing.lastStatisticModified &&
-            statistic.copy(readingTimeByHour = emptyMap(), timeZone = null) ==
-            existing.copy(readingTimeByHour = emptyMap(), timeZone = null) &&
+        val sameCounters = existing != null && statistic.lastStatisticModified == existing.lastStatisticModified &&
+            statistic.copy(readingTimeByHour = emptyMap(), timeZone = null, mangaPageSeconds = emptyMap()) ==
+            existing.copy(readingTimeByHour = emptyMap(), timeZone = null, mangaPageSeconds = emptyMap())
+        val richerTiming = sameCounters &&
             (statistic.readingTimeByHour.values.sum() > existing.readingTimeByHour.values.sum() ||
                 (statistic.readingTimeByHour == existing.readingTimeByHour && statistic.timeZone != null && existing.timeZone == null))
         if (mergedBaseline != null) {
@@ -190,6 +200,16 @@ fun List<ReadingStatistics>.deduplicateReadingStatistics(): List<ReadingStatisti
         } else if (existing == null || statistic.lastStatisticModified > existing.lastStatisticModified || richerTiming ||
             newerImportEvidence) {
             grouped[key] = statistic.withImportedResidual()
+        }
+        if (existing != null) {
+            // Samples are append-only per origin, independently of the scalar timestamp. A
+            // same-day restore or older client can send a newer row missing earlier samples.
+            // Maxima retain that evidence; summing snapshots would count every retry twice.
+            grouped[key] = grouped.getValue(key).copy(
+                mangaPageSeconds = (existing.mangaPageSeconds.keys + statistic.mangaPageSeconds.keys).sorted().associateWith { seconds ->
+                    maxOf(existing.mangaPageSeconds[seconds] ?: 0, statistic.mangaPageSeconds[seconds] ?: 0)
+                },
+            )
         }
         grouped
     }.values.toList()

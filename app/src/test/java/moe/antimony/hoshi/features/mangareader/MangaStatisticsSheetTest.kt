@@ -43,16 +43,11 @@ class MangaStatisticsSheetTest {
     }
 
     @Test
-    fun remainingTimeUsesPagesPerHourPace() {
-        assertEquals(1800.0, mangaSecondsRemaining(remainingPages = 10, speed = 20), 0.0)
-        assertEquals(0.0, mangaSecondsRemaining(remainingPages = 10, speed = 0), 0.0)
-        assertEquals(0.0, mangaSecondsRemaining(remainingPages = -1, speed = 20), 0.0)
-    }
-
-    @Test
-    fun paceTextUsesMangaPageUnits() {
-        assertEquals("42 pages / h", formatMangaReadingPace(42))
-        assertEquals("0 pages / h", formatMangaReadingPace(-10))
+    fun remainingTimeUsesMedianPageDurationAndDistinguishesUnknownFromFinished() {
+        assertEquals(1800.0, mangaSecondsRemaining(remainingPages = 10, medianPageSeconds = 180.0)!!, 0.0)
+        assertEquals(null, mangaSecondsRemaining(remainingPages = 10, medianPageSeconds = null))
+        assertEquals(null, mangaSecondsRemaining(remainingPages = 10, medianPageSeconds = 0.0))
+        assertEquals(0.0, mangaSecondsRemaining(remainingPages = -1, medianPageSeconds = null)!!, 0.0)
     }
 
     @Test

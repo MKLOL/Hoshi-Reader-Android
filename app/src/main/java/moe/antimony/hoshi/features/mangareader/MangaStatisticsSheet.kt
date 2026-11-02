@@ -34,6 +34,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import moe.antimony.hoshi.R
 import moe.antimony.hoshi.epub.ReadingStatistics
+import moe.antimony.hoshi.epub.medianMangaPageSeconds
 import moe.antimony.hoshi.features.reader.ReaderBottomPanel
 import moe.antimony.hoshi.features.reader.ReaderStatisticsState
 import moe.antimony.hoshi.features.reader.formatDurationSeconds
@@ -79,23 +80,33 @@ internal fun MangaStatisticsSheet(
                 }
             } else {
                 item {
+                    val secondsRemaining = mangaSecondsRemaining(
+                        remainingPages = mangaRemainingPages(pageIndex, pageCount),
+                        medianPageSeconds = state.allTime.medianMangaPageSeconds(),
+                    )
+                    MangaStatisticsSection(
+                        title = stringResource(R.string.reader_statistics_all_time),
+                        icon = Icons.Rounded.QueryStats,
+                        statistic = state.allTime,
+                        charactersRead = textState?.allTimeCharacters,
+                        accentColor = MaterialTheme.colorScheme.primary,
+                        useMedianPace = true,
+                        extraRows = listOf(
+                            stringResource(R.string.manga_statistics_pages_remaining) to
+                                mangaRemainingPages(pageIndex, pageCount).toString(),
+                            stringResource(R.string.manga_statistics_time_to_finish) to
+                                (secondsRemaining?.let(::formatDurationSeconds)
+                                    ?: stringResource(R.string.manga_statistics_pace_pending)),
+                        ),
+                    )
+                }
+                item {
                     MangaStatisticsSection(
                         title = stringResource(R.string.reader_statistics_session),
                         icon = Icons.Rounded.Timer,
                         statistic = state.session,
                         charactersRead = textState?.sessionCharacters,
-                        accentColor = MaterialTheme.colorScheme.primary,
-                        extraRows = listOf(
-                            stringResource(R.string.manga_statistics_pages_remaining) to
-                                mangaRemainingPages(pageIndex, pageCount).toString(),
-                            stringResource(R.string.manga_statistics_time_to_finish) to
-                                formatDurationSeconds(
-                                    mangaSecondsRemaining(
-                                        remainingPages = mangaRemainingPages(pageIndex, pageCount),
-                                        speed = state.session.lastReadingSpeed,
-                                    ),
-                                ),
-                        ),
+                        accentColor = MaterialTheme.colorScheme.secondary,
                     )
                 }
                 item {
@@ -105,15 +116,6 @@ internal fun MangaStatisticsSheet(
                         statistic = state.today,
                         charactersRead = textState?.todayCharacters,
                         accentColor = MaterialTheme.colorScheme.tertiary,
-                    )
-                }
-                item {
-                    MangaStatisticsSection(
-                        title = stringResource(R.string.reader_statistics_all_time),
-                        icon = Icons.Rounded.QueryStats,
-                        statistic = state.allTime,
-                        charactersRead = textState?.allTimeCharacters,
-                        accentColor = MaterialTheme.colorScheme.secondary,
                     )
                 }
             }
@@ -209,6 +211,7 @@ private fun MangaStatisticsSection(
     statistic: ReadingStatistics,
     accentColor: Color,
     charactersRead: Int? = null,
+    useMedianPace: Boolean = false,
     extraRows: List<Pair<String, String>> = emptyList(),
 ) {
     val metrics = readerSheetDensityMetrics()
@@ -251,8 +254,15 @@ private fun MangaStatisticsSection(
             }
             MangaStatisticsDivider()
             MangaStatisticRow(
-                stringResource(R.string.manga_statistics_pace),
-                formatMangaReadingPace(statistic.lastReadingSpeed),
+                stringResource(if (useMedianPace) R.string.manga_statistics_median_pace else R.string.manga_statistics_pace),
+                if (useMedianPace) {
+                    statistic.medianMangaPageSeconds()?.let { seconds ->
+                        stringResource(R.string.manga_statistics_pace_format,
+                            String.format(Locale.getDefault(), "%.1f", 3600.0 / seconds))
+                    } ?: stringResource(R.string.manga_statistics_pace_pending)
+                } else {
+                    stringResource(R.string.manga_statistics_pace_format, statistic.lastReadingSpeed.toString())
+                },
             )
             MangaStatisticsDivider()
             MangaStatisticRow(
@@ -312,15 +322,13 @@ internal fun mangaPageChangeCountsAsRead(isTracking: Boolean, countAsRead: Boole
 internal fun mangaRemainingPages(pageIndex: Int, pageCount: Int): Int =
     max(pageCount - mangaStatisticsPosition(pageIndex), 0)
 
-internal fun mangaSecondsRemaining(remainingPages: Int, speed: Int): Double {
-    if (speed <= 0) return 0.0
-    return max(remainingPages, 0).toDouble() / (speed.toDouble() / 3600.0)
+internal fun mangaSecondsRemaining(remainingPages: Int, medianPageSeconds: Double?): Double? {
+    if (remainingPages <= 0) return 0.0
+    if (medianPageSeconds == null || !medianPageSeconds.isFinite() || medianPageSeconds <= 0.0) return null
+    return remainingPages.toDouble() * medianPageSeconds
 }
 
 internal fun mangaPageProgress(pageIndex: Int, pageCount: Int): Float {
     if (pageCount <= 0) return 0f
     return (mangaStatisticsPosition(pageIndex).toFloat() / pageCount.toFloat()).coerceIn(0f, 1f)
 }
-
-internal fun formatMangaReadingPace(pagesPerHour: Int): String =
-    String.format(Locale.US, "%d pages / h", pagesPerHour.coerceAtLeast(0))

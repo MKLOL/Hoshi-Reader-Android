@@ -318,6 +318,7 @@ internal fun MangaReaderScreen(
                 onTrackingChanged = { reading -> currentUsageSession.value?.readingChanged(reading, pageIndex + 1) },
                 resetHour = { currentResetHour.value },
                 statisticsZone = { currentStatisticsZone.value },
+                trackMangaPageDurations = true,
             )
         }
     }
@@ -340,11 +341,6 @@ internal fun MangaReaderScreen(
     }
 
     fun textStatisticsForSave(): List<MangaTextStatistic>? = textReadCounter?.statisticsForPersistenceOrNull()
-
-    fun recordStatisticsAtCounter(counter: Int) {
-        statisticsTracker?.update(counter)
-        syncStatisticsState()
-    }
 
     fun statisticsForSave(counter: Int, syncState: Boolean = true): List<ReadingStatistics>? {
         statisticsTracker?.update(counter)
@@ -464,7 +460,11 @@ internal fun MangaReaderScreen(
         // "Go to page" and bookmark jumps move without turning pages; tag them so they are
         // not counted as page turns.
         usageSession?.pageTurned(fromPage = previousPageIndex + 1, toPage = clamped + 1, jump = !countAsRead)
-        recordStatisticsAtCounter(statisticsPageCounter)
+        statisticsTracker?.onMangaPageChanged(
+            currentCounter = statisticsPageCounter,
+            completedPage = countAsRead && clamped == previousPageIndex + 1,
+        )
+        syncStatisticsState()
         scheduleBookmarkSave(clamped, if (countAsRead) "pageTurn" else "jump")
     }
 
@@ -813,7 +813,12 @@ internal fun MangaReaderScreen(
     }
     LaunchedEffect(statisticsTracker) {
         // Statistics are always on: every opened manga starts a tracking session.
-        statisticsTracker?.start(statisticsPageCounterState.intValue)
+        // A slow statistics load can finish after ON_STOP; wait for visibility in that case.
+        if (lifecycle == null || lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) {
+            statisticsTracker?.start(statisticsPageCounterState.intValue)
+        } else {
+            resumeStatisticsTrackingOnStart = true
+        }
         syncStatisticsState()
     }
     LaunchedEffect(statisticsTracker, statisticsState?.isTracking) {

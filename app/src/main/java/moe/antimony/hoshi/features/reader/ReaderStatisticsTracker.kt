@@ -5,10 +5,12 @@ import moe.antimony.hoshi.epub.ReadingStatistics
 import moe.antimony.hoshi.epub.deduplicateReadingStatistics
 import moe.antimony.hoshi.epub.readingTotals
 import moe.antimony.hoshi.epub.readingHoursBetween
+import moe.antimony.hoshi.epub.sumMangaPageSeconds
 import moe.antimony.hoshi.epub.sumReadingHours
 import java.time.LocalDate
 import java.time.ZoneId
 import kotlin.math.abs
+import kotlin.math.roundToInt
 import java.time.Instant
 import java.time.LocalDateTime
 import java.time.temporal.ChronoUnit
@@ -68,11 +70,14 @@ class ReaderStatisticsTracker(
      * [clock]'s wall clock, named by [ReadingStatistics.timeZone].
      */
     private val statisticsZone: () -> ZoneId? = { null },
+    /** Manga records one duration per completed page, independently of periodic time ticks. */
+    private val trackMangaPageDurations: Boolean = false,
 ) {
     private var statistics = initialStatistics.deduplicateReadingStatistics()
     private var lastTimestampMillis: Long = clock.currentTimeMillis()
     private var lastCharacterCount: Int = 0
     private var hasUpdated = false
+    private var activePageSeconds = 0.0
 
     /** This device's entry for today: what [update] adds to and [storeToday] writes back. */
     private var todayOnThisDevice: ReadingStatistics = statisticForDate(clock.currentDate())
@@ -146,6 +151,7 @@ class ReaderStatisticsTracker(
         }
         if (elapsedMillis <= 0L) return
         val timeDiff = elapsedMillis.toDouble() / 1000.0
+        if (trackMangaPageDurations) activePageSeconds += timeDiff
 
         val charDiff = currentCharacter - lastCharacterCount
         val finalCharDiff = if (charDiff < 0 && abs(charDiff) > currentState.session.charactersRead) {
@@ -165,6 +171,30 @@ class ReaderStatisticsTracker(
         hasUpdated = true
         lastTimestampMillis = now
         lastCharacterCount = currentCharacter
+    }
+
+    /**
+     * Called for every navigation. Only a real single-page forward turn completes a page;
+     * jumps/backtracking discard its unfinished sample rather than inventing page durations.
+     * Pausing preserves active time on the same page, but never includes time spent paused.
+     */
+    fun onMangaPageChanged(currentCounter: Int, completedPage: Boolean) {
+        update(currentCounter)
+        if (trackMangaPageDurations && currentState.isTracking && completedPage && activePageSeconds > 0.0) {
+            val sample = mapOf(activePageSeconds.roundToInt().coerceAtLeast(1) to 1)
+            fun ReadingStatistics.withSample() = copy(
+                mangaPageSeconds = listOf(mangaPageSeconds, sample).sumMangaPageSeconds(),
+                lastStatisticModified = maxOf(clock.currentTimeMillis(), lastStatisticModified + 1),
+            )
+            todayOnThisDevice = todayOnThisDevice.withSample()
+            currentState = currentState.copy(
+                session = currentState.session.withSample(),
+                today = todayAcrossDevices(),
+                allTime = currentState.allTime.withSample(),
+            )
+            hasUpdated = true
+        }
+        activePageSeconds = 0.0
     }
 
     fun resetBaseline(currentCharacter: Int) {
@@ -256,6 +286,8 @@ class ReaderStatisticsTracker(
             },
             timeZone = zone?.id ?: todayOnThisDevice.timeZone,
             lastReadingSpeed = if (readingTime > 0.0) (charactersRead / readingTime * 3600.0).toInt() else 0,
+            mangaPageSeconds = records.filter { it.dateKey == todayOnThisDevice.dateKey }
+                .map { it.mangaPageSeconds }.sumMangaPageSeconds(),
         )
     }
 
@@ -269,6 +301,7 @@ class ReaderStatisticsTracker(
             readingTime = totals.readingTime,
             charactersRead = totals.charactersRead,
             lastReadingSpeed = totals.readingSpeed,
+            mangaPageSeconds = statistics.deduplicateReadingStatistics().map { it.mangaPageSeconds }.sumMangaPageSeconds(),
         )
     }
 }

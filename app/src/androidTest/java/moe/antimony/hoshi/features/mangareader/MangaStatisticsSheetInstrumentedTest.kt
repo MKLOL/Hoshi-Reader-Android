@@ -10,6 +10,7 @@ import androidx.compose.ui.test.performClick
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import moe.antimony.hoshi.epub.ReadingStatistics
 import moe.antimony.hoshi.features.reader.ReaderStatisticsState
+import moe.antimony.hoshi.features.reader.formatDurationSeconds
 import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
@@ -48,6 +49,7 @@ class MangaStatisticsSheetInstrumentedTest {
                             charactersRead = 31,
                             readingTime = 6200.0,
                             lastReadingSpeed = 18,
+                            mangaPageSeconds = mapOf(200 to 3, 3600 to 1),
                         ),
                     ),
                     textState = MangaTextReadState(sessionCharacters = 321, todayCharacters = 654, allTimeCharacters = 987),
@@ -62,9 +64,12 @@ class MangaStatisticsSheetInstrumentedTest {
         composeRule.onNodeWithText("Manga Statistics").assertIsDisplayed()
         composeRule.onNodeWithText("Page 3 of 12").assertIsDisplayed()
         composeRule.onAllNodesWithText("Pages Read")[0].assertIsDisplayed()
-        composeRule.onAllNodesWithText("18 pages / h")[0].assertIsDisplayed()
+        composeRule.onNodeWithText("All Time").assertIsDisplayed()
+        composeRule.onNodeWithText("Median Pace").assertIsDisplayed()
+        composeRule.onNodeWithText("18.0 pages / h").assertIsDisplayed()
+        composeRule.onNodeWithText(formatDurationSeconds(1800.0)).assertIsDisplayed()
         composeRule.onAllNodesWithText("Characters Read")[0].assertIsDisplayed()
-        composeRule.onNodeWithText("321").assertIsDisplayed()
+        composeRule.onNodeWithText("987").assertIsDisplayed()
         composeRule.onNodeWithContentDescription("Start statistics").performClick()
         composeRule.runOnIdle {
             assertEquals(1, toggleClicks)

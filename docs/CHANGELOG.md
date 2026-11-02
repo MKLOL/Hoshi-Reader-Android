@@ -7,6 +7,9 @@ Semantic Versioning.
 
 ## [Unreleased]
 
+### Fixed
+- Manga time-to-finish estimates now remember your reading pace after closing the book or restarting the app, and sync it across devices. Estimates use the median time of completed pages so leaving a page open does not skew the pace; saved book totals appear first in Statistics.
+
 ### Changed
 - Find reading options in dedicated **Manga** and **EPUB** settings. Manga furigana is first under Manga; EPUB text, layout and reading controls are together. Shared theme, e-ink and volume-button controls live in **App & reading**, and both readers link to the same **Popup Cards** editor. Existing choices are preserved. With HTTP sync set up, these preferences and Sasayaki reading options carry across your devices, including resetting a choice to its default; custom font files still need importing on each device.
 

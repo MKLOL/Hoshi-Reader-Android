@@ -15,6 +15,8 @@ REQUIRED_JVM_CLASSES = {
         "features.sync.integration.SyncReleaseRegressionTest",
         "features.sync.integration.SyncReleasePerformanceTest",
         "features.sync.integration.CrossDeviceReadingHistoryTest",
+        "features.sync.integration.MangaPaceSyncIntegrationTest",
+        "features.mangareader.MangaReadingPaceTest",
         "features.sync.http.HttpSyncStatisticsLaneTest",
         "epub.StatisticsHistoryTest",
         "features.sync.http.HttpSyncBatchExchangeTest",
@@ -68,6 +70,7 @@ ANDROID_CLASSES = tuple(PREFIX + name for name in (
     "features.reader.PopupCardsSettingsSyncEditTest",
     "features.settings.SettingsDetailLayoutTest",
     "features.mangareader.MangaFuriganaRuntimeInstrumentedTest",
+    "features.mangareader.MangaStatisticsSheetInstrumentedTest",
     "features.mangareader.MangaFuriganaInstrumentedTest",
     "features.mangareader.MangaBubbleScrollGestureInstrumentedTest",
 ))

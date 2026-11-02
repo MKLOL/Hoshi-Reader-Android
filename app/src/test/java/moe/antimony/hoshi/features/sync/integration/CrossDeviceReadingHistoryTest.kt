@@ -109,7 +109,11 @@ class CrossDeviceReadingHistoryTest {
             assertEquals(1, usage.today.bubbleTranslations)
         }
         val usageKeys = server.client().list(prefix = "sync/maps/usage/").keys.map { it.key }.toSet()
-        assertEquals(setOf("sync/maps/usage/phone/2026-10-03.ndjson.gz", "sync/maps/usage/tablet/2026-10-03.ndjson.gz"), usageKeys)
+        // The lane rolls finished months into monthly files. Both representations retain
+        // the same events and device isolation, regardless of the date this test runs on.
+        val daily = setOf("sync/maps/usage/phone/2026-10-03.ndjson.gz", "sync/maps/usage/tablet/2026-10-03.ndjson.gz")
+        val monthly = setOf("sync/maps/usage/phone/2026-10.ndjson.gz", "sync/maps/usage/tablet/2026-10.ndjson.gz")
+        assertTrue("Unexpected per-device usage keys: $usageKeys", usageKeys == daily || usageKeys == monthly)
     }
 
     /** A phone whose book downloads keep failing: the book never gets installed there. */

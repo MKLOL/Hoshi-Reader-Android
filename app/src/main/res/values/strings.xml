@@ -734,7 +734,10 @@
     <string name="manga_statistics_pages_remaining">Pages Remaining</string>
     <string name="manga_statistics_time_to_finish">Time to Finish</string>
     <string name="manga_statistics_pages_read">Pages Read</string>
-    <string name="manga_statistics_pace">Pace</string>
+    <string name="manga_statistics_pace">Average Pace</string>
+    <string name="manga_statistics_median_pace">Median Pace</string>
+    <string name="manga_statistics_pace_format">%1$s pages / h</string>
+    <string name="manga_statistics_pace_pending">Read a page to estimate</string>
     <string name="manga_statistics_reading_time">Reading Time</string>
     <string name="manga_statistics_characters_read">Characters Read</string>
     <!-- Manga screenshot crop overlay + clipboard (features/mangareader) -->
