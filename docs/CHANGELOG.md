@@ -7,6 +7,8 @@ Semantic Versioning.
 
 ## [Unreleased]
 
+## [v1.0.1] - 2026-11-01
+
 ### Fixed
 - Manga time-to-finish estimates now remember your reading pace after closing the book or restarting the app, and sync it across devices. Estimates use the median time of completed pages so leaving a page open does not skew the pace; saved book totals appear first in Statistics.
 
