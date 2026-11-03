@@ -7,6 +7,9 @@ Semantic Versioning.
 
 ## [Unreleased]
 
+### Fixed
+- Manga pages stay still while you read instead of redrawing every second for hidden statistics, reducing unnecessary rendering work on e-ink devices while reading time and pace continue to be recorded.
+
 ## [v1.0.1] - 2026-11-01
 
 ### Fixed

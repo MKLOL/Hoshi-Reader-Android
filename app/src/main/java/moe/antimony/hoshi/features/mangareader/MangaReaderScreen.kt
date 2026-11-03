@@ -252,6 +252,7 @@ internal fun MangaReaderScreen(
     var aiHistory by remember(book) { mutableStateOf<List<AiChatEntry>>(emptyList()) }
     var showAiHistory by remember(book) { mutableStateOf(false) }
     var showStatistics by remember(book) { mutableStateOf(false) }
+    val currentShowStatistics = rememberUpdatedState(showStatistics)
     var showGoToPageDialog by remember(book) { mutableStateOf(false) }
     var screenshotCropMode by remember(book) { mutableStateOf(false) }
 
@@ -339,6 +340,7 @@ internal fun MangaReaderScreen(
         statisticsState = statisticsTracker?.state
         textReadState = currentTextReadState()
     }
+    val currentSyncStatisticsState = rememberUpdatedState { syncStatisticsState() }
 
     fun textStatisticsForSave(): List<MangaTextStatistic>? = textReadCounter?.statisticsForPersistenceOrNull()
 
@@ -827,7 +829,9 @@ internal fun MangaReaderScreen(
             while (tracker.state.isTracking) {
                 delay(1_000)
                 tracker.update(statisticsPageCounterState.intValue)
-                syncStatisticsState()
+                // Keep accounting ticks (including day rollover) without invalidating the
+                // stationary manga/lookup views while their statistics are not visible.
+                if (currentShowStatistics.value) currentSyncStatisticsState.value()
             }
         }
     }
@@ -1189,7 +1193,11 @@ internal fun MangaReaderScreen(
                         onTakeScreenshot = startScreenshotCrop,
                         onShowAiHistory = { showAiHistory = true },
                         aiRequestRunning = backgroundAiRequests.any { it.status == AiChatRequest.Status.Running },
-                        onShowStatistics = { showStatistics = true },
+                        onShowStatistics = {
+                            statisticsTracker?.update(statisticsPageCounterState.intValue)
+                            syncStatisticsState()
+                            showStatistics = true
+                        },
                         onShowGoToPage = { showGoToPageDialog = true },
                         onOpenSettings = onOpenSettings,
                     )
