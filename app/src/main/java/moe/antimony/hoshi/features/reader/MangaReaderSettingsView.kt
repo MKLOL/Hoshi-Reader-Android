@@ -42,19 +42,15 @@ internal fun MangaReaderSettingsScreen(
                     )
                     GroupDivider()
                     ReaderSettingsSwitchRow(
-                        label = stringResource(R.string.reader_behavior_manga_enlarge_small_text),
-                        checked = settings.mangaEnlargeSmallText,
-                        onCheckedChange = { onSettingsChange(settings.copy(mangaEnlargeSmallText = it)) },
-                        description = stringResource(R.string.reader_behavior_manga_enlarge_small_text_desc),
-                    )
-                    GroupDivider()
-                    ReaderSettingsSwitchRow(
                         label = stringResource(R.string.reader_behavior_manga_use_noto_sans_jp),
                         checked = settings.mangaUseNotoSansJp,
                         onCheckedChange = { onSettingsChange(settings.copy(mangaUseNotoSansJp = it)) },
                         description = stringResource(R.string.reader_behavior_manga_use_noto_sans_jp_desc),
                     )
                 }
+            }
+            item {
+                MangaSmallTextSettings(settings, onSettingsChange)
             }
             item {
                 ReaderSettingsSection(stringResource(R.string.reader_settings_bubble_actions)) {

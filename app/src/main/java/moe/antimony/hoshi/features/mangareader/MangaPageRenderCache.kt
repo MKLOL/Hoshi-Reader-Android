@@ -21,6 +21,8 @@ internal data class MangaPageRenderConfig(
     /** See ReaderSettings.mangaShowCopyButton — off hides Copy and enlarges Translate. */
     val showCopyButton: Boolean = false,
     val enlargeSmallText: Boolean = true,
+    val smallTextAmount: Int = 50,
+    val smallTextThreshold: Int = 30,
     val selectionScript: String = ReaderSelectionScripts.source(),
     val showFurigana: Boolean = true,
 )
@@ -89,6 +91,8 @@ internal class MangaPageRenderCache(
             useNotoSansJpFont = config.useNotoSansJpFont,
             showCopyButton = config.showCopyButton,
             enlargeSmallText = config.enlargeSmallText,
+            smallTextAmount = config.smallTextAmount,
+            smallTextThreshold = config.smallTextThreshold,
             imageUrl = imageUrl,
             furigana = furigana,
         )

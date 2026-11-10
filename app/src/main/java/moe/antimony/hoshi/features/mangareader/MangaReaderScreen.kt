@@ -1031,6 +1031,8 @@ internal fun MangaReaderScreen(
                 readerSettings.mangaUseNotoSansJp,
                 readerSettings.mangaShowCopyButton,
                 readerSettings.mangaEnlargeSmallText,
+                readerSettings.mangaSmallTextAmount,
+                readerSettings.mangaSmallTextThreshold,
                 readerSettings.mangaShowFurigana,
             ) {
                 MangaPageRenderConfig(
@@ -1043,6 +1045,8 @@ internal fun MangaReaderScreen(
                     useNotoSansJpFont = readerSettings.mangaUseNotoSansJp,
                     showCopyButton = readerSettings.mangaShowCopyButton,
                     enlargeSmallText = readerSettings.mangaEnlargeSmallText,
+                    smallTextAmount = readerSettings.mangaSmallTextAmount,
+                    smallTextThreshold = readerSettings.mangaSmallTextThreshold,
                     showFurigana = readerSettings.mangaShowFurigana,
                 )
             }

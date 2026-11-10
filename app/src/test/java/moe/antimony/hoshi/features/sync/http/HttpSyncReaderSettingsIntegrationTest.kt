@@ -10,6 +10,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonPrimitive
 import moe.antimony.hoshi.epub.BookRepository
@@ -43,7 +44,11 @@ class HttpSyncReaderSettingsIntegrationTest {
             device().use { phone -> device().use { tablet ->
                 phone.state.publishMaps(server)
                 tablet.state.publishMaps(server)
-                phone.reader.update { it.copy(mangaShowFurigana = false, dictionaryCard = PopupCardStyle(width = 550.0)) }
+                val ios = ReaderSettingRecord(JsonObject(mapOf("enabled" to JsonPrimitive(false),
+                    "amount" to JsonPrimitive(25), "threshold" to JsonPrimitive(24))), 100, "ios")
+                server.stage("ios", mapOf("mangaTextEnlargement.ios" to ios))
+                phone.reader.update { it.copy(mangaShowFurigana = false, dictionaryCard = PopupCardStyle(width = 550.0),
+                    mangaSmallTextAmount = 75, mangaSmallTextThreshold = 40) }
                 tablet.reader.update { it.copy(fontSize = 30) }
                 tablet.audio.update { it.copy(showReaderToggle = false) }
                 val phoneSync = HttpSyncFastSync(phone.state, HttpSyncFullCycleRunner(this)) { server }
@@ -66,6 +71,10 @@ class HttpSyncReaderSettingsIntegrationTest {
                 assertFalse(upload.hasErrors || exchange.hasErrors || pull.hasErrors)
                 assertFalse(phone.reader.settings.first().mangaShowFurigana)
                 assertFalse(tablet.reader.settings.first().mangaShowFurigana)
+                assertEquals(75, tablet.reader.settings.first().mangaSmallTextAmount)
+                assertEquals(40, tablet.reader.settings.first().mangaSmallTextThreshold)
+                assertEquals(ios, tablet.composite.snapshot().records["mangaTextEnlargement.ios"])
+                assertFalse(tablet.composite.snapshot().records.containsKey("mangaEnlargeSmallText"))
                 assertEquals(30, phone.reader.settings.first().fontSize)
                 assertFalse(phone.audio.settings.first().showReaderToggle)
                 assertEquals(phone.composite.snapshot().records, tablet.composite.snapshot().records)

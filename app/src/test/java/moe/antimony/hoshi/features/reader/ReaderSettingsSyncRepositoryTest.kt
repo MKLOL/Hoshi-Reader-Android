@@ -14,6 +14,7 @@ import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonPrimitive
 import org.junit.Assert.assertEquals
@@ -335,6 +336,73 @@ class ReaderSettingsSyncRepositoryTest {
             assertTrue(local.repo.snapshot().records.isEmpty())
         }
     }
+
+    @Test
+    fun mangaEnlargementIsOneAtomicAndroidRecordAndRetainsIosWithoutApplyingIt() = runBlocking {
+        repository("phone").use { phone -> repository("tablet").use { tablet ->
+            phone.repo.update { it.copy(mangaEnlargeSmallText = false, mangaSmallTextAmount = 75, mangaSmallTextThreshold = 40) }
+            val key = ReaderSettingsSyncCodec.MANGA_TEXT_ENLARGEMENT_KEY
+            val first = phone.repo.snapshot().records
+            assertEquals(setOf(key), first.keys)
+            assertFalse(first.containsKey("mangaEnlargeSmallText"))
+            tablet.repo.merge(first)
+            assertFalse(tablet.repo.settings.first().mangaEnlargeSmallText)
+            assertEquals(75, tablet.repo.settings.first().mangaSmallTextAmount)
+            assertEquals(40, tablet.repo.settings.first().mangaSmallTextThreshold)
+            val ios = ReaderSettingRecord(enlargement(true, 25, 24), 500, "ios")
+            tablet.repo.merge(mapOf("mangaTextEnlargement.ios" to ios,
+                "mangaEnlargeSmallText" to record(true, 600)))
+            assertFalse(tablet.repo.settings.first().mangaEnlargeSmallText)
+            assertEquals(ios, tablet.repo.snapshot().records["mangaTextEnlargement.ios"])
+            phone.repo.update { it.copy(mangaEnlargeSmallText = true, mangaSmallTextAmount = 50, mangaSmallTextThreshold = 30) }
+            tablet.repo.merge(phone.repo.snapshot().records)
+            assertTrue(tablet.repo.settings.first().mangaEnlargeSmallText)
+            assertEquals(50, tablet.repo.settings.first().mangaSmallTextAmount)
+            assertEquals(30, tablet.repo.settings.first().mangaSmallTextThreshold)
+        } }
+    }
+
+    @Test
+    fun mangaTupleMigrationSeedsAnExistingJournalOnceAndKeepsAnOlderDisabledChoice() = runBlocking {
+        repository("old", initial = mutablePreferencesOf(
+            booleanPreferencesKey("readerSettingsMigratedFromSharedPreferences") to true,
+            booleanPreferencesKey("mangaEnlargeSmallText") to false,
+            stringPreferencesKey("readerSettingsSyncJournalV1") to ReaderSettingsSyncCodec.encode(mapOf(
+                "fontSize" to record(25), "mangaEnlargeSmallText" to record(false, 50),
+            )),
+        )).use { old ->
+            val key = ReaderSettingsSyncCodec.MANGA_TEXT_ENLARGEMENT_KEY
+            val baseline = old.repo.snapshot().records.getValue(key)
+            assertEquals(enlargement(false, 50, 30), baseline.value)
+            assertEquals(0L, baseline.editedAt)
+            assertEquals(baseline, old.repo.snapshot().records[key])
+            old.repo.merge(mapOf(key to ReaderSettingRecord(enlargement(true, 75, 40), 1, "new")))
+            assertTrue(old.repo.settings.first().mangaEnlargeSmallText)
+            assertEquals(75, old.repo.settings.first().mangaSmallTextAmount)
+            assertEquals(40, old.repo.settings.first().mangaSmallTextThreshold)
+        }
+    }
+
+    @Test
+    fun invalidMangaTupleRejectsTheWholeMergeWithoutPartialApplication() = runBlocking {
+        repository("phone").use { phone ->
+            val key = ReaderSettingsSyncCodec.MANGA_TEXT_ENLARGEMENT_KEY
+            listOf(enlargement(true, 101, 30), enlargement(true, 50, 9),
+                JsonObject(mapOf("enabled" to JsonPrimitive(true))),
+                JsonObject(mapOf("enabled" to JsonPrimitive("true"), "amount" to JsonPrimitive(50), "threshold" to JsonPrimitive(30))),
+            ).forEach { invalid ->
+                listOf(key, "mangaTextEnlargement.ios").forEach { platformKey ->
+                    expectInvalidMerge(phone.repo, mapOf("fontSize" to record(40), platformKey to ReaderSettingRecord(invalid, 100, "remote")))
+                }
+                assertEquals(22, phone.repo.settings.first().fontSize)
+                assertTrue(phone.repo.snapshot().records.isEmpty())
+            }
+        }
+    }
+
+    private fun enlargement(enabled: Boolean, amount: Int, threshold: Int) = JsonObject(mapOf(
+        "enabled" to JsonPrimitive(enabled), "amount" to JsonPrimitive(amount), "threshold" to JsonPrimitive(threshold),
+    ))
 
     private suspend fun expectInvalidMerge(repository: ReaderSettingsRepository, records: Map<String, ReaderSettingRecord>) {
         var failed = false

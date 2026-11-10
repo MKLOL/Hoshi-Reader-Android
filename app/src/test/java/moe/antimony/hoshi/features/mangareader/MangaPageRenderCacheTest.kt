@@ -178,4 +178,20 @@ class MangaPageRenderCacheTest {
         textBoxes = listOf(MokuroTextBox(20, 20, 150, 300, 24, true,
             listOf("漢字", "を読む"), blockIndex = 7)),
     )
+
+    @Test
+    fun amountAndCutoffInvalidateCachedHtmlAndRenderFromOriginalOcrSize() {
+        val cache = MangaPageRenderCache(furiganaGenerator = { emptyList() })
+        val page = page(0).copy(imageWidth = 1000, textBoxes = listOf(
+            MokuroTextBox(20, 20, 150, 300, 21, true, listOf("文字"), originalFontSize = 12),
+        ))
+        val original = config.copy(enlargeSmallText = false)
+        val strong = config.copy(smallTextAmount = 75, smallTextThreshold = 40)
+        val first = cache.htmlFor(page, config)
+        assertTrue(first.contains("font-size: 2.1cqw"))
+        assertNull(cache.knownHtmlFor(page, strong))
+        assertTrue(cache.htmlFor(page, strong).contains("font-size: 3.3cqw"))
+        assertTrue(cache.htmlFor(page, original).contains("font-size: 1.2cqw"))
+        assertTrue(first === cache.knownHtmlFor(page, config))
+    }
 }

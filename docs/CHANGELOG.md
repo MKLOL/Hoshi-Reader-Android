@@ -7,6 +7,9 @@ Semantic Versioning.
 
 ## [Unreleased]
 
+### Added
+- Preview and customize manga small-text enlargement in Settings → Manga. Choose a visual preset or adjust the enlargement amount and small-text cutoff, with live before/after examples. Choices sync between Android devices while iOS keeps separate preferences.
+
 ### Fixed
 - Manga pages stay still while you read instead of redrawing every second for hidden statistics, reducing unnecessary rendering work on e-ink devices while reading time and pace continue to be recorded.
 

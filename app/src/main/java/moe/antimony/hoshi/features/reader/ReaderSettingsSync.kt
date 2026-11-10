@@ -5,6 +5,7 @@ import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.doubleOrNull
@@ -30,6 +31,7 @@ interface ReaderSettingsSyncStore {
 
 /** Explicit wire allowlist: never serialize an entire settings/repository object. */
 internal object ReaderSettingsSyncCodec {
+    const val MANGA_TEXT_ENLARGEMENT_KEY = "mangaTextEnlargement.android"
     const val MAX_RECORDS = 256
     const val MAX_TIMESTAMP = 253402300799999L
     private const val MAX_CLOCK_SKEW_MILLIS = 24 * 60 * 60 * 1000L
@@ -80,7 +82,17 @@ internal object ReaderSettingsSyncCodec {
         boolean("mangaSingleTapLookup", { it.mangaSingleTapLookup }) { settings, value -> settings.copy(mangaSingleTapLookup = value) },
         boolean("mangaUseNotoSansJp", { it.mangaUseNotoSansJp }) { settings, value -> settings.copy(mangaUseNotoSansJp = value) },
         boolean("mangaShowCopyButton", { it.mangaShowCopyButton }) { settings, value -> settings.copy(mangaShowCopyButton = value) },
-        boolean("mangaEnlargeSmallText", { it.mangaEnlargeSmallText }) { settings, value -> settings.copy(mangaEnlargeSmallText = value) },
+        Field(MANGA_TEXT_ENLARGEMENT_KEY, { settings ->
+            JsonObject(mapOf(
+                "enabled" to JsonPrimitive(settings.mangaEnlargeSmallText),
+                "amount" to JsonPrimitive(settings.mangaSmallTextAmount),
+                "threshold" to JsonPrimitive(settings.mangaSmallTextThreshold),
+            ))
+        }, { settings, element ->
+            mangaEnlargement(element)?.let { (enabled, amount, threshold) -> settings.copy(
+                mangaEnlargeSmallText = enabled, mangaSmallTextAmount = amount, mangaSmallTextThreshold = threshold,
+            ) }
+        }),
         boolean("mangaShowFurigana", { it.mangaShowFurigana }) { settings, value -> settings.copy(mangaShowFurigana = value) },
         integer("fontSize", 16..60, { it.fontSize }) { settings, value -> settings.copy(fontSize = value) },
         integer("chapterSwipeDistance", 10..60, { it.chapterSwipeDistance }) { settings, value -> settings.copy(chapterSwipeDistance = value) },
@@ -126,6 +138,7 @@ internal object ReaderSettingsSyncCodec {
         fieldPattern.matches(name) && name !in excluded &&
             record.editedAt in 0..MAX_TIMESTAMP && isValidDeviceId(record.deviceId) &&
             record.value.toString().length <= 4096 &&
+            (name !in setOf(MANGA_TEXT_ENLARGEMENT_KEY, "mangaTextEnlargement.ios") || mangaEnlargement(record.value) != null) &&
             (name !in fields || fields.getValue(name).apply(ReaderSettings(), record.value) != null)
 
     fun validatedRecords(records: Map<String, ReaderSettingRecord>): Map<String, ReaderSettingRecord> {
@@ -197,4 +210,12 @@ internal object ReaderSettingsSyncCodec {
 
     private fun JsonElement.typedPrimitive(): JsonPrimitive? = (this as? JsonPrimitive)?.takeUnless { it.isString }
     private fun JsonElement.stringValue(): String? = (this as? JsonPrimitive)?.takeIf { it.isString }?.content
+
+    private fun mangaEnlargement(element: JsonElement): Triple<Boolean, Int, Int>? {
+        val value = element as? JsonObject ?: return null
+        val enabled = value["enabled"]?.typedPrimitive()?.booleanOrNull ?: return null
+        val amount = value["amount"]?.typedPrimitive()?.intOrNull?.takeIf { it in 0..100 } ?: return null
+        val threshold = value["threshold"]?.typedPrimitive()?.intOrNull?.takeIf { it in 10..60 } ?: return null
+        return Triple(enabled, amount, threshold)
+    }
 }

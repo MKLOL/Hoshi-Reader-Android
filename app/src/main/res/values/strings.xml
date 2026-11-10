@@ -994,4 +994,23 @@
     <string name="http_sync_reader_error_upload_limit">Reader settings exceed the upload size limit.</string>
     <string name="http_sync_reader_error_upload">Reader settings: could not upload local choices.</string>
     <string name="http_sync_reader_error_exchange">Reader settings could not sync. Your changes are saved and will retry.</string>
+    <string name="manga_small_text_title">Small text</string>
+    <string name="manga_small_text_visual_options">Visual options</string>
+    <string name="manga_small_text_subtle">Subtle</string>
+    <string name="manga_small_text_balanced">Balanced</string>
+    <string name="manga_small_text_strong">Strong</string>
+    <string name="manga_small_text_preset_values">%1$d%% · %2$d px</string>
+    <string name="manga_small_text_amount">Enlargement amount</string>
+    <string name="manga_small_text_threshold">Small text cutoff</string>
+    <string name="manga_small_text_percent">%1$d%%</string>
+    <string name="manga_small_text_pixels">%1$d px</string>
+    <string name="manga_small_text_explanation" formatted="false">Text below the cutoff grows toward that size. Amount controls how much of the gap is filled: 0% keeps the original size; 100% reaches the cutoff. Sizes use pixels in the manga image.</string>
+    <string name="manga_small_text_preview">Live preview</string>
+    <string name="manga_small_text_source">Size</string>
+    <string name="manga_small_text_original">Original</string>
+    <string name="manga_small_text_result">Your settings</string>
+    <string name="manga_small_text_preview_accessibility">%1$d image pixels becomes %2$d image pixels</string>
+    <string name="manga_small_text_preview_note">Preview shows relative size changes. Actual text scales with the manga page and zoom.</string>
+    <string name="manga_small_text_sync_note">With HTTP sync enabled, these choices sync between Android devices. iOS keeps its own choices.</string>
+    <string name="manga_small_text_sample" translatable="false">文字</string>
 </resources>

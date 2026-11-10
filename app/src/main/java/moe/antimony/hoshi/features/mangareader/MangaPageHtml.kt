@@ -91,6 +91,8 @@ internal object MangaPageHtml {
          */
         showCopyButton: Boolean = false,
         enlargeSmallText: Boolean = true,
+        smallTextAmount: Int = 50,
+        smallTextThreshold: Int = 30,
         imageUrl: String = encodeImagePath(page.imagePath),
         furigana: Map<Int, List<MangaFuriganaSpan>> = emptyMap(),
     ): String {
@@ -110,7 +112,7 @@ internal object MangaPageHtml {
         val actionButtons = actionButtonsHtml(showCopyButton)
         val boxes = page.textBoxes.joinToString("\n") { box ->
             textBoxHtml(box, imageWidth, imageHeight, actionButtons, page.index, enlargeSmallText,
-                furigana[box.blockIndex].orEmpty())
+                smallTextAmount, smallTextThreshold, furigana[box.blockIndex].orEmpty())
         }
         return """
             <!DOCTYPE html>
@@ -472,6 +474,8 @@ internal object MangaPageHtml {
         actionButtons: String,
         pageIndex: Int? = null,
         enlargeSmallText: Boolean = true,
+        smallTextAmount: Int = 50,
+        smallTextThreshold: Int = 30,
         furigana: List<MangaFuriganaSpan> = emptyList(),
     ): String {
         val leftPct = percent(box.left, imageWidth)
@@ -480,7 +484,7 @@ internal object MangaPageHtml {
         val heightPct = percent(box.height, imageHeight)
         // Font size is in image pixels; express it relative to image width so it scales
         // with the rendered frame (cqw = 1% of the container's width).
-        val fontCqw = percent(box.revealFontSize(enlargeSmallText), imageWidth)
+        val fontCqw = percent(box.revealFontSize(enlargeSmallText, smallTextAmount, smallTextThreshold), imageWidth)
         val verticalClass = if (box.vertical) " vertical" else ""
         // Join with literal `\n` so the existing shared selection scanner
         // (ReaderSelectionScripts.kt) sees mokuro's line boundaries as sentence
@@ -877,28 +881,10 @@ internal object MangaPageHtml {
               actions.style.transform = 'translate(' + (targetX - row.left) + 'px,' +
                 (targetY - row.top) + 'px)';
             },
-            // Two artwork glyphs of the same drawn size must reveal at the same OCR
-            // text size — independent of how many characters fit beside them in the
-            // bubble. The parser's clamp gives that property: it uses mokuro's
-            // reported drawn-glyph height directly and adds a continuous boost
-            // (`mokuroFs + max(0, target - mokuroFs) × strength`), so the result
-            // depends only on mokuroFs, not on box dims or char count. See
-            // MokuroBookParser.clampMokuroFontSize.
-            //
-            // So at reveal time we leave the parser-set font size *alone* and only
-            // step in for the case the parser can't fix: mokuro mis-tagging a tall
-            // narrow vertical bubble as horizontal. Wrap mode (CJK breaks at every
-            // character via `.ocr-box.wrap`'s CSS) reflows into multiple short rows
-            // and fits a meaningfully larger glyph than the single-row strip nowrap
-            // produces. We promote only when wrap gives at least [WRAP_WIN_RATIO]
-            // more font size than the parser's value — the cosmetic change of
-            // stacking the bubble is only worth it when the reader sees a clearly
-            // bigger character. Otherwise the parser's value stays.
-            //
-            // Runs on first reveal (cached via the dataset flag so the binary search
-            // is amortised) and only on horizontal boxes — vertical CJK with
-            // `text-orientation: upright` doesn't soft-wrap usefully (one glyph =
-            // one column cell), so wrap mode would give the same or worse size.
+            // The configured image-space size is authoritative. Mis-tagged horizontal
+            // bubbles can benefit from reflow, but geometry must never add another boost.
+            // Keep wrap only when the measured layout has ample room at the configured
+            // size. Runs once per horizontal bubble; vertical CJK needs no such reflow.
             tryWrapFallback: function(box) {
               if (box.dataset.enlargeText === 'false' || box.dataset.wrapTried === '1') return;
               box.dataset.wrapTried = '1';
@@ -970,7 +956,8 @@ internal object MangaPageHtml {
               // avoid.
               var WRAP_WIN_RATIO = 1.3;
               if (wrapFs >= initialPx * WRAP_WIN_RATIO) {
-                setFs(wrapFs);
+                // Preserve the configured cqw size, including across viewport resizes.
+                box.style.fontSize = originalInlineFontSize;
               } else {
                 // Keep the parser-set size as-is. Restoring the original cqw inline
                 // value (rather than setting an absolute px) keeps the box responsive
@@ -1025,7 +1012,7 @@ internal object MangaPageHtml {
                   // Run the wrap-fallback before reveal in both tap modes; no-op for
                   // bubbles where mokuro got the geometry right, promotes the broken
                   // cases (e.g. mokuro tagging a tall narrow box as horizontal) to a
-                  // wrap layout that fits a meaningfully larger glyph than nowrap can.
+                  // wrap layout at the configured glyph size.
                   window.hoshiManga.tryWrapFallback(box);
                   window.hoshiManga.fitFurigana(box);
                   box.classList.add('revealed');

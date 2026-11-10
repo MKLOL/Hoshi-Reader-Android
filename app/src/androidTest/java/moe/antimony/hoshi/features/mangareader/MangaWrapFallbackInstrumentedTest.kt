@@ -29,7 +29,7 @@ import java.util.concurrent.TimeUnit
  * `vertical=false`, `font_size=137`, box 85×145. Before the fallback, the OCR plate
  * either rendered as a giant horizontal pill (~10x the box) or — after the parse-time
  * clamp — as a single-line strip too small to read. The fallback should detect that
- * wrapping permits a meaningfully larger font and apply `.wrap` + a bigger font-size.
+ * wrapping has ample room at the configured font and apply `.wrap` without another size boost.
  *
  * This test loads the generated HTML in a real WebView, invokes the tap handler via
  * `evaluateJavascript` (no actual touch event needed — we just need the JS to run),
@@ -59,10 +59,36 @@ class MangaWrapFallbackInstrumentedTest {
             }
             val state = JSONObject(requireNotNull(result))
             assertEquals(if (enabled) 11.0 else 7.5, state.getDouble("before"), 0.05)
+            assertEquals(state.getDouble("before"), state.getDouble("after"), 0.05)
             if (!enabled) {
                 assertEquals(7.5, state.getDouble("after"), 0.05)
                 assertFalse(state.getBoolean("wrapped"))
             }
+        }
+    }
+
+    @Test
+    fun revealNeverAddsAHiddenGeometryBoostForZeroAmountOrAboveCutoff() {
+        for ((amount, threshold) in listOf(0 to 60, 100 to 10, 58 to 51)) {
+            val page = MokuroPage(0, "test.png", 1000, 1000, listOf(
+                MokuroTextBox(100, 100, 180, 240, 22, false, listOf("文字"), originalFontSize = 15),
+            ))
+            val html = MangaPageHtml.build(page, "#ffffff", "", false, false, 500, 500,
+                smallTextAmount = amount, smallTextThreshold = threshold)
+            val result = runInWebView(html) { webView, done ->
+                webView.evaluateJavascript("""
+                    (function() {
+                      var box = document.querySelector('.ocr-box');
+                      var before = parseFloat(getComputedStyle(box).fontSize);
+                      var r = box.getBoundingClientRect();
+                      window.hoshiManga.handleTap(r.left + r.width / 2, r.top + r.height / 2, 16);
+                      return JSON.stringify({before:before,after:parseFloat(getComputedStyle(box).fontSize),revealed:box.classList.contains('revealed')});
+                    })();
+                """.trimIndent()) { value -> done(JSONTokener(value).nextValue() as String) }
+            }
+            val state = JSONObject(requireNotNull(result))
+            assertTrue(state.getBoolean("revealed"))
+            assertEquals(state.getDouble("before"), state.getDouble("after"), 0.05)
         }
     }
 
@@ -72,8 +98,7 @@ class MangaWrapFallbackInstrumentedTest {
 
         assertTrue("fitting font should promote wrapping: $state", state.getBoolean("wrapped"))
         assertTrue("wrapped text must fit its box: $state", state.getBoolean("fits"))
-        assertTrue("expected a larger fitting font: $state", state.getDouble("fontSize") >= 13.0)
-        assertTrue("font must stay below the overflowing bound: $state", state.getDouble("fontSize") < 14.8)
+        assertEquals("reflow must preserve the configured font: $state", 7.4, state.getDouble("fontSize"), 0.01)
     }
 
     @Test
@@ -162,14 +187,8 @@ class MangaWrapFallbackInstrumentedTest {
             classList!!.contains("wrap"),
         )
 
-        // And the chosen font-size must be larger than the parser-clamp's nowrap floor
-        // for this box (mokuro 137 / 6 chars = 22 px nowrap fit pre-clamp; the wrapped
-        // 2-chars-per-row layout permits ~9 CSS px on the test viewport — anything ≥4 px
-        // beats the nowrap single-row fit which is bounded by box width ≈18 CSS px / 6.
-        assertTrue(
-            "wrap font-size $fontSizePx px is no larger than nowrap fit (~3 px)",
-            fontSizePx!! >= 4f,
-        )
+        assertEquals("reflow must preserve the configured image-relative font", 22.0 * 411 / 1950,
+            fontSizePx!!.toDouble(), 0.05)
     }
 
     /**

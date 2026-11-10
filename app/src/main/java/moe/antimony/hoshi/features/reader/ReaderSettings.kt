@@ -123,6 +123,9 @@ data class ReaderSettings(
     val mangaShowCopyButton: Boolean = false,
     /** Keep the current reveal-size boost by default; off uses the original OCR glyph size. */
     val mangaEnlargeSmallText: Boolean = true,
+    /** Percentage of the remaining room to the image-pixel cutoff. */
+    val mangaSmallTextAmount: Int = 50,
+    val mangaSmallTextThreshold: Int = 30,
     /** Generate readings for recognized manga text when revealing a bubble. */
     val mangaShowFurigana: Boolean = true,
 ) {
@@ -333,6 +336,8 @@ class ReaderSettingsStore(context: Context) : ReaderSettingsLegacySource {
         mangaUseNotoSansJp = preferences.getBoolean("mangaUseNotoSansJp", false),
         mangaShowCopyButton = preferences.getBoolean("mangaShowCopyButton", false),
         mangaEnlargeSmallText = preferences.getBoolean("mangaEnlargeSmallText", true),
+        mangaSmallTextAmount = preferences.getInt("mangaSmallTextAmount", 50).coerceIn(0, 100),
+        mangaSmallTextThreshold = preferences.getInt("mangaSmallTextThreshold", 30).coerceIn(10, 60),
         mangaShowFurigana = preferences.getBoolean("mangaShowFurigana", true),
     )
 
@@ -394,6 +399,8 @@ class ReaderSettingsStore(context: Context) : ReaderSettingsLegacySource {
             .putBoolean("mangaUseNotoSansJp", settings.mangaUseNotoSansJp)
             .putBoolean("mangaShowCopyButton", settings.mangaShowCopyButton)
             .putBoolean("mangaEnlargeSmallText", settings.mangaEnlargeSmallText)
+            .putInt("mangaSmallTextAmount", settings.mangaSmallTextAmount.coerceIn(0, 100))
+            .putInt("mangaSmallTextThreshold", settings.mangaSmallTextThreshold.coerceIn(10, 60))
             .putBoolean("mangaShowFurigana", settings.mangaShowFurigana)
             .apply()
     }
@@ -516,6 +523,17 @@ class ReaderSettingsRepository(
                     ReaderSettingsSyncCodec.validatedRecords(records),
                 )
             }
+            if (preferences[KEY_MANGA_TEXT_ENLARGEMENT_MIGRATED] != true) {
+                val records = ReaderSettingsSyncCodec.decode(preferences[KEY_SYNC_JOURNAL]).toMutableMap()
+                val name = ReaderSettingsSyncCodec.MANGA_TEXT_ENLARGEMENT_KEY
+                val value = ReaderSettingsSyncCodec.values(preferences.toReaderSettings()).getValue(name)
+                val old = records["mangaEnlargeSmallText"]
+                if (name !in records && (old != null || value != ReaderSettingsSyncCodec.values(DEFAULTS)[name])) {
+                    records[name] = ReaderSettingRecord(value, 0L, requireNotNull(preferences[KEY_SYNC_DEVICE_ID]))
+                    preferences[KEY_SYNC_JOURNAL] = ReaderSettingsSyncCodec.encode(ReaderSettingsSyncCodec.validatedRecords(records))
+                }
+                preferences[KEY_MANGA_TEXT_ENLARGEMENT_MIGRATED] = true
+            }
         }
     }
 
@@ -587,6 +605,8 @@ class ReaderSettingsRepository(
             mangaUseNotoSansJp = this[KEY_MANGA_USE_NOTO_SANS_JP] ?: false,
             mangaShowCopyButton = this[KEY_MANGA_SHOW_COPY_BUTTON] ?: false,
             mangaEnlargeSmallText = this[KEY_MANGA_ENLARGE_SMALL_TEXT] ?: true,
+            mangaSmallTextAmount = (this[KEY_MANGA_SMALL_TEXT_AMOUNT] ?: 50).coerceIn(0, 100),
+            mangaSmallTextThreshold = (this[KEY_MANGA_SMALL_TEXT_THRESHOLD] ?: 30).coerceIn(10, 60),
             mangaShowFurigana = this[KEY_MANGA_SHOW_FURIGANA] ?: true,
         )
 
@@ -651,6 +671,8 @@ class ReaderSettingsRepository(
         this[KEY_MANGA_USE_NOTO_SANS_JP] = settings.mangaUseNotoSansJp
         this[KEY_MANGA_SHOW_COPY_BUTTON] = settings.mangaShowCopyButton
         this[KEY_MANGA_ENLARGE_SMALL_TEXT] = settings.mangaEnlargeSmallText
+        this[KEY_MANGA_SMALL_TEXT_AMOUNT] = settings.mangaSmallTextAmount.coerceIn(0, 100)
+        this[KEY_MANGA_SMALL_TEXT_THRESHOLD] = settings.mangaSmallTextThreshold.coerceIn(10, 60)
         this[KEY_MANGA_SHOW_FURIGANA] = settings.mangaShowFurigana
     }
 
@@ -723,6 +745,9 @@ class ReaderSettingsRepository(
         private val KEY_MANGA_USE_NOTO_SANS_JP = booleanPreferencesKey("mangaUseNotoSansJp")
         private val KEY_MANGA_SHOW_COPY_BUTTON = booleanPreferencesKey("mangaShowCopyButton")
         private val KEY_MANGA_ENLARGE_SMALL_TEXT = booleanPreferencesKey("mangaEnlargeSmallText")
+        private val KEY_MANGA_SMALL_TEXT_AMOUNT = intPreferencesKey("mangaSmallTextAmount")
+        private val KEY_MANGA_SMALL_TEXT_THRESHOLD = intPreferencesKey("mangaSmallTextThreshold")
+        private val KEY_MANGA_TEXT_ENLARGEMENT_MIGRATED = booleanPreferencesKey("mangaTextEnlargementMigrated")
         private val KEY_MANGA_SHOW_FURIGANA = booleanPreferencesKey("mangaShowFurigana")
     }
 }

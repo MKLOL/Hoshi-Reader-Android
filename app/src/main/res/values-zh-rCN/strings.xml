@@ -992,4 +992,23 @@
     <string name="http_sync_reader_error_upload_limit">阅读设置超出上传大小限制。</string>
     <string name="http_sync_reader_error_upload">阅读设置：无法上传本机偏好。</string>
     <string name="http_sync_reader_error_exchange">阅读设置同步失败。更改已保存，稍后将重试。</string>
+    <string name="manga_small_text_title">小字放大</string>
+    <string name="manga_small_text_visual_options">效果预设</string>
+    <string name="manga_small_text_subtle">轻度</string>
+    <string name="manga_small_text_balanced">均衡</string>
+    <string name="manga_small_text_strong">强烈</string>
+    <string name="manga_small_text_preset_values">%1$d%% · %2$d 像素</string>
+    <string name="manga_small_text_amount">放大量</string>
+    <string name="manga_small_text_threshold">小字判定阈值</string>
+    <string name="manga_small_text_percent">%1$d%%</string>
+    <string name="manga_small_text_pixels">%1$d 像素</string>
+    <string name="manga_small_text_explanation" formatted="false">小于阈值的文字会向该字号放大。放大量决定填补多少差距：0% 保留原始字号，100% 放大至阈值。字号以漫画原图的像素计算。</string>
+    <string name="manga_small_text_preview">实时预览</string>
+    <string name="manga_small_text_source">原字号</string>
+    <string name="manga_small_text_original">原始效果</string>
+    <string name="manga_small_text_result">当前效果</string>
+    <string name="manga_small_text_preview_accessibility">原图字号 %1$d 像素变为 %2$d 像素</string>
+    <string name="manga_small_text_preview_note">预览显示相对大小变化。实际文字会随漫画页面和缩放比例调整。</string>
+    <string name="manga_small_text_sync_note">启用 HTTP 同步后，这些选项会在 Android 设备之间同步。iOS 使用独立设置。</string>
+    <string name="manga_small_text_sample" translatable="false">文字</string>
 </resources>

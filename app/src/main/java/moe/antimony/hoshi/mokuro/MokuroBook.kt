@@ -54,6 +54,14 @@ data class MokuroTextBox(
     /** Unmodified OCR glyph height, retained so reveal-size preferences can change immediately. */
     val originalFontSize: Int = fontSize,
 ) {
-    fun revealFontSize(enlargeSmallText: Boolean): Int =
-        (if (enlargeSmallText) fontSize else originalFontSize).coerceAtLeast(1)
+    fun revealFontSize(enlargeSmallText: Boolean, amount: Int = 50, threshold: Int = 30): Int =
+        mangaRevealFontSize(originalFontSize, enlargeSmallText, amount, threshold)
+}
+
+/** Image-space sizing shared by the reader and its settings preview. */
+fun mangaRevealFontSize(originalFontSize: Int, enabled: Boolean, amount: Int = 50, threshold: Int = 30): Int {
+    val original = originalFontSize.coerceAtLeast(1)
+    if (!enabled) return original
+    val headroom = (threshold.coerceIn(10, 60) - original).coerceAtLeast(0)
+    return original + headroom * amount.coerceIn(0, 100) / 100
 }
