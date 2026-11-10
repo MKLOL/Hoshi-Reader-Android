@@ -202,8 +202,17 @@ internal fun MangaReaderScreen(
     val view = LocalView.current
     val lifecycle = view.findViewTreeLifecycleOwner()?.lifecycle
 
+    var showTextPreview by remember { mutableStateOf(false) }
     var pageIndex by remember(book) {
         mutableIntStateOf(initialPageIndex.coerceIn(0, book.pages.lastIndex.coerceAtLeast(0)))
+    }
+    if (showTextPreview) {
+        MangaTextPreviewDialog(initialSource = MangaTextPreviewSource(book, bookRoot, pageIndex),
+            settings = readerSettings, onApply = { draft ->
+                onReaderSettingsChange(readerSettings.copy(mangaEnlargeSmallText = draft.mangaEnlargeSmallText,
+                    mangaSmallTextAmount = draft.mangaSmallTextAmount, mangaSmallTextThreshold = draft.mangaSmallTextThreshold))
+                showTextPreview = false
+            }, onClose = { showTextPreview = false })
     }
     val statisticsPageCounterState = remember(book) { mutableIntStateOf(0) }
     var statisticsPageCounter by statisticsPageCounterState
@@ -1204,6 +1213,7 @@ internal fun MangaReaderScreen(
                         },
                         onShowGoToPage = { showGoToPageDialog = true },
                         onOpenSettings = onOpenSettings,
+                        onPreviewTextSize = { clearSelectionAndPopups(); showTextPreview = true },
                     )
                 }
 
@@ -1411,6 +1421,7 @@ private fun MangaReaderOverflowMenu(
     onShowStatistics: () -> Unit,
     onShowGoToPage: () -> Unit,
     onOpenSettings: () -> Unit,
+    onPreviewTextSize: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val contentColor = if (darkInterface) Color.White else Color.Black
@@ -1430,6 +1441,10 @@ private fun MangaReaderOverflowMenu(
             expanded = menuExpanded,
             onDismissRequest = { menuExpanded = false },
         ) {
+            DropdownMenuItem(
+                text = { Text(stringResource(R.string.manga_preview_title)) },
+                onClick = { menuExpanded = false; onPreviewTextSize() },
+            )
             DropdownMenuItem(
                 text = { Text(stringResource(R.string.manga_reader_settings)) },
                 onClick = {

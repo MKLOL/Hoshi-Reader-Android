@@ -5,6 +5,20 @@ import org.junit.Test
 
 class MangaTextEnlargementTest {
     @Test
+    fun everySupportedSettingPreservesTextSizeOrder() {
+        for (threshold in 10..60) for (amount in 0..100) {
+            var previous = mangaRevealFontSize(1, true, amount, threshold)
+            for (original in 2..120) {
+                val result = mangaRevealFontSize(original, true, amount, threshold)
+                check(result >= previous && result >= original && (original < threshold || result == original)) {
+                    "Size order changed at source $original amount $amount cutoff $threshold"
+                }
+                previous = result
+            }
+        }
+    }
+
+    @Test
     fun defaultMatchesPreviousCurveAndLeavesLargeTextAlone() {
         assertEquals(listOf(21, 25, 30, 40), listOf(12, 20, 30, 40).map { mangaRevealFontSize(it, true) })
         assertEquals(27, mangaRevealFontSize(25, true))

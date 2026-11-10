@@ -25,6 +25,7 @@ internal data class MangaPageRenderConfig(
     val smallTextThreshold: Int = 30,
     val selectionScript: String = ReaderSelectionScripts.source(),
     val showFurigana: Boolean = true,
+    val textSizePreview: Boolean = false,
 )
 
 /**
@@ -93,6 +94,7 @@ internal class MangaPageRenderCache(
             enlargeSmallText = config.enlargeSmallText,
             smallTextAmount = config.smallTextAmount,
             smallTextThreshold = config.smallTextThreshold,
+            textSizePreview = config.textSizePreview,
             imageUrl = imageUrl,
             furigana = furigana,
         )

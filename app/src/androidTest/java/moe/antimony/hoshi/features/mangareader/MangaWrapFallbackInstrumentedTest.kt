@@ -40,6 +40,30 @@ import java.util.concurrent.TimeUnit
 @RunWith(AndroidJUnit4::class)
 class MangaWrapFallbackInstrumentedTest {
     @Test
+    fun pagePreviewRevealsAllTextAtConfiguredSizesAndOriginalComparison() {
+        val page = MokuroPage(0, "test.png", 400, 600, listOf(
+            MokuroTextBox(20, 30, 200, 50, 21, false, listOf("学校"), originalFontSize = 12),
+            MokuroTextBox(20, 150, 200, 80, 40, false, listOf("大きな文字"), originalFontSize = 40),
+        ))
+        for (enabled in listOf(true, false)) {
+            val html = MangaPageHtml.build(page, "#fff", "", false, false, 400, 600,
+                enlargeSmallText = enabled, smallTextAmount = 75, smallTextThreshold = 40, textSizePreview = true)
+            val result = runInWebView(html) { webView, done ->
+                webView.evaluateJavascript("""
+                    JSON.stringify([...document.querySelectorAll('.ocr-box')].map(b => ({
+                      revealed:b.classList.contains('revealed'), size:parseFloat(getComputedStyle(b).fontSize)
+                    })))
+                """) { raw -> done(JSONTokener(raw).nextValue().toString()) }
+            }
+            val boxes = org.json.JSONArray(result)
+            assertTrue(boxes.getJSONObject(0).getBoolean("revealed"))
+            assertTrue(boxes.getJSONObject(1).getBoolean("revealed"))
+            assertEquals(if (enabled) 33.0 else 12.0, boxes.getJSONObject(0).getDouble("size"), 0.1)
+            assertEquals(40.0, boxes.getJSONObject(1).getDouble("size"), 0.1)
+        }
+    }
+
+    @Test
     fun disablingEnlargementRestoresOriginalGlyphSizeAndSkipsWrapBoost() {
         val page = MokuroPage(0, "test.png", 1000, 1000, listOf(
             MokuroTextBox(100, 100, 85, 145, 22, false, listOf("なんだそりゃ"), originalFontSize = 15),

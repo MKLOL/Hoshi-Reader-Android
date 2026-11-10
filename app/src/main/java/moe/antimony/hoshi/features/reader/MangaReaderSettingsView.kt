@@ -5,7 +5,8 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.runtime.Composable
+import androidx.compose.runtime.*
+import moe.antimony.hoshi.features.mangareader.MangaTextPreviewDialog
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
@@ -22,6 +23,14 @@ internal fun MangaReaderSettingsScreen(
     onOpenCards: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    var showPreview by remember { mutableStateOf(false) }
+    if (showPreview) {
+        MangaTextPreviewDialog(settings = settings, onApply = { draft ->
+            onSettingsChange(settings.copy(mangaEnlargeSmallText = draft.mangaEnlargeSmallText,
+                mangaSmallTextAmount = draft.mangaSmallTextAmount, mangaSmallTextThreshold = draft.mangaSmallTextThreshold))
+            showPreview = false
+        }, onClose = { showPreview = false })
+    }
     SettingsDetailScaffold(
         title = stringResource(R.string.settings_manga),
         onClose = onClose,
@@ -47,6 +56,12 @@ internal fun MangaReaderSettingsScreen(
                         onCheckedChange = { onSettingsChange(settings.copy(mangaUseNotoSansJp = it)) },
                         description = stringResource(R.string.reader_behavior_manga_use_noto_sans_jp_desc),
                     )
+                }
+            }
+            item {
+                ReaderSettingsSection(stringResource(R.string.manga_small_text_title)) {
+                    ReaderSettingsLinkRow(label = stringResource(R.string.manga_preview_open),
+                        onClick = { showPreview = true }, description = stringResource(R.string.manga_preview_order))
                 }
             }
             item {

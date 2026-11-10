@@ -1013,4 +1013,18 @@
     <string name="manga_small_text_preview_note">Preview shows relative size changes. Actual text scales with the manga page and zoom.</string>
     <string name="manga_small_text_sync_note">With HTTP sync enabled, these choices sync between Android devices. iOS keeps its own choices.</string>
     <string name="manga_small_text_sample" translatable="false">文字</string>
+    <string name="manga_preview_title">Preview text size</string>
+    <string name="manga_preview_open">Preview on a manga page</string>
+    <string name="manga_preview_order">Smaller text can match, but never overtake, larger text.</string>
+    <string name="manga_preview_choose">Choose manga</string>
+    <string name="manga_preview_empty">Download or import a manga to preview its text size here.</string>
+    <string name="manga_preview_error">Could not load this manga. Try another one.</string>
+    <string name="manga_preview_apply">Apply</string>
+    <string name="manga_preview_adjusted">Adjusted</string>
+    <string name="manga_preview_page">Page %1$d of %2$d</string>
+    <string name="manga_preview_page_label">Preview page</string>
+    <string name="manga_preview_previous">Previous</string>
+    <string name="manga_preview_next">Next</string>
+    <string name="manga_preview_no_text">No recognized text on this page. Choose another page.</string>
+    <string name="manga_preview_note">All recognized text is revealed. Pinch to zoom. Smaller text can match, but never overtake, larger text. Your reading position stays unchanged.</string>
 </resources>

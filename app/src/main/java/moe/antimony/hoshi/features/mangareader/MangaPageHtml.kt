@@ -93,6 +93,7 @@ internal object MangaPageHtml {
         enlargeSmallText: Boolean = true,
         smallTextAmount: Int = 50,
         smallTextThreshold: Int = 30,
+        textSizePreview: Boolean = false,
         imageUrl: String = encodeImagePath(page.imagePath),
         furigana: Map<Int, List<MangaFuriganaSpan>> = emptyMap(),
     ): String {
@@ -220,7 +221,16 @@ internal object MangaPageHtml {
             $selectionScript
             $MANGA_TAP_HANDLER_SCRIPT
             window.hoshiManga && window.hoshiManga.setSingleTapLookup($singleTapLookup);
-            window.hoshiManga && window.hoshiManga.installTapListener($MANGA_MAX_SELECTION_LENGTH);
+            if ($textSizePreview) {
+              document.querySelectorAll('.ocr-actions').forEach(function(actions) { actions.remove(); });
+              document.querySelectorAll('.ocr-box').forEach(function(box) {
+                box.classList.add('revealed');
+                window.hoshiManga.tryWrapFallback(box);
+                window.hoshiManga.fitFurigana(box);
+              });
+            } else {
+              window.hoshiManga && window.hoshiManga.installTapListener($MANGA_MAX_SELECTION_LENGTH);
+            }
             </script>
             </body>
             </html>

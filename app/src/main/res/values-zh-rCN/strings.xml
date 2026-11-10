@@ -1011,4 +1011,18 @@
     <string name="manga_small_text_preview_note">预览显示相对大小变化。实际文字会随漫画页面和缩放比例调整。</string>
     <string name="manga_small_text_sync_note">启用 HTTP 同步后，这些选项会在 Android 设备之间同步。iOS 使用独立设置。</string>
     <string name="manga_small_text_sample" translatable="false">文字</string>
+    <string name="manga_preview_title">预览文字大小</string>
+    <string name="manga_preview_open">在漫画页面上预览</string>
+    <string name="manga_preview_order">小字可以变得和大字一样大，但绝不会超过大字。</string>
+    <string name="manga_preview_choose">选择漫画</string>
+    <string name="manga_preview_empty">下载或导入漫画后，即可在这里预览文字大小。</string>
+    <string name="manga_preview_error">无法加载这部漫画，请尝试其他漫画。</string>
+    <string name="manga_preview_apply">应用</string>
+    <string name="manga_preview_adjusted">调整后</string>
+    <string name="manga_preview_page">第 %1$d 页，共 %2$d 页</string>
+    <string name="manga_preview_page_label">预览页面</string>
+    <string name="manga_preview_previous">上一页</string>
+    <string name="manga_preview_next">下一页</string>
+    <string name="manga_preview_no_text">此页没有识别出的文字，请选择其他页面。</string>
+    <string name="manga_preview_note">显示所有识别出的文字。双指缩放。小字可以和大字一样大，但绝不会超过大字。阅读位置保持不变。</string>
 </resources>

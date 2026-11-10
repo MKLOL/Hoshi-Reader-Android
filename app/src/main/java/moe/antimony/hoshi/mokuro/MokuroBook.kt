@@ -63,5 +63,7 @@ fun mangaRevealFontSize(originalFontSize: Int, enabled: Boolean, amount: Int = 5
     val original = originalFontSize.coerceAtLeast(1)
     if (!enabled) return original
     val headroom = (threshold.coerceIn(10, 60) - original).coerceAtLeast(0)
+    // Bounded amount makes this nondecreasing: small text can tie, but never overtake,
+    // a larger source size. Integer arithmetic preserves that at every step.
     return original + headroom * amount.coerceIn(0, 100) / 100
 }
