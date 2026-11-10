@@ -71,6 +71,7 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
@@ -206,8 +207,9 @@ internal fun MangaReaderScreen(
     var pageIndex by remember(book) {
         mutableIntStateOf(initialPageIndex.coerceIn(0, book.pages.lastIndex.coerceAtLeast(0)))
     }
+    var webView by remember { mutableStateOf<WebView?>(null) }
     if (showTextPreview) {
-        MangaTextPreviewDialog(initialSource = MangaTextPreviewSource(book, bookRoot, pageIndex),
+        MangaTextPreviewDialog(initialSource = MangaTextPreviewSource(book, bookRoot, pageIndex, webView?.captureMangaPreviewViewport()),
             settings = readerSettings, onApply = { draft ->
                 onReaderSettingsChange(readerSettings.copy(mangaEnlargeSmallText = draft.mangaEnlargeSmallText,
                     mangaSmallTextAmount = draft.mangaSmallTextAmount, mangaSmallTextThreshold = draft.mangaSmallTextThreshold))
@@ -216,7 +218,6 @@ internal fun MangaReaderScreen(
     }
     val statisticsPageCounterState = remember(book) { mutableIntStateOf(0) }
     var statisticsPageCounter by statisticsPageCounterState
-    var webView by remember { mutableStateOf<WebView?>(null) }
     var lookupPopups by remember(book) { mutableStateOf<List<LookupPopupItem>>(emptyList()) }
     var lookupSelectionJob by remember(book) { mutableStateOf<Job?>(null) }
     var lookupSelectionRequest by remember(book) { mutableIntStateOf(0) }
@@ -1104,6 +1105,7 @@ internal fun MangaReaderScreen(
                 onWebViewReady = { webView = it },
                 modifier = Modifier
                     .fillMaxSize()
+                    .then(Modifier.testTag("manga-reader-surface"))
                     .offset {
                         val transition = activeTransition ?: return@offset IntOffset.Zero
                         // Hold progress at 0 until the LaunchedEffect has adopted this transition,
@@ -1926,13 +1928,13 @@ internal fun cropWebViewBitmapPng(bitmap: Bitmap, rect: MangaScreenshotCropRect)
  * a moment later when the bars finished hiding — two full page loads for one open.
  */
 @Composable
-internal fun MangaReaderSystemBarsEffect() {
+internal fun MangaReaderSystemBarsEffect(overrideWindow: android.view.Window? = null) {
     val context = LocalContext.current
     val view = LocalView.current
     val lifecycle = view.findViewTreeLifecycleOwner()?.lifecycle
-    DisposableEffect(context, view, lifecycle) {
+    DisposableEffect(context, view, lifecycle, overrideWindow) {
         val activity = context.findHoshiActivity()
-        val window = activity?.window
+        val window = overrideWindow ?: activity?.window
         val controller = window?.let { currentWindow ->
             WindowCompat.getInsetsController(currentWindow, view)
         }

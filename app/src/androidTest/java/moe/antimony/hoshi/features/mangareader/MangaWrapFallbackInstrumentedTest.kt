@@ -40,6 +40,33 @@ import java.util.concurrent.TimeUnit
 @RunWith(AndroidJUnit4::class)
 class MangaWrapFallbackInstrumentedTest {
     @Test
+    fun previewHasExactlyTheNormalReaderPageAndTextGeometry() {
+        val page = MokuroPage(0, "test.png", 400, 600, listOf(
+            MokuroTextBox(20, 30, 200, 100, 21, false, listOf("学校"), originalFontSize = 12),
+            MokuroTextBox(20, 250, 200, 100, 40, false, listOf("大きな文字"), originalFontSize = 40),
+        ))
+        for ((width, height) in listOf(400 to 800, 800 to 400)) {
+            val states = listOf(false, true).map { preview ->
+                val html = MangaPageHtml.build(page, "#fff", "", false, false, width, height,
+                    enlargeSmallText = true, smallTextAmount = 75, smallTextThreshold = 40, textSizePreview = preview)
+                runInWebView(html) { webView, done ->
+                    webView.evaluateJavascript("""
+                        (() => {
+                          document.querySelectorAll('.ocr-box').forEach(b => {
+                            b.classList.add('revealed'); window.hoshiManga.tryWrapFallback(b); window.hoshiManga.fitFurigana(b);
+                          });
+                          const rect = e => { const r = e.getBoundingClientRect(); return [r.x,r.y,r.width,r.height]; };
+                          return JSON.stringify([innerWidth,innerHeight,...rect(document.querySelector('.frame')),
+                            ...[...document.querySelectorAll('.ocr-box')].flatMap(b => [parseFloat(getComputedStyle(b).fontSize),...rect(b)])]);
+                        })()
+                    """) { raw -> done(JSONTokener(raw).nextValue().toString()) }
+                }
+            }
+            assertEquals(states[0], states[1])
+        }
+    }
+
+    @Test
     fun pagePreviewRevealsAllTextAtConfiguredSizesAndOriginalComparison() {
         val page = MokuroPage(0, "test.png", 400, 600, listOf(
             MokuroTextBox(20, 30, 200, 50, 21, false, listOf("学校"), originalFontSize = 12),

@@ -1027,4 +1027,7 @@
     <string name="manga_preview_next">Next</string>
     <string name="manga_preview_no_text">No recognized text on this page. Choose another page.</string>
     <string name="manga_preview_note">All recognized text is revealed. Pinch to zoom. Smaller text can match, but never overtake, larger text. Your reading position stays unchanged.</string>
+    <string name="manga_preview_hide_controls">Hide controls</string>
+    <string name="manga_preview_show_controls">Show controls</string>
+    <string name="manga_preview_fullscreen_note">Preview uses the full reader viewport. Hide controls to inspect the page unobstructed. Pinch to zoom.</string>
 </resources>

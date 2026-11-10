@@ -54,6 +54,7 @@ class MangaTextSizePreviewInstrumentedTest {
         compose.setContent {
             CompositionLocalProvider(LocalHoshiAppContainer provides container) {
                 HoshiReaderTheme(darkTheme = false, dynamicColor = false) {
+                    MangaReaderSystemBarsEffect()
                     MangaReaderScreen(book, root, 1, repository, settings, { settings = it }, DictionarySettings(), {}, {}, {})
                 }
             }
@@ -64,15 +65,34 @@ class MangaTextSizePreviewInstrumentedTest {
             compose.onNodeWithText(label(R.string.manga_preview_title)).performClick()
             compose.onNodeWithText(compose.activity.getString(R.string.manga_preview_page, 2, 3)).assertExists()
         }
+        compose.waitForIdle()
+        val readerBounds = compose.onNodeWithTag("manga-reader-surface").fetchSemanticsNode().boundsInWindow
+        fun assertReaderViewport() {
+            val previewBounds = compose.onNodeWithTag("manga-preview-surface").fetchSemanticsNode().boundsInWindow
+            assertEquals(readerBounds.width.toDouble(), previewBounds.width.toDouble(), 0.5)
+            assertEquals(readerBounds.height.toDouble(), previewBounds.height.toDouble(), 0.5)
+            assertEquals(readerBounds.left.toDouble(), previewBounds.left.toDouble(), 0.5)
+            assertEquals(readerBounds.top.toDouble(), previewBounds.top.toDouble(), 0.5)
+        }
         openPreview()
+        assertReaderViewport()
+        compose.onNodeWithContentDescription(label(R.string.manga_preview_hide_controls)).performClick()
+        assertReaderViewport()
+        screenshot("android-manga-page-fullscreen.png")
+        compose.onNodeWithContentDescription(label(R.string.manga_preview_show_controls)).performClick()
+        assertReaderViewport()
         compose.onNodeWithText(label(R.string.manga_small_text_strong)).performScrollTo().performClick()
         compose.runOnIdle { assertEquals(original, settings) }
         screenshot("android-manga-page-adjusted.png")
+        compose.onNodeWithContentDescription(label(R.string.manga_preview_hide_controls)).performClick()
+        assertReaderViewport()
+        screenshot("android-manga-page-fullscreen.png")
+        compose.onNodeWithContentDescription(label(R.string.manga_preview_show_controls)).performClick()
         compose.onNodeWithText(label(R.string.manga_small_text_original)).performClick()
         screenshot("android-manga-page-original.png")
         compose.onNodeWithText(label(R.string.manga_preview_next)).performScrollTo().performClick()
         compose.onNodeWithText(compose.activity.getString(R.string.manga_preview_page, 3, 3)).assertExists()
-        compose.onNodeWithContentDescription(label(R.string.action_back)).performClick()
+        compose.onNodeWithText(label(R.string.action_back)).performClick()
         compose.runOnIdle { assertEquals(original, settings) }
         openPreview()
         compose.onNodeWithText(label(R.string.manga_small_text_strong)).performScrollTo().performClick()

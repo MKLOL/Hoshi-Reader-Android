@@ -1025,4 +1025,7 @@
     <string name="manga_preview_next">下一页</string>
     <string name="manga_preview_no_text">此页没有识别出的文字，请选择其他页面。</string>
     <string name="manga_preview_note">显示所有识别出的文字。双指缩放。小字可以和大字一样大，但绝不会超过大字。阅读位置保持不变。</string>
+    <string name="manga_preview_hide_controls">隐藏控件</string>
+    <string name="manga_preview_show_controls">显示控件</string>
+    <string name="manga_preview_fullscreen_note">预览使用与阅读器相同的全屏区域。隐藏控件可完整查看页面，双指缩放。</string>
 </resources>

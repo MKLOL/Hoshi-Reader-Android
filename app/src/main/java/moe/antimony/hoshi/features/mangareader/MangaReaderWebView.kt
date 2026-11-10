@@ -281,6 +281,20 @@ private fun MangaWebView.attachMangaTouchListener(
 @Suppress("DEPRECATION")
 private fun WebView.rawMangaScale(): Float = scale
 
+internal data class MangaPreviewViewport(val scale: Float, val scrollX: Int, val scrollY: Int)
+
+internal fun WebView.captureMangaPreviewViewport() = MangaPreviewViewport(rawMangaScale(), scrollX, scrollY)
+
+internal fun WebView.restoreMangaPreviewViewport(viewport: MangaPreviewViewport) {
+    val current = rawMangaScale()
+    if (current.isFinite() && current > 0 && viewport.scale.isFinite() && viewport.scale > 0) {
+        zoomBy(viewport.scale / current)
+        scrollTo(viewport.scrollX, viewport.scrollY)
+        syncMangaHostScale()
+    }
+}
+
+
 private fun WebView.mangaZoomScale(): Float =
     (this as? MangaWebView)?.mangaZoomScale()
         ?: 1f
