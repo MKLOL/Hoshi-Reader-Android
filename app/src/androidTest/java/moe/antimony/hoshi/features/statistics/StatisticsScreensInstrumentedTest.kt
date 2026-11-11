@@ -26,6 +26,9 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import java.time.LocalDate
+import java.time.ZoneId
+import java.time.format.TextStyle
+import java.util.Locale
 
 /**
  * The reader's Statistics sheet, the Statistics screen and a book's detail screen are rendered
@@ -62,6 +65,8 @@ class StatisticsScreensInstrumentedTest {
         assertEquals(sheetAllTime, formatDurationSeconds(row.totalSeconds))
         assertEquals("35m 15s", sheetAllTime)
 
+        val zone = ZoneId.of("Asia/Tokyo")
+        val zoneLabel = "This device’s time zone: " + zone.getDisplayName(TextStyle.FULL, Locale.getDefault())
         var opened: String? = null
         composeRule.setContent {
             MaterialTheme {
@@ -72,13 +77,16 @@ class StatisticsScreensInstrumentedTest {
                     onMinimumMinutesChange = {},
                     onOpenBook = { opened = it },
                     onClose = {},
+                    zone = zone,
                 )
             }
         }
         composeRule.onNodeWithText("1 day streak").assertIsDisplayed()
         composeRule.onNodeWithText("Today's goal reached").assertIsDisplayed()
-        composeRule.onAllNodesWithText("35m 15s")[0].assertIsDisplayed() // totals card
-        composeRule.onAllNodes(hasScrollAction()).onFirst().performScrollToNode(hasText("Shirokuma"))
+        val list = composeRule.onAllNodes(hasScrollAction()).onFirst()
+        list.performScrollToNode(hasText(zoneLabel))
+        composeRule.onNodeWithText(zoneLabel).assertIsDisplayed()
+        list.performScrollToNode(hasText("Shirokuma"))
         composeRule.onNodeWithText("Shirokuma").assertIsDisplayed()
         composeRule.onNodeWithText("52 pages read · 4,050 characters read · Last read Sep 12, 2026").assertIsDisplayed()
         composeRule.onAllNodesWithText("35m 15s")[1].assertIsDisplayed() // the book row

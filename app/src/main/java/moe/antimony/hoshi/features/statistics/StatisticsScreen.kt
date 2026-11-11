@@ -103,36 +103,33 @@ fun StatisticsScreen(
     var usage by remember { mutableStateOf<UsageStatistics?>(null) }
     var now by remember { mutableStateOf(ZonedDateTime.now()) }
     val resetHour = readerSettings.statisticsDayResetHour
-    // Days are counted in one zone on every device, whatever zone each device's clock is set to.
-    val zone = readerSettings.statisticsZone()
-    // Every day on this screen is a reading day: it starts at the configured reset hour, never at
-    // midnight, so Today, the streak, the history and the charts all change day together.
-    val today = streakDate(now.withZoneSameInstant(zone), resetHour)
+    // Today follows this device's clock. Past reading keeps its original local day.
+    val today = streakDate(now, resetHour)
     val resumeCount = rememberResumeCount()
     val httpSync by appContainer.httpSyncSettingsRepository.settings.collectAsStateWithLifecycle(initialValue = null)
     val syncStatus by appContainer.httpSyncBatchState.statisticsStatus.collectAsStateWithLifecycle()
     // Opening Statistics, or coming back to it, takes every other device's latest reading at
     // once instead of waiting for the next poll; what arrives reloads the screen.
     LaunchedEffect(resumeCount) { appContainer.httpSyncBookmarkScheduler.refreshStatistics() }
-    LaunchedEffect(statisticsVersion, resumeCount, today, resetHour, zone) {
+    LaunchedEffect(statisticsVersion, resumeCount, today, resetHour) {
         // Keep showing the last numbers while new ones load: a sync merging several books
         // changes the files in a burst, and blanking each time would flash the whole screen.
         if (overview != null) delay(RELOAD_COALESCE_MS)
         overview = loadReadingStatisticsOverview(
-            appContainer.bookRepository, today.toString(), resetHour, zone,
+            appContainer.bookRepository, today.toString(), resetHour,
         )
     }
-    LaunchedEffect(usageVersion, resumeCount, today, resetHour, zone) {
+    LaunchedEffect(usageVersion, resumeCount, today, resetHour) {
         // Other devices' days arrive in bursts too.
         if (usage != null) delay(RELOAD_COALESCE_MS)
         usage = loadUsageStatistics(
-            appContainer.usageLog, today, historyDays = TrendRange.Quarter.days, zone = zone, resetHour = resetHour,
+            appContainer.usageLog, today, historyDays = TrendRange.Quarter.days, resetHour = resetHour,
         )
     }
     // Refresh at the reset hour, and recheck zone/clock changes at least each minute.
-    LaunchedEffect(resumeCount, resetHour, zone) {
+    LaunchedEffect(resumeCount, resetHour) {
         while (true) {
-            now = ZonedDateTime.now(zone)
+            now = ZonedDateTime.now()
             val reset = streakDate(now, resetHour).plusDays(1).atTime(resetHour, 0).atZone(now.zone)
             delay(Duration.between(now.toInstant(), reset.toInstant()).toMillis().coerceIn(1_000L, 60_000L))
         }
@@ -155,17 +152,6 @@ fun StatisticsScreen(
                 appContainer.httpSyncBookmarkScheduler.refreshStatistics()
             }
         },
-        // Days are counted in the chosen zone on every device; choosing one is stamped and synced
-        // like the goal and reset.
-        onTimeZoneChange = { zoneId ->
-            scope.launch {
-                appContainer.readerSettingsRepository.update {
-                    if (it.statisticsTimeZone == zoneId) it
-                    else it.copy(statisticsTimeZone = zoneId, statisticsSettingsUpdatedAt = System.currentTimeMillis())
-                }
-                appContainer.httpSyncBookmarkScheduler.refreshStatistics()
-            }
-        },
         onMinimumMinutesChange = { minutes ->
             scope.launch {
                 appContainer.readerSettingsRepository.update {
@@ -177,7 +163,7 @@ fun StatisticsScreen(
         },
         syncStatus = syncStatus.takeIf { httpSync?.isConfigured == true },
         nowMillis = now.toInstant().toEpochMilli(),
-        zone = zone,
+        zone = now.zone,
         onOpenBook = onOpenBook,
         onClose = onClose,
         modifier = modifier,
@@ -221,13 +207,12 @@ fun StatisticsScreenContent(
     /** How current other devices' reading is; null when HTTP sync is not set up. */
     syncStatus: StatisticsSyncStatus? = null,
     nowMillis: Long = System.currentTimeMillis(),
-    /** The zone days are counted in (see [statisticsZone]). */
+    /** The viewing device's current time zone, shown alongside the reset setting. */
     zone: ZoneId = ZoneId.systemDefault(),
-    onTimeZoneChange: (String) -> Unit = {},
 ) {
     val colorScheme = MaterialTheme.colorScheme
     val streak = remember(overview, minimumMinutes, streakToday) {
-        overview?.let { computeReadingStreak(it.streakDaily, minimumMinutes * 60.0, streakToday) }
+        overview?.let { computeReadingStreak(it.daily, minimumMinutes * 60.0, streakToday) }
     }
     val heatmap = remember(overview, today) { overview?.let { buildReadingHeatmap(it.daily, today) } }
     val weekdays = remember(overview) { overview?.let { weekdayDistribution(it.daily) } }
@@ -290,7 +275,6 @@ fun StatisticsScreenContent(
                     syncStatus = syncStatus,
                     nowMillis = nowMillis,
                     zone = zone,
-                    onTimeZoneChange = onTimeZoneChange,
                 )
             }
         }
@@ -317,7 +301,6 @@ private fun StatisticsOverviewList(
     syncStatus: StatisticsSyncStatus?,
     nowMillis: Long,
     zone: ZoneId,
-    onTimeZoneChange: (String) -> Unit,
 ) {
     val colorScheme = MaterialTheme.colorScheme
     LazyColumn(
@@ -339,13 +322,11 @@ private fun StatisticsOverviewList(
                 todaySeconds = overview?.todaySeconds,
                 todayCharacters = overview?.todayCharacters,
                 usage = usage?.today,
-                zone = zone,
             )
             Spacer(Modifier.height(18.dp))
         }
         item {
-            StreakCard(streak, minimumMinutes, onMinimumMinutesChange, resetHour, onResetHourChange,
-                overview?.hasEstimatedStreakHistory == true, zone, onTimeZoneChange)
+            StreakCard(streak, minimumMinutes, onMinimumMinutesChange, resetHour, onResetHourChange, zone)
             Spacer(Modifier.height(18.dp))
         }
         item { TotalsCard(overview); Spacer(Modifier.height(18.dp)) }
@@ -384,8 +365,7 @@ private fun StatisticsOverviewList(
 @Composable
 private fun StreakCard(
     streak: ReadingStreak?, minimumMinutes: Int, onMinimumMinutesChange: (Int) -> Unit,
-    resetHour: Int, onResetHourChange: (Int) -> Unit, hasEstimatedHistory: Boolean, zone: ZoneId,
-    onTimeZoneChange: (String) -> Unit,
+    resetHour: Int, onResetHourChange: (Int) -> Unit, zone: ZoneId,
 ) {
     val colorScheme = MaterialTheme.colorScheme
     val eInk = LocalHoshiEInkMode.current
@@ -467,15 +447,7 @@ private fun StreakCard(
                 color = colorScheme.onSurfaceVariant,
             )
             Spacer(Modifier.height(12.dp))
-            StreakSettings(minimumMinutes, onMinimumMinutesChange, resetHour, onResetHourChange, zone, onTimeZoneChange)
-            if (hasEstimatedHistory) {
-                Text(
-                    stringResource(R.string.statistics_streak_history_credit),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = 8.dp),
-                )
-            }
+            StreakSettings(minimumMinutes, onMinimumMinutesChange, resetHour, onResetHourChange, zone)
         }
     }
 }

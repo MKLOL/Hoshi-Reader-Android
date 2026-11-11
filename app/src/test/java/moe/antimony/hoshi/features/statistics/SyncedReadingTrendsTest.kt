@@ -58,7 +58,7 @@ class SyncedReadingTrendsTest {
         assertEquals(1_200.0, overview.todaySeconds, 0.0)
         assertEquals(3_000, overview.totalCharacters)
         assertEquals(phone.id, overview.devices.single().deviceId)
-        assertEquals(2, computeReadingStreak(overview.streakDaily, 600.0, today).currentDays)
+        assertEquals(2, computeReadingStreak(overview.daily, 600.0, today).currentDays)
 
         // The same persisted daily history supplies the two reading charts on every device.
         val minutes = rollingAverageSeries(

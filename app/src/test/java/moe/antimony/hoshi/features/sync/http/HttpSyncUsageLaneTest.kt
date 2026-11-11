@@ -65,7 +65,7 @@ class HttpSyncUsageLaneTest {
             server.keys().filter { it.startsWith(USAGE_PREFIX) }.toSet(),
         )
         for (device in listOf(phone, tablet)) {
-            val usage = loadUsageStatistics(device.log, LocalDate.parse("2026-10-03"), historyDays = 1, zone = newYork, resetHour = 3)
+            val usage = loadUsageStatistics(device.log, LocalDate.parse("2026-10-03"), historyDays = 1, resetHour = 3)
             assertEquals("${device.id} sees every device's lookups", 3, usage.today.wordLookups)
             assertEquals(1, usage.today.bubblesRevealed)
             assertEquals("天気 was looked up on both devices", listOf("天気"), usage.today.repeatedWords.map { it.word })

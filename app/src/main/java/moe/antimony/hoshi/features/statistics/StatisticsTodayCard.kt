@@ -63,11 +63,10 @@ internal fun TodayCard(
     todaySeconds: Double?,
     todayCharacters: Int?,
     usage: UsageDaySummary?,
-    zone: ZoneId = ZoneId.systemDefault(),
 ) {
     val colorScheme = MaterialTheme.colorScheme
     val timeFormat = rememberClockFormatter()
-    fun clock(millis: Long): String = Instant.ofEpochMilli(millis).atZone(zone).toLocalTime().format(timeFormat)
+    fun clock(millis: Long, zone: ZoneId): String = Instant.ofEpochMilli(millis).atZone(zone).toLocalTime().format(timeFormat)
     GroupCard {
         Column(modifier = Modifier.padding(16.dp)) {
             Text(
@@ -77,10 +76,12 @@ internal fun TodayCard(
             )
             val first = usage?.firstActivityMillis
             val last = usage?.lastActivityMillis
+            val firstZone = usage?.firstActivityZone
+            val lastZone = usage?.lastActivityZone
             val dateText = today.format(DateTimeFormatter.ofLocalizedDate(FormatStyle.FULL))
             Text(
-                text = if (first != null && last != null) {
-                    stringResource(R.string.statistics_today_date_active_format, dateText, clock(first), clock(last))
+                text = if (first != null && last != null && firstZone != null && firstZone == lastZone) {
+                    stringResource(R.string.statistics_today_date_active_format, dateText, clock(first, firstZone), clock(last, firstZone))
                 } else {
                     dateText
                 },
@@ -127,10 +128,10 @@ internal fun TodayCard(
                     Spacer(Modifier.height(18.dp))
                     TodaySectionTitle(stringResource(R.string.statistics_today_timeline))
                     Spacer(Modifier.height(8.dp))
-                    TodayTimeline(usage.spans, usage.date, zone, timeFormat)
+                    TodayTimeline(usage.spans, usage.date, timeFormat)
                     Spacer(Modifier.height(8.dp))
                     usage.spans.takeLast(TODAY_LISTED_SPANS).asReversed().forEach { span ->
-                        TodaySpanRow(span, clock(span.startMillis), clock(span.endMillis))
+                        TodaySpanRow(span, clock(span.startMillis, span.zone), clock(span.endMillis, span.zone))
                     }
                 }
                 if (usage.repeatedWords.isNotEmpty()) {
@@ -197,20 +198,21 @@ private fun TodayCountTiles(usage: UsageDaySummary) {
  * (00:30 is hour 24.5) is drawn after the evening, not before it.
  */
 @Composable
-private fun TodayTimeline(spans: List<UsageReadingSpan>, day: LocalDate, zone: ZoneId, timeFormat: DateTimeFormatter) {
+private fun TodayTimeline(spans: List<UsageReadingSpan>, day: LocalDate, timeFormat: DateTimeFormatter) {
     val colorScheme = MaterialTheme.colorScheme
     val eInk = LocalHoshiEInkMode.current
     val fill = if (eInk) colorScheme.onBackground else colorScheme.primary
     // E-ink's surface variant is white, which would make the strip itself invisible.
     val track = if (eInk) colorScheme.onBackground.copy(alpha = 0.08f) else colorScheme.surfaceVariant
-    fun hourOf(millis: Long): Double {
+    fun hourOf(millis: Long, zone: ZoneId): Double {
         val local = Instant.ofEpochMilli(millis).atZone(zone).toLocalDateTime()
         return ChronoUnit.DAYS.between(day, local.toLocalDate()) * 24.0 + local.toLocalTime().toSecondOfDay() / 3600.0
     }
     // The strip never runs past the end of the last span's day.
-    val limit = max(24.0, ceil(hourOf(spans.maxOf { it.endMillis }) / 24.0) * 24.0)
-    var startHour = (floor(hourOf(spans.minOf { it.startMillis })) - 1).coerceAtLeast(0.0)
-    var endHour = (ceil(hourOf(spans.maxOf { it.endMillis })) + 1).coerceAtMost(limit)
+    val latestHour = spans.maxOf { hourOf(it.endMillis, it.zone) }
+    val limit = max(24.0, ceil(latestHour / 24.0) * 24.0)
+    var startHour = (floor(spans.minOf { hourOf(it.startMillis, it.zone) }) - 1).coerceAtLeast(0.0)
+    var endHour = (ceil(latestHour) + 1).coerceAtMost(limit)
     if (endHour - startHour < 4.0) {
         endHour = (startHour + 4.0).coerceAtMost(limit)
         startHour = (endHour - 4.0).coerceAtLeast(0.0)
@@ -235,8 +237,8 @@ private fun TodayTimeline(spans: List<UsageReadingSpan>, day: LocalDate, zone: Z
         val radius = CornerRadius(size.height / 2f)
         drawRoundRect(color = track, cornerRadius = radius)
         spans.forEach { span ->
-            val from = ((hourOf(span.startMillis) - startHour) / window).toFloat().coerceIn(0f, 1f)
-            val to = ((hourOf(span.endMillis) - startHour) / window).toFloat().coerceIn(0f, 1f)
+            val from = ((hourOf(span.startMillis, span.zone) - startHour) / window).toFloat().coerceIn(0f, 1f)
+            val to = ((hourOf(span.endMillis, span.zone) - startHour) / window).toFloat().coerceIn(0f, 1f)
             // A span of a few seconds still gets a visible mark.
             val width = ((to - from) * size.width).coerceAtLeast(3.dp.toPx())
             drawRoundRect(

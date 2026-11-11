@@ -35,9 +35,8 @@ data class ReadingStatistics(
     @EncodeDefault(EncodeDefault.Mode.NEVER)
     val readingTimeByHour: Map<String, Double> = emptyMap(),
     /**
-     * The IANA zone [dateKey] and [readingTimeByHour] are wall-clock time of: the recording
-     * device's zone. Devices set to different zones still agree on which day an hour belongs
-     * to (see [recordedZone]). `null` in entries written before zones were recorded.
+     * The recording device's time zone for a uniform row. Older records without a zone
+     * use US Eastern. A row that spans zones names them in [readingTimeByZone].
      */
     @EncodeDefault(EncodeDefault.Mode.NEVER)
     val timeZone: String? = null,
@@ -51,6 +50,9 @@ data class ReadingStatistics(
      */
     @EncodeDefault(EncodeDefault.Mode.NEVER)
     val mangaPageSeconds: Map<Int, Int> = emptyMap(),
+    /** Local hourly buckets split by time zone when this same device/date spans zones. */
+    @EncodeDefault(EncodeDefault.Mode.NEVER)
+    val readingTimeByZone: Map<String, Map<String, Double>> = emptyMap(),
 )
 
 /** The device counters already included in one external day total. Never used by a tracker. */
@@ -94,6 +96,7 @@ internal fun ReadingStatistics.withImportedResidual(): ReadingStatistics {
         lastReadingSpeed = if (seconds > 0.0) (characters / seconds * 3600.0).toInt() else 0,
         readingTimeByHour = hours,
         timeZone = baseline.timeZone.takeIf { hours.isNotEmpty() },
+        readingTimeByZone = emptyMap(),
     )
 }
 
@@ -142,8 +145,8 @@ fun List<ReadingStatistics>.collapsedByDay(): List<ReadingStatistics> =
                 deviceId = null,
                 deviceName = null,
                 readingTimeByHour = entries.map { it.readingTimeByHour }.sumReadingHours(),
-                // Hours added up from several zones would be no single zone's wall clock.
                 timeZone = entries.map { it.timeZone }.distinct().singleOrNull(),
+                readingTimeByZone = emptyMap(),
                 importedBaseline = null,
                 // TTU's shared imported baseline cannot own a device's page samples.
                 mangaPageSeconds = emptyMap(),
@@ -190,11 +193,11 @@ fun List<ReadingStatistics>.deduplicateReadingStatistics(): List<ReadingStatisti
         // equal-stamp entry, retain the more complete timing evidence instead of erasing it:
         // more located hours, or the same hours with the zone they were recorded in.
         val sameCounters = existing != null && statistic.lastStatisticModified == existing.lastStatisticModified &&
-            statistic.copy(readingTimeByHour = emptyMap(), timeZone = null, mangaPageSeconds = emptyMap()) ==
-            existing.copy(readingTimeByHour = emptyMap(), timeZone = null, mangaPageSeconds = emptyMap())
+            statistic.copy(readingTimeByHour = emptyMap(), timeZone = null, mangaPageSeconds = emptyMap(), readingTimeByZone = emptyMap()) ==
+            existing.copy(readingTimeByHour = emptyMap(), timeZone = null, mangaPageSeconds = emptyMap(), readingTimeByZone = emptyMap())
         val richerTiming = sameCounters &&
             (statistic.readingTimeByHour.values.sum() > existing.readingTimeByHour.values.sum() ||
-                (statistic.readingTimeByHour == existing.readingTimeByHour && statistic.timeZone != null && existing.timeZone == null))
+                (statistic.readingTimeByHour == existing.readingTimeByHour && statistic.zoneEvidence() > existing.zoneEvidence()))
         if (mergedBaseline != null) {
             grouped[key] = mergedBaseline
         } else if (existing == null || statistic.lastStatisticModified > existing.lastStatisticModified || richerTiming ||
@@ -213,3 +216,9 @@ fun List<ReadingStatistics>.deduplicateReadingStatistics(): List<ReadingStatisti
         }
         grouped
     }.values.toList()
+
+private fun ReadingStatistics.zoneEvidence(): Int = when {
+    readingTimeByZone.isNotEmpty() -> 2
+    timeZone != null -> 1
+    else -> 0
+}

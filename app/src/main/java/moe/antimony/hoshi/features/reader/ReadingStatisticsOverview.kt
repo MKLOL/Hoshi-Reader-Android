@@ -16,9 +16,7 @@ import moe.antimony.hoshi.mokuro.MangaTextStatistic
 import moe.antimony.hoshi.mokuro.deduplicateMangaTextStatistics
 import moe.antimony.hoshi.features.statistics.charactersByDate
 import moe.antimony.hoshi.features.statistics.readingDays
-import moe.antimony.hoshi.features.statistics.reconstructStreakHistory
 import moe.antimony.hoshi.features.sync.http.syncIdForMetadata
-import java.time.ZoneId
 
 /** One day of reading: seconds spent and the amount read (characters, or OCR characters for manga). */
 data class DailyReading(
@@ -92,9 +90,6 @@ data class ReadingStatisticsOverview(
     val daily: List<DailyReading>,
     /** Reading per device across every book, longest first. */
     val devices: List<DeviceReadingSummary> = emptyList(),
-    /** Streak credit under the selected reset hour; calendar-day totals above are unchanged. */
-    val streakDaily: List<DailyReading> = daily,
-    val hasEstimatedStreakHistory: Boolean = false,
 )
 
 data class BookStatisticsInput(
@@ -123,8 +118,6 @@ fun summarizeReadingStatistics(
     inputs: List<BookStatisticsInput>,
     todayKey: String,
     streakResetHour: Int = 0,
-    /** The zone days are counted in (see `statisticsZone`); null reads every record as recorded here. */
-    zone: ZoneId? = null,
 ): ReadingStatisticsOverview {
     val dailySeconds = mutableMapOf<String, Double>()
     val dailyCharacters = mutableMapOf<String, Int>()
@@ -132,7 +125,7 @@ fun summarizeReadingStatistics(
         val statistics = input.statistics.deduplicateReadingStatistics()
         val mangaText = input.mangaTextStatistics.deduplicateMangaTextStatistics()
         // Every device's entries for a day add up, regrouped into reading days.
-        val days = readingDays(statistics, input.charactersByDate(), streakResetHour, zone)
+        val days = readingDays(statistics, input.charactersByDate(), streakResetHour)
         // The same totals the reader's Statistics sheet shows as "All Time".
         val totals = statistics.readingTotals()
         val charactersRead = when (input.contentType) {
@@ -164,7 +157,7 @@ fun summarizeReadingStatistics(
             finished = isBookCompleted(input.progress),
             coverSource = input.coverSource,
             days = days,
-            devices = summarizeDevices(input.contentType, statistics, mangaText, streakResetHour, zone),
+            devices = summarizeDevices(input.contentType, statistics, mangaText, streakResetHour),
             onDevice = input.onDevice,
             progressKnown = input.progressKnown,
         )
@@ -172,7 +165,6 @@ fun summarizeReadingStatistics(
     val daily = (dailySeconds.keys + dailyCharacters.keys).distinct()
         .map { DailyReading(it, dailySeconds[it] ?: 0.0, dailyCharacters[it] ?: 0) }
         .sortedByDescending { it.dateKey }
-    val streak = reconstructStreakHistory(inputs, streakResetHour, zone)
     return ReadingStatisticsOverview(
         totalSeconds = books.sumOf { it.totalSeconds },
         todaySeconds = dailySeconds[todayKey] ?: 0.0,
@@ -181,8 +173,6 @@ fun summarizeReadingStatistics(
         books = books,
         daily = daily,
         devices = books.flatMap { it.devices }.mergeDevices(),
-        streakDaily = streak.days,
-        hasEstimatedStreakHistory = streak.hasEstimatedHistory,
     )
 }
 
@@ -195,7 +185,6 @@ private fun summarizeDevices(
     statistics: List<ReadingStatistics>,
     mangaText: List<MangaTextStatistic>,
     resetHour: Int,
-    zone: ZoneId?,
 ): List<DeviceReadingSummary> {
     val deviceIds = (statistics.map { it.deviceId } + mangaText.map { it.deviceId }).distinct()
     return deviceIds.mapNotNull { deviceId ->
@@ -220,7 +209,7 @@ private fun summarizeDevices(
             totalSeconds = totalSeconds,
             charactersRead = charactersRead,
             pagesRead = pagesRead,
-            lastReadDateKey = readingDays(own, emptyMap(), resetHour, zone).firstOrNull { it.seconds > 0.0 }?.dateKey,
+            lastReadDateKey = readingDays(own, emptyMap(), resetHour).firstOrNull { it.seconds > 0.0 }?.dateKey,
             bookCount = 1,
             newestStamp = newest?.first ?: stamped.maxOfOrNull { it.first } ?: 0L,
         )
@@ -253,15 +242,14 @@ const val STATISTICS_HISTORY_BOOK_ID_PREFIX: String = "history:"
 /**
  * Reads every book's statistics sidecars, bookmark progress and cover, plus the reading history
  * of books this install has no folder for (not downloaded, deleted, or still downloading): what
- * was read counts no matter which books are installed, so every device shows the same Today,
- * streak and totals. Call it again whenever [BookRepository.statisticsChanges] changes: the
+ * was read counts no matter which books are installed. The viewer's current reading day
+ * selects Today from those records. Call it when [BookRepository.statisticsChanges] changes: the
  * result is a snapshot of the files, never cached across screens.
  */
 suspend fun loadReadingStatisticsOverview(
     bookRepository: BookRepository,
     todayKey: String,
     streakResetHour: Int = 0,
-    zone: ZoneId? = null,
 ): ReadingStatisticsOverview = withContext(Dispatchers.IO) {
     val history = bookRepository.loadStatisticsHistory().associateBy { it.syncId }
     val joined = mutableSetOf<String>()
@@ -300,5 +288,5 @@ suspend fun loadReadingStatisticsOverview(
             progressKnown = kept.progress != null,
         )
     }
-    summarizeReadingStatistics(installed + historyOnly, todayKey, streakResetHour, zone)
+    summarizeReadingStatistics(installed + historyOnly, todayKey, streakResetHour)
 }

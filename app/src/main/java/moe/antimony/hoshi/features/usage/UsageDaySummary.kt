@@ -1,5 +1,6 @@
 package moe.antimony.hoshi.features.usage
 
+import moe.antimony.hoshi.features.statistics.streakDate
 import java.time.LocalDate
 import java.time.ZoneId
 
@@ -10,6 +11,7 @@ data class UsageReadingSpan(
     val bookId: String?,
     val bookTitle: String?,
     val contentType: String?,
+    val zone: ZoneId,
 ) {
     val durationMillis: Long get() = (endMillis - startMillis).coerceAtLeast(0L)
 }
@@ -42,6 +44,8 @@ data class UsageDaySummary(
     val screenshotTranslations: Int,
     val firstActivityMillis: Long?,
     val lastActivityMillis: Long?,
+    val firstActivityZone: ZoneId? = null,
+    val lastActivityZone: ZoneId? = null,
 ) {
     val readingMillis: Long get() = spans.sumOf { it.durationMillis }
 
@@ -59,21 +63,20 @@ data class UsageDaySummary(
 fun summarizeUsageDay(
     events: List<UsageEvent>,
     date: LocalDate,
-    zone: ZoneId,
     maxRepeatedWords: Int = 5,
     /** The day runs from this hour on [date] to the same hour the next morning; 0 is midnight. */
     resetHour: Int = 0,
 ): UsageDaySummary {
     val reset = resetHour.coerceIn(0, 23)
-    val dayStart = date.atTime(reset, 0).atZone(zone).toInstant().toEpochMilli()
-    val dayEnd = date.plusDays(1).atTime(reset, 0).atZone(zone).toInstant().toEpochMilli()
-    val ordered = events.filter { it.at in dayStart until dayEnd }.sortedBy { it.at }
+    val ordered = events.sortedBy { it.at }
 
-    fun span(start: Long, end: Long, event: UsageEvent): UsageReadingSpan? {
+    fun span(start: Long, end: Long, event: UsageEvent, zone: ZoneId): UsageReadingSpan? {
+        val dayStart = date.atTime(reset, 0).atZone(zone).toInstant().toEpochMilli()
+        val dayEnd = date.plusDays(1).atTime(reset, 0).atZone(zone).toInstant().toEpochMilli()
         val clippedStart = start.coerceAtLeast(dayStart)
         val clippedEnd = end.coerceAtMost(dayEnd)
         if (clippedEnd <= clippedStart) return null
-        return UsageReadingSpan(clippedStart, clippedEnd, event.bookId, event.bookTitle, event.contentType)
+        return UsageReadingSpan(clippedStart, clippedEnd, event.bookId, event.bookTitle, event.contentType, zone)
     }
 
     val spans = mutableListOf<UsageReadingSpan>()
@@ -84,37 +87,48 @@ fun summarizeUsageDay(
         when (event.type) {
             UsageEventType.ReadingStarted -> openStarts[event.session] = event
             UsageEventType.ReadingStopped -> {
-                openStarts.remove(event.session)
-                span(event.startedAt ?: event.at, event.at, event)?.let(spans::add)
+                val start = openStarts[event.session]?.takeIf { event.startedAt == null || it.at == event.startedAt }
+                if (start != null) openStarts.remove(event.session)
+                val zone = event.startedTimeZone?.let { usageZone(it, null) } ?: start?.recordedZone ?: event.recordedZone
+                span(event.startedAt ?: start?.at ?: event.at, event.at, event, zone)?.let(spans::add)
             }
             else -> Unit
         }
     }
     for ((session, start) in openStarts) {
-        span(start.at, lastEventOfSession[session] ?: start.at, start)?.let(spans::add)
+        span(start.at, lastEventOfSession[session] ?: start.at, start, start.recordedZone)?.let(spans::add)
     }
 
-    val lookups = ordered.filter { it.type == UsageEventType.WordLookedUp }
+    val onDay = ordered.filter { streakDate(it.localTime(), reset) == date }
+    val lookups = onDay.filter { it.type == UsageEventType.WordLookedUp }
     // A press that matched nothing logged the text it scanned, which is not a word.
     val words = lookups.filter { it.outcome != "not-found" }
         .mapNotNull { (it.term ?: it.text)?.takeIf(String::isNotBlank) }
+    val firstActivity = (onDay.firstOrNull()?.let { it.at to it.instantZone }).let { point ->
+        listOfNotNull(point, spans.minByOrNull { it.startMillis }?.let { it.startMillis to it.zone }).minByOrNull { it.first }
+    }
+    val lastActivity = (onDay.lastOrNull()?.let { it.at to it.instantZone }).let { point ->
+        listOfNotNull(point, spans.maxByOrNull { it.endMillis }?.let { it.endMillis to it.zone }).maxByOrNull { it.first }
+    }
     return UsageDaySummary(
         date = date,
         spans = spans.sortedBy { it.startMillis },
-        sessions = ordered.count { it.type == UsageEventType.ReaderOpened },
-        pageTurns = ordered.count { it.type == UsageEventType.PageTurned && it.source != ReaderUsageSession.PAGE_JUMP },
+        sessions = onDay.count { it.type == UsageEventType.ReaderOpened },
+        pageTurns = onDay.count { it.type == UsageEventType.PageTurned && it.source != ReaderUsageSession.PAGE_JUMP },
         wordLookups = lookups.size,
         mangaPageLookups = lookups.count {
             it.contentType == UsageContentType.Manga.serialName && it.source == UsageLookupSource.Page.serialName
         },
         distinctWords = words.toSet().size,
         repeatedWords = repeatedWords(words, maxRepeatedWords),
-        bubblesRevealed = ordered.count { it.type == UsageEventType.BubbleRevealed },
-        bubbleTranslations = ordered.count { it.type == UsageEventType.BubbleTranslated },
-        bubblesCopied = ordered.count { it.type == UsageEventType.BubbleCopied },
-        screenshotTranslations = ordered.count { it.type == UsageEventType.ScreenshotTranslated },
-        firstActivityMillis = listOfNotNull(ordered.firstOrNull()?.at, spans.minOfOrNull { it.startMillis }).minOrNull(),
-        lastActivityMillis = ordered.lastOrNull()?.at,
+        bubblesRevealed = onDay.count { it.type == UsageEventType.BubbleRevealed },
+        bubbleTranslations = onDay.count { it.type == UsageEventType.BubbleTranslated },
+        bubblesCopied = onDay.count { it.type == UsageEventType.BubbleCopied },
+        screenshotTranslations = onDay.count { it.type == UsageEventType.ScreenshotTranslated },
+        firstActivityMillis = firstActivity?.first,
+        lastActivityMillis = lastActivity?.first,
+        firstActivityZone = firstActivity?.second,
+        lastActivityZone = lastActivity?.second,
     )
 }
 

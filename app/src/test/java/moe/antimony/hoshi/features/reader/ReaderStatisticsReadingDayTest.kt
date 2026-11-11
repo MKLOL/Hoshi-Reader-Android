@@ -58,14 +58,14 @@ class ReaderStatisticsReadingDayTest {
     }
 
     @Test
-    fun entriesNameTheZoneTheyAreRecordedInAndTodayFollowsTheStatisticsZone() {
+    fun entriesNameTheRecordingZoneAndTodayFollowsTheViewingDevice() {
         val newYork = ZoneId.of("America/New_York")
         val shanghai = ZoneId.of("Asia/Shanghai")
         // 00:09 in New York on Oct 3 is 12:09 on the tablet's clock.
         val clock = ZonedClock(LocalDateTime.parse("2026-10-03T00:09").atZone(newYork).toInstant(), shanghai)
         val tracker = ReaderStatisticsTracker(
             "Book", emptyList(), enabled = true, clock = clock, device = moe.antimony.hoshi.epub.DeviceIdentity("tablet", "Tablet"),
-            resetHour = { 3 }, statisticsZone = { newYork },
+            resetHour = { 3 },
         )
         tracker.start(currentCharacter = 0)
         clock.instant = clock.instant.plusSeconds(20 * 60)
@@ -76,16 +76,18 @@ class ReaderStatisticsReadingDayTest {
         assertEquals("recorded on the tablet's own clock", "2026-10-03", stored.dateKey)
         assertEquals(mapOf("2026-10-03T12:00" to 1200.0), stored.readingTimeByHour)
         assertEquals("Asia/Shanghai", stored.timeZone)
-        // Counted in New York: still the evening of Oct 2 until 03:00.
-        assertEquals("2026-10-02", tracker.state.today.dateKey)
+        assertEquals("2026-10-03", tracker.state.today.dateKey)
         assertEquals(1200.0, tracker.state.today.readingTime, 0.001)
+        clock.zone = newYork
+        assertEquals("2026-10-02", tracker.state.today.dateKey)
+        assertEquals(0.0, tracker.state.today.readingTime, 0.0)
         clock.instant = LocalDateTime.parse("2026-10-03T03:00").atZone(newYork).toInstant()
         assertEquals("2026-10-03", tracker.state.today.dateKey)
-        assertEquals(0.0, tracker.state.today.readingTime, 0.0)
+        assertEquals(1200.0, tracker.state.today.readingTime, 0.0)
     }
 
     @Test
-    fun hoursRecordedBeforeTheDevicesZoneChangedMoveToTheNewZone() {
+    fun sameDateZoneChangeKeepsEarlierHoursAndTagsNewReading() {
         val shanghai = ZoneId.of("Asia/Shanghai")
         val newYork = ZoneId.of("America/New_York")
         val clock = ZonedClock(LocalDateTime.parse("2026-10-03T12:00").atZone(shanghai).toInstant(), shanghai)
@@ -98,36 +100,66 @@ class ReaderStatisticsReadingDayTest {
         clock.instant = clock.instant.plusSeconds(600)
         tracker.update(currentCharacter = 20)
 
+        clock.instant = clock.instant.plusSeconds(600)
+        tracker.update(currentCharacter = 30)
+
         val stored = tracker.statisticsForPersistence().single { it.dateKey == "2026-10-03" }
-        assertEquals("America/New_York", stored.timeZone)
-        assertEquals(mapOf("2026-10-03T00:00" to 1200.0), stored.readingTimeByHour)
+        assertEquals(null, stored.timeZone)
+        val before = mapOf("2026-10-03T12:00" to 1200.0)
+        val after = mapOf("2026-10-03T00:00" to 600.0)
+        assertEquals(before + after, stored.readingTimeByHour)
+        assertEquals(mapOf(shanghai.id to before, newYork.id to after), stored.readingTimeByZone)
+        assertEquals("2026-10-02", tracker.state.today.dateKey)
+        assertEquals(600.0, tracker.state.today.readingTime, 0.001)
     }
 
     @Test
-    fun theTabletsChinaTimeNightIsConvertedWhenItsClockIsSetRight() {
-        val newYork = ZoneId.of("America/New_York")
+    fun sameDateLegacyHoursKeepTheirEasternTimeWhenNewReadingHasAnotherZone() {
+        val eastern = ZoneId.of("America/New_York")
+        val shanghai = ZoneId.of("Asia/Shanghai")
         val tablet = moe.antimony.hoshi.epub.DeviceIdentity("tablet", "Tablet")
-        // Recorded by 0.12.x on China time: 00:09–00:29 in New York stored as noon, no zone named.
-        val night = ReadingStatistics(
+        // A stamp suggestive of Shanghai must not override the US Eastern fallback.
+        val legacyHours = mapOf("2026-10-03T12:00" to 1162.0)
+        val legacy = ReadingStatistics(
             title = "Book", dateKey = "2026-10-03", readingTime = 1162.0, deviceId = tablet.id,
-            lastStatisticModified = LocalDateTime.parse("2026-10-03T00:29").atZone(newYork).toInstant().toEpochMilli(),
-            readingTimeByHour = mapOf("2026-10-03T12:00" to 1162.0),
+            lastStatisticModified = LocalDateTime.parse("2026-10-03T12:29").atZone(shanghai).toInstant().toEpochMilli(),
+            readingTimeByHour = legacyHours,
         )
-        // The clock is now on New York time and the tablet reads again that evening.
-        val clock = ZonedClock(LocalDateTime.parse("2026-10-03T20:00").atZone(newYork).toInstant(), newYork)
+        val clock = ZonedClock(LocalDateTime.parse("2026-10-03T20:00").atZone(shanghai).toInstant(), shanghai)
         val tracker = ReaderStatisticsTracker(
-            "Book", listOf(night), enabled = true, clock = clock, device = tablet, resetHour = { 3 }, statisticsZone = { newYork },
+            "Book", listOf(legacy), enabled = true, clock = clock, device = tablet, resetHour = { 3 },
         )
         tracker.start(currentCharacter = 0)
         clock.instant = clock.instant.plusSeconds(600)
         tracker.update(currentCharacter = 10)
 
         val stored = tracker.statisticsForPersistence().single()
-        assertEquals("America/New_York", stored.timeZone)
-        assertEquals(mapOf("2026-10-03T00:00" to 1162.0, "2026-10-03T20:00" to 600.0), stored.readingTimeByHour)
-        val days = moe.antimony.hoshi.features.statistics.readingDays(listOf(stored), emptyMap(), 3, newYork).associateBy { it.dateKey }
-        assertEquals(1162.0, days.getValue("2026-10-02").seconds, 0.001)
-        assertEquals(600.0, days.getValue("2026-10-03").seconds, 0.001)
+        val newHours = mapOf("2026-10-03T20:00" to 600.0)
+        assertEquals(null, stored.timeZone)
+        assertEquals(legacyHours + newHours, stored.readingTimeByHour)
+        assertEquals(mapOf(eastern.id to legacyHours, shanghai.id to newHours), stored.readingTimeByZone)
+        assertEquals(1762.0, tracker.state.today.readingTime, 0.001)
+    }
+
+    @Test
+    fun pendingReadingStaysOnThePreviousZoneDateWhenTheDeviceCrossesMidnight() {
+        val pacific = ZoneId.of("America/Los_Angeles")
+        val tokyo = ZoneId.of("Asia/Tokyo")
+        val clock = ZonedClock(LocalDateTime.parse("2026-01-10T10:00").atZone(pacific).toInstant(), pacific)
+        val tracker = ReaderStatisticsTracker("Book", emptyList(), enabled = true, clock = clock, resetHour = { 3 })
+        tracker.start(currentCharacter = 0)
+        clock.instant = clock.instant.plusSeconds(600)
+        clock.zone = tokyo
+        tracker.update(currentCharacter = 10)
+        clock.instant = clock.instant.plusSeconds(600)
+        tracker.update(currentCharacter = 20)
+
+        val rows = tracker.statisticsForPersistence().filter { it.readingTime > 0 }.associateBy { it.dateKey }
+        assertEquals(pacific.id, rows.getValue("2026-01-10").timeZone)
+        assertEquals(mapOf("2026-01-10T10:00" to 600.0), rows.getValue("2026-01-10").readingTimeByHour)
+        assertEquals(tokyo.id, rows.getValue("2026-01-11").timeZone)
+        assertEquals(mapOf("2026-01-11T03:00" to 600.0), rows.getValue("2026-01-11").readingTimeByHour)
+        assertEquals(600.0, tracker.state.today.readingTime, 0.001)
     }
 
     @Test

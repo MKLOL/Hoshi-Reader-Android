@@ -24,7 +24,7 @@ class UsageDaySummaryTest {
             event(UsageEventType.ReadingStopped, at(8, 15), session = "s0").copy(startedAt = at(8)),
         )
 
-        val summary = summarizeUsageDay(events, day, zone)
+        val summary = summarizeUsageDay(events, day)
 
         assertEquals(listOf(at(8), at(20)), summary.spans.map { it.startMillis })
         assertEquals(45 * 60_000L, summary.readingMillis)
@@ -37,10 +37,24 @@ class UsageDaySummaryTest {
         val yesterdayEvening = at(0) - 20 * 60_000L
         val events = listOf(event(UsageEventType.ReadingStopped, at(0, 10)).copy(startedAt = yesterdayEvening))
 
-        val span = summarizeUsageDay(events, day, zone).spans.single()
+        val span = summarizeUsageDay(events, day).spans.single()
 
         assertEquals(at(0), span.startMillis)
         assertEquals(10 * 60_000L, span.durationMillis)
+    }
+
+    @Test
+    fun stopEventKeepsTheStartZoneWhenTheDeviceZoneChanged() {
+        val start = at(8)
+        val stop = at(8, 20)
+        val event = event(UsageEventType.ReadingStopped, stop).copy(
+            utcOffset = "+14:00", timeZone = "Pacific/Kiritimati", startedAt = start,
+            startedTimeZone = "America/New_York",
+        )
+        val span = summarizeUsageDay(listOf(event), day, resetHour = 3).spans.single()
+        assertEquals(start, span.startMillis)
+        assertEquals(20 * 60_000L, span.durationMillis)
+        assertEquals("America/New_York", span.zone.id)
     }
 
     @Test
@@ -52,7 +66,7 @@ class UsageDaySummaryTest {
             event(UsageEventType.PageTurned, at(13), session = "other"),
         )
 
-        val span = summarizeUsageDay(events, day, zone).spans.single()
+        val span = summarizeUsageDay(events, day).spans.single()
 
         assertEquals(at(12), span.startMillis)
         assertEquals(at(12, 9), span.endMillis)
@@ -77,7 +91,7 @@ class UsageDaySummaryTest {
             event(UsageEventType.PageTurned, at(0) - 1),
         )
 
-        val summary = summarizeUsageDay(events, day, zone)
+        val summary = summarizeUsageDay(events, day)
 
         assertEquals(1, summary.sessions)
         assertEquals(4, summary.wordLookups)
@@ -99,7 +113,7 @@ class UsageDaySummaryTest {
         val events = terms.mapIndexed { minute, term -> lookup(minute, term) } +
             lookup(40, "明日") + lookup(41, "一度だけ")
 
-        val repeated = summarizeUsageDay(events, day, zone).repeatedWords
+        val repeated = summarizeUsageDay(events, day).repeatedWords
 
         assertEquals(
             listOf(
@@ -125,7 +139,7 @@ class UsageDaySummaryTest {
             lookup(4, "epub", "page"),
         )
 
-        val summary = summarizeUsageDay(events, day, zone)
+        val summary = summarizeUsageDay(events, day)
 
         assertEquals(4, summary.wordLookups)
         assertEquals(2, summary.mangaPageLookups)
@@ -133,7 +147,7 @@ class UsageDaySummaryTest {
 
     @Test
     fun aDayWithoutEventsIsEmpty() {
-        assertTrue(summarizeUsageDay(emptyList(), day, zone).isEmpty)
+        assertTrue(summarizeUsageDay(emptyList(), day).isEmpty)
     }
 
     @Test
@@ -148,11 +162,11 @@ class UsageDaySummaryTest {
         )
 
         // From 03:00 on the day until 03:00 the next morning, as the streak counts it.
-        val summary = summarizeUsageDay(events, day, zone, resetHour = 3)
+        val summary = summarizeUsageDay(events, day, resetHour = 3)
 
         assertEquals(2, summary.wordLookups)
         assertEquals(at(22), summary.firstActivityMillis)
         assertEquals(next(1), summary.lastActivityMillis)
-        assertEquals(2, summarizeUsageDay(events, day, zone).wordLookups)
+        assertEquals(2, summarizeUsageDay(events, day).wordLookups)
     }
 }

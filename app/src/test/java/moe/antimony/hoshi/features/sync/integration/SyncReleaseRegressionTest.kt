@@ -128,18 +128,16 @@ class SyncReleaseRegressionTest(private val phoneEngine: SyncEngine, private val
         val devices: List<DeviceReadingSummary>,
         val currentStreak: Int,
         val longestStreak: Int,
-        val estimatedStreak: Boolean,
         val minutes: List<TrendPoint>,
         val characters: List<TrendPoint>,
     )
 
     private suspend fun history(device: SyncDevice): VisibleHistory {
         val overview = loadReadingStatisticsOverview(device.repo, TODAY.toString(), streakResetHour = 3)
-        val streak = computeReadingStreak(overview.streakDaily, minimumSeconds = 600.0, today = TODAY)
+        val streak = computeReadingStreak(overview.daily, minimumSeconds = 600.0, today = TODAY)
         return VisibleHistory(
             overview.totalSeconds, overview.todaySeconds, overview.totalCharacters, overview.todayCharacters,
             overview.daily, overview.devices, streak.currentDays, streak.longestDays,
-            overview.hasEstimatedStreakHistory,
             rollingAverageSeries(overview.daily.associate { LocalDate.parse(it.dateKey) to it.seconds / 60.0 }, TODAY, 30),
             rollingAverageSeries(overview.daily.associate { LocalDate.parse(it.dateKey) to it.characters.toDouble() }, TODAY, 30),
         )
@@ -159,7 +157,6 @@ class SyncReleaseRegressionTest(private val phoneEngine: SyncEngine, private val
         )
         assertEquals(2, history.currentStreak)
         assertEquals(2, history.longestStreak)
-        assertFalse(history.estimatedStreak)
         assertEquals(listOf(PHONE.id), history.devices.map { it.deviceId })
         assertEquals(0.0, history.minutes.last().value, 0.0)
         assertEquals(40.0 / 3, history.minutes.last().rollingAverage, 0.0001)
@@ -263,15 +260,14 @@ class SyncReleaseRegressionTest(private val phoneEngine: SyncEngine, private val
         val observed = withTimeout(5_000) { refreshed.await() }
         assertEquals(600.0, observed.totalSeconds, 0.0)
         assertEquals(1_000, observed.totalCharacters)
-        assertEquals(2, observed.currentStreak)
-        assertTrue(observed.estimatedStreak)
+        assertEquals(1, observed.currentStreak)
         assertEquals(listOf<String?>(null), observed.devices.map { it.deviceId })
         assertEquals(history(legacyPhone), history(tablet))
 
         tablet.close()
         tablet = device("tablet", tabletEngine)
         repeat(2) { assertClean(tablet.sync()); assertClean(legacyPhone.sync()) }
-        assertEquals("optimistic streak credit cannot duplicate calendar totals after restart", observed, history(tablet))
+        assertEquals("legacy records retain their one recorded date after restart", observed, history(tablet))
         assertEquals(observed, history(legacyPhone))
     }
 
@@ -346,7 +342,7 @@ class SyncReleaseRegressionTest(private val phoneEngine: SyncEngine, private val
         assertEquals(1_234, overview.totalCharacters)
         assertEquals(6, overview.books.single().pagesRead)
         assertEquals(6, overview.devices.single().pagesRead)
-        assertEquals(1, computeReadingStreak(overview.streakDaily, 600.0, TODAY).currentDays)
+        assertEquals(1, computeReadingStreak(overview.daily, 600.0, TODAY).currentDays)
         assertEquals(history(phone), history(tablet))
         assertNoPayloadTransfer()
     }

@@ -6,7 +6,9 @@ import org.junit.Assert.assertNull
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
+import java.time.Instant
 import java.time.LocalDate
+import java.time.ZoneId
 import java.time.ZoneOffset
 
 class ReaderUsageSessionTest {
@@ -20,6 +22,27 @@ class ReaderUsageSessionTest {
     private fun session() = ReaderUsageSession(log, "book-1", "Test Manga", UsageContentType.Manga, id = "s1")
 
     private fun events() = runBlocking { log.eventsOn(day) }
+
+    @Test
+    fun anActiveSessionKeepsBothDaysWhenTheDeviceMovesBackAcrossTheDateLine() = runBlocking {
+        val transition = Instant.parse("2027-01-11T15:00:00Z").toEpochMilli()
+        var time = transition - 600_000
+        var zone = ZoneId.of("Pacific/Kiritimati")
+        val travelLog = UsageLog(folder.newFolder(), clock = { time }, zone = { zone })
+        val session = ReaderUsageSession(travelLog, "book", "Manga", UsageContentType.Manga)
+        session.readingChanged(true)
+        time = transition
+        zone = ZoneId.of("Pacific/Honolulu")
+        session.pageTurned(1, 2)
+        time += 1_200_000
+        session.pageTurned(2, 3)
+
+        val jan11 = LocalDate.of(2027, 1, 11)
+        val jan12 = jan11.plusDays(1)
+        val events = travelLog.eventsOn(jan11) + travelLog.eventsOn(jan12)
+        assertEquals(1_200_000L, summarizeUsageDay(events, jan11, resetHour = 3).readingMillis)
+        assertEquals(600_000L, summarizeUsageDay(events, jan12, resetHour = 3).readingMillis)
+    }
 
     @Test
     fun aReadingSpanRecordsWhenItStartedOnItsStopEvent() {
@@ -116,7 +139,7 @@ class ReaderUsageSessionTest {
         val (turn, jump) = events()
         assertNull(turn.source)
         assertEquals(ReaderUsageSession.PAGE_JUMP, jump.source)
-        assertEquals(1, summarizeUsageDay(events(), day, ZoneOffset.UTC).pageTurns)
+        assertEquals(1, summarizeUsageDay(events(), day).pageTurns)
     }
 
     @Test

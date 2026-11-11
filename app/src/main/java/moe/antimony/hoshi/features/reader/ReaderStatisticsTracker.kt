@@ -2,6 +2,7 @@ package moe.antimony.hoshi.features.reader
 
 import moe.antimony.hoshi.epub.DeviceIdentity
 import moe.antimony.hoshi.epub.ReadingStatistics
+import moe.antimony.hoshi.epub.addReadingHours
 import moe.antimony.hoshi.epub.deduplicateReadingStatistics
 import moe.antimony.hoshi.epub.readingTotals
 import moe.antimony.hoshi.epub.readingHoursBetween
@@ -12,15 +13,10 @@ import java.time.ZoneId
 import kotlin.math.abs
 import kotlin.math.roundToInt
 import java.time.Instant
-import java.time.LocalDateTime
-import java.time.temporal.ChronoUnit
-import moe.antimony.hoshi.epub.convertWallClock
 import moe.antimony.hoshi.epub.dayDeviceKey
-import moe.antimony.hoshi.epub.recordedZone
-import moe.antimony.hoshi.epub.zoneOrNull
+import moe.antimony.hoshi.features.statistics.localReadingHours
 import moe.antimony.hoshi.features.statistics.readingDayOf
 import moe.antimony.hoshi.features.statistics.readingDays
-import moe.antimony.hoshi.features.statistics.streakDate
 
 data class ReaderStatisticsState(
     val isTracking: Boolean,
@@ -64,17 +60,12 @@ class ReaderStatisticsTracker(
      * use, so changing the setting applies without reopening the book.
      */
     private val resetHour: () -> Int = { 0 },
-    /**
-     * The zone reading days are counted in on every device (see `statisticsZone`), read on
-     * every use; null counts them on [clock]'s own wall clock. Entries are still recorded on
-     * [clock]'s wall clock, named by [ReadingStatistics.timeZone].
-     */
-    private val statisticsZone: () -> ZoneId? = { null },
     /** Manga records one duration per completed page, independently of periodic time ticks. */
     private val trackMangaPageDurations: Boolean = false,
 ) {
     private var statistics = initialStatistics.deduplicateReadingStatistics()
     private var lastTimestampMillis: Long = clock.currentTimeMillis()
+    private var lastZone: ZoneId = clock.zoneId()
     private var lastCharacterCount: Int = 0
     private var hasUpdated = false
     private var activePageSeconds = 0.0
@@ -109,7 +100,7 @@ class ReaderStatisticsTracker(
     fun readingDayCharacters(charactersByDate: Map<String, Int>): Int {
         rollTodayIfNeeded()
         val day = readingDay().toString()
-        return readingDays(recordsWithRunningToday(), charactersByDate, resetHour(), statisticsZone())
+        return readingDays(recordsWithRunningToday(), charactersByDate, resetHour())
             .firstOrNull { it.dateKey == day }?.characters ?: 0
     }
 
@@ -141,15 +132,20 @@ class ReaderStatisticsTracker(
 
     fun update(currentCharacter: Int) {
         if (!enabled || !currentState.isTracking) return
-        rollTodayIfNeeded()
         val now = clock.currentTimeMillis()
+        val currentZone = clock.zoneId()
         val elapsedMillis = now - lastTimestampMillis
-        if (elapsedMillis < 0L) {
-            // The wall clock was set back: lose this one tick, not every tick until the clock
-            // passes the value it had before the correction.
+        if (elapsedMillis <= 0L) {
+            // A backwards clock correction starts a new baseline immediately.
             lastTimestampMillis = now
+            lastZone = currentZone
+            return
         }
-        if (elapsedMillis <= 0L) return
+        // When a clock changes zones between ticks, finish the pending interval on
+        // the clock it started on. New time begins in the new zone at this tick.
+        val endDate = if (lastZone == currentZone) clock.currentDate()
+            else Instant.ofEpochMilli(now).atZone(lastZone).toLocalDate()
+        rollTodayIfNeeded(endDate)
         val timeDiff = elapsedMillis.toDouble() / 1000.0
         if (trackMangaPageDurations) activePageSeconds += timeDiff
 
@@ -159,17 +155,17 @@ class ReaderStatisticsTracker(
         } else {
             charDiff
         }
-        val modified = clock.currentTimeMillis()
-        val zone = clock.zoneId()
-        val hours = readingHoursBetween(lastTimestampMillis, now, zone)
-        todayOnThisDevice = todayOnThisDevice.recordedIn(zone).updated(timeDiff, finalCharDiff, modified, hours)
+        val hours = readingHoursBetween(lastTimestampMillis, now, lastZone)
+        todayOnThisDevice = todayOnThisDevice.addReadingHours(lastZone, hours).updated(timeDiff, finalCharDiff, now)
         currentState = currentState.copy(
-            session = currentState.session.recordedIn(zone).updated(timeDiff, finalCharDiff, modified, hours),
-            today = todayAcrossDevices(),
-            allTime = currentState.allTime.updated(timeDiff, finalCharDiff, modified),
+            session = currentState.session.addReadingHours(lastZone, hours).updated(timeDiff, finalCharDiff, now),
+            allTime = currentState.allTime.updated(timeDiff, finalCharDiff, now),
         )
+        rollTodayIfNeeded()
+        currentState = currentState.copy(today = todayAcrossDevices())
         hasUpdated = true
         lastTimestampMillis = now
+        lastZone = currentZone
         lastCharacterCount = currentCharacter
     }
 
@@ -200,6 +196,7 @@ class ReaderStatisticsTracker(
     fun resetBaseline(currentCharacter: Int) {
         lastCharacterCount = currentCharacter
         lastTimestampMillis = clock.currentTimeMillis()
+        lastZone = clock.zoneId()
     }
 
     /** The list to write, or null when this session has not added anything (nothing to save, nothing to sync). */
@@ -224,8 +221,7 @@ class ReaderStatisticsTracker(
         return statistics
     }
 
-    private fun rollTodayIfNeeded() {
-        val currentDate = clock.currentDate()
+    private fun rollTodayIfNeeded(currentDate: LocalDate = clock.currentDate()) {
         val currentDateKey = currentDate.toString()
         if (todayOnThisDevice.dateKey == currentDateKey) return
         storeToday()
@@ -241,9 +237,6 @@ class ReaderStatisticsTracker(
 
     /** The reading day the clock is in: before the reset hour it is still the previous date. */
     private fun readingDay(): LocalDate {
-        statisticsZone()?.let { zone ->
-            return streakDate(Instant.ofEpochMilli(clock.currentTimeMillis()).atZone(zone), resetHour())
-        }
         val date = clock.currentDate()
         val reset = resetHour().coerceIn(0, 23)
         if (reset == 0) return date
@@ -265,26 +258,23 @@ class ReaderStatisticsTracker(
     private fun todayAcrossDevices(): ReadingStatistics {
         val records = recordsWithRunningToday()
         val reset = resetHour()
-        val zone = statisticsZone()
         val day = readingDay().toString()
         val characters = records.groupBy { dayDeviceKey(it.dateKey, it.deviceId) }
             .mapValues { (_, entries) -> entries.sumOf { it.charactersRead } }
-        val total = readingDays(records, characters, reset, zone).firstOrNull { it.dateKey == day }
+        val total = readingDays(records, characters, reset).firstOrNull { it.dateKey == day }
         val readingTime = total?.seconds ?: 0.0
         val charactersRead = total?.characters ?: 0
         return todayOnThisDevice.copy(
             dateKey = day,
             readingTime = readingTime,
             charactersRead = charactersRead,
-            // The hours that make up the day: its own records' with a midnight reset, as before.
-            readingTimeByHour = if (reset <= 0 && zone == null) {
-                records.filter { it.dateKey == day }.map { it.readingTimeByHour }.sumReadingHours()
-            } else {
-                records.map { it.hoursOn(zone) }.sumReadingHours().filterKeys { key ->
-                    runCatching { readingDayOf(LocalDateTime.parse(key), reset).toString() == day }.getOrDefault(false)
-                }
-            },
-            timeZone = zone?.id ?: todayOnThisDevice.timeZone,
+            readingTimeByHour = records.map { record ->
+                record.localReadingHours()
+                    .filter { (hour, _) -> readingDayOf(hour, reset.coerceIn(0, 23)).toString() == day }
+                    .associate { (hour, seconds) -> hour.toString() to seconds }
+            }.sumReadingHours(),
+            timeZone = null,
+            readingTimeByZone = emptyMap(),
             lastReadingSpeed = if (readingTime > 0.0) (charactersRead / readingTime * 3600.0).toInt() else 0,
             mangaPageSeconds = records.filter { it.dateKey == todayOnThisDevice.dateKey }
                 .map { it.mangaPageSeconds }.sumMangaPageSeconds(),
@@ -306,40 +296,10 @@ class ReaderStatisticsTracker(
     }
 }
 
-/**
- * This entry recorded on [zone]'s wall clock. Hours recorded in another zone move to [zone]'s:
- * the zone the entry names, or for an entry from before zones were recorded the one its stamp
- * tells (a device whose clock was on another zone and has since been set right).
- */
-private fun ReadingStatistics.recordedIn(zone: ZoneId): ReadingStatistics {
-    if (timeZone == zone.id) return this
-    val from = zoneOrNull(timeZone) ?: recordedZone(zone)
-    if (from == null || from == zone) return copy(timeZone = zone.id)
-    return copy(timeZone = zone.id, readingTimeByHour = readingTimeByHour.rekeyed(from, zone))
-}
-
-/** [ReadingStatistics.readingTimeByHour] on [zone]'s wall clock (as recorded when null). */
-private fun ReadingStatistics.hoursOn(zone: ZoneId?): Map<String, Double> {
-    zone ?: return readingTimeByHour
-    val from = recordedZone(zone)?.takeIf { it != zone } ?: return readingTimeByHour
-    return readingTimeByHour.rekeyed(from, zone)
-}
-
-private fun Map<String, Double>.rekeyed(from: ZoneId, to: ZoneId): Map<String, Double> {
-    val result = mutableMapOf<String, Double>()
-    forEach { (key, seconds) ->
-        val hour = runCatching { LocalDateTime.parse(key) }.getOrNull()
-        val moved = hour?.let { convertWallClock(it, from, to).truncatedTo(ChronoUnit.HOURS).toString() } ?: key
-        result[moved] = (result[moved] ?: 0.0) + seconds
-    }
-    return result
-}
-
 private fun ReadingStatistics.updated(
     timeDiff: Double,
     characterDiff: Int,
     lastStatisticModified: Long,
-    hours: Map<String, Double> = emptyMap(),
 ): ReadingStatistics {
     val nextReadingTime = readingTime + timeDiff
     val nextCharactersRead = (charactersRead + characterDiff).coerceAtLeast(0)
@@ -350,7 +310,6 @@ private fun ReadingStatistics.updated(
     }
     return copy(
         readingTime = nextReadingTime,
-        readingTimeByHour = listOf(readingTimeByHour, hours).sumReadingHours(),
         charactersRead = nextCharactersRead,
         lastReadingSpeed = nextReadingSpeed,
         maxReadingSpeed = maxOf(maxReadingSpeed, nextReadingSpeed),

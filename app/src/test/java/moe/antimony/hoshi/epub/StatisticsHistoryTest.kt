@@ -237,7 +237,7 @@ class StatisticsHistoryTest {
 
         assertEquals(900.0, overview.todaySeconds, 0.0)
         assertEquals(5 * 900.0 + 300.0, overview.totalSeconds, 0.0)
-        assertEquals(5, computeReadingStreak(overview.streakDaily, 600.0, today).currentDays)
+        assertEquals(5, computeReadingStreak(overview.daily, 600.0, today).currentDays)
         assertEquals(listOf("Elsewhere", "Book"), overview.books.map { it.title })
         assertEquals(STATISTICS_HISTORY_BOOK_ID_PREFIX + "elsewhere", overview.books.first().bookId)
     }

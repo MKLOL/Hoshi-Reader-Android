@@ -110,7 +110,6 @@ import moe.antimony.hoshi.features.sasayaki.launchSasayakiMining
 import moe.antimony.hoshi.features.sync.http.syncIdForMetadata
 import moe.antimony.hoshi.features.sasayaki.SasayakiSheet
 import kotlin.math.roundToInt
-import moe.antimony.hoshi.features.statistics.statisticsZone
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -487,7 +486,6 @@ fun ReaderWebView(
     }
     val currentUsageSession = rememberUpdatedState(usageSession)
     val currentResetHour = rememberUpdatedState(readerSettings.statisticsDayResetHour)
-    val currentStatisticsZone = rememberUpdatedState(readerSettings.statisticsZone())
     val statisticsTracker = remember(bookRoot, book.title, persistedStatistics) {
         persistedStatistics?.let { statistics ->
             ReaderStatisticsTracker(
@@ -497,7 +495,6 @@ fun ReaderWebView(
                 device = appContainer.deviceIdentity,
                 onTrackingChanged = { reading -> currentUsageSession.value?.readingChanged(reading) },
                 resetHour = { currentResetHour.value },
-                statisticsZone = { currentStatisticsZone.value },
             )
         }
     }

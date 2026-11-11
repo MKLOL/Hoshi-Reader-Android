@@ -27,9 +27,6 @@ val STATISTICS_STREAK_MINIMUM_MINUTES_RANGE: IntRange = 1..600
 /** Hours a reading day may start at. */
 val STATISTICS_DAY_RESET_HOUR_RANGE: IntRange = 0..23
 
-/** Reading days are Eastern Time days unless another zone is chosen (also one this device does not know). */
-const val STATISTICS_DEFAULT_TIME_ZONE: String = "America/New_York"
-
 data class ReaderSettings(
     val theme: ReaderTheme = ReaderTheme.System,
     val eInkMode: Boolean = false,
@@ -54,14 +51,11 @@ data class ReaderSettings(
     val statisticsDayResetHour: Int = 3,
     /**
      * Epoch milliseconds when the streak goal or day reset was last chosen (0: never). HTTP
-     * sync applies the newest choice of any device everywhere, so every device counts the
-     * same streak and the same Today.
+     * sync applies the newest goal and reset choice on every device.
      */
     val statisticsSettingsUpdatedAt: Long = 0L,
     /**
-     * The IANA zone every device counts reading days in, wherever it is and whatever zone its
-     * clock is set to; null until one is chosen ([STATISTICS_DEFAULT_TIME_ZONE] applies).
-     * Chosen like the goal and reset (stamped, synced newest-wins).
+     * The previous shared statistics zone. Preserved for older sync clients.
      */
     val statisticsTimeZone: String? = null,
     val showStatisticsToggle: Boolean = false,

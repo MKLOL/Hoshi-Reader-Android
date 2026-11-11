@@ -42,9 +42,7 @@ internal fun StreakSettings(
     onMinimumMinutesChange: (Int) -> Unit,
     resetHour: Int,
     onResetHourChange: (Int) -> Unit,
-    /** The zone days are counted in on every device. */
     zone: ZoneId = ZoneId.systemDefault(),
-    onTimeZoneChange: (String) -> Unit = {},
 ) {
     var draftMinutes by remember(minimumMinutes) { mutableIntStateOf(minimumMinutes) }
     val goalLabel = stringResource(R.string.statistics_streak_goal)
@@ -92,18 +90,10 @@ internal fun StreakSettings(
             stringResource(
                 R.string.statistics_streak_zone_format,
                 zone.getDisplayName(TextStyle.FULL, Locale.getDefault()),
-                zone.id,
             ),
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(top = 4.dp),
         )
-        // On a device set to another zone, days can follow its zone instead (on every device).
-        val deviceZone = ZoneId.systemDefault()
-        if (zone.rules != deviceZone.rules) {
-            TextButton(onClick = { onTimeZoneChange(deviceZone.id) }) {
-                Text(stringResource(R.string.statistics_streak_use_device_zone_format, deviceZone.id))
-            }
-        }
     }
 }

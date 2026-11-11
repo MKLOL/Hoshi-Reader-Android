@@ -7,13 +7,15 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.time.LocalDate
+import java.time.ZoneId
 
 class ReaderStatisticsTrackerTest {
     @Test
     fun forwardProgressUpdatesSessionTodayAndAllTimeSpeeds() {
+        val date = LocalDate.parse("2026-05-13")
         val clock = FakeStatisticsClock(
-            millis = 1_778_623_200_000,
-            date = LocalDate.parse("2026-05-13"),
+            millis = date.atTime(12, 0).atZone(ZoneId.systemDefault()).toInstant().toEpochMilli(),
+            date = date,
         )
         val tracker = ReaderStatisticsTracker(
             title = "Book",
@@ -32,7 +34,11 @@ class ReaderStatisticsTrackerTest {
         assertEquals(7200, tracker.state.session.minReadingSpeed)
         assertEquals(7200, tracker.state.session.altMinReadingSpeed)
         assertEquals(7200, tracker.state.session.maxReadingSpeed)
-        assertEquals(tracker.state.session, tracker.state.today.copy(dateKey = tracker.state.session.dateKey))
+        val today = tracker.state.today
+        assertEquals(20, today.charactersRead)
+        assertEquals(10.0, today.readingTime, 0.0)
+        assertEquals(7200, today.lastReadingSpeed)
+        assertEquals(tracker.state.session.readingTimeByHour, today.readingTimeByHour)
         assertEquals(20, tracker.state.allTime.charactersRead)
     }
 

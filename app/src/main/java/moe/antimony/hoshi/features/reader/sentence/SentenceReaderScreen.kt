@@ -110,7 +110,6 @@ import moe.antimony.hoshi.navigation.ReaderForegroundImport
 import moe.antimony.hoshi.navigation.ReaderRouteAutoSyncState
 import moe.antimony.hoshi.navigation.ReaderSessionReloadBarrier
 import moe.antimony.hoshi.navigation.RemoteBookmarkUpdateGate
-import moe.antimony.hoshi.features.statistics.statisticsZone
 import moe.antimony.hoshi.features.sasayaki.SasayakiSettings
 import moe.antimony.hoshi.features.sync.http.HttpSyncActiveBooks
 import moe.antimony.hoshi.features.sync.http.syncIdForMetadata
@@ -374,7 +373,6 @@ private fun SentenceReaderContent(
         mutableStateOf(progressMapping.isFinished(state.initialPosition, state.readerState.bookmark))
     }
     val currentResetHour by rememberUpdatedState(readerSettings.statisticsDayResetHour)
-    val currentStatisticsZone by rememberUpdatedState(readerSettings.statisticsZone())
     val statisticsSession by produceState<SentenceReaderStatisticsSession?>(null, state) {
         val repository = appContainer.bookRepository
         repository.awaitPendingStatisticsSaves(state.readerState.bookRoot)
@@ -388,7 +386,6 @@ private fun SentenceReaderContent(
                 appContainer.usageLog, state.readerState.entry.metadata.id, state.title, UsageContentType.Epub,
             ),
             resetHour = { currentResetHour },
-            statisticsZone = { currentStatisticsZone },
         )
     }
     fun saveStatistics(flush: Boolean, session: SentenceReaderStatisticsSession? = statisticsSession) {

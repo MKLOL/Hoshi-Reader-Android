@@ -7,19 +7,15 @@ import moe.antimony.hoshi.features.reader.BookStatisticsInput
 import moe.antimony.hoshi.features.reader.DailyReading
 import moe.antimony.hoshi.mokuro.deduplicateMangaTextStatistics
 import moe.antimony.hoshi.epub.DAY_DEVICE_SEPARATOR
-import moe.antimony.hoshi.epub.convertWallClock
 import moe.antimony.hoshi.epub.dayDeviceKey
-import moe.antimony.hoshi.epub.recordedZone
+import moe.antimony.hoshi.epub.localHourBuckets
 import java.time.LocalDate
 import java.time.LocalDateTime
-import java.time.ZoneId
 import java.time.ZonedDateTime
 
 /** A wall-clock boundary, not a fixed 24-hour duration: this also works on DST days. */
 fun streakDate(now: ZonedDateTime, resetHour: Int): LocalDate =
     now.toLocalDate().let { if (now.hour < resetHour.coerceIn(0, 23)) it.minusDays(1) else it }
-
-data class StreakHistory(val days: List<DailyReading>, val hasEstimatedHistory: Boolean)
 
 /** The reading day an exact hour belongs to: before [reset] it is still the previous day. */
 internal fun readingDayOf(hour: LocalDateTime, reset: Int): LocalDate =
@@ -42,8 +38,6 @@ fun readingDays(
     statistics: List<ReadingStatistics>,
     charactersByDate: Map<String, Int>,
     resetHour: Int,
-    /** The statistics zone (see [statisticsZone]); null reads every record as recorded here. */
-    zone: ZoneId? = null,
 ): List<DailyReading> {
     val reset = resetHour.coerceIn(0, 23)
     val seconds = mutableMapOf<String, Double>()
@@ -53,17 +47,7 @@ fun readingDays(
     val splitByDate = mutableMapOf<String, MutableMap<String, Double>>()
     statistics.deduplicateReadingStatistics().forEach { entry ->
         val total = entry.readingTime.takeIf { it.isFinite() && it > 0.0 } ?: return@forEach
-        val date = runCatching { LocalDate.parse(entry.dateKey) }.getOrNull()
-        // A record from another zone is moved to the statistics zone's wall clock hour by hour.
-        val recorded = zone?.let(entry::recordedZone)?.takeIf { it != zone }
-        // With a midnight reset the reading day is the record's own date. Otherwise an hour
-        // belongs to its record's date, or to the evening before when a tick crossed midnight;
-        // anything else came from a skewed clock and counts as an unknown hour.
-        val hours = if (reset == 0 && recorded == null) emptyList() else entry.readingTimeByHour.mapNotNull { (key, value) ->
-            val hour = runCatching { LocalDateTime.parse(key) }.getOrNull() ?: return@mapNotNull null
-            val plausible = date != null && (hour.toLocalDate() == date || hour.toLocalDate() == date.minusDays(1))
-            if (plausible && value.isFinite() && value > 0.0) convertWallClock(hour, recorded, zone) to value else null
-        }
+        val hours = entry.localReadingHours()
         val known = hours.sumOf { it.second }
         // Bound malformed/imported hour maps to the record's counted time, as the streak does.
         val scale = if (known > total) total / known else 1.0
@@ -109,6 +93,20 @@ fun readingDays(
 }
 
 /**
+ * Date/hour keys already contain the recording device's local time. Legacy keys with no
+ * zone are US Eastern wall-clock times. A tick that crossed midnight can include the prior
+ * date; untrusted imported keys beyond that range are credited to the row's stored date.
+ */
+internal fun ReadingStatistics.localReadingHours(): List<Pair<LocalDateTime, Double>> {
+    val date = runCatching { LocalDate.parse(dateKey) }.getOrNull() ?: return emptyList()
+    val previous = date.minusDays(1)
+    return localHourBuckets().mapNotNull { (key, seconds) ->
+        val hour = runCatching { LocalDateTime.parse(key) }.getOrNull() ?: return@mapNotNull null
+        if (hour.toLocalDate() in previous..date && seconds.isFinite() && seconds > 0.0) hour to seconds else null
+    }
+}
+
+/**
  * The characters a book's records hold per calendar date and device ([dayDeviceKey]): text for
  * an EPUB, OCR text for a manga.
  */
@@ -124,62 +122,10 @@ fun readingDayTotals(
     inputs: List<BookStatisticsInput>,
     day: LocalDate,
     resetHour: Int,
-    zone: ZoneId? = null,
 ): DailyReading {
     val key = day.toString()
     val days = inputs.mapNotNull { book ->
-        readingDays(book.statistics, book.charactersByDate(), resetHour, zone).firstOrNull { it.dateKey == key }
+        readingDays(book.statistics, book.charactersByDate(), resetHour).firstOrNull { it.dateKey == key }
     }
     return DailyReading(key, days.sumOf { it.seconds }, days.sumOf { it.characters })
-}
-
-/**
- * Rebuild on every load/settings change, without rewriting calendar-day sidecars. Exact hours
- * travel with statistics. Legacy seconds without synced timing get the benefit of the doubt
- * on BOTH possible dates (D and D-1). Private usage logs must not change streak eligibility:
- * they differ by device, and using them can erase a day only on the originating device. Credit is only
- * for streaks, never added to reading totals, charts or characters. No missing day without
- * evidence of reading on that day or the following morning is filled in.
- */
-fun reconstructStreakHistory(
-    inputs: List<BookStatisticsInput>,
-    resetHour: Int,
-    /** The statistics zone (see [statisticsZone]); null reads every record as recorded here. */
-    zone: ZoneId? = null,
-): StreakHistory {
-    val reset = resetHour.coerceIn(0, 23)
-    val days = mutableMapOf<LocalDate, Double>()
-    var estimated = false
-    fun credit(date: LocalDate, seconds: Double) {
-        if (seconds > 0.0) days[date] = (days[date] ?: 0.0) + seconds
-    }
-    inputs.forEach { book ->
-        book.statistics.deduplicateReadingStatistics().forEach entry@ { entry ->
-            val date = runCatching { LocalDate.parse(entry.dateKey) }.getOrNull() ?: return@entry
-            val total = entry.readingTime.takeIf { it.isFinite() && it > 0.0 } ?: return@entry
-            val recorded = zone?.let(entry::recordedZone)?.takeIf { it != zone }
-            val hours = entry.readingTimeByHour.mapNotNull { (key, seconds) ->
-                val hour = runCatching { LocalDateTime.parse(key) }.getOrNull()
-                if (hour != null && seconds.isFinite() && seconds > 0.0) convertWallClock(hour, recorded, zone) to seconds else null
-            }.groupBy({ it.first }, { it.second }).mapValues { (_, values) -> values.sum() }
-            val known = hours.values.sum()
-            // Bound malformed/imported hour maps to the record's counted time.
-            val scale = if (known > total) total / known else 1.0
-            hours.forEach { (hour, seconds) ->
-                credit(if (hour.hour < reset) hour.toLocalDate().minusDays(1) else hour.toLocalDate(), seconds * scale)
-            }
-            val unknown = (total - known).coerceAtLeast(0.0)
-            if (unknown > 0.001) {
-                credit(date, unknown)
-                if (reset > 0) {
-                    credit(date.minusDays(1), unknown)
-                    estimated = true
-                }
-            }
-        }
-    }
-    return StreakHistory(
-        days.entries.sortedByDescending { it.key }.map { DailyReading(it.key.toString(), it.value, 0) },
-        estimated,
-    )
 }

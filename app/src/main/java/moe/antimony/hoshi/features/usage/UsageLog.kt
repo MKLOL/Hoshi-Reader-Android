@@ -14,6 +14,7 @@ import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
 import java.io.File
 import java.io.IOException
+import moe.antimony.hoshi.features.statistics.streakDate
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
@@ -51,8 +52,7 @@ class UsageLog(
     val changes: StateFlow<Long> = writes.asStateFlow()
 
     /**
-     * Totals of reading days that are over, keyed by day, reset hour and zone: their files no
-     * longer change, so they are read once per reset hour and zone.
+     * Totals of finished reading days, keyed by date and reset hour.
      */
     internal val finishedDayCounts: MutableMap<UsageDayKey, UsageDayCounts> = ConcurrentHashMap()
 
@@ -63,25 +63,30 @@ class UsageLog(
     /** Forgets the finished days a change to the files named [date] can affect (their reading days, either side). */
     private fun invalidateAround(date: LocalDate) {
         cacheGeneration += 1
-        finishedDayCounts.keys.removeAll { it.date in date.minusDays(2)..date.plusDays(2) }
+        finishedDayCounts.keys.removeAll { it.date in date.minusDays(3)..date.plusDays(3) }
     }
 
-    /** A new event of [type] stamped with the current time and UTC offset. */
+    /** Capture the timestamp and zone before handing the event to the background writer. */
     fun newEvent(type: UsageEventType): UsageEvent {
         val at = clock()
-        return UsageEvent(at = at, utcOffset = offsetAt(at), type = type)
+        val recordedZone = zone()
+        val offset = recordedZone.rules.getOffset(Instant.ofEpochMilli(at)).id
+        return UsageEvent(at = at, utcOffset = if (offset == "Z") "+00:00" else offset,
+            type = type, timeZone = recordedZone.id)
     }
 
     /** Appends [event] to its day's file without blocking the caller. */
     fun append(event: UsageEvent) {
         scope.launch {
             val written = try {
-                val file = fileFor(dateOf(event.at))
+                val date = event.localTime().toLocalDate()
+                val file = fileFor(date)
                 file.parentFile?.mkdirs()
                 // A line cut short by a crash or a full disk has no newline; start a fresh line
                 // so this event is not glued onto the broken one and lost with it.
                 val prefix = if (file.length() > 0 && !file.endsWithNewline()) "\n" else ""
                 file.appendText(prefix + json.encodeToString(UsageEvent.serializer(), event) + "\n")
+                invalidateAround(date)
                 true
             } catch (_: Exception) {
                 // Whatever goes wrong loses this one event; logging must never break reading.
@@ -102,18 +107,13 @@ class UsageLog(
             .sortedBy { it.at }
     }
 
-    /**
-     * When logging began on any device, in epoch milliseconds: the start of this device's first
-     * day file, and the first event in each other device's (named by that device's own calendar,
-     * whose zone this device does not know); null when there is none.
-     */
-    suspend fun firstLoggedAt(): Long? = withContext(io) {
-        fun firstFile(folder: File) = dayFilesIn(folder)
-            .mapNotNull { file -> runCatching { LocalDate.parse(file.name.removeSuffix(FILE_SUFFIX)) }.getOrNull()?.let { it to file } }
-            .minByOrNull { it.first }
-        val own = firstFile(directory)?.let { (date, _) -> startOf(date) }
-        val others = deviceFolders().mapNotNull { folder -> firstFile(folder)?.second?.let(::readEvents)?.minOfOrNull { it.at } }
-        (listOfNotNull(own) + others).minOrNull()
+    /** The earliest recorded reading date, using the date on the device that logged it. */
+    internal suspend fun firstReadingDay(resetHour: Int): LocalDate? = withContext(io) {
+        (listOf(directory) + deviceFolders()).mapNotNull { folder ->
+            dayFilesIn(folder).sortedBy { it.name }.asSequence()
+                .take(3).flatMap { readEvents(it).asSequence() }
+                .minOfOrNull { streakDate(it.localTime(), resetHour) }
+        }.minOrNull()
     }
 
     /** This device's own day file for [date] as stored, or null when there is none. */
@@ -205,9 +205,6 @@ class UsageLog(
             file.seek(file.length() - 1)
             file.read() == '\n'.code
         }
-
-    private fun offsetAt(epochMillis: Long): String =
-        zone().rules.getOffset(Instant.ofEpochMilli(epochMillis)).id.let { if (it == "Z") "+00:00" else it }
 
     private fun decodeOrNull(line: String): UsageEvent? =
         try {

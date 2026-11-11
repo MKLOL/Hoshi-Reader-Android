@@ -1,5 +1,6 @@
 package moe.antimony.hoshi.features.usage
 
+import java.time.Instant
 import java.util.UUID
 
 /** Where a word lookup started. */
@@ -27,11 +28,11 @@ class ReaderUsageSession(
     val id: String = UUID.randomUUID().toString(),
 ) {
     private var openedAt: Long? = null
-    private var readingSince: Long? = null
+    private var readingStart: UsageEvent? = null
     private var closed = false
     private val revealedBubbles = mutableSetOf<String>()
 
-    val isReading: Boolean get() = readingSince != null
+    val isReading: Boolean get() = readingStart != null
 
     fun opened(page: Int?) {
         if (openedAt != null || closed) return
@@ -44,14 +45,15 @@ class ReaderUsageSession(
     fun readingChanged(reading: Boolean, page: Int? = null) {
         if (closed) return
         if (reading) {
-            if (readingSince != null) return
+            if (readingStart != null) return
             val event = event(UsageEventType.ReadingStarted).copy(page = page)
-            readingSince = event.at
+            readingStart = event
             log.append(event)
         } else {
-            val since = readingSince ?: return
-            readingSince = null
-            log.append(event(UsageEventType.ReadingStopped).copy(page = page, startedAt = since))
+            val start = readingStart ?: return
+            readingStart = null
+            log.append(event(UsageEventType.ReadingStopped).copy(page = page, startedAt = start.at,
+                startedTimeZone = start.recordedZone.id))
         }
     }
 
@@ -125,13 +127,26 @@ class ReaderUsageSession(
         log.append(event(type).copy(page = page, text = text?.trim()?.take(MAX_TEXT_LENGTH)?.ifEmpty { null }))
     }
 
-    private fun event(type: UsageEventType): UsageEvent =
-        log.newEvent(type).copy(
+    private fun event(type: UsageEventType): UsageEvent {
+        val next = log.newEvent(type).copy(
             session = id,
             bookId = bookId,
             bookTitle = bookTitle,
             contentType = contentType.serialName,
         )
+        val start = readingStart
+        if (type != UsageEventType.ReadingStarted && type != UsageEventType.ReadingStopped &&
+            start != null && next.at > start.at && start.recordedZone != next.recordedZone
+        ) {
+            // The first event observed on the new clock closes the old span.
+            val previousZone = start.recordedZone
+            val offset = previousZone.rules.getOffset(Instant.ofEpochMilli(next.at)).id
+            log.append(next.copy(type = UsageEventType.ReadingStopped, utcOffset = offset,
+                timeZone = previousZone.id, startedAt = start.at, startedTimeZone = previousZone.id))
+            readingStart = next.copy(type = UsageEventType.ReadingStarted).also(log::append)
+        }
+        return next
+    }
 
     companion object {
         /** [UsageEvent.source] of a page change that jumped rather than turned. */

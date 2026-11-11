@@ -4,6 +4,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import moe.antimony.hoshi.features.usage.UsageLog
+import moe.antimony.hoshi.features.usage.usageInstantZone
 import moe.antimony.hoshi.storage.writeSidecarAtomically
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
@@ -12,7 +13,6 @@ import java.security.MessageDigest
 import java.time.Instant
 import java.time.LocalDate
 import java.time.YearMonth
-import java.time.ZoneOffset
 import java.util.concurrent.ConcurrentHashMap
 import java.util.zip.GZIPInputStream
 import java.util.zip.GZIPOutputStream
@@ -251,15 +251,15 @@ class HttpSyncUsageLane(
         for (line in text.lineSequence()) {
             if (line.isBlank()) continue
             val stamp = runCatching { json.decodeFromString(LineStamp.serializer(), line) }.getOrNull() ?: continue
-            val offset = runCatching { ZoneOffset.of(stamp.utcOffset) }.getOrNull() ?: ZoneOffset.UTC
-            val date = Instant.ofEpochMilli(stamp.at).atOffset(offset).toLocalDate()
+            val zone = usageInstantZone(stamp.timeZone, stamp.utcOffset)
+            val date = Instant.ofEpochMilli(stamp.at).atZone(zone).toLocalDate()
             days.getOrPut(date) { StringBuilder() }.append(line).append('\n')
         }
         return days.mapValues { it.value.toString() }
     }
 
     @Serializable
-    private data class LineStamp(val at: Long, val utcOffset: String = "Z")
+    private data class LineStamp(val at: Long, val utcOffset: String? = null, val timeZone: String? = null)
 
     private fun usageKeys(listing: List<HttpSyncKvKeyMeta>): Map<String, HttpSyncKvKeyMeta> =
         listing.filter { it.key.startsWith(USAGE_PREFIX) && parseUsageKey(it.key) != null }.associateBy { it.key }

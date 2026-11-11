@@ -2,6 +2,19 @@ package moe.antimony.hoshi.features.usage
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import moe.antimony.hoshi.epub.LEGACY_READING_ZONE
+import java.time.Instant
+import java.time.ZoneId
+import java.time.ZoneOffset
+import java.time.ZonedDateTime
+
+internal fun usageZone(timeZone: String?, utcOffset: String?): ZoneId =
+    timeZone?.let { runCatching { ZoneId.of(it) }.getOrNull() }
+        ?: utcOffset?.let { runCatching { ZoneOffset.of(it) }.getOrNull() }
+        ?: LEGACY_READING_ZONE
+
+internal fun usageInstantZone(timeZone: String?, utcOffset: String?): ZoneId =
+    utcOffset?.let { runCatching { ZoneOffset.of(it) }.getOrNull() } ?: usageZone(timeZone, null)
 
 /** What happened. Serialized as a stable kebab-case name so the log reads well outside the app. */
 @Serializable
@@ -68,7 +81,7 @@ data class UsageEvent(
     /** When it happened, in epoch milliseconds. */
     val at: Long,
     /** The device's UTC offset at that moment, such as `+09:00`. */
-    val utcOffset: String,
+    val utcOffset: String? = null,
     val type: UsageEventType,
     /** Ties together every event from one opening of a reader. */
     val session: String? = null,
@@ -94,7 +107,13 @@ data class UsageEvent(
     val source: String? = null,
     /** For lookups: `found` or `not-found`. */
     val outcome: String? = null,
+    /** Named zone for reading spans that run through a daylight saving change. */
+    val timeZone: String? = null,
+    val startedTimeZone: String? = null,
 ) {
+    internal val recordedZone: ZoneId get() = usageZone(timeZone, utcOffset)
+    internal val instantZone: ZoneId get() = usageInstantZone(timeZone, utcOffset)
+    internal fun localTime(): ZonedDateTime = Instant.ofEpochMilli(at).atZone(instantZone)
     /** The span this event closes, for the events that close one. */
     val span: LongRange?
         get() = startedAt?.takeIf { it <= at }?.let { it..at }

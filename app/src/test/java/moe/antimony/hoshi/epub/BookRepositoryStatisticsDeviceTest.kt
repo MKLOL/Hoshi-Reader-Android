@@ -167,7 +167,7 @@ class BookRepositoryStatisticsDeviceTest {
 
         val kept = repository.loadStatistics(root).single { it.deviceId == phone.id }
         assertEquals(night, kept)
-        assertEquals(java.time.ZoneId.of("America/New_York"), kept.recordedZone(java.time.ZoneId.of("America/New_York")))
+        assertEquals(java.time.ZoneId.of("America/New_York"), kept.recordedZone())
         assertEquals(ReadingTotals(3000.0, 160), repository.loadStatistics(root).readingTotals())
     }
 
