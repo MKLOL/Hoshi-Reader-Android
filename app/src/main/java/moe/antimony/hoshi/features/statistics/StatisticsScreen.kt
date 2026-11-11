@@ -63,7 +63,6 @@ import moe.antimony.hoshi.features.reader.BookReadingSummary
 import moe.antimony.hoshi.features.reader.ReaderSettings
 import moe.antimony.hoshi.features.reader.ReadingStatisticsOverview
 import moe.antimony.hoshi.features.reader.formatDurationSeconds
-import moe.antimony.hoshi.features.reader.loadReadingStatisticsOverview
 import moe.antimony.hoshi.features.settings.GroupCard
 import moe.antimony.hoshi.features.settings.GroupDivider
 import moe.antimony.hoshi.features.settings.SettingsDetailScaffold
@@ -99,6 +98,7 @@ fun StatisticsScreen(
     val usageVersion by appContainer.usageLog.changes.collectAsStateWithLifecycle()
     val readerSettings by appContainer.readerSettingsRepository.settings.collectAsStateWithLifecycle(initialValue = ReaderSettings())
     val syncSettings = appContainer.syncSettingsRepository.settings.collectAsLoadedSettings()
+    val readingCache = appContainer.readingStatisticsOverviewCache
     var overview by remember { mutableStateOf<ReadingStatisticsOverview?>(null) }
     var usage by remember { mutableStateOf<UsageStatistics?>(null) }
     var now by remember { mutableStateOf(ZonedDateTime.now()) }
@@ -115,7 +115,7 @@ fun StatisticsScreen(
         // Keep showing the last numbers while new ones load: a sync merging several books
         // changes the files in a burst, and blanking each time would flash the whole screen.
         if (overview != null) delay(RELOAD_COALESCE_MS)
-        overview = loadReadingStatisticsOverview(
+        overview = readingCache.load(
             appContainer.bookRepository, today.toString(), resetHour,
         )
     }
@@ -211,8 +211,20 @@ fun StatisticsScreenContent(
     zone: ZoneId = ZoneId.systemDefault(),
 ) {
     val colorScheme = MaterialTheme.colorScheme
-    val streak = remember(overview, minimumMinutes, streakToday) {
-        overview?.let { computeReadingStreak(it.daily, minimumMinutes * 60.0, streakToday) }
+    val streak = overview?.let { statistics ->
+        val older = statistics.olderStreakDays
+        val recent = statistics.recentStreakDays
+        val revision = statistics.streakHistoryRevision
+        val goal = minimumMinutes * 60.0
+        when {
+            // Wait for the cached window for the new date rather than rebuilding the old history.
+            statistics.streakWindowDay != null && statistics.streakWindowDay != streakToday -> null
+            older != null && recent != null && revision != null ->
+                ReadingStreakCache.shared.compute(older, recent, revision, goal, streakToday)
+            else -> remember(statistics.daily, goal, streakToday) {
+                computeReadingStreak(statistics.daily, goal, streakToday)
+            }
+        }
     }
     val heatmap = remember(overview, today) { overview?.let { buildReadingHeatmap(it.daily, today) } }
     val weekdays = remember(overview) { overview?.let { weekdayDistribution(it.daily) } }

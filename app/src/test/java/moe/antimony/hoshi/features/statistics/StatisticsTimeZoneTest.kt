@@ -17,6 +17,18 @@ class StatisticsTimeZoneTest {
     private val tokyo = ZoneId.of("Asia/Tokyo")
 
     @Test
+    fun oldHoursRebasedOutsideTheirRowUseTheSavedDateWithoutCreatingAnExtraDay() {
+        val row = ReadingStatistics(
+            title = "Old entry",
+            dateKey = "2026-01-10",
+            readingTime = 720.0,
+            readingTimeByHour = mapOf("2026-01-10T18:00" to 120.0, "2026-01-11T07:00" to 600.0),
+            timeZone = "Asia/Tokyo",
+        )
+        assertEquals(listOf(DailyReading("2026-01-10", 720.0, 0)), readingDays(listOf(row), emptyMap(), 3))
+    }
+
+    @Test
     fun legacyRowsUseEasternEvenIfTheirStampSuggestsADifferentZone() {
         val legacy = ReadingStatistics(
             title = "Book", dateKey = "2026-01-11", readingTime = 600.0,

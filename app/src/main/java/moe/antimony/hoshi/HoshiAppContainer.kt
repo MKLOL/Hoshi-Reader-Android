@@ -54,6 +54,7 @@ import moe.antimony.hoshi.features.dictionary.DictionaryViewModelRepository
 import moe.antimony.hoshi.features.dictionary.dictionarySettingsRepository
 import moe.antimony.hoshi.features.reader.ReaderFontManager
 import moe.antimony.hoshi.features.reader.ReaderSettings
+import moe.antimony.hoshi.features.reader.ReadingStatisticsOverviewCache
 import moe.antimony.hoshi.features.reader.STATISTICS_DAY_RESET_HOUR_RANGE
 import moe.antimony.hoshi.features.reader.STATISTICS_STREAK_MINIMUM_MINUTES_RANGE
 import moe.antimony.hoshi.features.reader.ReaderSettingsRepository
@@ -110,6 +111,7 @@ internal class HoshiAppContainer(context: Context) {
     val usageLog: moe.antimony.hoshi.features.usage.UsageLog = moe.antimony.hoshi.features.usage.UsageLog.forDirectory(
         java.io.File(appContext.filesDir, moe.antimony.hoshi.features.usage.UsageLog.DIRECTORY_NAME),
     )
+    val readingStatisticsOverviewCache by lazy { ReadingStatisticsOverviewCache() }
     val bookRepository: BookRepository = BookRepository(
         filesDir = appContext.filesDir,
         bookLocks = httpSyncBookLocks,

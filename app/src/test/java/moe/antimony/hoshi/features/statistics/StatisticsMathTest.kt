@@ -64,6 +64,34 @@ class StatisticsMathTest {
     }
 
     @Test
+    fun recentStreakUpdatesReuseYearsOfHistoryAndAdvanceAtRollover() {
+        fun reading(daysAgo: Long) = day(today.minusDays(daysAgo).toString(), 15.0)
+        val older = (3L..2002L).map(::reading)
+        val recent = listOf(reading(1), reading(2))
+        val revision = Any()
+        val cache = ReadingStreakCache()
+        assertEquals(2002, cache.compute(older, recent, revision, 600.0, today).currentDays)
+
+        val inaccessibleHistory = object : AbstractList<DailyReading>() {
+            override val size: Int get() = error("A recent update read historical days")
+            override fun get(index: Int): DailyReading = error("A recent update read historical day $index")
+        }
+        assertEquals(2003, cache.compute(inaccessibleHistory, listOf(reading(0)) + recent, revision, 600.0, today).currentDays)
+        // At rollover only yesterday's oldest recent day and the boundary are inspected.
+        val rollover = listOf(reading(2), older.first())
+        val afterMidnight = cache.compute(rollover, listOf(reading(0), reading(1)), revision, 600.0, today.plusDays(1))
+        assertEquals(2003, afterMidnight.currentDays)
+        assertEquals(2003, afterMidnight.longestDays)
+        assertEquals(2003, afterMidnight.qualifyingDays)
+
+        val historicalEdit = older.drop(1)
+        val refreshed = cache.compute(historicalEdit, recent, Any(), 600.0, today)
+        assertEquals(2, refreshed.currentDays)
+        assertEquals(1999, refreshed.longestDays)
+        assertEquals(2001, refreshed.qualifyingDays)
+    }
+
+    @Test
     fun weekdayDistributionSumsSecondsMondayFirst() {
         val distribution = weekdayDistribution(
             listOf(day("2026-09-07", 10.0), day("2026-09-14", 5.0), day("2026-09-12", 7.0), day("bad-date", 99.0)),

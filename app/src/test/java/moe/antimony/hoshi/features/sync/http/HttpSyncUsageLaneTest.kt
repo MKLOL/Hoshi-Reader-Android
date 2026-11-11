@@ -14,8 +14,10 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import java.io.File
+import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalDateTime
+import java.time.YearMonth
 import java.time.ZoneId
 import java.util.concurrent.Executors
 
@@ -143,6 +145,36 @@ class HttpSyncUsageLaneTest {
             assertEquals(date, 1, tablet.log.eventsOn(LocalDate.parse(date)).size)
         }
         assertFalse(tablet.lane.needsRun(server, server.listing(), "tablet"))
+    }
+
+    @Test
+    fun legacyEventsAtCompactedMonthBoundariesKeepTheirRecordedDay() = runBlocking {
+        val server = ContentAddressedKv()
+        val tablet = Device("tablet")
+        suspend fun upload(month: String, event: UsageEvent) {
+            val line = json.encodeToString(UsageEvent.serializer(), event) + "\n"
+            server.put(usageMonthKey("phone", YearMonth.parse(month)), "application/gzip", HttpSyncUsageLane.gzip(line.toByteArray()))
+        }
+        val known = lookup("2026-01-31T20:00", "雨").copy(utcOffset = "-05:00")
+        val legacy = UsageEvent(
+            at = Instant.parse("2026-02-01T02:00:00Z").toEpochMilli(),
+            type = UsageEventType.WordLookedUp,
+            term = "雪",
+        )
+        upload("2026-01", known)
+        upload("2026-02", legacy)
+
+        val listing = server.listing()
+        assertTrue(tablet.lane.run(server, listing, tablet.id, flush = true, retryFailed = false).isEmpty())
+        val january = LocalDate.parse("2026-01-31")
+        val february = january.plusDays(1)
+        // Month caches keep both records. The summary uses Eastern for the line without a zone.
+        assertEquals(listOf(known), tablet.log.eventsOn(january))
+        assertEquals(listOf(legacy), tablet.log.eventsOn(february))
+        val usage = loadUsageStatistics(tablet.log, february, historyDays = 2, resetHour = 3)
+        assertEquals(2, usage.days[january]?.wordLookups)
+        assertEquals(0, usage.today.wordLookups)
+        assertFalse(tablet.lane.needsRun(server, listing, tablet.id))
     }
 
     @Test

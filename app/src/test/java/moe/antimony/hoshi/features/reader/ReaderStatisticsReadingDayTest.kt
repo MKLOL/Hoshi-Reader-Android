@@ -163,6 +163,33 @@ class ReaderStatisticsReadingDayTest {
     }
 
     @Test
+    fun todaysTotalsCanIncludePreviousDayHoursFromTwoDatesAhead() {
+        val clock = Clock(LocalDateTime.parse("2026-01-10T12:00"))
+        val ahead = ReadingStatistics(
+            title = "Book", dateKey = "2026-01-12", charactersRead = 100, readingTime = 1200.0,
+            deviceId = "tablet", readingTimeByHour = mapOf(
+                "2026-01-11T02:00" to 600.0, "2026-01-11T04:00" to 600.0,
+            ),
+        )
+        val older = lastNight.copy(dateKey = "2026-01-08", readingTimeByHour = emptyMap())
+        var reset = 3
+        val tracker = ReaderStatisticsTracker(
+            "Book", listOf(older, ahead), enabled = true, clock = clock, resetHour = { reset },
+        )
+        val ocr = mapOf("2026-01-12" to 20, "2026-01-08" to 80)
+        assertEquals("2026-01-10", tracker.state.today.dateKey)
+        assertEquals(600.0, tracker.state.today.readingTime, 0.0)
+        assertEquals(50, tracker.state.today.charactersRead)
+        assertEquals(10, tracker.readingDayCharacters(ocr))
+        assertEquals(4800.0, tracker.state.allTime.readingTime, 0.0)
+        reset = 5
+        // The date label stays the same while the new reset makes another hour eligible.
+        assertEquals("2026-01-10", tracker.state.today.dateKey)
+        assertEquals(1200.0, tracker.state.today.readingTime, 0.0)
+        assertEquals(20, tracker.readingDayCharacters(ocr))
+    }
+
+    @Test
     fun aMidnightResetIsTheCalendarDayAsBefore() {
         val tracker = ReaderStatisticsTracker("Book", listOf(lastNight), enabled = true, clock = Clock(LocalDateTime.parse("2026-10-01T00:30")))
         assertEquals(0.0, tracker.state.today.readingTime, 0.0)

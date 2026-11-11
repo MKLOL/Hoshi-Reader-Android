@@ -11,7 +11,7 @@ Semantic Versioning.
 - Preview and customize manga small-text enlargement in Settings → Manga. Choose a visual preset or adjust the enlargement amount and small-text cutoff, with live before/after examples. Open **Preview text size** from the manga reader to start on your current page, or choose a manga in Settings. The preview fills the same viewport as the reader, with transparent overlay controls you can hide and the current zoom preserved. Compare Original size and Adjusted, browse pages, and save or cancel without moving your reading position. The preview uses the same furigana layout as the reader. Smaller text may match but never overtake larger text. Choices sync between Android devices while iOS keeps separate preferences.
 
 ### Changed
-- Reading streaks and statistics keep the local date where you read, even after you travel. Today follows your device's clock. The daily goal and reset hour still sync, and each recording uses the reset on its own clock. Older reading without a recorded time zone uses US Eastern.
+- Reading streaks and statistics keep the local date where you read, even after you travel. Today follows your device's clock. The daily goal and reset hour still sync, and each recording uses the reset on its own clock. Older reading without a recorded time zone uses US Eastern. Statistics reuses settled days for faster refreshes and updates them when older reading arrives.
 
 ### Fixed
 - Manga pages stay still while you read instead of redrawing every second for hidden statistics, reducing unnecessary rendering work on e-ink devices while reading time and pace continue to be recorded.

@@ -146,7 +146,7 @@ class HttpSyncUsageLane(
                     continue
                 }
                 val text = gunzip(fetched.body).toString(Charsets.UTF_8)
-                val days = if (parsed.date != null) mapOf(parsed.date to text) else splitByDay(text)
+                val days = if (parsed.date != null) mapOf(parsed.date to text) else splitByDay(text, parsed.month)
                 if (own) {
                     days.forEach { (date, lines) -> log.mergeOwnDay(date, lines) }
                     index = index.copy(
@@ -245,15 +245,18 @@ class HttpSyncUsageLane(
         }
     }
 
-    /** A month's lines by the calendar day of the device that wrote them (its offset at that moment). */
-    private fun splitByDay(text: String): Map<LocalDate, String> {
+    /** Rebuild the shard's files without letting a misplaced line overwrite a neighboring month. */
+    private fun splitByDay(text: String, month: YearMonth): Map<LocalDate, String> {
+        val first = month.atDay(1)
+        val last = month.atEndOfMonth()
         val days = linkedMapOf<LocalDate, StringBuilder>()
         for (line in text.lineSequence()) {
             if (line.isBlank()) continue
             val stamp = runCatching { json.decodeFromString(LineStamp.serializer(), line) }.getOrNull() ?: continue
             val zone = usageInstantZone(stamp.timeZone, stamp.utcOffset)
             val date = Instant.ofEpochMilli(stamp.at).atZone(zone).toLocalDate()
-            days.getOrPut(date) { StringBuilder() }.append(line).append('\n')
+            // The event retains its actual local time. Only the cache filename is constrained.
+            days.getOrPut(date.coerceIn(first, last)) { StringBuilder() }.append(line).append('\n')
         }
         return days.mapValues { it.value.toString() }
     }

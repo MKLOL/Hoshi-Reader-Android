@@ -41,6 +41,7 @@ import java.time.Instant
 import java.time.ZoneId
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicLong
 import java.util.zip.ZipInputStream
 import kotlin.math.abs
 
@@ -485,8 +486,12 @@ class BookRepository(
         }
     }
 
+    private val statisticsRestoreCounter = AtomicLong()
+    internal val statisticsRestoreVersion: Long get() = statisticsRestoreCounter.get()
+
     /** For paths that replace book directories wholesale (backup restore) and cannot go through a save. */
     fun notifyStatisticsChanged() {
+        statisticsRestoreCounter.incrementAndGet()
         invalidateHistoryNames()
         statisticsChangeCounter.update { it + 1 }
     }

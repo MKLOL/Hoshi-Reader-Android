@@ -22,33 +22,81 @@ data class ReadingStreak(
     val todayQualifies: Boolean get() = todaySeconds >= minimumSeconds
 }
 
-fun computeReadingStreak(daily: List<DailyReading>, minimumSeconds: Double, today: LocalDate): ReadingStreak {
-    val qualifying = daily
-        .filter { it.seconds >= minimumSeconds && minimumSeconds > 0.0 }
+private data class StreakRun(
+    var lastDay: LocalDate? = null,
+    var trailingDays: Int = 0,
+    var longestDays: Int = 0,
+    var qualifyingDays: Int = 0,
+) {
+    fun add(date: LocalDate) {
+        val previous = lastDay
+        if (previous != null && date <= previous) return
+        trailingDays = if (previous != null && previous.plusDays(1) == date) trailingDays + 1 else 1
+        longestDays = maxOf(longestDays, trailingDays)
+        qualifyingDays++
+        lastDay = date
+    }
+
+    fun progress(today: LocalDate, todaySeconds: Double, minimumSeconds: Double): ReadingStreak =
+        ReadingStreak(
+            currentDays = if (lastDay == today || lastDay == today.minusDays(1)) trailingDays else 0,
+            longestDays = longestDays,
+            qualifyingDays = qualifyingDays,
+            todaySeconds = todaySeconds,
+            minimumSeconds = minimumSeconds,
+        )
+}
+
+private fun Sequence<DailyReading>.qualifyingDates(minimumSeconds: Double, through: LocalDate): Sequence<LocalDate> =
+    filter { minimumSeconds > 0.0 && it.seconds >= minimumSeconds }
         .mapNotNull { runCatching { LocalDate.parse(it.dateKey) }.getOrNull() }
-        .filter { !it.isAfter(today) }
-        .toSortedSet()
-    var longest = 0
-    var run = 0
-    var previous: LocalDate? = null
-    for (date in qualifying) {
-        run = if (previous != null && previous.plusDays(1) == date) run + 1 else 1
-        longest = maxOf(longest, run)
-        previous = date
+        .filter { it <= through }
+
+fun computeReadingStreak(daily: List<DailyReading>, minimumSeconds: Double, today: LocalDate): ReadingStreak {
+    val run = StreakRun()
+    daily.asSequence().qualifyingDates(minimumSeconds, today).sorted().forEach(run::add)
+    val todayKey = today.toString()
+    return run.progress(today, daily.firstOrNull { it.dateKey == todayKey }?.seconds ?: 0.0, minimumSeconds)
+}
+
+/** Keep the completed run and the all-time record while only the last three days change. */
+internal class ReadingStreakCache {
+    companion object {
+        // Used on the UI thread by the Statistics screen across navigation.
+        val shared = ReadingStreakCache()
     }
-    var current = 0
-    var cursor = if (today in qualifying) today else today.minusDays(1)
-    while (cursor in qualifying) {
-        current += 1
-        cursor = cursor.minusDays(1)
+
+    private var revision: Any? = null
+    private var goalSeconds = 0.0
+    private var through: LocalDate? = null
+    private var historical = StreakRun()
+
+    fun compute(
+        older: List<DailyReading>,
+        recent: List<DailyReading>,
+        historyRevision: Any,
+        minimumSeconds: Double,
+        today: LocalDate,
+    ): ReadingStreak {
+        val endOfHistory = today.minusDays(3)
+        val previousEnd = through
+        if (revision !== historyRevision || goalSeconds != minimumSeconds || previousEnd == null || endOfHistory < previousEnd) {
+            historical = StreakRun()
+            older.asSequence().qualifyingDates(minimumSeconds, endOfHistory).sorted().forEach(historical::add)
+        } else if (endOfHistory > previousEnd) {
+            // Older days are newest first. At rollover only the newly finished days enter the prefix.
+            val previousKey = previousEnd.toString()
+            older.asSequence().takeWhile { it.dateKey > previousKey }
+                .qualifyingDates(minimumSeconds, endOfHistory).sorted().forEach(historical::add)
+        }
+        revision = historyRevision
+        goalSeconds = minimumSeconds
+        through = endOfHistory
+        val run = historical.copy()
+        recent.asSequence().qualifyingDates(minimumSeconds, today)
+            .filter { it > endOfHistory }.sorted().forEach(run::add)
+        return run.progress(today, recent.firstOrNull { it.dateKey == today.toString() }?.seconds ?: 0.0, minimumSeconds)
     }
-    return ReadingStreak(
-        currentDays = current,
-        longestDays = longest,
-        qualifyingDays = qualifying.size,
-        todaySeconds = daily.firstOrNull { it.dateKey == today.toString() }?.seconds ?: 0.0,
-        minimumSeconds = minimumSeconds,
-    )
 }
 
 /** Seconds read per weekday, indexed Monday (0) to Sunday (6). */
