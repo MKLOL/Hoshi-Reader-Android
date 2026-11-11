@@ -203,18 +203,18 @@ internal fun MangaReaderScreen(
     val view = LocalView.current
     val lifecycle = view.findViewTreeLifecycleOwner()?.lifecycle
 
-    var showTextPreview by remember { mutableStateOf(false) }
+    var textPreviewSource by remember(book) { mutableStateOf<MangaTextPreviewSource?>(null) }
     var pageIndex by remember(book) {
         mutableIntStateOf(initialPageIndex.coerceIn(0, book.pages.lastIndex.coerceAtLeast(0)))
     }
     var webView by remember { mutableStateOf<WebView?>(null) }
-    if (showTextPreview) {
-        MangaTextPreviewDialog(initialSource = MangaTextPreviewSource(book, bookRoot, pageIndex, webView?.captureMangaPreviewViewport()),
+    textPreviewSource?.let { source ->
+        MangaTextPreviewDialog(initialSource = source,
             settings = readerSettings, onApply = { draft ->
                 onReaderSettingsChange(readerSettings.copy(mangaEnlargeSmallText = draft.mangaEnlargeSmallText,
                     mangaSmallTextAmount = draft.mangaSmallTextAmount, mangaSmallTextThreshold = draft.mangaSmallTextThreshold))
-                showTextPreview = false
-            }, onClose = { showTextPreview = false })
+                textPreviewSource = null
+            }, onClose = { textPreviewSource = null })
     }
     val statisticsPageCounterState = remember(book) { mutableIntStateOf(0) }
     var statisticsPageCounter by statisticsPageCounterState
@@ -481,6 +481,7 @@ internal fun MangaReaderScreen(
     }
 
     fun navigate(direction: ReaderNavigationDirection): Boolean {
+        if (textPreviewSource != null) return false
         val target = MangaPageNavigation.targetIndex(pageIndex, pageCount, direction) ?: return false
         goToPage(target)
         return true
@@ -1215,7 +1216,10 @@ internal fun MangaReaderScreen(
                         },
                         onShowGoToPage = { showGoToPageDialog = true },
                         onOpenSettings = onOpenSettings,
-                        onPreviewTextSize = { clearSelectionAndPopups(); showTextPreview = true },
+                        onPreviewTextSize = {
+                            clearSelectionAndPopups()
+                            textPreviewSource = MangaTextPreviewSource(book, bookRoot, pageIndex, webView?.mangaViewportForReload())
+                        },
                     )
                 }
 

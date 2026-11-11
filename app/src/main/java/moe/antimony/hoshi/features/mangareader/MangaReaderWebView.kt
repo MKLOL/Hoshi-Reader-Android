@@ -75,6 +75,8 @@ internal fun MangaReaderWebView(
     onBubbleRevealed: (String, String?) -> Unit = { _, _ -> },
     /** A bubble's Copy button copied its OCR text. */
     onBubbleCopied: (String) -> Unit = {},
+    initialViewport: MangaPreviewViewport? = null,
+    onPageLoadStarted: () -> Unit = {},
 ) {
     val currentOnNavigate = rememberUpdatedState(onNavigate)
     val currentOnTextSelected = rememberUpdatedState(onTextSelected)
@@ -106,6 +108,7 @@ internal fun MangaReaderWebView(
         modifier = modifier,
         factory = { context ->
             MangaWebView(context).apply {
+                pendingViewport = initialViewport
                 applyHoshiWebViewSecurityDefaults()
                 isVerticalScrollBarEnabled = false
                 isHorizontalScrollBarEnabled = false
@@ -176,30 +179,34 @@ internal fun MangaReaderWebView(
             // read rememberUpdatedState values, so they stay current without being
             // re-allocated on every recomposition. update() only swaps the page content.
             val pageHtml = html ?: return@AndroidView
-            val loadToken = MangaPageLoadToken(
-                pageIndex = page.index,
-                htmlHash = pageHtml.hashCode(),
-            )
-            if (webView.tag != loadToken) {
-                imageLoader?.onPageRequested(page.index)
-                webView.tag = loadToken
-                webView.bubbleScrollRegions.reset(page.index)
-                // Keep WebView's default initial scale. Rounding density to a whole percent
-                // can slightly magnify a fitted page and make it horizontally pannable.
-                webView.loadDataWithBaseURL(
-                    MangaPageHtml.BASE_URL,
-                    pageHtml,
-                    "text/html",
-                    "utf-8",
-                    null,
-                )
+            val hash = pageHtml.hashCode()
+            val previous = webView.tag as? MangaPageLoadToken
+            if (previous?.pageIndex == page.index && previous.htmlHash == hash) return@AndroidView
+            if (previous != null) {
+                if (previous.pageIndex != page.index) webView.pendingViewport = null
+                else if (webView.readyLoad == previous) webView.pendingViewport = webView.captureMangaPreviewViewport()
+                // A superseded same-page load must keep the last ready viewport.
             }
+            val token = MangaPageLoadToken(page.index, hash, ++webView.loadSequence, renderConfig.textSizePreview)
+            imageLoader?.onPageRequested(page.index)
+            webView.tag = token
+            webView.bubbleScrollRegions.reset(page.index)
+            onPageLoadStarted()
+            webView.loadDataWithBaseURL(
+                MangaPageHtml.BASE_URL,
+                pageHtml.replaceFirst("<head>", "<head><script>window.hoshiMangaLoadSequence=${token.sequence};</script>"),
+                "text/html", "utf-8", null,
+            )
         },
     )
 }
 
 private class MangaWebView(context: Context) : WebView(context) {
     val bubbleScrollRegions = MangaBubbleScrollRegions()
+    var loadSequence = 0L
+    var readyLoad: MangaPageLoadToken? = null
+    var finalizingLoad: MangaPageLoadToken? = null
+    var pendingViewport: MangaPreviewViewport? = null
 
     fun mangaZoomScale(): Float {
         // The fitted document uses initial/minimum-scale=1. Never adopt a restored zoom as
@@ -211,6 +218,8 @@ private class MangaWebView(context: Context) : WebView(context) {
 private data class MangaPageLoadToken(
     val pageIndex: Int,
     val htmlHash: Int,
+    val sequence: Long,
+    val preview: Boolean,
 )
 
 @SuppressLint("ClickableViewAccessibility")
@@ -282,6 +291,11 @@ private fun MangaWebView.attachMangaTouchListener(
 private fun WebView.rawMangaScale(): Float = scale
 
 internal data class MangaPreviewViewport(val scale: Float, val scrollX: Int, val scrollY: Int)
+
+internal fun WebView.mangaViewportForReload(): MangaPreviewViewport? {
+    val manga = this as? MangaWebView ?: return null
+    return if (manga.readyLoad != null && manga.readyLoad == tag) captureMangaPreviewViewport() else manga.pendingViewport
+}
 
 internal fun WebView.captureMangaPreviewViewport() = MangaPreviewViewport(rawMangaScale(), scrollX, scrollY)
 
@@ -372,34 +386,34 @@ private class MangaWebViewClient(
     override fun onPageFinished(view: WebView, url: String?) {
         super.onPageFinished(view, url)
         if (requestUrlHost(url) != MangaWebResourceBridge.HOST) return
-        val loadToken = view.tag as? MangaPageLoadToken ?: return
-        // Reloading the same base URL can retain the preceding page's zoom and pan. Clamp to
-        // the document's minimum after it loads, before announcing its first rendered frame.
-        view.zoomBy(0.1f)
-        view.scrollTo(0, 0)
-        view.syncMangaHostScale()
-        val requestId = nextMangaPageReadyRequestId()
-        view.postVisualStateCallback(
-            requestId,
-            object : WebView.VisualStateCallback() {
-                override fun onComplete(requestId: Long) {
-                    if (view.tag == loadToken) {
-                        view.scrollTo(0, 0)
-                        view.syncMangaHostScale()
-                        onPageReady(loadToken.pageIndex)
-                        // Neighbour versions are read in the background; the decode script comes
-                        // back here only while this page is still the one loaded.
-                        imageLoader?.prepareAdjacentImages(loadToken.pageIndex) { script ->
+        val manga = view as? MangaWebView ?: return
+        val token = view.tag as? MangaPageLoadToken ?: return
+        // All pages use the same base URL. An older navigation's callback cannot finish a
+        // new document until the document itself confirms its identity.
+        view.evaluateJavascript("window.hoshiMangaLoadSequence") { identity ->
+            if (identity != token.sequence.toString() || view.tag != token || manga.finalizingLoad == token) return@evaluateJavascript
+            manga.finalizingLoad = token
+            view.zoomBy(0.1f)
+            view.scrollTo(0, 0)
+            manga.pendingViewport?.let { view.restoreMangaPreviewViewport(it) }
+            view.syncMangaHostScale()
+            val fit = if (token.preview) "window.hoshiManga && window.hoshiManga.revealPreview()" else "0"
+            view.evaluateJavascript(fit) fitResult@{
+                if (view.tag != token) return@fitResult
+                view.postVisualStateCallback(nextMangaPageReadyRequestId(), object : WebView.VisualStateCallback() {
+                    override fun onComplete(requestId: Long) {
+                        if (view.tag != token) return
+                        manga.readyLoad = token
+                        onPageReady(token.pageIndex)
+                        imageLoader?.prepareAdjacentImages(token.pageIndex) { script ->
                             view.post {
-                                if (view.tag == loadToken && view.isAttachedToWindow) {
-                                    view.evaluateJavascript(script, null)
-                                }
+                                if (view.tag == token && view.isAttachedToWindow) view.evaluateJavascript(script, null)
                             }
                         }
                     }
-                }
-            },
-        )
+                })
+            }
+        }
     }
 
     override fun onScaleChanged(view: WebView, oldScale: Float, newScale: Float) {

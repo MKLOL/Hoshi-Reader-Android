@@ -1019,7 +1019,7 @@
     <string name="manga_preview_choose">Choose manga</string>
     <string name="manga_preview_empty">Download or import a manga to preview its text size here.</string>
     <string name="manga_preview_error">Could not load this manga. Try another one.</string>
-    <string name="manga_preview_apply">Apply</string>
+    <string name="manga_preview_apply">Save settings</string>
     <string name="manga_preview_adjusted">Adjusted</string>
     <string name="manga_preview_page">Page %1$d of %2$d</string>
     <string name="manga_preview_page_label">Preview page</string>
@@ -1030,4 +1030,8 @@
     <string name="manga_preview_hide_controls">Hide controls</string>
     <string name="manga_preview_show_controls">Show controls</string>
     <string name="manga_preview_fullscreen_note">Preview uses the full reader viewport. Hide controls to inspect the page unobstructed. Pinch to zoom.</string>
+    <string name="manga_preview_cancel">Cancel</string>
+    <string name="manga_preview_original_size">Original size</string>
+    <string name="manga_preview_save_note">Viewing original size. Save settings keeps your adjustments.</string>
+    <string name="manga_preview_tuning_note" formatted="false">100% raises small text to the cutoff (image pixels).</string>
 </resources>

@@ -3,6 +3,7 @@ package moe.antimony.hoshi.features.mangareader
 import android.view.ViewGroup
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.widget.FrameLayout
 import androidx.activity.ComponentActivity
 import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -42,19 +43,28 @@ class MangaWrapFallbackInstrumentedTest {
     @Test
     fun previewHasExactlyTheNormalReaderPageAndTextGeometry() {
         val page = MokuroPage(0, "test.png", 400, 600, listOf(
-            MokuroTextBox(20, 30, 200, 100, 21, false, listOf("学校"), originalFontSize = 12),
+            MokuroTextBox(315, 3, 70, 160, 21, true, listOf("学校で本を読む"), blockIndex = 1, originalFontSize = 12),
             MokuroTextBox(20, 250, 200, 100, 40, false, listOf("大きな文字"), originalFontSize = 40),
         ))
         for ((width, height) in listOf(400 to 800, 800 to 400)) {
             val states = listOf(false, true).map { preview ->
                 val html = MangaPageHtml.build(page, "#fff", "", false, false, width, height,
-                    enlargeSmallText = true, smallTextAmount = 75, smallTextThreshold = 40, textSizePreview = preview)
-                runInWebView(html) { webView, done ->
+                    enlargeSmallText = true, smallTextAmount = 75, smallTextThreshold = 40, textSizePreview = preview,
+                    furigana = mapOf(1 to listOf(MangaFuriganaSpan(0, 2, "がっこう"))))
+                runInWebView(html, viewport = width to height) { webView, done ->
                     webView.evaluateJavascript("""
                         (() => {
-                          document.querySelectorAll('.ocr-box').forEach(b => {
-                            b.classList.add('revealed'); window.hoshiManga.tryWrapFallback(b); window.hoshiManga.fitFurigana(b);
+                          const boxes = [...document.querySelectorAll('.ocr-box')];
+                          if ($preview) window.hoshiManga.revealPreview();
+                          else boxes.forEach(b => {
+                            window.hoshiManga.layoutReveal(b);
+                            b.classList.add('revealed');
                           });
+                          if (!boxes.every(b => b.classList.contains('revealed'))) return JSON.stringify('unrevealed boxes');
+                          if (!boxes[0].querySelector('rt') || boxes[0].dataset.furiganaFitted !== '1') return JSON.stringify('unfitted ruby');
+                          if ($preview && getComputedStyle(boxes[0].querySelector('.ocr-actions')).visibility !== 'hidden') {
+                            return JSON.stringify('visible reader actions');
+                          }
                           const rect = e => { const r = e.getBoundingClientRect(); return [r.x,r.y,r.width,r.height]; };
                           return JSON.stringify([innerWidth,innerHeight,...rect(document.querySelector('.frame')),
                             ...[...document.querySelectorAll('.ocr-box')].flatMap(b => [parseFloat(getComputedStyle(b).fontSize),...rect(b)])]);
@@ -62,6 +72,7 @@ class MangaWrapFallbackInstrumentedTest {
                     """) { raw -> done(JSONTokener(raw).nextValue().toString()) }
                 }
             }
+            assertTrue(states[0], states[0]?.startsWith("[") == true)
             assertEquals(states[0], states[1])
         }
     }
@@ -412,6 +423,7 @@ class MangaWrapFallbackInstrumentedTest {
     private fun runInWebView(
         html: String,
         timeoutSeconds: Long = 10,
+        viewport: Pair<Int, Int>? = null,
         block: (WebView, done: (String?) -> Unit) -> Unit,
     ): String? {
         var result: String? = null
@@ -449,7 +461,16 @@ class MangaWrapFallbackInstrumentedTest {
                         }
                     }
                 }
-                activity.setContentView(webView)
+                if (viewport == null) {
+                    activity.setContentView(webView)
+                } else {
+                    val density = activity.resources.displayMetrics.density
+                    val container = FrameLayout(activity)
+                    container.addView(webView, FrameLayout.LayoutParams(
+                        (viewport.first * density).toInt(), (viewport.second * density).toInt(),
+                    ))
+                    activity.setContentView(container)
+                }
                 webView.loadDataWithBaseURL(
                     MangaPageHtml.BASE_URL,
                     html,

@@ -125,7 +125,7 @@ internal object MangaPageHtml {
             ${pageCss(backgroundCssColor, eInkMode, viewportWidth, viewportHeight, frameWidthCss, frameHeightCss, useNotoSansJpFont)}
             </style>
             </head>
-            <body>
+            <body class="${if (textSizePreview) "text-size-preview" else ""}">
             <div class="page">
               <div class="frame" data-page-index="${page.index}" data-image-width="$imageWidth" data-image-height="$imageHeight">
                 <img class="page-image" src="${escapeAttribute(imageUrl)}" alt="">
@@ -222,12 +222,29 @@ internal object MangaPageHtml {
             $MANGA_TAP_HANDLER_SCRIPT
             window.hoshiManga && window.hoshiManga.setSingleTapLookup($singleTapLookup);
             if ($textSizePreview) {
-              document.querySelectorAll('.ocr-actions').forEach(function(actions) { actions.remove(); });
-              document.querySelectorAll('.ocr-box').forEach(function(box) {
-                box.classList.add('revealed');
-                window.hoshiManga.tryWrapFallback(box);
-                window.hoshiManga.fitFurigana(box);
-              });
+              window.hoshiManga.revealPreview = function() {
+                this.clearRevealed();
+                document.querySelectorAll('.ocr-box').forEach(function(box) {
+                  var vv = window.visualViewport, r = box.getBoundingClientRect();
+                  if (!vv || (r.right > vv.offsetLeft && r.left < vv.offsetLeft + vv.width &&
+                              r.bottom > vv.offsetTop && r.top < vv.offsetTop + vv.height)) {
+                    window.hoshiManga.layoutReveal(box);
+                  }
+                  box.classList.add('revealed');
+                  box.setAttribute('aria-pressed', 'true');
+                });
+                this.notifyScrollableBubbleRegions();
+              };
+              window.hoshiManga.revealPreview();
+              var previewFitTimer;
+              function refitPreviewAfterViewportChange() {
+                clearTimeout(previewFitTimer);
+                previewFitTimer = setTimeout(function() { window.hoshiManga.revealPreview(); }, 120);
+              }
+              if (window.visualViewport) {
+                window.visualViewport.addEventListener('resize', refitPreviewAfterViewportChange);
+                window.visualViewport.addEventListener('scroll', refitPreviewAfterViewportChange);
+              }
             } else {
               window.hoshiManga && window.hoshiManga.installTapListener($MANGA_MAX_SELECTION_LENGTH);
             }
@@ -421,6 +438,10 @@ internal object MangaPageHtml {
         }
         .ocr-box.revealed .ocr-actions {
           display: flex;
+        }
+        .text-size-preview .ocr-actions {
+          visibility: hidden;
+          pointer-events: none;
         }
         /* When a revealed bubble sits high enough that the action row would be clipped past
            the top of the viewport (and so be unreachable), the tap handler adds
@@ -751,6 +772,14 @@ internal object MangaPageHtml {
               while (node = walker.nextNode()) result += node.textContent;
               return result;
             },
+            layoutReveal: function(box) {
+              if (box.classList.contains('has-furigana')) {
+                box.dataset.furiganaOriginalStyle = box.getAttribute('style') || '';
+                box.dataset.furiganaOriginalWrap = box.classList.contains('wrap') ? '1' : '0';
+              }
+              this.tryWrapFallback(box);
+              this.fitFurigana(box);
+            },
             // Ruby takes extra block space. Grow the revealed plate instead of shrinking
             // the parser's glyph size; only wrap when the text would leave the viewport.
             // This also applies with Enlarge small text off, preserving the original font.
@@ -763,10 +792,13 @@ internal object MangaPageHtml {
               var viewTop = (vv ? vv.offsetTop : 0) + 2;
               var viewWidth = Math.max(1, (vv ? vv.width : window.innerWidth) - 4);
               var actions = box.querySelector('.ocr-actions');
-              var previousDisplay = actions.style.display;
-              actions.style.display = 'flex';
-              var actionHeight = actions.getBoundingClientRect().height;
-              actions.style.display = previousDisplay;
+              var actionHeight = 0;
+              if (actions) {
+                var previousDisplay = actions.style.display;
+                actions.style.display = 'flex';
+                actionHeight = actions.getBoundingClientRect().height;
+                actions.style.display = previousDisplay;
+              }
               // Leave one action row available even when text needs the whole screen.
               var viewHeight = Math.max(1, (vv ? vv.height : window.innerHeight) - 10 - actionHeight);
               var vertical = box.classList.contains('vertical');
@@ -1015,16 +1047,7 @@ internal object MangaPageHtml {
                 var initialHit = !alreadyRevealed && window.hoshiManga.singleTapLookupValue
                   ? (window.hoshiManga.annotationBaseHit(box, x, y) || window.hoshiSelection.getCharacterAtPoint(x, y)) : null;
                 if (!alreadyRevealed) {
-                  if (box.classList.contains('has-furigana')) {
-                    box.dataset.furiganaOriginalStyle = box.getAttribute('style') || '';
-                    box.dataset.furiganaOriginalWrap = box.classList.contains('wrap') ? '1' : '0';
-                  }
-                  // Run the wrap-fallback before reveal in both tap modes; no-op for
-                  // bubbles where mokuro got the geometry right, promotes the broken
-                  // cases (e.g. mokuro tagging a tall narrow box as horizontal) to a
-                  // wrap layout at the configured glyph size.
-                  window.hoshiManga.tryWrapFallback(box);
-                  window.hoshiManga.fitFurigana(box);
+                  window.hoshiManga.layoutReveal(box);
                   box.classList.add('revealed');
                   box.setAttribute('aria-pressed', 'true');
                   window.hoshiManga.updateActionPlacement(box);

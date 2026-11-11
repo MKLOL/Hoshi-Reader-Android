@@ -1017,7 +1017,7 @@
     <string name="manga_preview_choose">选择漫画</string>
     <string name="manga_preview_empty">下载或导入漫画后，即可在这里预览文字大小。</string>
     <string name="manga_preview_error">无法加载这部漫画，请尝试其他漫画。</string>
-    <string name="manga_preview_apply">应用</string>
+    <string name="manga_preview_apply">保存设置</string>
     <string name="manga_preview_adjusted">调整后</string>
     <string name="manga_preview_page">第 %1$d 页，共 %2$d 页</string>
     <string name="manga_preview_page_label">预览页面</string>
@@ -1028,4 +1028,8 @@
     <string name="manga_preview_hide_controls">隐藏控件</string>
     <string name="manga_preview_show_controls">显示控件</string>
     <string name="manga_preview_fullscreen_note">预览使用与阅读器相同的全屏区域。隐藏控件可完整查看页面，双指缩放。</string>
+    <string name="manga_preview_cancel">取消</string>
+    <string name="manga_preview_original_size">原始字号</string>
+    <string name="manga_preview_save_note">正在预览原始字号。保存设置会保留调整后的设置。</string>
+    <string name="manga_preview_tuning_note" formatted="false">100% 将小字放大到阈值（原图像素）。</string>
 </resources>

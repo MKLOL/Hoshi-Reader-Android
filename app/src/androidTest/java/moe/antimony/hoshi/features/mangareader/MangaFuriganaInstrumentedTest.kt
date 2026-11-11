@@ -264,7 +264,7 @@ class MangaFuriganaInstrumentedTest {
 
     @Test fun revealedExpandedTextReceivesTapsOverLaterHiddenBubbles() {
         val first = box().copy(left = 100, top = 100, width = 100, height = 100)
-        val later = box("後ろの気泡", blockIndex = 9).copy(left = 250, top = 100, width = 350, height = 200)
+        val later = box("後ろの気泡", blockIndex = 9).copy(left = 205, top = 100, width = 350, height = 200)
         val state = evaluate(boxes = listOf(first, later), script = """
             var boxes = document.querySelectorAll('.ocr-box');
             var active = boxes[0], hidden = boxes[1];
