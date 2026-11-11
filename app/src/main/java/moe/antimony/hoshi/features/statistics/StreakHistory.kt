@@ -22,14 +22,11 @@ internal fun readingDayOf(hour: LocalDateTime, reset: Int): LocalDate =
     if (hour.hour < reset) hour.toLocalDate().minusDays(1) else hour.toLocalDate()
 
 /**
- * One book's records regrouped into reading days: each day runs from [resetHour] until the same
- * hour the next morning, the day the streak counts, so nothing in the statistics changes day
- * at midnight. Records stay keyed by calendar date on disk (iOS and ッツ read them); only what
- * is shown is regrouped. Time comes from the exact hours; time recorded without a plausible
- * hour stays on its own date (unlike the streak's benefit of the doubt, a total must never
- * count it twice). Characters are only stored per calendar date and device, so each one's
- * characters follow where that device's time on that date fell (two devices' clocks can be in
- * different zones), rounded so the book's total is unchanged.
+ * One book's records regrouped into reading days, from [resetHour] to the same hour the
+ * next morning on each recording device's clock. Records stay keyed by calendar date on
+ * disk (iOS and ッツ read them). Time without a plausible hour stays on its recorded date.
+ * Characters are stored per calendar date and device, then divided according to where
+ * that device's time fell, rounded so the book's total stays the same.
  * [charactersByDate] is keyed by [dayDeviceKey], or by the calendar date alone, which then
  * follows every device's time on that date.
  * Newest day first; days with neither time nor characters are left out.
@@ -49,7 +46,7 @@ fun readingDays(
         val total = entry.readingTime.takeIf { it.isFinite() && it > 0.0 } ?: return@forEach
         val hours = entry.localReadingHours()
         val known = hours.sumOf { it.second }
-        // Bound malformed/imported hour maps to the record's counted time, as the streak does.
+        // Bound malformed or imported hour maps to the record's counted time.
         val scale = if (known > total) total / known else 1.0
         val shares = split.getOrPut(dayDeviceKey(entry.dateKey, entry.deviceId)) { mutableMapOf() }
         val dateShares = splitByDate.getOrPut(entry.dateKey) { mutableMapOf() }
