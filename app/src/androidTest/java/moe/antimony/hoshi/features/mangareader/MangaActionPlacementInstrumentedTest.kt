@@ -1,12 +1,16 @@
 package moe.antimony.hoshi.features.mangareader
 
 import android.view.ViewGroup
+import android.webkit.JavascriptInterface
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.FrameLayout
 import androidx.activity.ComponentActivity
 import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import moe.antimony.hoshi.features.dictionary.LookupPopupLayout
+import moe.antimony.hoshi.features.reader.MangaActionSide
+import moe.antimony.hoshi.features.reader.ReaderSelectionBridgePayload
 import moe.antimony.hoshi.mokuro.MokuroPage
 import moe.antimony.hoshi.mokuro.MokuroTextBox
 import org.json.JSONObject
@@ -17,6 +21,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
 
 @RunWith(AndroidJUnit4::class)
 class MangaActionPlacementInstrumentedTest {
@@ -63,7 +68,58 @@ class MangaActionPlacementInstrumentedTest {
         assertTrue(state.getDouble("actionBottom") <= state.getDouble("viewportHeight"))
     }
 
-    private fun measure(paired: Boolean, setup: String, viewportWidth: Int = 706, viewportHeight: Int = 935): JSONObject {
+    @Test fun dictionaryLookupKeepsTheMeasuredActionRowClearAndDiscardsStaleZoomCoordinates() {
+        val setups = mapOf(
+            MangaActionSide.Above to "box.style.cssText = 'left:200px;top:200px;width:180px;height:160px;font-size:18px';",
+            MangaActionSide.Below to "box.style.cssText = 'left:2px;top:0px;width:150px;height:6px;font-size:24px';",
+            MangaActionSide.Right to "box.style.cssText = 'left:150px;top:0px;width:100px;height:' + window.innerHeight + 'px;font-size:24px';",
+        )
+        val scale = 1.8
+        for ((side, setup) in setups) {
+            val state = measure(
+                paired = true, setup = setup, hostScale = scale,
+                exerciseSelection = true, verifyViewportChange = side == MangaActionSide.Above,
+            )
+            val selection = checkNotNull(ReaderSelectionBridgePayload.fromJson(state.getString("selection")))
+            val placement = checkNotNull(selection.mangaActions)
+            assertEquals(side, placement.side)
+            assertEquals(state.getDouble("actionLeft") * scale, placement.row.x, 0.05)
+            assertEquals(state.getDouble("actionTop") * scale, placement.row.y, 0.05)
+            val frame = LookupPopupLayout(
+                selectionRect = selection.rect,
+                screenWidth = state.getDouble("viewportWidth") * scale,
+                screenHeight = state.getDouble("viewportHeight") * scale,
+                maxWidth = 320.0, maxHeight = 300.0, isVertical = false, mangaActions = placement,
+            ).calculate()
+            val row = placement.row
+            val clear = frame.centerY - frame.height / 2 >= row.y + row.height ||
+                frame.centerY + frame.height / 2 <= row.y ||
+                frame.centerX - frame.width / 2 >= row.x + row.width ||
+                frame.centerX + frame.width / 2 <= row.x
+            assertTrue("Popup covers the measured $side row: $state", clear)
+            if (side == MangaActionSide.Above) {
+                assertTrue(frame.centerY - frame.height / 2 >= placement.bubble.y + placement.bubble.height)
+            }
+            if (side == MangaActionSide.Right) {
+                assertTrue(frame.centerX + frame.width / 2 <= placement.bubble.x)
+            }
+        }
+    }
+
+    private class SelectionRecorder {
+        val latest = AtomicReference<String>()
+        @JavascriptInterface fun postMessage(message: String) { latest.set(message) }
+    }
+
+    private fun measure(
+        paired: Boolean,
+        setup: String,
+        viewportWidth: Int = 706,
+        viewportHeight: Int = 935,
+        hostScale: Double = 1.0,
+        exerciseSelection: Boolean = false,
+        verifyViewportChange: Boolean = false,
+    ): JSONObject {
         val html = MangaPageHtml.build(
             page = MokuroPage(0, "test.png", 706, 935, listOf(
                 MokuroTextBox(100, 100, 200, 200, 24, false, listOf("いつものやつを！？")),
@@ -74,6 +130,8 @@ class MangaActionPlacementInstrumentedTest {
         var result: String? = null
         val loaded = CountDownLatch(1)
         val evaluated = CountDownLatch(1)
+        val dismissed = CountDownLatch(1)
+        val recorder = SelectionRecorder()
         ActivityScenario.launch(ComponentActivity::class.java).use { scenario ->
             lateinit var webView: WebView
             scenario.onActivity { activity ->
@@ -81,6 +139,10 @@ class MangaActionPlacementInstrumentedTest {
                     settings.javaScriptEnabled = true
                     settings.minimumFontSize = 1
                     settings.minimumLogicalFontSize = 1
+                    if (exerciseSelection) {
+                        addJavascriptInterface(recorder, "HoshiTextSelection")
+                        addJavascriptInterface(MangaTapBridge(onSelectedNothing = { dismissed.countDown() }), "HoshiMangaTap")
+                    }
                     webViewClient = object : WebViewClient() {
                         override fun onPageFinished(view: WebView, url: String?) { loaded.countDown() }
                         override fun shouldInterceptRequest(view: WebView, request: android.webkit.WebResourceRequest) =
@@ -97,6 +159,7 @@ class MangaActionPlacementInstrumentedTest {
             scenario.onActivity {
                 webView.evaluateJavascript("""
                     (function() {
+                      window.hoshiManga.setHostScale($hostScale);
                       var box = document.querySelector('.ocr-box');
                       box.classList.add('revealed');
                       $setup
@@ -117,6 +180,15 @@ class MangaActionPlacementInstrumentedTest {
                       actions.classList.remove('solo');
                       var pairedButton = button.getBoundingClientRect();
                       actions.classList.toggle('solo', wasSolo);
+                      if ($exerciseSelection) {
+                        window.hoshiSelection = {
+                          selection: {startNode: box.querySelector('p').firstChild},
+                          clearSelection: function() { this.selection = null; }
+                        };
+                        window.HoshiTextSelection.postMessage(JSON.stringify({
+                          text:'いつも', sentence:'いつものやつを！？', rect:{x:0,y:0,width:1,height:1}
+                        }));
+                      }
                       return JSON.stringify({
                         textBottom: Math.max(text.bottom, border.bottom), textRight: Math.max(text.right, border.right),
                         boxBottom: border.bottom, actionTop: row.top, actionBottom: row.bottom,
@@ -132,8 +204,14 @@ class MangaActionPlacementInstrumentedTest {
                 """.trimIndent()) { result = it; evaluated.countDown() }
             }
             assertTrue(evaluated.await(15, TimeUnit.SECONDS))
+            if (verifyViewportChange) {
+                scenario.onActivity { webView.evaluateJavascript("window.hoshiManga.setHostScale(${hostScale * 1.2})", null) }
+                assertTrue("Moving the toolbar must dismiss the stale native popup", dismissed.await(5, TimeUnit.SECONDS))
+            }
             scenario.onActivity { webView.destroy() }
         }
-        return JSONObject(JSONTokener(result!!).nextValue() as String)
+        return JSONObject(JSONTokener(result!!).nextValue() as String).apply {
+            if (exerciseSelection) put("selection", checkNotNull(recorder.latest.get()))
+        }
     }
 }

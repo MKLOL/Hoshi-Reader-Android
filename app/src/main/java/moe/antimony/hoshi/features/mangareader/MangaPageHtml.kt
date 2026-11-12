@@ -28,8 +28,8 @@ import moe.antimony.hoshi.mokuro.MokuroTextBox
  * default — the reader sees only the artwork — but it stays present and hit-testable.
  * Tapping a hidden box adds `.revealed`, which paints its text on a translucent plate; a
  * *second* tap on that revealed box runs the shared selection bridge to look the tapped word
- * up. The lookup is held back to the second tap so the dictionary popup can't open on top of
- * the box's action buttons. Tapping empty artwork hides every revealed box again. A revealed
+ * up. When looking up a word, the popup uses the opposite side of the bubble from its
+ * action row where space permits. Tapping empty artwork hides every revealed box again. A revealed
  * box also shows action buttons — ask ChatGPT about the bubble and, when the Copy setting is
  * on, copy the whole bubble's OCR text. All of these outcomes are routed through `window.hoshiManga.handleTap`
  * (see the page script) so a single tap path decides between them. `<p>` is used because
@@ -74,8 +74,7 @@ internal object MangaPageHtml {
         viewportCssHeight: Int,
         /**
          * When `true`, the tap handler combines reveal + lookup on the first tap. Default
-         * `false` preserves the current two-tap-to-lookup behaviour (first tap reveals so
-         * the action buttons surface without the dictionary popup covering them).
+         * `false` preserves the two-tap-to-lookup behaviour: first reveal, then look up.
          */
         singleTapLookup: Boolean = false,
         /**
@@ -181,12 +180,12 @@ internal object MangaPageHtml {
                 }
                 return {left:left, top:top, right:right, bottom:bottom};
               }
-              window.hoshiOcrBoxExtent = function(box) {
+              window.hoshiOcrBoxExtent = function(box, includeActions) {
                 var r = box.getBoundingClientRect();
                 var text = window.hoshiOcrTextExtent(box);
                 var left = Math.min(r.left, text.left), top = Math.min(r.top, text.top);
                 var right = Math.max(r.right, text.right), bottom = Math.max(r.bottom, text.bottom);
-                box.querySelectorAll('.ocr-actions').forEach(function(actions) {
+                if (includeActions !== false) box.querySelectorAll('.ocr-actions').forEach(function(actions) {
                   if (getComputedStyle(actions).display === 'none') return;
                   var rect = actions.getBoundingClientRect();
                   left = Math.min(left, rect.left); top = Math.min(top, rect.top);
@@ -210,6 +209,10 @@ internal object MangaPageHtml {
                           ? window.hoshiManga.hostRectFromViewportRect(r)
                           : { x: r.x, y: r.y, width: r.width, height: r.height };
                         data.rect = hostRect;
+                        var manga = window.hoshiManga;
+                        var placement = manga && manga.actionPlacement(box);
+                        if (placement) data.mangaActions = placement;
+                        if (manga) manga.selectedActions = placement ? { box: box, placement: placement } : null;
                         json = JSON.stringify(data);
                       }
                     } catch (e) {}
@@ -621,8 +624,7 @@ internal object MangaPageHtml {
      *    return `'__copied__'` so the caller leaves the lookup popup untouched;
      *  - a not-yet-revealed text box -> add `.revealed` to paint that bubble's text and show
      *    its action buttons, returning `'__revealed__'` so the caller leaves the popup
-     *    untouched; the word lookup is deferred to the next tap, so the dictionary popup can
-     *    never open on top of (and cover) the ChatGPT / copy buttons;
+     *    untouched; the next tap looks up the word;
      *  - an already-revealed text box -> run the shared `selectText` so the tapped word is
      *    looked up (its return value flows back out);
      *  - empty artwork -> strip `.revealed` from every box and clear the active selection,
@@ -632,14 +634,14 @@ internal object MangaPageHtml {
         (function() {
           window.hoshiManga = {
             hostScaleValue: 1,
+            selectedActions: null,
             // When true, the first tap on a bubble both reveals and looks up immediately.
-            // Default false preserves the two-tap-to-lookup model (first tap reveals so
-            // the action buttons surface without the dictionary popup covering them).
+            // Default false preserves the two-tap-to-lookup model.
             singleTapLookupValue: false,
             setHostScale: function(scale) {
               if (typeof scale === 'number' && isFinite(scale) && scale > 0) {
                 this.hostScaleValue = scale;
-                this.notifyScrollableBubbleRegions();
+                refreshActions();
               }
             },
             setSingleTapLookup: function(enabled) {
@@ -717,6 +719,7 @@ internal object MangaPageHtml {
               };
             },
             clearRevealed: function() {
+              this.selectedActions = null;
               var revealed = document.querySelectorAll('.ocr-box.revealed');
               for (var i = 0; i < revealed.length; i++) {
                 // Chromium can retain a paragraph's offset after overflow is removed.
@@ -905,16 +908,20 @@ internal object MangaPageHtml {
               var viewRight = viewLeft + (vv ? vv.width : window.innerWidth);
               var targetX = Math.max(viewLeft, Math.min(row.left, viewRight - row.width));
               var targetY = Math.min(row.top, top - row.height - margin);
+              var placement = 'above';
               if (targetY < viewTop) {
+                placement = 'below';
                 targetY = bottom + margin;
                 box.classList.add('actions-below');
                 row = actions.getBoundingClientRect();
                 if (targetY + row.height > viewBottom) {
                   // A tall/pinch-zoomed bubble may leave room only beside its text.
                   if (right + margin + row.width <= viewRight) {
+                    placement = 'right';
                     targetX = right + margin;
                     targetY = Math.max(viewTop, Math.min(top, viewBottom - row.height));
                   } else if (left - margin - row.width >= viewLeft) {
+                    placement = 'left';
                     targetX = left - margin - row.width;
                     targetY = Math.max(viewTop, Math.min(top, viewBottom - row.height));
                   }
@@ -922,6 +929,24 @@ internal object MangaPageHtml {
               }
               actions.style.transform = 'translate(' + (targetX - row.left) + 'px,' +
                 (targetY - row.top) + 'px)';
+              actions.dataset.placement = placement;
+            },
+            actionPlacement: function(box) {
+              var actions = box.querySelector('.ocr-actions');
+              if (!actions || !actions.dataset.placement || getComputedStyle(actions).visibility === 'hidden') return null;
+              var row = actions.getBoundingClientRect();
+              var vv = window.visualViewport;
+              var viewTop = vv ? vv.offsetTop : 0;
+              var viewLeft = vv ? vv.offsetLeft : 0;
+              var viewBottom = viewTop + (vv ? vv.height : window.innerHeight);
+              var viewRight = viewLeft + (vv ? vv.width : window.innerWidth);
+              if (row.width <= 0 || row.height <= 0 || row.right <= viewLeft || row.left >= viewRight ||
+                  row.bottom <= viewTop || row.top >= viewBottom) return null;
+              return {
+                side: actions.dataset.placement,
+                bubble: this.hostRectFromViewportRect(window.hoshiOcrBoxExtent(box, false)),
+                row: this.hostRectFromViewportRect(row)
+              };
             },
             // The configured image-space size is authoritative. Mis-tagged horizontal
             // bubbles can benefit from reflow, but geometry must never add another boost.
@@ -1057,12 +1082,10 @@ internal object MangaPageHtml {
                     window.HoshiMangaTap.bubbleRevealed(window.hoshiManga.bubbleText(box), revealedBlock);
                   }
                 }
-                // Default two-tap mode: first tap on an unrevealed bubble just reveals
-                // (so the action buttons surface without the dictionary popup covering
-                // them); the second tap looks the word up. Single-tap mode collapses
-                // both into the first tap — the popup may overlap the buttons in that
-                // mode, which is the trade-off the user opts in to.
+                // Default two-tap mode reveals the bubble before looking up a word.
+                // In either mode the popup receives the current action row geometry.
                 if (alreadyRevealed || window.hoshiManga.singleTapLookupValue) {
+                  if (alreadyRevealed) window.hoshiManga.updateActionPlacement(box);
                   // Fitting ruby can move a vertical column or an edge bubble. Keep the
                   // original tapped base character when reveal and lookup share one tap.
                   if (initialHit) {
@@ -1085,10 +1108,26 @@ internal object MangaPageHtml {
             if (placementFrame !== null) return;
             placementFrame = requestAnimationFrame(function() {
               placementFrame = null;
+              var manga = window.hoshiManga;
               document.querySelectorAll('.ocr-box.revealed').forEach(function(box) {
-                window.hoshiManga.updateActionPlacement(box);
+                manga.updateActionPlacement(box);
               });
-              window.hoshiManga.notifyScrollableBubbleRegions();
+              var selected = manga.selectedActions;
+              if (selected && window.hoshiSelection && window.hoshiSelection.selection) {
+                var previous = selected.placement;
+                var next = manga.actionPlacement(selected.box);
+                // The native popup was anchored to the old viewport. Close it if pan,
+                // zoom or reflow moves the action row underneath that fixed frame.
+                var moved = !next || next.side !== previous.side || ['x', 'y', 'width', 'height'].some(function(key) {
+                  return Math.abs(next.row[key] - previous.row[key]) > 0.5;
+                });
+                if (moved) {
+                  manga.selectedActions = null;
+                  window.hoshiSelection.clearSelection();
+                  if (window.HoshiMangaTap) window.HoshiMangaTap.selectedNothing();
+                }
+              }
+              manga.notifyScrollableBubbleRegions();
             });
           }
           window.addEventListener('resize', refreshActions);

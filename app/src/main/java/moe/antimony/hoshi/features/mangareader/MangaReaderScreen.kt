@@ -1139,7 +1139,8 @@ internal fun MangaReaderScreen(
                 popups = lookupPopups,
                 onPopupsChange = { lookupPopups = it },
                 lookupChildPopup = { selection ->
-                    lookupPopupFor(selection).also { lookup ->
+                    val mangaActions = lookupPopups.firstOrNull()?.state?.selection?.mangaActions
+                    lookupPopupFor(selection.copy(mangaActions = mangaActions)).also { lookup ->
                         usageSession?.logLookup(selection, lookup?.first, UsageLookupSource.Popup, page = pageIndex + 1)
                     }
                 },

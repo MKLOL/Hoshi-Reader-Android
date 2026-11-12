@@ -865,6 +865,7 @@ private class LookupPopupHostView(
             isFullWidth = isFullWidth,
             topInset = topInset,
             bottomInset = bottomInset,
+            mangaActions = selection.mangaActions,
         ).calculate()
         return PopupFrameDp(
             leftDp = frame.centerX - frame.width / 2,

@@ -6,6 +6,7 @@ data class ReaderSelectionData(
     val rect: ReaderSelectionRect,
     val normalizedOffset: Int?,
     val sentenceOffset: Int? = null,
+    val mangaActions: MangaActionPlacement? = null,
 )
 
 data class ReaderSelectionRect(
@@ -14,3 +15,13 @@ data class ReaderSelectionRect(
     val width: Double,
     val height: Double,
 )
+
+
+/** Geometry for the selected manga bubble and its Translate/Copy row in host coordinates. */
+data class MangaActionPlacement(
+    val bubble: ReaderSelectionRect,
+    val row: ReaderSelectionRect,
+    val side: MangaActionSide,
+)
+
+enum class MangaActionSide { Above, Below, Left, Right }
