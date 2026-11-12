@@ -14,6 +14,7 @@ import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
 import java.io.File
 import java.io.IOException
+import moe.antimony.hoshi.features.statistics.statisticsClock
 import moe.antimony.hoshi.features.statistics.streakDate
 import java.time.Instant
 import java.time.LocalDate
@@ -52,7 +53,7 @@ class UsageLog(
     val changes: StateFlow<Long> = writes.asStateFlow()
 
     /**
-     * Totals of finished reading days, keyed by date and reset hour.
+     * Totals of finished reading days, keyed by date, reset hour and historical time zone.
      */
     internal val finishedDayCounts: MutableMap<UsageDayKey, UsageDayCounts> = ConcurrentHashMap()
 
@@ -107,12 +108,12 @@ class UsageLog(
             .sortedBy { it.at }
     }
 
-    /** The earliest recorded reading date, using the date on the device that logged it. */
-    internal suspend fun firstReadingDay(resetHour: Int): LocalDate? = withContext(io) {
+    /** The earliest logged date under the applicable reading-day clock. */
+    internal suspend fun firstReadingDay(resetHour: Int, legacyZone: ZoneId): LocalDate? = withContext(io) {
         (listOf(directory) + deviceFolders()).mapNotNull { folder ->
             dayFilesIn(folder).sortedBy { it.name }.asSequence()
                 .take(3).flatMap { readEvents(it).asSequence() }
-                .minOfOrNull { streakDate(it.localTime(), resetHour) }
+                .minOfOrNull { streakDate(statisticsClock(it.localTime(), resetHour, legacyZone), resetHour) }
         }.minOrNull()
     }
 

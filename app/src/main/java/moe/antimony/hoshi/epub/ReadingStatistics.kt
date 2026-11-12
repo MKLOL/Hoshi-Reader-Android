@@ -28,7 +28,7 @@ data class ReadingStatistics(
     /** The device's name when this day was recorded; the newest entry's name is shown. */
     @EncodeDefault(EncodeDefault.Mode.NEVER)
     val deviceName: String? = null,
-    /** Counted seconds by local ISO date/hour (yyyy-MM-ddTHH:00), for adjustable streak days.
+    /** Counted seconds by local ISO date/hour, with a partial hour at the travel cutoff.
      * Missing time is legacy history with unknown time of day. Calendar totals stay compatible
      * with iOS; a tick across midnight can contain an hour from the preceding date.
      */

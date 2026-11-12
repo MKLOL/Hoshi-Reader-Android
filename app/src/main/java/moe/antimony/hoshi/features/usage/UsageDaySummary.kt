@@ -1,5 +1,8 @@
 package moe.antimony.hoshi.features.usage
 
+import moe.antimony.hoshi.epub.LEGACY_READING_ZONE
+import moe.antimony.hoshi.features.statistics.legacyStatisticsCutoff
+import moe.antimony.hoshi.features.statistics.statisticsClock
 import moe.antimony.hoshi.features.statistics.streakDate
 import java.time.LocalDate
 import java.time.ZoneId
@@ -66,20 +69,31 @@ fun summarizeUsageDay(
     maxRepeatedWords: Int = 5,
     /** The day runs from this hour on [date] to the same hour the next morning; 0 is midnight. */
     resetHour: Int = 0,
+    legacyZone: ZoneId = LEGACY_READING_ZONE,
 ): UsageDaySummary {
     val reset = resetHour.coerceIn(0, 23)
+    val cutoff = legacyStatisticsCutoff(reset, legacyZone).toEpochMilli()
     val ordered = events.sortedBy { it.at }
+    val spans = mutableListOf<UsageReadingSpan>()
 
-    fun span(start: Long, end: Long, event: UsageEvent, zone: ZoneId): UsageReadingSpan? {
+    fun addSpan(start: Long, end: Long, event: UsageEvent, zone: ZoneId) {
         val dayStart = date.atTime(reset, 0).atZone(zone).toInstant().toEpochMilli()
         val dayEnd = date.plusDays(1).atTime(reset, 0).atZone(zone).toInstant().toEpochMilli()
         val clippedStart = start.coerceAtLeast(dayStart)
         val clippedEnd = end.coerceAtMost(dayEnd)
-        if (clippedEnd <= clippedStart) return null
-        return UsageReadingSpan(clippedStart, clippedEnd, event.bookId, event.bookTitle, event.contentType, zone)
+        if (clippedEnd <= clippedStart) return
+        spans += UsageReadingSpan(clippedStart, clippedEnd, event.bookId, event.bookTitle, event.contentType, zone)
     }
 
-    val spans = mutableListOf<UsageReadingSpan>()
+    fun addReading(start: Long, end: Long, event: UsageEvent, recordedZone: ZoneId) {
+        if (recordedZone == legacyZone) {
+            addSpan(start, end, event, legacyZone)
+        } else {
+            if (start < cutoff) addSpan(start, minOf(end, cutoff), event, legacyZone)
+            if (end > cutoff) addSpan(maxOf(start, cutoff), end, event, recordedZone)
+        }
+    }
+
     val openStarts = mutableMapOf<String?, UsageEvent>()
     val lastEventOfSession = mutableMapOf<String?, Long>()
     for (event in ordered) {
@@ -90,24 +104,25 @@ fun summarizeUsageDay(
                 val start = openStarts[event.session]?.takeIf { event.startedAt == null || it.at == event.startedAt }
                 if (start != null) openStarts.remove(event.session)
                 val zone = event.startedTimeZone?.let { usageZone(it, null) } ?: start?.recordedZone ?: event.recordedZone
-                span(event.startedAt ?: start?.at ?: event.at, event.at, event, zone)?.let(spans::add)
+                addReading(event.startedAt ?: start?.at ?: event.at, event.at, event, zone)
             }
             else -> Unit
         }
     }
     for ((session, start) in openStarts) {
-        span(start.at, lastEventOfSession[session] ?: start.at, start, start.recordedZone)?.let(spans::add)
+        addReading(start.at, lastEventOfSession[session] ?: start.at, start, start.recordedZone)
     }
 
-    val onDay = ordered.filter { streakDate(it.localTime(), reset) == date }
+    fun clock(event: UsageEvent) = statisticsClock(event.localTime(), reset, legacyZone)
+    val onDay = ordered.filter { streakDate(clock(it), reset) == date }
     val lookups = onDay.filter { it.type == UsageEventType.WordLookedUp }
     // A press that matched nothing logged the text it scanned, which is not a word.
     val words = lookups.filter { it.outcome != "not-found" }
         .mapNotNull { (it.term ?: it.text)?.takeIf(String::isNotBlank) }
-    val firstActivity = (onDay.firstOrNull()?.let { it.at to it.instantZone }).let { point ->
+    val firstActivity = (onDay.firstOrNull()?.let { it.at to clock(it).zone }).let { point ->
         listOfNotNull(point, spans.minByOrNull { it.startMillis }?.let { it.startMillis to it.zone }).minByOrNull { it.first }
     }
-    val lastActivity = (onDay.lastOrNull()?.let { it.at to it.instantZone }).let { point ->
+    val lastActivity = (onDay.lastOrNull()?.let { it.at to clock(it).zone }).let { point ->
         listOfNotNull(point, spans.maxByOrNull { it.endMillis }?.let { it.endMillis to it.zone }).maxByOrNull { it.first }
     }
     return UsageDaySummary(

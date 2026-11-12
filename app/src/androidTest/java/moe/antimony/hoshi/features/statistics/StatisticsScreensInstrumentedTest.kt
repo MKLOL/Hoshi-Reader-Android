@@ -66,7 +66,7 @@ class StatisticsScreensInstrumentedTest {
         assertEquals("35m 15s", sheetAllTime)
 
         val zone = ZoneId.of("Asia/Tokyo")
-        val zoneLabel = "This device’s time zone: " + zone.getDisplayName(TextStyle.FULL, Locale.getDefault())
+        val zoneLabel = "Today’s time zone: " + zone.getDisplayName(TextStyle.FULL, Locale.getDefault())
         var opened: String? = null
         composeRule.setContent {
             MaterialTheme {

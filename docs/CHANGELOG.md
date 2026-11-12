@@ -7,6 +7,9 @@ Semantic Versioning.
 
 ## [Unreleased]
 
+### Fixed
+- Keep reading streaks and statistics through October 31, 2026 on their previous statistics clock (US Eastern by default). Starting November 1, reading counts on the clock where it happened.
+
 ## [v1.1.0] - 2026-11-12
 
 ### Added

@@ -282,7 +282,7 @@
     <string name="statistics_streak_goal_minutes_format">%1$d min</string>
     <string name="statistics_streak_reset">Streak day resets at</string>
     <string name="statistics_streak_reset_help">Reading uses the local time where it was recorded. Time before this hour counts toward the previous day. Older records without a time zone use US Eastern.</string>
-    <string name="statistics_streak_zone_format">This device’s time zone: %1$s</string>
+    <string name="statistics_streak_zone_format">Today’s time zone: %1$s</string>
     <string name="statistics_heatmap_title">Last 16 weeks</string>
     <string name="statistics_today_title">Today</string>
     <string name="statistics_today_date_active_format">%1$s · Active %2$s–%3$s</string>

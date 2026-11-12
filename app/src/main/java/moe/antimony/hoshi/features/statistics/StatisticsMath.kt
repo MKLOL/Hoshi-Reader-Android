@@ -48,7 +48,7 @@ private data class StreakRun(
 }
 
 private fun Sequence<DailyReading>.qualifyingDates(minimumSeconds: Double, through: LocalDate): Sequence<LocalDate> =
-    filter { minimumSeconds > 0.0 && it.seconds >= minimumSeconds }
+    filter { minimumSeconds > 0.0 && it.streakSeconds >= minimumSeconds }
         .mapNotNull { runCatching { LocalDate.parse(it.dateKey) }.getOrNull() }
         .filter { it <= through }
 
@@ -56,7 +56,7 @@ fun computeReadingStreak(daily: List<DailyReading>, minimumSeconds: Double, toda
     val run = StreakRun()
     daily.asSequence().qualifyingDates(minimumSeconds, today).sorted().forEach(run::add)
     val todayKey = today.toString()
-    return run.progress(today, daily.firstOrNull { it.dateKey == todayKey }?.seconds ?: 0.0, minimumSeconds)
+    return run.progress(today, daily.firstOrNull { it.dateKey == todayKey }?.streakSeconds ?: 0.0, minimumSeconds)
 }
 
 /** Keep the completed run and the all-time record while only the last three days change. */
@@ -95,7 +95,7 @@ internal class ReadingStreakCache {
         val run = historical.copy()
         recent.asSequence().qualifyingDates(minimumSeconds, today)
             .filter { it > endOfHistory }.sorted().forEach(run::add)
-        return run.progress(today, recent.firstOrNull { it.dateKey == today.toString() }?.seconds ?: 0.0, minimumSeconds)
+        return run.progress(today, recent.firstOrNull { it.dateKey == today.toString() }?.streakSeconds ?: 0.0, minimumSeconds)
     }
 }
 

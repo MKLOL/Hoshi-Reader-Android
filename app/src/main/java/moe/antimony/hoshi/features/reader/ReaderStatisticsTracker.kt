@@ -2,22 +2,30 @@ package moe.antimony.hoshi.features.reader
 
 import moe.antimony.hoshi.epub.DAY_DEVICE_SEPARATOR
 import moe.antimony.hoshi.epub.DeviceIdentity
+import moe.antimony.hoshi.epub.LEGACY_READING_ZONE
 import moe.antimony.hoshi.epub.ReadingStatistics
 import moe.antimony.hoshi.epub.addReadingHours
 import moe.antimony.hoshi.epub.deduplicateReadingStatistics
 import moe.antimony.hoshi.epub.readingTotals
 import moe.antimony.hoshi.epub.readingHoursBetween
 import moe.antimony.hoshi.epub.sumMangaPageSeconds
-import moe.antimony.hoshi.epub.sumReadingHours
 import java.time.LocalDate
 import java.time.ZoneId
+import java.time.ZoneOffset
 import kotlin.math.abs
 import kotlin.math.roundToInt
 import java.time.Instant
 import moe.antimony.hoshi.epub.dayDeviceKey
-import moe.antimony.hoshi.features.statistics.localReadingHours
+import moe.antimony.hoshi.features.statistics.TRAVEL_READING_START
+import moe.antimony.hoshi.features.statistics.legacyStatisticsCutoff
 import moe.antimony.hoshi.features.statistics.readingDayOf
 import moe.antimony.hoshi.features.statistics.readingDays
+import moe.antimony.hoshi.features.statistics.statisticsClock
+import moe.antimony.hoshi.features.statistics.statisticsReadingHours
+
+// Even a fixed offset of ±18 hours and a reset at 23:00 fall inside this UTC window.
+private val EARLIEST_CUTOFF_MILLIS = TRAVEL_READING_START.minusDays(1).atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli()
+private val LATEST_CUTOFF_MILLIS = TRAVEL_READING_START.plusDays(2).atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli()
 
 data class ReaderStatisticsState(
     val isTracking: Boolean,
@@ -63,9 +71,12 @@ class ReaderStatisticsTracker(
     private val resetHour: () -> Int = { 0 },
     /** Manga records one duration per completed page, independently of periodic time ticks. */
     private val trackMangaPageDurations: Boolean = false,
+    /** The previously selected statistics clock, used to preserve earlier reading days. */
+    private val legacyZone: () -> ZoneId = { LEGACY_READING_ZONE },
 ) {
     private val statisticsByDate = initialStatistics.deduplicateReadingStatistics().groupBy { it.dateKey }.toMutableMap()
     private var todayResetHour = resetHour().coerceIn(0, 23)
+    private var todayLegacyZone = legacyZone()
     private var lastTimestampMillis: Long = clock.currentTimeMillis()
     private var lastZone: ZoneId = clock.zoneId()
     private var lastCharacterCount: Int = 0
@@ -89,7 +100,9 @@ class ReaderStatisticsTracker(
     val state: ReaderStatisticsState
         get() {
             rollTodayIfNeeded()
-            if (todayResetHour != resetHour().coerceIn(0, 23) || currentState.today.dateKey != readingDay().toString()) {
+            if (todayResetHour != resetHour().coerceIn(0, 23) || todayLegacyZone != legacyZone() ||
+                currentState.today.dateKey != readingDay().toString()
+            ) {
                 currentState = currentState.copy(today = todayAcrossDevices())
             }
             return currentState
@@ -102,11 +115,12 @@ class ReaderStatisticsTracker(
     fun readingDayCharacters(charactersByDate: Map<String, Int>): Int {
         rollTodayIfNeeded()
         val reset = resetHour().coerceIn(0, 23)
-        val day = readingDay(reset)
+        val zone = legacyZone()
+        val day = readingDay(reset, zone)
         val keys = readingDaySourceDates(day)
         val characters = charactersByDate.filterKeys { it.substringBefore(DAY_DEVICE_SEPARATOR) in keys }
-        return readingDays(keys.flatMap(::recordsForDate), characters, reset)
-            .firstOrNull { it.dateKey == keys.first() }?.characters ?: 0
+        return readingDays(keys.flatMap(::recordsForDate), characters, reset, zone)
+            .firstOrNull { it.dateKey == day.toString() }?.characters ?: 0
     }
 
     fun start(currentCharacter: Int) {
@@ -160,7 +174,10 @@ class ReaderStatisticsTracker(
         } else {
             charDiff
         }
-        val hours = readingHoursBetween(lastTimestampMillis, now, lastZone)
+        val cutoff = if (now >= EARLIEST_CUTOFF_MILLIS && lastTimestampMillis < LATEST_CUTOFF_MILLIS) {
+            legacyStatisticsCutoff(resetHour(), legacyZone()).toEpochMilli()
+        } else null
+        val hours = readingHoursBetween(lastTimestampMillis, now, lastZone, cutoff)
         todayOnThisDevice = todayOnThisDevice.addReadingHours(lastZone, hours).updated(timeDiff, finalCharDiff, now)
         currentState = currentState.copy(
             session = currentState.session.addReadingHours(lastZone, hours).updated(timeDiff, finalCharDiff, now),
@@ -234,11 +251,11 @@ class ReaderStatisticsTracker(
             ?: defaultStatistic(date)
 
     /** The reading day the clock is in: before the reset hour it is still the previous date. */
-    private fun readingDay(reset: Int = resetHour().coerceIn(0, 23)): LocalDate {
-        val date = clock.currentDate()
-        if (reset == 0) return date
-        val hour = Instant.ofEpochMilli(clock.currentTimeMillis()).atZone(clock.zoneId()).hour
-        return if (hour < reset) date.minusDays(1) else date
+    private fun readingDay(reset: Int = resetHour().coerceIn(0, 23), zone: ZoneId = legacyZone()): LocalDate {
+        val device = Instant.ofEpochMilli(clock.currentTimeMillis()).atZone(clock.zoneId())
+        val statistics = statisticsClock(device, reset, zone)
+        val date = if (statistics.zone == device.zone) clock.currentDate() else statistics.toLocalDate()
+        return if (statistics.hour < reset) date.minusDays(1) else date
     }
 
     private fun recordsForDate(date: String): List<ReadingStatistics> {
@@ -248,9 +265,11 @@ class ReaderStatisticsTracker(
         } else stored
     }
 
-    /** A row can contain the previous calendar day's pre-reset hours, up to two days back. */
-    private fun readingDaySourceDates(day: LocalDate): List<String> =
-        (0L..2L).map { day.plusDays(it).toString() }
+    /** Legacy zone conversion can also bring in hours recorded on either neighbouring clock. */
+    private fun readingDaySourceDates(day: LocalDate): List<String> {
+        val offsets = if (day < TRAVEL_READING_START) -2L..4L else 0L..2L
+        return offsets.map { day.plusDays(it).toString() }
+    }
 
     /**
      * Today for this book across every device, as a reading day (see [readingDays]): after
@@ -261,23 +280,25 @@ class ReaderStatisticsTracker(
     private fun todayAcrossDevices(): ReadingStatistics {
         val reset = resetHour().coerceIn(0, 23)
         todayResetHour = reset
-        val keys = readingDaySourceDates(readingDay(reset))
-        val day = keys.first()
+        val zone = legacyZone()
+        todayLegacyZone = zone
+        val readingDay = readingDay(reset, zone)
+        val keys = readingDaySourceDates(readingDay)
+        val day = readingDay.toString()
         val records = keys.flatMap(::recordsForDate)
         val characters = records.groupBy { dayDeviceKey(it.dateKey, it.deviceId) }
             .mapValues { (_, entries) -> entries.sumOf { it.charactersRead } }
-        val total = readingDays(records, characters, reset).firstOrNull { it.dateKey == day }
+        val total = readingDays(records, characters, reset, zone).firstOrNull { it.dateKey == day }
         val readingTime = total?.seconds ?: 0.0
         val charactersRead = total?.characters ?: 0
         return todayOnThisDevice.copy(
             dateKey = day,
             readingTime = readingTime,
             charactersRead = charactersRead,
-            readingTimeByHour = records.map { record ->
-                record.localReadingHours()
-                    .filter { (hour, _) -> readingDayOf(hour, reset).toString() == day }
-                    .associate { (hour, seconds) -> hour.toString() to seconds }
-            }.sumReadingHours(),
+            readingTimeByHour = records.flatMap { it.statisticsReadingHours(reset, zone) }
+                .filter { (hour, _) -> readingDayOf(hour, reset) == readingDay }
+                .groupingBy { (hour, _) -> hour.toString() }
+                .fold(0.0) { total, (_, seconds) -> total + seconds },
             timeZone = null,
             readingTimeByZone = emptyMap(),
             lastReadingSpeed = if (readingTime > 0.0) (charactersRead / readingTime * 3600.0).toInt() else 0,

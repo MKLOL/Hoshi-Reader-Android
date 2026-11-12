@@ -4,6 +4,7 @@ import kotlinx.coroutines.runBlocking
 import moe.antimony.hoshi.epub.BookMetadata
 import moe.antimony.hoshi.epub.BookRepository
 import moe.antimony.hoshi.epub.ReadingStatistics
+import moe.antimony.hoshi.features.statistics.ReadingStreakCache
 import moe.antimony.hoshi.features.statistics.charactersByDate
 import moe.antimony.hoshi.features.statistics.readingDays
 import org.junit.Assert.assertEquals
@@ -15,13 +16,45 @@ import org.junit.rules.TemporaryFolder
 import java.io.File
 import java.nio.file.Files
 import java.nio.file.attribute.FileTime
+import java.time.LocalDate
+import java.time.ZoneId
 
 class ReadingStatisticsOverviewCacheTest {
     @get:Rule val folder = TemporaryFolder()
     private val projected = mutableListOf<Pair<String, String>>()
-    private val cache = ReadingStatisticsOverviewCache { input, resetHour ->
+    private val cache = ReadingStatisticsOverviewCache { input, resetHour, legacyZone ->
         projected += input.title to input.statistics.single().dateKey
-        readingDays(input.statistics, input.charactersByDate(), resetHour)
+        readingDays(input.statistics, input.charactersByDate(), resetHour, legacyZone, includeEstimatedStreakCredit = true)
+    }
+
+    @Test
+    fun oldZoneChangesInvalidateHistoryAndHistoricalCreditStaysOutOfTodayTotals() = runBlocking {
+        val repository = BookRepository(folder.root)
+        val book = repository.book("book")
+        val today = LocalDate.parse("2026-10-12")
+        repository.saveStatistics(book, listOf(
+            row("2026-10-09").copy(readingTimeByHour = mapOf("2026-10-09T12:00" to 600.0)),
+            row("2026-10-11").copy(
+                timeZone = "Asia/Tokyo",
+                readingTimeByHour = mapOf("2026-10-11T05:00" to 600.0),
+            ),
+            row(today.toString(), seconds = 200.0),
+            row("2026-10-13"),
+        ))
+        val oldClock = cache.load(repository, today.toString(), 3)
+        assertEquals(600.0, oldClock.daily.single { it.dateKey == "2026-10-10" }.seconds, 0.0)
+        assertEquals(200.0, oldClock.todaySeconds, 0.0)
+        val streak = ReadingStreakCache().compute(
+            oldClock.olderStreakDays!!, oldClock.recentStreakDays!!, oldClock.streakHistoryRevision!!, 600.0, today,
+        )
+        assertEquals(1, streak.currentDays)
+        assertEquals(2, streak.longestDays)
+        assertEquals(800.0, streak.todaySeconds, 0.0)
+        assertEquals(true, streak.todayQualifies)
+
+        val changed = cache.load(repository, today.toString(), 3, ZoneId.of("Asia/Tokyo"))
+        assertEquals(600.0, changed.daily.single { it.dateKey == "2026-10-11" }.seconds, 0.0)
+        assertNotSame(oldClock.streakHistoryRevision, changed.streakHistoryRevision)
     }
 
     @Test

@@ -1,6 +1,7 @@
 package moe.antimony.hoshi.features.reader.sentence
 
 import moe.antimony.hoshi.epub.DeviceIdentity
+import moe.antimony.hoshi.epub.LEGACY_READING_ZONE
 import moe.antimony.hoshi.epub.ReadingStatistics
 import moe.antimony.hoshi.features.dictionary.LookupPopupItem
 import moe.antimony.hoshi.features.reader.ReaderSelectionData
@@ -11,6 +12,7 @@ import moe.antimony.hoshi.features.reader.SystemReaderStatisticsClock
 import moe.antimony.hoshi.features.usage.ReaderUsageSession
 import moe.antimony.hoshi.features.usage.UsageLookupSource
 import moe.antimony.hoshi.features.usage.logLookup
+import java.time.ZoneId
 
 /**
  * Sentence mode's foreground reading session, using the normal EPUB statistics and usage log.
@@ -25,6 +27,7 @@ internal class SentenceReaderStatisticsSession(
     private val usageSession: ReaderUsageSession? = null,
     clock: ReaderStatisticsClock = SystemReaderStatisticsClock,
     resetHour: () -> Int = { 0 },
+    legacyZone: () -> ZoneId = { LEGACY_READING_ZONE },
 ) {
     private var currentCharacter = initialCharacter.coerceAtLeast(0)
     private var closed = false
@@ -36,6 +39,7 @@ internal class SentenceReaderStatisticsSession(
         device = device,
         onTrackingChanged = { usageSession?.readingChanged(it) },
         resetHour = resetHour,
+        legacyZone = legacyZone,
     )
 
     val state: ReaderStatisticsState get() = tracker.state

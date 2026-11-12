@@ -104,34 +104,36 @@ fun StatisticsScreen(
     var usage by remember { mutableStateOf<UsageStatistics?>(null) }
     var now by remember { mutableStateOf(ZonedDateTime.now()) }
     val resetHour = readerSettings.statisticsDayResetHour
-    // Today follows this device's clock. Past reading keeps its original local day.
-    val today = streakDate(now, resetHour)
+    val legacyZone = legacyStatisticsZone(readerSettings.statisticsTimeZone)
+    val statisticsNow = statisticsClock(now, resetHour, legacyZone)
+    val today = streakDate(statisticsNow, resetHour)
     val resumeCount = rememberResumeCount()
     val httpSync by appContainer.httpSyncSettingsRepository.settings.collectAsStateWithLifecycle(initialValue = null)
     val syncStatus by appContainer.httpSyncBatchState.statisticsStatus.collectAsStateWithLifecycle()
     // Opening Statistics, or coming back to it, takes every other device's latest reading at
     // once instead of waiting for the next poll; what arrives reloads the screen.
     LaunchedEffect(resumeCount) { appContainer.httpSyncBookmarkScheduler.refreshStatistics() }
-    LaunchedEffect(statisticsVersion, resumeCount, today, resetHour) {
+    LaunchedEffect(statisticsVersion, resumeCount, today, resetHour, legacyZone) {
         // Keep showing the last numbers while new ones load: a sync merging several books
         // changes the files in a burst, and blanking each time would flash the whole screen.
         if (overview != null) delay(RELOAD_COALESCE_MS)
         overview = readingCache.load(
-            appContainer.bookRepository, today.toString(), resetHour,
+            appContainer.bookRepository, today.toString(), resetHour, legacyZone,
         )
     }
-    LaunchedEffect(usageVersion, resumeCount, today, resetHour) {
+    LaunchedEffect(usageVersion, resumeCount, today, resetHour, legacyZone) {
         // Other devices' days arrive in bursts too.
         if (usage != null) delay(RELOAD_COALESCE_MS)
         usage = loadUsageStatistics(
-            appContainer.usageLog, today, historyDays = TrendRange.Quarter.days, resetHour = resetHour,
+            appContainer.usageLog, today, historyDays = TrendRange.Quarter.days, resetHour = resetHour, legacyZone = legacyZone,
         )
     }
     // Refresh at the reset hour, and recheck zone/clock changes at least each minute.
-    LaunchedEffect(resumeCount, resetHour) {
+    LaunchedEffect(resumeCount, resetHour, legacyZone) {
         while (true) {
             now = ZonedDateTime.now()
-            val reset = streakDate(now, resetHour).plusDays(1).atTime(resetHour, 0).atZone(now.zone)
+            val statisticsTime = statisticsClock(now, resetHour, legacyZone)
+            val reset = streakDate(statisticsTime, resetHour).plusDays(1).atTime(resetHour, 0).atZone(statisticsTime.zone)
             delay(Duration.between(now.toInstant(), reset.toInstant()).toMillis().coerceIn(1_000L, 60_000L))
         }
     }
@@ -164,7 +166,7 @@ fun StatisticsScreen(
         },
         syncStatus = syncStatus.takeIf { httpSync?.isConfigured == true },
         nowMillis = now.toInstant().toEpochMilli(),
-        zone = now.zone,
+        zone = statisticsNow.zone,
         onOpenBook = onOpenBook,
         onClose = onClose,
         modifier = modifier,
@@ -208,7 +210,7 @@ fun StatisticsScreenContent(
     /** How current other devices' reading is; null when HTTP sync is not set up. */
     syncStatus: StatisticsSyncStatus? = null,
     nowMillis: Long = System.currentTimeMillis(),
-    /** The viewing device's current time zone, shown alongside the reset setting. */
+    /** The time zone used for Today, shown alongside the reset setting. */
     zone: ZoneId = ZoneId.systemDefault(),
 ) {
     val colorScheme = MaterialTheme.colorScheme
@@ -222,8 +224,8 @@ fun StatisticsScreenContent(
             statistics.streakWindowDay != null && statistics.streakWindowDay != streakToday -> null
             older != null && recent != null && revision != null ->
                 ReadingStreakCache.shared.compute(older, recent, revision, goal, streakToday)
-            else -> remember(statistics.daily, goal, streakToday) {
-                computeReadingStreak(statistics.daily, goal, streakToday)
+            else -> remember(statistics.streakDaily, goal, streakToday) {
+                computeReadingStreak(statistics.streakDaily, goal, streakToday)
             }
         }
     }

@@ -107,6 +107,7 @@ import moe.antimony.hoshi.features.sasayaki.SasayakiCueRange
 import moe.antimony.hoshi.features.sasayaki.SasayakiPlayer
 import moe.antimony.hoshi.features.sasayaki.SasayakiSettings
 import moe.antimony.hoshi.features.sasayaki.launchSasayakiMining
+import moe.antimony.hoshi.features.statistics.legacyStatisticsZone
 import moe.antimony.hoshi.features.sync.http.syncIdForMetadata
 import moe.antimony.hoshi.features.sasayaki.SasayakiSheet
 import kotlin.math.roundToInt
@@ -486,6 +487,7 @@ fun ReaderWebView(
     }
     val currentUsageSession = rememberUpdatedState(usageSession)
     val currentResetHour = rememberUpdatedState(readerSettings.statisticsDayResetHour)
+    val currentLegacyZone = rememberUpdatedState(legacyStatisticsZone(readerSettings.statisticsTimeZone))
     val statisticsTracker = remember(bookRoot, book.title, persistedStatistics) {
         persistedStatistics?.let { statistics ->
             ReaderStatisticsTracker(
@@ -495,6 +497,7 @@ fun ReaderWebView(
                 device = appContainer.deviceIdentity,
                 onTrackingChanged = { reading -> currentUsageSession.value?.readingChanged(reading) },
                 resetHour = { currentResetHour.value },
+                legacyZone = { currentLegacyZone.value },
             )
         }
     }

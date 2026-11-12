@@ -2,6 +2,7 @@ package moe.antimony.hoshi.features.reader
 
 import moe.antimony.hoshi.epub.BookRepository
 import moe.antimony.hoshi.epub.ContentType
+import moe.antimony.hoshi.epub.LEGACY_READING_ZONE
 import moe.antimony.hoshi.epub.ReadingStatistics
 import moe.antimony.hoshi.epub.StatisticsHistoryEntry
 import moe.antimony.hoshi.epub.deduplicateReadingStatistics
@@ -13,13 +14,18 @@ import moe.antimony.hoshi.mokuro.deduplicateMangaTextStatistics
 import moe.antimony.hoshi.features.statistics.charactersByDate
 import moe.antimony.hoshi.features.statistics.readingDays
 import java.time.LocalDate
+import java.time.ZoneId
 
 /** One day of reading: seconds spent and the amount read (characters, or OCR characters for manga). */
 data class DailyReading(
     val dateKey: String,
     val seconds: Double,
     val characters: Int,
-)
+    internal val estimatedStreakSeconds: Double = 0.0,
+) {
+    internal val hasReading: Boolean get() = seconds > 0.0 || characters > 0
+    internal val streakSeconds: Double get() = seconds + estimatedStreakSeconds
+}
 
 /**
  * What one device read: of one book on the book page, of the whole library on the overview.
@@ -86,6 +92,8 @@ data class ReadingStatisticsOverview(
     val daily: List<DailyReading>,
     /** Reading per device across every book, longest first. */
     val devices: List<DeviceReadingSummary> = emptyList(),
+    /** Actual reading with the same estimated credit the older streak calculation used. */
+    val streakDaily: List<DailyReading> = daily,
     /** The cached portion before the current three reading days, newest first. */
     val olderStreakDays: List<DailyReading>? = null,
     /** At most three reading days ending today, newest first. */
@@ -121,21 +129,28 @@ fun summarizeReadingStatistics(
     inputs: List<BookStatisticsInput>,
     todayKey: String,
     streakResetHour: Int = 0,
+    legacyZone: ZoneId = LEGACY_READING_ZONE,
 ): ReadingStatisticsOverview {
-    val books = inputs.mapNotNull { input ->
-        summarizeBookReading(input, readingDays(input.statistics, input.charactersByDate(), streakResetHour), streakResetHour)
+    val projections = inputs.mapNotNull { input ->
+        val days = readingDays(input.statistics, input.charactersByDate(), streakResetHour, legacyZone, includeEstimatedStreakCredit = true)
+        summarizeBookReading(input, days.filter(DailyReading::hasReading), streakResetHour, legacyZone)?.let { it to days }
     }
-    val byDate = books.flatMap { it.days }.groupBy { it.dateKey }
+    val byDate = projections.flatMap { it.second }.groupBy { it.dateKey }
     val daily = byDate.entries.map { (date, days) ->
-        DailyReading(date, days.sumOf { it.seconds }, days.sumOf { it.characters })
+        combineDailyReading(date, days)
     }.sortedByDescending { it.dateKey }
-    return summarizeBooks(books, daily, todayKey)
+    return summarizeBooks(projections.map { it.first }, daily.filter(DailyReading::hasReading), todayKey)
+        .copy(streakDaily = daily)
 }
+
+internal fun combineDailyReading(date: String, days: Collection<DailyReading>): DailyReading =
+    DailyReading(date, days.sumOf { it.seconds }, days.sumOf { it.characters }, days.sumOf { it.estimatedStreakSeconds })
 
 internal fun summarizeBookReading(
     input: BookStatisticsInput,
     days: List<DailyReading>,
     resetHour: Int,
+    legacyZone: ZoneId,
 ): BookReadingSummary? {
     val statistics = input.statistics.deduplicateReadingStatistics()
     val mangaText = input.mangaTextStatistics.deduplicateMangaTextStatistics()
@@ -162,7 +177,7 @@ internal fun summarizeBookReading(
         finished = isBookCompleted(input.progress),
         coverSource = input.coverSource,
         days = days,
-        devices = summarizeDevices(input.contentType, statistics, mangaText, resetHour),
+        devices = summarizeDevices(input.contentType, statistics, mangaText, resetHour, legacyZone),
         onDevice = input.onDevice,
         progressKnown = input.progressKnown,
     )
@@ -194,6 +209,7 @@ private fun summarizeDevices(
     statistics: List<ReadingStatistics>,
     mangaText: List<MangaTextStatistic>,
     resetHour: Int,
+    legacyZone: ZoneId,
 ): List<DeviceReadingSummary> {
     val deviceIds = (statistics.map { it.deviceId } + mangaText.map { it.deviceId }).distinct()
     return deviceIds.mapNotNull { deviceId ->
@@ -218,22 +234,23 @@ private fun summarizeDevices(
             totalSeconds = totalSeconds,
             charactersRead = charactersRead,
             pagesRead = pagesRead,
-            lastReadDateKey = latestReadingDay(own, resetHour),
+            lastReadDateKey = latestReadingDay(own, resetHour, legacyZone),
             bookCount = 1,
             newestStamp = newest?.first ?: stamped.maxOfOrNull { it.first } ?: 0L,
         )
     }.sortedWith(compareByDescending<DeviceReadingSummary> { it.totalSeconds }.thenBy { it.deviceName ?: "" })
 }
 
-/** Only the newest calendar rows can contribute the latest reading day. */
-private fun latestReadingDay(statistics: List<ReadingStatistics>, resetHour: Int): String? {
-    var latest: String? = null
+/** A legacy hour can be moved up to two calendar days forward by zone conversion. */
+private fun latestReadingDay(statistics: List<ReadingStatistics>, resetHour: Int, legacyZone: ZoneId): String? {
+    var latest: LocalDate? = null
     for (row in statistics.sortedByDescending { it.dateKey }) {
-        if (latest != null && row.dateKey <= latest) break
-        val day = readingDays(listOf(row), emptyMap(), resetHour).firstOrNull()?.dateKey ?: continue
+        if (latest != null && row.dateKey <= latest.minusDays(2).toString()) break
+        val key = readingDays(listOf(row), emptyMap(), resetHour, legacyZone).firstOrNull()?.dateKey ?: continue
+        val day = runCatching { LocalDate.parse(key) }.getOrNull() ?: continue
         if (latest == null || day > latest) latest = day
     }
-    return latest
+    return latest?.toString()
 }
 
 /** Adds up per-book device summaries into per-device totals for the whole library. */
@@ -264,7 +281,8 @@ suspend fun loadReadingStatisticsOverview(
     bookRepository: BookRepository,
     todayKey: String,
     streakResetHour: Int = 0,
+    legacyZone: ZoneId = LEGACY_READING_ZONE,
 ): ReadingStatisticsOverview =
-    ReadingStatisticsOverviewCache().load(bookRepository, todayKey, streakResetHour).copy(
+    ReadingStatisticsOverviewCache().load(bookRepository, todayKey, streakResetHour, legacyZone).copy(
         olderStreakDays = null, recentStreakDays = null, streakHistoryRevision = null, streakWindowDay = null,
     )

@@ -2,7 +2,9 @@ package moe.antimony.hoshi.features.usage
 
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import moe.antimony.hoshi.epub.LEGACY_READING_ZONE
 import java.time.LocalDate
+import java.time.ZoneId
 
 /** One day's totals from the usage log, for the trend charts. */
 data class UsageDayCounts(
@@ -18,7 +20,7 @@ data class UsageDayCounts(
 }
 
 /** A finished reading day's place in [UsageLog.finishedDayCounts]. */
-internal data class UsageDayKey(val date: LocalDate, val resetHour: Int)
+internal data class UsageDayKey(val date: LocalDate, val resetHour: Int, val legacyZone: ZoneId)
 
 /** What the Statistics screen shows from the usage log. */
 data class UsageStatistics(
@@ -42,9 +44,10 @@ suspend fun loadUsageStatistics(
     historyDays: Int,
     averageWindow: Int = 3,
     resetHour: Int = 0,
+    legacyZone: ZoneId = LEGACY_READING_ZONE,
 ): UsageStatistics = withContext(Dispatchers.Default) {
     val reset = resetHour.coerceIn(0, 23)
-    val firstDay = log.firstReadingDay(reset)
+    val firstDay = log.firstReadingDay(reset, legacyZone)
     // Cached only if no day file changed while this load read them.
     val generation = log.cacheGeneration
     val days = mutableMapOf<LocalDate, UsageDayCounts>()
@@ -54,7 +57,7 @@ suspend fun loadUsageStatistics(
     // Each calendar file is read once even though neighbouring reading days share it.
     val files = mutableMapOf<LocalDate, List<UsageEvent>>()
     while (!date.isAfter(today)) {
-        val key = UsageDayKey(date, reset)
+        val key = UsageDayKey(date, reset, legacyZone)
         val cached = if (date < today) log.finishedDayCounts[key] else null
         val counts = cached ?: run {
             // Neighbouring files contain overnight spans. Also allow old logs named after
@@ -68,7 +71,7 @@ suspend fun loadUsageStatistics(
                 file = file.plusDays(1)
             }
             files.keys.removeAll { it < firstFile }
-            val summary = summarizeUsageDay(events, date, resetHour = reset)
+            val summary = summarizeUsageDay(events, date, resetHour = reset, legacyZone = legacyZone)
             if (date == today) todaySummary = summary
             summary.toCounts().also { if (date < today && log.cacheGeneration == generation) log.finishedDayCounts[key] = it }
         }
@@ -76,7 +79,7 @@ suspend fun loadUsageStatistics(
         date = date.plusDays(1)
     }
     UsageStatistics(
-        today = todaySummary ?: summarizeUsageDay(emptyList(), today, resetHour = reset),
+        today = todaySummary ?: summarizeUsageDay(emptyList(), today, resetHour = reset, legacyZone = legacyZone),
         days = days,
         firstLoggedDate = firstDay,
     )

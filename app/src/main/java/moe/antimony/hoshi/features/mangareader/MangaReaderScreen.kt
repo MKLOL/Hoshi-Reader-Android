@@ -154,6 +154,7 @@ import moe.antimony.hoshi.features.reader.readerHardwareKeyActionForKeyEvent
 import moe.antimony.hoshi.features.reader.ReaderHardwareKeyAction
 import moe.antimony.hoshi.features.reader.usesDarkInterface
 import moe.antimony.hoshi.features.reader.ReaderStatisticsTracker
+import moe.antimony.hoshi.features.statistics.legacyStatisticsZone
 import moe.antimony.hoshi.features.sync.http.rememberHttpSyncReaderHooks
 import moe.antimony.hoshi.mokuro.MangaTextStatistic
 import moe.antimony.hoshi.mokuro.MokuroBook
@@ -317,6 +318,7 @@ internal fun MangaReaderScreen(
     }
     val currentUsageSession = rememberUpdatedState(usageSession)
     val currentResetHour = rememberUpdatedState(readerSettings.statisticsDayResetHour)
+    val currentLegacyZone = rememberUpdatedState(legacyStatisticsZone(readerSettings.statisticsTimeZone))
     val statisticsTracker = remember(bookRoot, book.title, persistedStatistics) {
         persistedStatistics?.let { statistics ->
             ReaderStatisticsTracker(
@@ -326,6 +328,7 @@ internal fun MangaReaderScreen(
                 device = statisticsDevice,
                 onTrackingChanged = { reading -> currentUsageSession.value?.readingChanged(reading, pageIndex + 1) },
                 resetHour = { currentResetHour.value },
+                legacyZone = { currentLegacyZone.value },
                 trackMangaPageDurations = true,
             )
         }

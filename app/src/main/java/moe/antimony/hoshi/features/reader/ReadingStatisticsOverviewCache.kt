@@ -6,6 +6,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import moe.antimony.hoshi.epub.BookRepository
 import moe.antimony.hoshi.epub.ContentType
+import moe.antimony.hoshi.epub.LEGACY_READING_ZONE
 import moe.antimony.hoshi.epub.ReadingStatistics
 import moe.antimony.hoshi.epub.STATISTICS_SYNC_STATE_FILE_NAME
 import moe.antimony.hoshi.epub.bookContentType
@@ -22,6 +23,7 @@ import java.nio.file.NoSuchFileException
 import java.nio.file.attribute.BasicFileAttributes
 import java.nio.file.attribute.FileTime
 import java.time.LocalDate
+import java.time.ZoneId
 import java.util.TreeMap
 
 /**
@@ -30,8 +32,8 @@ import java.util.TreeMap
  * Each row can change several reading days, including days outside the viewer's recent window.
  */
 internal class ReadingStatisticsOverviewCache(
-    private val project: (BookStatisticsInput, Int) -> List<DailyReading> = { input, resetHour ->
-        readingDays(input.statistics, input.charactersByDate(), resetHour)
+    private val project: (BookStatisticsInput, Int, ZoneId) -> List<DailyReading> = { input, resetHour, legacyZone ->
+        readingDays(input.statistics, input.charactersByDate(), resetHour, legacyZone, includeEstimatedStreakCredit = true)
     },
 ) {
     private val loadLock = Mutex()
@@ -39,10 +41,17 @@ internal class ReadingStatisticsOverviewCache(
     private val totals = ReadingDateTotals()
     private var previousCutoff: String? = null
     private var previousReset: Int? = null
+    private var previousLegacyZone: ZoneId? = null
     private var olderDays = emptyList<DailyReading>()
+    private var olderActualDays = emptyList<DailyReading>()
     private var historyRevision = Any()
 
-    suspend fun load(repository: BookRepository, todayKey: String, resetHour: Int): ReadingStatisticsOverview =
+    suspend fun load(
+        repository: BookRepository,
+        todayKey: String,
+        resetHour: Int,
+        legacyZone: ZoneId = LEGACY_READING_ZONE,
+    ): ReadingStatisticsOverview =
         withContext(Dispatchers.IO) {
             loadLock.withLock {
                 val history = repository.loadStatisticsHistory().associateBy { it.syncId }
@@ -68,8 +77,8 @@ internal class ReadingStatisticsOverviewCache(
                         // on the next refresh, so never cache a fingerprint taken after the read alone.
                         book.source = source?.takeIf { it == captureSource(repository, root, retainedRoot, input.contentType) }
                     }
-                    if (reread || book.resetHour != resetHour) {
-                        for (day in book.update(input, resetHour)) {
+                    if (reread || book.resetHour != resetHour || book.legacyZone != legacyZone) {
+                        for (day in book.update(input, resetHour, legacyZone)) {
                             totals.set(path, day, book.totals.days[day].takeIf { book.summary != null })
                         }
                     }
@@ -121,15 +130,20 @@ internal class ReadingStatisticsOverviewCache(
                     (cutoff != null && day < cutoff) || (previous != null && day < previous)
                 var olderSecondsChanged = false
                 val changed = totals.refresh { if (isOlder(it)) olderSecondsChanged = true }
-                if (olderSecondsChanged || resetHour != previousReset) historyRevision = Any()
+                if (olderSecondsChanged || resetHour != previousReset || legacyZone != previousLegacyZone) historyRevision = Any()
                 if (cutoff != previous || changed.any(::isOlder)) {
                     olderDays = cutoff?.let { totals.days.headMap(it, false).descendingMap().values.toList() }.orEmpty()
+                    olderActualDays = olderDays.filter(DailyReading::hasReading)
                 }
                 previousCutoff = cutoff
                 previousReset = resetHour
+                previousLegacyZone = legacyZone
                 val recent = cutoff?.let { totals.days.tailMap(it, true).descendingMap().values.toList() }
-                val daily = if (recent != null) recent + olderDays else totals.days.descendingMap().values.toList()
+                val streakDaily = if (recent != null) recent + olderDays else totals.days.descendingMap().values.toList()
+                val daily = if (recent != null) recent.filter(DailyReading::hasReading) + olderActualDays
+                    else streakDaily.filter(DailyReading::hasReading)
                 summarizeBooks(summaries, daily, todayKey).copy(
+                    streakDaily = streakDaily,
                     olderStreakDays = olderDays.takeIf { today != null },
                     recentStreakDays = recent?.filter { it.dateKey <= todayKey },
                     streakHistoryRevision = historyRevision.takeIf { today != null },
@@ -144,12 +158,14 @@ internal class ReadingStatisticsOverviewCache(
         var manga: List<MangaTextStatistic> = emptyList()
         var resetHour: Int? = null
             private set
+        var legacyZone: ZoneId? = null
+            private set
         var summary: BookReadingSummary? = null
             private set
         val totals = ReadingDateTotals()
         private val calendarRows = mutableMapOf<String, CalendarRows>()
 
-        fun update(input: BookStatisticsInput, reset: Int): Set<String> {
+        fun update(input: BookStatisticsInput, reset: Int, zone: ZoneId): Set<String> {
             val wasListed = summary != null
             val readingByDate = reading.groupBy { it.dateKey }
             val mangaByDate = manga.groupBy { it.dateKey }
@@ -157,22 +173,24 @@ internal class ReadingStatisticsOverviewCache(
                 val previous = calendarRows[date]
                 val read = readingByDate[date].orEmpty()
                 val text = mangaByDate[date].orEmpty()
-                if (resetHour == reset && previous != null && previous.reading == read && previous.manga == text) continue
+                if (resetHour == reset && legacyZone == zone && previous != null && previous.reading == read && previous.manga == text) continue
                 previous?.days?.forEach { totals.set(date, it.dateKey, null) }
                 if (read.isEmpty() && text.isEmpty()) {
                     calendarRows.remove(date)
                 } else {
-                    val days = project(input.copy(statistics = read, mangaTextStatistics = text), reset)
+                    val days = project(input.copy(statistics = read, mangaTextStatistics = text), reset, zone)
                     days.forEach { totals.set(date, it.dateKey, it) }
                     calendarRows[date] = CalendarRows(read, text, days)
                 }
             }
             resetHour = reset
+            legacyZone = zone
             val changed = totals.refresh()
             summary = summarizeBookReading(
                 input.copy(statistics = reading, mangaTextStatistics = manga),
-                totals.days.descendingMap().values.toList(),
+                totals.days.descendingMap().values.filter(DailyReading::hasReading),
                 reset,
+                zone,
             )
             return if (wasListed != (summary != null)) changed + totals.days.keys else changed
         }
@@ -206,10 +224,10 @@ private class ReadingDateTotals {
     fun refresh(onSecondsChanged: (String) -> Unit = {}): Set<String> = buildSet {
         for (date in dirty) {
             val contributions = sources[date]?.values
-            val next = contributions?.let { DailyReading(date, it.sumOf { day -> day.seconds }, it.sumOf { day -> day.characters }) }
+            val next = contributions?.let { combineDailyReading(date, it) }
             val previous = days[date]
             if (previous == next) continue
-            if ((previous?.seconds ?: 0.0) != (next?.seconds ?: 0.0)) onSecondsChanged(date)
+            if ((previous?.streakSeconds ?: 0.0) != (next?.streakSeconds ?: 0.0)) onSecondsChanged(date)
             if (next == null) days.remove(date) else days[date] = next
             add(date)
         }

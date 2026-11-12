@@ -10,6 +10,7 @@ import moe.antimony.hoshi.features.reader.summarizeReadingStatistics
 import org.junit.Assert.assertEquals
 import org.junit.Test
 import java.time.Instant
+import java.time.LocalDate
 import java.time.ZoneId
 
 class StatisticsTimeZoneTest {
@@ -31,19 +32,19 @@ class StatisticsTimeZoneTest {
     @Test
     fun legacyRowsUseEasternEvenIfTheirStampSuggestsADifferentZone() {
         val legacy = ReadingStatistics(
-            title = "Book", dateKey = "2026-01-11", readingTime = 600.0,
-            lastStatisticModified = Instant.parse("2026-01-11T03:10:00Z").toEpochMilli(),
-            readingTimeByHour = mapOf("2026-01-11T12:00" to 600.0),
+            title = "Book", dateKey = "2027-01-11", readingTime = 600.0,
+            lastStatisticModified = Instant.parse("2027-01-11T03:10:00Z").toEpochMilli(),
+            readingTimeByHour = mapOf("2027-01-11T12:00" to 600.0),
         )
         assertEquals(eastern, legacy.recordedZone())
         assertEquals(eastern, legacy.copy(timeZone = "invalid").recordedZone())
         assertEquals(tokyo, legacy.copy(timeZone = tokyo.id).recordedZone())
-        assertEquals(listOf(DailyReading("2026-01-11", 600.0, 0)), readingDays(listOf(legacy), emptyMap(), 3))
+        assertEquals(listOf(DailyReading("2027-01-11", 600.0, 0)), readingDays(listOf(legacy), emptyMap(), 3))
     }
 
     @Test
     fun resetIsAppliedToEachRecordingClockAndCharactersFollowTheirDevice() {
-        val jan11 = "2026-01-11"
+        val jan11 = "2027-01-11"
         val phone = ReadingStatistics(
             title = "Book", dateKey = jan11, readingTime = 900.0, charactersRead = 1000,
             deviceId = "phone", readingTimeByHour = mapOf("${jan11}T20:00" to 900.0), timeZone = eastern.id,
@@ -54,7 +55,7 @@ class StatisticsTimeZoneTest {
         )
         val input = BookStatisticsInput("b", "Book", ContentType.Epub, listOf(phone, tablet))
         val overview = summarizeReadingStatistics(listOf(input), jan11, 3)
-        assertEquals(listOf(DailyReading(jan11, 900.0, 1000), DailyReading("2026-01-10", 600.0, 5000)), overview.daily)
+        assertEquals(listOf(DailyReading(jan11, 900.0, 1000), DailyReading("2027-01-10", 600.0, 5000)), overview.daily)
         assertEquals(900.0, overview.todaySeconds, 0.0)
         assertEquals(2, computeReadingStreak(overview.daily, 600.0, java.time.LocalDate.parse(jan11)).currentDays)
     }
@@ -76,12 +77,67 @@ class StatisticsTimeZoneTest {
     @Test
     fun exactLocalHoursSplitAcrossMidnightEvenWhenTheRowWasSavedAfterMidnight() {
         val row = ReadingStatistics(
-            title = "Book", dateKey = "2026-01-11", readingTime = 1200.0, timeZone = tokyo.id,
-            readingTimeByHour = mapOf("2026-01-10T23:00" to 600.0, "2026-01-11T00:00" to 600.0),
+            title = "Book", dateKey = "2027-01-11", readingTime = 1200.0, timeZone = tokyo.id,
+            readingTimeByHour = mapOf("2027-01-10T23:00" to 600.0, "2027-01-11T00:00" to 600.0),
         )
         assertEquals(
-            listOf(DailyReading("2026-01-11", 600.0, 0), DailyReading("2026-01-10", 600.0, 0)),
+            listOf(DailyReading("2027-01-11", 600.0, 0), DailyReading("2027-01-10", 600.0, 0)),
             readingDays(listOf(row), emptyMap(), 0),
         )
+    }
+
+    @Test
+    fun octoberKeepsItsSharedReadingDayEvenWhenItIsNovemberOnTheTablet() {
+        val endOfOctober = ReadingStatistics(
+            title = "Book", dateKey = "2026-11-01", readingTime = 600.0,
+            readingTimeByHour = mapOf("2026-11-01T12:00" to 600.0), timeZone = tokyo.id,
+        )
+        val november = endOfOctober.copy(
+            dateKey = "2026-11-02",
+            readingTimeByHour = mapOf("2026-11-02T05:00" to 600.0),
+        )
+        assertEquals(
+            listOf(DailyReading("2026-11-02", 600.0, 0), DailyReading("2026-10-31", 600.0, 0)),
+            readingDays(listOf(endOfOctober, november), emptyMap(), 3),
+        )
+        val before = Instant.parse("2026-11-01T07:59:59Z").atZone(tokyo)
+        val after = before.plusSeconds(1)
+        assertEquals(eastern, statisticsClock(before, 3, eastern).zone)
+        assertEquals(LocalDate.parse("2026-10-31"), streakDate(statisticsClock(before, 3, eastern), 3))
+        assertEquals(tokyo, statisticsClock(after, 3, eastern).zone)
+        assertEquals(LocalDate.parse("2026-11-01"), streakDate(statisticsClock(after, 3, eastern), 3))
+    }
+
+    @Test
+    fun preCutoffInferenceAndUntimedCreditRestoreAHistoricalStreakWithoutInventingReadingTime() {
+        val today = LocalDate.parse("2026-11-11")
+        val first = LocalDate.parse("2026-09-11")
+        val reading = generateSequence(first.plusDays(1)) { it.plusDays(1).takeUnless { day -> day > today } }
+            .filterNot { it == LocalDate.parse("2026-10-02") }
+            .map { date ->
+                ReadingStatistics(
+                    title = "Book", dateKey = date.toString(), readingTime = 600.0, deviceId = "phone",
+                    readingTimeByHour = if (date == first.plusDays(1)) emptyMap() else mapOf("${date}T12:00" to 600.0),
+                )
+            }.toList()
+        val tablet = ReadingStatistics(
+            title = "Book", dateKey = "2026-10-03", readingTime = 1162.0, deviceId = "tablet",
+            lastStatisticModified = Instant.parse("2026-10-03T04:24:00Z").toEpochMilli(),
+            readingTimeByHour = mapOf("2026-10-03T12:00" to 1162.0),
+        )
+        val book = BookStatisticsInput("b", "Book", ContentType.Epub, reading + tablet)
+        val overview = summarizeReadingStatistics(listOf(book), today.toString(), 3)
+        assertEquals(1162.0, overview.daily.single { it.dateKey == "2026-10-02" }.seconds, 0.0)
+        assertEquals(61, overview.daily.size)
+        assertEquals(62, computeReadingStreak(overview.streakDaily, 600.0, today).currentDays)
+        assertEquals(overview.totalSeconds, overview.daily.sumOf { it.seconds }, 0.0)
+    }
+
+    @Test
+    fun untimedNovemberReadingDoesNotBackfillOctober() {
+        val row = ReadingStatistics(title = "Book", dateKey = "2026-11-01", readingTime = 600.0)
+        val book = BookStatisticsInput("b", "Book", ContentType.Epub, listOf(row))
+        val overview = summarizeReadingStatistics(listOf(book), row.dateKey, 3)
+        assertEquals(listOf(DailyReading(row.dateKey, 600.0, 0)), overview.streakDaily)
     }
 }

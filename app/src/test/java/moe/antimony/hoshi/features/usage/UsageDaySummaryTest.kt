@@ -3,11 +3,12 @@ package moe.antimony.hoshi.features.usage
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneOffset
 
 class UsageDaySummaryTest {
-    private val day = LocalDate.parse("2026-09-23")
+    private val day = LocalDate.parse("2027-01-23")
     private val zone = ZoneOffset.UTC
 
     private fun at(hour: Int, minute: Int = 0): Long = day.atTime(hour, minute).toInstant(zone).toEpochMilli()
@@ -55,6 +56,33 @@ class UsageDaySummaryTest {
         assertEquals(start, span.startMillis)
         assertEquals(20 * 60_000L, span.durationMillis)
         assertEquals("America/New_York", span.zone.id)
+    }
+
+    @Test
+    fun aSpanCrossingTheNovemberResetUsesBothClocksWithoutCountingTimeTwice() {
+        val cutoff = Instant.parse("2026-11-01T08:00:00Z").toEpochMilli()
+        val start = cutoff - 5 * 60_000L
+        val end = cutoff + 5 * 60_000L
+        val stop = event(UsageEventType.ReadingStopped, end).copy(
+            utcOffset = "+09:00", timeZone = "Asia/Tokyo", startedAt = start, startedTimeZone = "Asia/Tokyo",
+        )
+        val events = listOf(
+            stop,
+            stop.copy(type = UsageEventType.WordLookedUp, at = cutoff - 1),
+            stop.copy(type = UsageEventType.WordLookedUp, at = cutoff),
+        )
+        val october = summarizeUsageDay(events, LocalDate.parse("2026-10-31"), resetHour = 3)
+        val november = summarizeUsageDay(events, LocalDate.parse("2026-11-01"), resetHour = 3)
+
+        assertEquals(1, october.wordLookups)
+        assertEquals(1, november.wordLookups)
+        assertEquals(start, october.spans.single().startMillis)
+        assertEquals(cutoff, october.spans.single().endMillis)
+        assertEquals("America/New_York", october.spans.single().zone.id)
+        assertEquals(cutoff, november.spans.single().startMillis)
+        assertEquals(end, november.spans.single().endMillis)
+        assertEquals("Asia/Tokyo", november.spans.single().zone.id)
+        assertEquals(end - start, october.readingMillis + november.readingMillis)
     }
 
     @Test

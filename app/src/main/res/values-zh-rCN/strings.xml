@@ -280,7 +280,7 @@
     <string name="statistics_streak_goal_minutes_format">%1$d 分钟</string>
     <string name="statistics_streak_reset">连续阅读日重置时间</string>
     <string name="statistics_streak_reset_help">阅读按记录时设备的本地时间计算。此时间之前的阅读计入前一天。没有时区的旧记录按美国东部时间计算。</string>
-    <string name="statistics_streak_zone_format">本设备的时区：%1$s</string>
+    <string name="statistics_streak_zone_format">今日统计时区：%1$s</string>
     <string name="statistics_heatmap_title">最近 16 周</string>
     <string name="statistics_today_title">今天</string>
     <string name="statistics_today_date_active_format">%1$s · 活跃时段 %2$s–%3$s</string>
