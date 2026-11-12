@@ -7,6 +7,8 @@ Semantic Versioning.
 
 ## [Unreleased]
 
+## [v1.1.0] - 2026-11-12
+
 ### Added
 - Preview and customize manga small-text enlargement in Settings → Manga. Choose a visual preset or adjust the enlargement amount and small-text cutoff, with live before/after examples. Open **Preview text size** from the manga reader to start on your current page, or choose a manga in Settings. The preview fills the same viewport as the reader, with transparent overlay controls you can hide and the current zoom preserved. Compare Original size and Adjusted, browse pages, and save or cancel without moving your reading position. The preview uses the same furigana layout as the reader. Smaller text may match but never overtake larger text. Choices sync between Android devices while iOS keeps separate preferences.
 
