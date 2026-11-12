@@ -75,6 +75,7 @@ import java.time.Duration
 import java.time.LocalDate
 import java.time.ZoneId
 import java.time.ZonedDateTime
+import kotlin.math.ceil
 import android.text.format.DateUtils
 import moe.antimony.hoshi.features.sync.http.StatisticsSyncProblem
 import moe.antimony.hoshi.features.sync.http.StatisticsSyncStatus
@@ -446,14 +447,14 @@ private fun StreakCard(
                     streak.todayQualifies -> stringResource(R.string.statistics_streak_today_done)
                     atRisk -> stringResource(
                         R.string.statistics_streak_keep_format,
-                        formatDurationSeconds((goalSeconds - todaySeconds).coerceAtLeast(0.0)),
+                        formatDurationSeconds(ceil((goalSeconds - todaySeconds).coerceAtLeast(0.0))),
                     )
                     todaySeconds > 0.0 -> stringResource(
                         R.string.statistics_streak_today_progress_format,
                         formatDurationSeconds(todaySeconds),
-                        formatGoalDuration(goalSeconds),
+                        formatDurationSeconds(goalSeconds),
                     )
-                    else -> stringResource(R.string.statistics_streak_start_format, formatGoalDuration(goalSeconds))
+                    else -> stringResource(R.string.statistics_streak_start_format, formatDurationSeconds(goalSeconds))
                 },
                 style = MaterialTheme.typography.bodyMedium,
                 color = colorScheme.onSurfaceVariant,
@@ -670,12 +671,6 @@ private fun StatisticsSyncStatusText(status: StatisticsSyncStatus, nowMillis: Lo
 
 /** How long a statistics change waits for the rest of its burst before the screen reloads. */
 private const val RELOAD_COALESCE_MS = 300L
-
-/** A goal is whole minutes, so show "10m" rather than "10m 0s". */
-internal fun formatGoalDuration(seconds: Double): String {
-    val minutes = (seconds / 60.0).toInt()
-    return if (minutes * 60.0 == seconds) "${minutes}m" else formatDurationSeconds(seconds)
-}
 
 internal fun bookTypeLabelRes(contentType: ContentType): Int = when (contentType) {
     ContentType.Mokuro -> R.string.statistics_book_type_manga

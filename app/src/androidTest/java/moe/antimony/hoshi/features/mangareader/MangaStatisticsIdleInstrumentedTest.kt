@@ -156,7 +156,7 @@ class MangaStatisticsIdleInstrumentedTest {
     private fun displayedReadingSeconds(): Int = compose.onAllNodes(
         SemanticsMatcher("reading duration") { node ->
             node.config.getOrNull(SemanticsProperties.Text)?.any {
-                it.text.matches(Regex("^(?:\\d+s|\\d+m \\d+s|\\d+h \\d+m)$"))
+                it.text.matches(Regex("\\d+[hms](?: \\d+[hms]){0,2}"))
             } == true
         },
     ).fetchSemanticsNodes().flatMap { node ->

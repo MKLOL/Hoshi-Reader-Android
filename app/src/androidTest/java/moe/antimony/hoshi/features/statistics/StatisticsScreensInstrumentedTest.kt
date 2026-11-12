@@ -81,6 +81,7 @@ class StatisticsScreensInstrumentedTest {
                 )
             }
         }
+        composeRule.onNodeWithText("10m 15s").assertIsDisplayed()
         composeRule.onNodeWithText("1 day streak").assertIsDisplayed()
         composeRule.onNodeWithText("Today's goal reached").assertIsDisplayed()
         val list = composeRule.onAllNodes(hasScrollAction()).onFirst()
@@ -92,6 +93,64 @@ class StatisticsScreensInstrumentedTest {
         composeRule.onAllNodesWithText("35m 15s")[1].assertIsDisplayed() // the book row
         composeRule.onNodeWithText("Shirokuma").performClick()
         composeRule.runOnIdle { assertEquals("m", opened) }
+    }
+
+    @Test
+    fun todayAndTrendsShowSecondsAfterAnHour() {
+        val preciseOverview = summarizeReadingStatistics(
+            listOf(
+                BookStatisticsInput(
+                    "m", "Shirokuma", ContentType.Mokuro,
+                    listOf(statistics.first().copy(readingTime = 179.0), statistics.last().copy(readingTime = 3667.0)),
+                ),
+            ),
+            todayKey = today.toString(),
+        )
+        composeRule.setContent {
+            MaterialTheme {
+                StatisticsScreenContent(
+                    overview = preciseOverview,
+                    today = today,
+                    minimumMinutes = 10,
+                    onMinimumMinutesChange = {},
+                    onOpenBook = {},
+                    onClose = {},
+                )
+            }
+        }
+        composeRule.onNodeWithText("1h 1m 7s").assertIsDisplayed()
+        composeRule.onNodeWithText("Trends").performClick()
+        composeRule.onNodeWithText("Sep 12 · 1h 1m 7s · 3-day average 21m 22s").assertIsDisplayed()
+    }
+
+    @Test
+    fun streakCountdownShowsOneSecondWhenLessThanOneSecondRemains() {
+        val closeToGoal = summarizeReadingStatistics(
+            listOf(
+                BookStatisticsInput(
+                    "m", "Shirokuma", ContentType.Mokuro,
+                    listOf(
+                        statistics.first().copy(dateKey = today.minusDays(1).toString()),
+                        statistics.last().copy(readingTime = 599.75),
+                    ),
+                ),
+            ),
+            todayKey = today.toString(),
+        )
+        composeRule.setContent {
+            MaterialTheme {
+                StatisticsScreenContent(
+                    overview = closeToGoal,
+                    today = today,
+                    minimumMinutes = 10,
+                    onMinimumMinutesChange = {},
+                    onOpenBook = {},
+                    onClose = {},
+                )
+            }
+        }
+        composeRule.onNodeWithText("9m 59s").assertIsDisplayed()
+        composeRule.onNodeWithText("1s more today keeps your streak").assertIsDisplayed()
     }
 
     @Test

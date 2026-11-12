@@ -248,14 +248,19 @@ class StatisticsReviewTest {
     // ---- formatting ----
 
     @Test
-    fun goalAndDurationFormatting() {
-        assertEquals("10m", formatGoalDuration(600.0))
-        assertEquals("5m", formatGoalDuration(300.0))
-        assertEquals("0m", formatGoalDuration(0.0))
-        assertEquals("1m 30s", formatGoalDuration(90.0))
+    fun durationsRetainSecondsAndSkipEmptyUnits() {
         assertEquals("0s", formatDurationSeconds(-5.0))
+        assertEquals("0s", formatDurationSeconds(0.0))
+        assertEquals("0s", formatDurationSeconds(0.9))
+        assertEquals("7s", formatDurationSeconds(7.9))
+        assertEquals("10m", formatDurationSeconds(600.0))
+        assertEquals("10m", formatDurationSeconds(600.5))
+        assertEquals("1m 30s", formatDurationSeconds(90.0))
         assertEquals("59m 59s", formatDurationSeconds(3599.9))
-        assertEquals("1h 0m", formatDurationSeconds(3600.0))
+        assertEquals("1h", formatDurationSeconds(3600.0))
+        assertEquals("1h 7s", formatDurationSeconds(3607.0))
+        assertEquals("1h 1m", formatDurationSeconds(3660.0))
+        assertEquals("1h 1m 7s", formatDurationSeconds(3667.0))
     }
 
     @Test

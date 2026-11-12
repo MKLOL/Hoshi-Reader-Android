@@ -102,17 +102,22 @@ internal fun TrendsSection(
                 runCatching { LocalDate.parse(day.dateKey) }.getOrNull()?.let { it to day }
             }.toMap()
         }
-        val minutes = remember(dailyByDate, days, today) {
-            rollingAverageSeries(dailyByDate.mapValues { it.value.seconds / 60.0 }, today, days)
+        val readingTime = remember(dailyByDate, days, today) {
+            rollingAverageSeries(
+                dailyByDate.mapValues { it.value.seconds.coerceAtMost(Long.MAX_VALUE.toDouble()) },
+                today,
+                days,
+            )
         }
         val characters = remember(dailyByDate, days, today) {
             rollingAverageSeries(dailyByDate.mapValues { it.value.characters.toDouble() }, today, days)
         }
         TrendChartCard(
             title = stringResource(R.string.statistics_trend_reading_time),
-            points = minutes,
-            formatValue = { formatDurationSeconds(it * 60.0) },
-            formatTick = { formatGoalDuration(it * 60.0) },
+            points = readingTime,
+            formatValue = ::formatDurationSeconds,
+            formatTick = ::formatDurationSeconds,
+            axisMaximum = { niceAxisMax(it / 60.0) * 60.0 },
         )
         Spacer(Modifier.height(12.dp))
         TrendChartCard(
@@ -196,6 +201,7 @@ private fun TrendChartCard(
     formatTick: (Double) -> String,
     formatAverage: (Double) -> String = formatValue,
     subtitle: String? = null,
+    axisMaximum: (Double) -> Double = { niceAxisMax(it) },
 ) {
     val colorScheme = MaterialTheme.colorScheme
     var selected by remember(points) { mutableIntStateOf(points.lastIndex) }
@@ -232,6 +238,9 @@ private fun TrendChartCard(
                 )
                 RollingAverageChart(
                     points = points,
+                    axisMax = remember(points, axisMaximum) {
+                        axisMaximum(points.maxOf { maxOf(it.value, it.rollingAverage) })
+                    },
                     selectedIndex = selected,
                     onSelect = { selected = it },
                     formatTick = formatTick,
@@ -267,6 +276,7 @@ private fun trendColors(): Pair<Color, Color> {
 @Composable
 private fun RollingAverageChart(
     points: List<TrendPoint>,
+    axisMax: Double,
     selectedIndex: Int,
     onSelect: (Int) -> Unit,
     formatTick: (Double) -> String,
@@ -280,7 +290,6 @@ private fun RollingAverageChart(
     val surface = colorScheme.surface
     val tickStyle = MaterialTheme.typography.labelSmall.copy(color = colorScheme.onSurfaceVariant)
     val measurer: TextMeasurer = rememberTextMeasurer()
-    val axisMax = remember(points) { niceAxisMax(points.maxOf { maxOf(it.value, it.rollingAverage) }) }
     val ticks = remember(axisMax, tickStyle, measurer) {
         listOf(axisMax, axisMax / 2).map { measurer.measure(formatTick(it), tickStyle) }
     }

@@ -14,6 +14,7 @@ Semantic Versioning.
 - Reading streaks and statistics keep the local date where you read, even after you travel. Today follows your device's clock. The daily goal and reset hour still sync, and each recording uses the reset on its own clock. Older reading without a recorded time zone uses US Eastern. Statistics reuses settled days for faster refreshes and updates them when older reading arrives.
 
 ### Fixed
+- Reading statistics and trends show elapsed seconds even for totals over an hour. Whole-minute totals display without an extra zero-second label. The streak countdown shows one second when less than a second remains.
 - Manga dictionary lookups open opposite the Translate and Copy buttons when space permits. The popup keeps those buttons tappable on zoomed pages and near the screen edges.
 - Manga pages stay still while you read instead of redrawing every second for hidden statistics, reducing unnecessary rendering work on e-ink devices while reading time and pace continue to be recorded.
 

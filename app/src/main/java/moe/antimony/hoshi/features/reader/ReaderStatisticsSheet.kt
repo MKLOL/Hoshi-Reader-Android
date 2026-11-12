@@ -184,11 +184,11 @@ internal fun formatDurationSeconds(seconds: Double): String {
     val hours = totalSeconds / 3600
     val minutes = (totalSeconds % 3600) / 60
     val remainingSeconds = totalSeconds % 60
-    return when {
-        hours > 0 -> "${hours}h ${minutes}m"
-        minutes > 0 -> "${minutes}m ${remainingSeconds}s"
-        else -> "${remainingSeconds}s"
-    }
+    return buildList {
+        if (hours > 0) add("${hours}h")
+        if (minutes > 0) add("${minutes}m")
+        if (remainingSeconds > 0 || isEmpty()) add("${remainingSeconds}s")
+    }.joinToString(" ")
 }
 
 private fun secondsRemaining(remainingCharacters: Int, speed: Int): Double {
