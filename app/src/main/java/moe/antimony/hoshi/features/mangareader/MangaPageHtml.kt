@@ -149,8 +149,8 @@ internal object MangaPageHtml {
               // than mokuro's detected region, so trailing glyphs (e.g. ！？) overflow past
               // the box edge with overflow:visible. getBoundingClientRect() measures only
               // the border-box, so the popup would clear the box yet still cover the spilled
-              // ！？. The Range captures the true painted extent (text overflow + the action
-              // buttons); union with the box rect so we never shrink below the box itself.
+              // ！？. The Range captures the painted text extent; union with the box rect
+              // so the dictionary avoids the entire bubble.
               // Exposed on window so it can be exercised directly in the instrumented
               // WebView test (a real layout engine is the only way to reproduce the
               // text-overflow this guards against).
@@ -180,19 +180,13 @@ internal object MangaPageHtml {
                 }
                 return {left:left, top:top, right:right, bottom:bottom};
               }
-              window.hoshiOcrBoxExtent = function(box, includeActions) {
+              window.hoshiOcrBoxExtent = function(box) {
                 var r = box.getBoundingClientRect();
                 var text = window.hoshiOcrTextExtent(box);
                 var left = Math.min(r.left, text.left), top = Math.min(r.top, text.top);
                 var right = Math.max(r.right, text.right), bottom = Math.max(r.bottom, text.bottom);
-                if (includeActions !== false) box.querySelectorAll('.ocr-actions').forEach(function(actions) {
-                  if (getComputedStyle(actions).display === 'none') return;
-                  var rect = actions.getBoundingClientRect();
-                  left = Math.min(left, rect.left); top = Math.min(top, rect.top);
-                  right = Math.max(right, rect.right); bottom = Math.max(bottom, rect.bottom);
-                });
                 return { x: left, y: top, width: right - left, height: bottom - top };
-              }
+              };
               var native = window.HoshiTextSelection;
               if (native) {
                 window.HoshiTextSelection = {
@@ -203,16 +197,11 @@ internal object MangaPageHtml {
                       var el = node && (node.nodeType === 1 ? node : node.parentElement);
                       var box = el && el.closest && el.closest('.ocr-box');
                       if (box) {
-                        var r = window.hoshiOcrBoxExtent(box);
-                        var data = JSON.parse(json);
-                        var hostRect = window.hoshiManga && window.hoshiManga.hostRectFromViewportRect
-                          ? window.hoshiManga.hostRectFromViewportRect(r)
-                          : { x: r.x, y: r.y, width: r.width, height: r.height };
-                        data.rect = hostRect;
                         var manga = window.hoshiManga;
-                        var placement = manga && manga.actionPlacement(box);
-                        if (placement) data.mangaActions = placement;
-                        if (manga) manga.selectedActions = placement ? { box: box, placement: placement } : null;
+                        var extent = window.hoshiOcrBoxExtent(box);
+                        var data = JSON.parse(json);
+                        data.rect = manga ? manga.hostRectFromViewportRect(extent) : extent;
+                        if (manga) manga.lookupAnchor = { box: box, rect: data.rect };
                         json = JSON.stringify(data);
                       }
                     } catch (e) {}
@@ -634,7 +623,12 @@ internal object MangaPageHtml {
         (function() {
           window.hoshiManga = {
             hostScaleValue: 1,
-            selectedActions: null,
+            lookupAnchor: null,
+            lookupPopupBounds: [],
+            setLookupPopupBounds: function(bounds) {
+              this.lookupPopupBounds = bounds;
+              refreshActions();
+            },
             // When true, the first tap on a bubble both reveals and looks up immediately.
             // Default false preserves the two-tap-to-lookup model.
             singleTapLookupValue: false,
@@ -719,7 +713,7 @@ internal object MangaPageHtml {
               };
             },
             clearRevealed: function() {
-              this.selectedActions = null;
+              this.lookupAnchor = null;
               var revealed = document.querySelectorAll('.ocr-box.revealed');
               for (var i = 0; i < revealed.length; i++) {
                 // Chromium can retain a paragraph's offset after overflow is removed.
@@ -893,12 +887,9 @@ internal object MangaPageHtml {
               if (!actions || !text) return;
               actions.style.transform = '';
               box.classList.remove('actions-below');
-              var rect = box.getBoundingClientRect();
-              var painted = window.hoshiOcrTextExtent(box);
-              var top = Math.min(rect.top, painted.top);
-              var bottom = Math.max(rect.bottom, painted.bottom);
-              var left = Math.min(rect.left, painted.left);
-              var right = Math.max(rect.right, painted.right);
+              var bubble = window.hoshiOcrBoxExtent(box);
+              var top = bubble.y, bottom = bubble.y + bubble.height;
+              var left = bubble.x, right = bubble.x + bubble.width;
               var row = actions.getBoundingClientRect();
               var margin = 3;
               var vv = window.visualViewport;
@@ -908,45 +899,64 @@ internal object MangaPageHtml {
               var viewRight = viewLeft + (vv ? vv.width : window.innerWidth);
               var targetX = Math.max(viewLeft, Math.min(row.left, viewRight - row.width));
               var targetY = Math.min(row.top, top - row.height - margin);
-              var placement = 'above';
               if (targetY < viewTop) {
-                placement = 'below';
                 targetY = bottom + margin;
                 box.classList.add('actions-below');
                 row = actions.getBoundingClientRect();
                 if (targetY + row.height > viewBottom) {
                   // A tall/pinch-zoomed bubble may leave room only beside its text.
                   if (right + margin + row.width <= viewRight) {
-                    placement = 'right';
                     targetX = right + margin;
                     targetY = Math.max(viewTop, Math.min(top, viewBottom - row.height));
                   } else if (left - margin - row.width >= viewLeft) {
-                    placement = 'left';
                     targetX = left - margin - row.width;
                     targetY = Math.max(viewTop, Math.min(top, viewBottom - row.height));
                   }
                 }
               }
+              if (this.lookupPopupBounds.length) {
+                var scale = this.hostScale();
+                var cards = this.lookupPopupBounds.map(function(rect) {
+                  return {
+                    left: viewLeft + rect.x / scale, top: viewTop + rect.y / scale,
+                    right: viewLeft + (rect.x + rect.width) / scale,
+                    bottom: viewTop + (rect.y + rect.height) / scale
+                  };
+                });
+                var width = row.width, height = row.height;
+                function overlaps(x, y, rect) {
+                  return x < rect.right + margin && x + width > rect.left - margin &&
+                    y < rect.bottom + margin && y + height > rect.top - margin;
+                }
+                if (cards.some(function(card) { return overlaps(targetX, targetY, card); })) {
+                  var obstacles = cards.concat({left: left, top: top, right: right, bottom: bottom});
+                  // Try the nearest placement that fits the entire row. Edges of the
+                  // cards and the painted bubble also allow sliding along either axis.
+                  var maxX = viewRight - width, maxY = viewBottom - height;
+                  var xs = [targetX, viewLeft, maxX];
+                  var ys = [targetY, viewTop, maxY];
+                  obstacles.forEach(function(rect) {
+                    xs.push(rect.left - margin - width, rect.right + margin);
+                    ys.push(rect.top - margin - height, rect.bottom + margin);
+                  });
+                  var best = Infinity;
+                  var preferredX = targetX, preferredY = targetY;
+                  xs.forEach(function(x) {
+                    if (x < viewLeft || x > maxX) return;
+                    ys.forEach(function(y) {
+                      if (y < viewTop || y > maxY || obstacles.some(function(rect) { return overlaps(x, y, rect); })) return;
+                      var distance = Math.hypot(x - preferredX, y - preferredY);
+                      if (distance < best) {
+                        best = distance;
+                        targetX = x;
+                        targetY = y;
+                      }
+                    });
+                  });
+                }
+              }
               actions.style.transform = 'translate(' + (targetX - row.left) + 'px,' +
                 (targetY - row.top) + 'px)';
-              actions.dataset.placement = placement;
-            },
-            actionPlacement: function(box) {
-              var actions = box.querySelector('.ocr-actions');
-              if (!actions || !actions.dataset.placement || getComputedStyle(actions).visibility === 'hidden') return null;
-              var row = actions.getBoundingClientRect();
-              var vv = window.visualViewport;
-              var viewTop = vv ? vv.offsetTop : 0;
-              var viewLeft = vv ? vv.offsetLeft : 0;
-              var viewBottom = viewTop + (vv ? vv.height : window.innerHeight);
-              var viewRight = viewLeft + (vv ? vv.width : window.innerWidth);
-              if (row.width <= 0 || row.height <= 0 || row.right <= viewLeft || row.left >= viewRight ||
-                  row.bottom <= viewTop || row.top >= viewBottom) return null;
-              return {
-                side: actions.dataset.placement,
-                bubble: this.hostRectFromViewportRect(window.hoshiOcrBoxExtent(box, false)),
-                row: this.hostRectFromViewportRect(row)
-              };
             },
             // The configured image-space size is authoritative. Mis-tagged horizontal
             // bubbles can benefit from reflow, but geometry must never add another boost.
@@ -1083,7 +1093,6 @@ internal object MangaPageHtml {
                   }
                 }
                 // Default two-tap mode reveals the bubble before looking up a word.
-                // In either mode the popup receives the current action row geometry.
                 if (alreadyRevealed || window.hoshiManga.singleTapLookupValue) {
                   if (alreadyRevealed) window.hoshiManga.updateActionPlacement(box);
                   // Fitting ruby can move a vertical column or an edge bubble. Keep the
@@ -1112,17 +1121,16 @@ internal object MangaPageHtml {
               document.querySelectorAll('.ocr-box.revealed').forEach(function(box) {
                 manga.updateActionPlacement(box);
               });
-              var selected = manga.selectedActions;
-              if (selected && window.hoshiSelection && window.hoshiSelection.selection) {
-                var previous = selected.placement;
-                var next = manga.actionPlacement(selected.box);
-                // The native popup was anchored to the old viewport. Close it if pan,
-                // zoom or reflow moves the action row underneath that fixed frame.
-                var moved = !next || next.side !== previous.side || ['x', 'y', 'width', 'height'].some(function(key) {
-                  return Math.abs(next.row[key] - previous.row[key]) > 0.5;
+              var anchor = manga.lookupAnchor;
+              if (anchor && window.hoshiSelection && window.hoshiSelection.selection) {
+                var current = manga.hostRectFromViewportRect(window.hoshiOcrBoxExtent(anchor.box));
+                // A viewport change can invalidate the dictionary's anchor. Moving the
+                // action buttons around a dictionary card leaves the anchor in place.
+                var moved = ['x', 'y', 'width', 'height'].some(function(key) {
+                  return Math.abs(current[key] - anchor.rect[key]) > 0.5;
                 });
                 if (moved) {
-                  manga.selectedActions = null;
+                  manga.lookupAnchor = null;
                   window.hoshiSelection.clearSelection();
                   if (window.HoshiMangaTap) window.HoshiMangaTap.selectedNothing();
                 }

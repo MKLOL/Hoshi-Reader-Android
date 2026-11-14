@@ -25,11 +25,14 @@ import moe.antimony.hoshi.features.reader.ReaderNavigationDirection
 import moe.antimony.hoshi.features.reader.ReaderSelectionBridge
 import moe.antimony.hoshi.features.reader.ReaderSelectionCommand
 import moe.antimony.hoshi.features.reader.ReaderSelectionData
+import moe.antimony.hoshi.features.reader.ReaderSelectionRect
 import moe.antimony.hoshi.features.reader.ReaderSelectionScripts
 import moe.antimony.hoshi.features.reader.ReaderSwipeGestureTracker
 import moe.antimony.hoshi.mokuro.MokuroBook
 import moe.antimony.hoshi.webview.applyHoshiWebViewSecurityDefaults
 import java.io.File
+import org.json.JSONArray
+import org.json.JSONObject
 
 private const val MANGA_SWIPE_MIN_DISTANCE = 72f
 private const val MANGA_NAVIGATION_MAX_ZOOM = 1.01f
@@ -191,6 +194,7 @@ internal fun MangaReaderWebView(
             imageLoader?.onPageRequested(page.index)
             webView.tag = token
             webView.bubbleScrollRegions.reset(page.index)
+            webView.lookupPopupBounds = emptyList()
             onPageLoadStarted()
             webView.loadDataWithBaseURL(
                 MangaPageHtml.BASE_URL,
@@ -207,6 +211,7 @@ private class MangaWebView(context: Context) : WebView(context) {
     var readyLoad: MangaPageLoadToken? = null
     var finalizingLoad: MangaPageLoadToken? = null
     var pendingViewport: MangaPreviewViewport? = null
+    var lookupPopupBounds: List<ReaderSelectionRect> = emptyList()
 
     fun mangaZoomScale(): Float {
         // The fitted document uses initial/minimum-scale=1. Never adopt a restored zoom as
@@ -349,6 +354,17 @@ private fun MotionEvent.toMangaTouchAction(): MangaTouchAction =
         MotionEvent.ACTION_CANCEL -> MangaTouchAction.Cancel
         else -> MangaTouchAction.Other
     }
+
+/** Sends native dictionary card bounds in the reader WebView's host coordinates. */
+internal fun WebView.setMangaLookupPopupBounds(bounds: List<ReaderSelectionRect>) {
+    val manga = this as? MangaWebView ?: return
+    if (manga.lookupPopupBounds == bounds) return
+    manga.lookupPopupBounds = bounds
+    val rects = JSONArray(bounds.map { rect ->
+        JSONObject().put("x", rect.x).put("y", rect.y).put("width", rect.width).put("height", rect.height)
+    })
+    evaluateJavascript("window.hoshiManga && window.hoshiManga.setLookupPopupBounds($rects)", null)
+}
 
 /** Clears any active in-page text selection (mirrors the EPUB reader's clear command). */
 internal fun WebView.clearMangaSelection() {

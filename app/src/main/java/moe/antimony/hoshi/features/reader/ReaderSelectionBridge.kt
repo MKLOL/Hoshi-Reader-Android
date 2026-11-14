@@ -34,7 +34,6 @@ internal object ReaderSelectionBridgePayload {
             rect = payload.rect.toSelectionRect(),
             normalizedOffset = payload.normalizedOffset,
             sentenceOffset = payload.sentenceOffset,
-            mangaActions = payload.mangaActions?.toPlacement(),
         )
     }
 
@@ -64,21 +63,7 @@ internal object ReaderSelectionBridgePayload {
         val rect: Rect,
         val normalizedOffset: Int? = null,
         val sentenceOffset: Int? = null,
-        val mangaActions: MangaActions? = null,
     )
-
-    @Serializable
-    private data class MangaActions(
-        val bubble: Rect,
-        val row: Rect,
-        val side: String,
-    ) {
-        fun toPlacement(): MangaActionPlacement? {
-            val placement = MangaActionSide.entries.firstOrNull { it.name.equals(side, ignoreCase = true) } ?: return null
-            if (row.width <= 0 || row.height <= 0) return null
-            return MangaActionPlacement(bubble.toSelectionRect(), row.toSelectionRect(), placement)
-        }
-    }
 
     @Serializable
     private data class Rect(

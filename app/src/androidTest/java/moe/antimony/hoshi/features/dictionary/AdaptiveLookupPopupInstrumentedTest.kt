@@ -13,6 +13,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import de.manhhao.hoshi.GlossaryEntry
+import de.manhhao.hoshi.LookupResult
+import de.manhhao.hoshi.TermResult
 import moe.antimony.hoshi.HoshiAppContainer
 import moe.antimony.hoshi.LocalHoshiAppContainer
 import moe.antimony.hoshi.features.reader.ReaderSelectionData
@@ -51,6 +54,49 @@ class AdaptiveLookupPopupInstrumentedTest {
         verifyPopup(expectedWidthDp = 672.0, expectedHeightDp = 525.0, expectedZoom = 3.0)
         compose.runOnIdle { tablet = false }
         verifyPopup(expectedWidthDp = 320.0, expectedHeightDp = 250.0, expectedZoom = 1.25)
+    }
+
+    @Test fun stackReportsVisibleReadyCardsAndClearsBoundsWhenTheyClose() {
+        val result = LookupResult("本", "本", emptyArray(), TermResult(
+            expression = "本", reading = "ほん", rules = "",
+            glossaries = arrayOf(GlossaryEntry("Sample", "book", "n", "")),
+            frequencies = emptyArray(), pitches = emptyArray(),
+        ), 0)
+        val root = LookupPopupItem(id = "root", state = LookupPopupState(
+            selection = ReaderSelectionData("本", "本を読む", ReaderSelectionRect(100.0, 200.0, 30.0, 30.0), null),
+            results = listOf(result),
+            isVertical = false,
+        ))
+        val child = root.copy(id = "child", state = root.state.copy(
+            selection = root.state.selection.copy(rect = ReaderSelectionRect(160.0, 450.0, 30.0, 30.0)),
+        ))
+        var popups by mutableStateOf(listOf(root))
+        val reported = AtomicReference<List<ReaderSelectionRect>>(emptyList())
+        val app = HoshiAppContainer(compose.activity)
+        compose.setContent {
+            CompositionLocalProvider(LocalHoshiAppContainer provides app) {
+                MaterialTheme {
+                    LookupPopupAndroidStack(
+                        popups = popups,
+                        onPopupsChange = {},
+                        lookupChildPopup = { null },
+                        modifier = Modifier.requiredSize(706.dp, 935.dp),
+                        onPopupBoundsChanged = reported::set,
+                    )
+                }
+            }
+        }
+        compose.waitUntil(15_000) { reported.get().size == 1 }
+        val rootBounds = reported.get().single()
+        assertEquals(320.0, rootBounds.width, 1.0)
+        assertEquals(250.0, rootBounds.height, 1.0)
+        compose.runOnIdle { popups = listOf(root, child) }
+        compose.waitUntil(15_000) { reported.get().size == 2 }
+        assertEquals(rootBounds, reported.get().first())
+        compose.runOnIdle { popups = listOf(root) }
+        compose.waitUntil(15_000) { reported.get() == listOf(rootBounds) }
+        compose.runOnIdle { popups = emptyList() }
+        compose.waitUntil(15_000) { reported.get().isEmpty() }
     }
 
     private fun verifyPopup(expectedWidthDp: Double, expectedHeightDp: Double, expectedZoom: Double) {

@@ -4,7 +4,8 @@ import unittest
 import xml.etree.ElementTree as ET
 import zipfile
 
-from tools.release_checks import (PREFIX, apk_native_abis, app_has_focus, check_device_abi, check_instrumentation,
+from tools.release_checks import (ANDROID_CLASSES, PREFIX, apk_native_abis, app_has_focus, check_device_abi,
+                                  check_instrumentation,
                                   check_junit, check_launch, check_smoke, launcher_component)
 
 
@@ -26,6 +27,12 @@ def android_output(classes=("example.Test",), *, end_code=0):
 class AndroidReportTest(unittest.TestCase):
     def test_complete_run(self):
         self.assertEqual(2, check_instrumentation(android_output(("a.A", "b.B")), ("a.A", "b.B")))
+
+    def test_manga_lookup_placement_is_required_for_release(self):
+        placement = PREFIX + "features.mangareader.MangaActionPlacementInstrumentedTest"
+        without_placement = tuple(name for name in ANDROID_CLASSES if name != placement)
+        with self.assertRaisesRegex(ValueError, "MangaActionPlacementInstrumentedTest"):
+            check_instrumentation(android_output(without_placement))
 
     def test_zero_tests_is_not_success(self):
         with self.assertRaises(ValueError):

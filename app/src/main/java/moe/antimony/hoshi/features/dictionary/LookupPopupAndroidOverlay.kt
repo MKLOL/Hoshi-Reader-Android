@@ -78,6 +78,7 @@ internal fun LookupPopupAndroidStack(
     rootHighlightVerticalWriting: Boolean = false,
     rootHighlightEInkStyle: PopupSelectionEInkStyle = PopupSelectionEInkStyle.Underline,
     onPopupBoundsChanged: (List<ReaderSelectionRect>) -> Unit = {},
+    dismissOnOutsideStylusTouch: Boolean = true,
 ) {
     val context = LocalContext.current
     val appContainer = LocalHoshiAppContainer.current
@@ -117,6 +118,7 @@ internal fun LookupPopupAndroidStack(
                 lookupChildPopup = lookupChildPopup,
                 onRootPopupDismissed = onRootPopupDismissed,
                 onPopupBoundsChanged = onPopupBoundsChanged,
+                dismissOnOutsideStylusTouch = dismissOnOutsideStylusTouch,
                 sasayakiWasPaused = false,
                 sasayakiIsPlaying = false,
                 onSasayakiReplayCue = {},
@@ -180,6 +182,7 @@ private class LookupPopupOverlayController(
         lookupChildPopup: (ReaderSelectionData) -> Pair<LookupPopupItem, Int>?,
         onRootPopupDismissed: () -> Boolean,
         onPopupBoundsChanged: (List<ReaderSelectionRect>) -> Unit,
+        dismissOnOutsideStylusTouch: Boolean,
         sasayakiWasPaused: Boolean,
         sasayakiIsPlaying: Boolean,
         onSasayakiReplayCue: (SasayakiMatch) -> Unit,
@@ -201,6 +204,7 @@ private class LookupPopupOverlayController(
             lookupChildPopup = lookupChildPopup,
             onRootPopupDismissed = onRootPopupDismissed,
             onPopupBoundsChanged = onPopupBoundsChanged,
+            dismissOnOutsideStylusTouch = dismissOnOutsideStylusTouch,
             sasayakiWasPaused = sasayakiWasPaused,
             sasayakiIsPlaying = sasayakiIsPlaying,
             onSasayakiReplayCue = onSasayakiReplayCue,
@@ -229,6 +233,8 @@ private class LookupPopupOverlayController(
         // input path entirely; some stylus implementations do not pass through a visible full-size
         // parent even when its touch dispatch returns false.
         view.visibility = lookupPopupOverlayVisibility(hasPopups = update.popups.isNotEmpty())
+        if (update.popups.isEmpty()) update.onPopupBoundsChanged(emptyList())
+        view.dismissOnOutsideStylusTouch = update.dismissOnOutsideStylusTouch
 
         rootHighlightView.update(
             rects = if (update.popups.isNotEmpty()) update.rootHighlightRects else emptyList(),
@@ -261,7 +267,7 @@ private class LookupPopupOverlayController(
                 onPopupsChange = update.onPopupsChange,
                 lookupChildPopup = update.lookupChildPopup,
                 onRootPopupDismissed = update.onRootPopupDismissed,
-                onContentReady = {},
+                onContentReady = { view.reportPopupBounds() },
                 sasayakiWasPaused = update.sasayakiWasPaused,
                 sasayakiIsPlaying = update.sasayakiIsPlaying,
                 onSasayakiReplayCue = update.onSasayakiReplayCue,
@@ -291,6 +297,7 @@ private data class OverlayUpdate(
     val lookupChildPopup: (ReaderSelectionData) -> Pair<LookupPopupItem, Int>?,
     val onRootPopupDismissed: () -> Boolean,
     val onPopupBoundsChanged: (List<ReaderSelectionRect>) -> Unit,
+    val dismissOnOutsideStylusTouch: Boolean,
     val sasayakiWasPaused: Boolean,
     val sasayakiIsPlaying: Boolean,
     val onSasayakiReplayCue: (SasayakiMatch) -> Unit,
@@ -304,6 +311,7 @@ private class LookupPopupOverlayLayout(context: Context) : FrameLayout(context) 
     var onOverlaySizeChanged: () -> Unit = {}
     var onOutsideStylusTouch: () -> Unit = {}
     var onPopupBoundsChanged: (List<ReaderSelectionRect>) -> Unit = {}
+    var dismissOnOutsideStylusTouch = true
     private val touchStreamTracker = PopupTouchStreamTracker()
 
     override fun onSizeChanged(width: Int, height: Int, oldWidth: Int, oldHeight: Int) {
@@ -313,21 +321,28 @@ private class LookupPopupOverlayLayout(context: Context) : FrameLayout(context) 
 
     override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
         super.onLayout(changed, left, top, right, bottom)
+        reportPopupBounds()
+    }
+
+    fun reportPopupBounds() {
         val density = resources.displayMetrics.density.toDouble()
         onPopupBoundsChanged((0 until childCount).mapNotNull { index ->
             val child = getChildAt(index)
-            if (child !is LookupPopupHostView || child.visibility != VISIBLE) return@mapNotNull null
+            if (child !is LookupPopupHostView || child.visibility != VISIBLE || child.alpha == 0f ||
+                child.width <= 0 || child.height <= 0
+            ) return@mapNotNull null
             ReaderSelectionRect(child.left / density, child.top / density, child.width / density, child.height / density)
         })
     }
 
     override fun dispatchTouchEvent(event: MotionEvent): Boolean {
         val hitPopup = hitPopup(event)
-        if (shouldDismissForOutsideStylusTouch(
-            actionMasked = event.actionMasked,
-            toolType = event.getToolType(0),
-            hitPopup = hitPopup,
-        )) {
+        if (dismissOnOutsideStylusTouch && shouldDismissForOutsideStylusTouch(
+                actionMasked = event.actionMasked,
+                toolType = event.getToolType(0),
+                hitPopup = hitPopup,
+            )
+        ) {
             onOutsideStylusTouch()
             return true
         }
@@ -865,7 +880,6 @@ private class LookupPopupHostView(
             isFullWidth = isFullWidth,
             topInset = topInset,
             bottomInset = bottomInset,
-            mangaActions = selection.mangaActions,
         ).calculate()
         return PopupFrameDp(
             leftDp = frame.centerX - frame.width / 2,

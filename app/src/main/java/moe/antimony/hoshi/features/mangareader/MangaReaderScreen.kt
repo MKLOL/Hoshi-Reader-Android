@@ -1104,6 +1104,11 @@ internal fun MangaReaderScreen(
                     }
                 },
                 onWebViewReady = { webView = it },
+                onPageLoadStarted = {
+                    lookupSelectionJob?.cancel()
+                    lookupSelectionRequest += 1
+                    lookupPopups = emptyList()
+                },
                 modifier = Modifier
                     .fillMaxSize()
                     .then(Modifier.testTag("manga-reader-surface"))
@@ -1142,11 +1147,13 @@ internal fun MangaReaderScreen(
                 popups = lookupPopups,
                 onPopupsChange = { lookupPopups = it },
                 lookupChildPopup = { selection ->
-                    val mangaActions = lookupPopups.firstOrNull()?.state?.selection?.mangaActions
-                    lookupPopupFor(selection.copy(mangaActions = mangaActions)).also { lookup ->
+                    lookupPopupFor(selection).also { lookup ->
                         usageSession?.logLookup(selection, lookup?.first, UsageLookupSource.Popup, page = pageIndex + 1)
                     }
                 },
+                onPopupBoundsChanged = { bounds -> webView?.setMangaLookupPopupBounds(bounds) },
+                // Let the WebView distinguish a relocated action from empty artwork.
+                dismissOnOutsideStylusTouch = false,
                 onRootPopupDismissed = {
                     // Clear the in-page selection highlight, then return false so the stack view
                     // still removes the dismissed popup from the list (the manga reader has no

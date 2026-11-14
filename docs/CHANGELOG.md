@@ -7,6 +7,9 @@ Semantic Versioning.
 
 ## [Unreleased]
 
+### Fixed
+- Manga dictionary cards open next to the looked-up text. Translate and Copy move out of the card’s way when they overlap.
+
 ## [v1.1.1] - 2026-11-12
 
 ### Fixed

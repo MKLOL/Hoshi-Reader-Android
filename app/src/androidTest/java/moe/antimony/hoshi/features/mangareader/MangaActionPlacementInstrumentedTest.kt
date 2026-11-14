@@ -9,7 +9,7 @@ import androidx.activity.ComponentActivity
 import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import moe.antimony.hoshi.features.dictionary.LookupPopupLayout
-import moe.antimony.hoshi.features.reader.MangaActionSide
+import moe.antimony.hoshi.features.reader.ReaderSelectionRect
 import moe.antimony.hoshi.features.reader.ReaderSelectionBridgePayload
 import moe.antimony.hoshi.mokuro.MokuroPage
 import moe.antimony.hoshi.mokuro.MokuroTextBox
@@ -68,42 +68,18 @@ class MangaActionPlacementInstrumentedTest {
         assertTrue(state.getDouble("actionBottom") <= state.getDouble("viewportHeight"))
     }
 
-    @Test fun dictionaryLookupKeepsTheMeasuredActionRowClearAndDiscardsStaleZoomCoordinates() {
-        val setups = mapOf(
-            MangaActionSide.Above to "box.style.cssText = 'left:200px;top:200px;width:180px;height:160px;font-size:18px';",
-            MangaActionSide.Below to "box.style.cssText = 'left:2px;top:0px;width:150px;height:6px;font-size:24px';",
-            MangaActionSide.Right to "box.style.cssText = 'left:150px;top:0px;width:100px;height:' + window.innerHeight + 'px;font-size:24px';",
+    @Test fun bottomBubbleKeepsItsNormalDictionaryCardAndMovesBothTapTargets() {
+        val state = measure(
+            paired = true,
+            setup = "box.style.cssText = 'left:200px;top:760px;width:180px;height:110px;font-size:18px';",
+            hostScale = 1.8,
+            exerciseSelection = true,
         )
-        val scale = 1.8
-        for ((side, setup) in setups) {
-            val state = measure(
-                paired = true, setup = setup, hostScale = scale,
-                exerciseSelection = true, verifyViewportChange = side == MangaActionSide.Above,
-            )
-            val selection = checkNotNull(ReaderSelectionBridgePayload.fromJson(state.getString("selection")))
-            val placement = checkNotNull(selection.mangaActions)
-            assertEquals(side, placement.side)
-            assertEquals(state.getDouble("actionLeft") * scale, placement.row.x, 0.05)
-            assertEquals(state.getDouble("actionTop") * scale, placement.row.y, 0.05)
-            val frame = LookupPopupLayout(
-                selectionRect = selection.rect,
-                screenWidth = state.getDouble("viewportWidth") * scale,
-                screenHeight = state.getDouble("viewportHeight") * scale,
-                maxWidth = 320.0, maxHeight = 300.0, isVertical = false, mangaActions = placement,
-            ).calculate()
-            val row = placement.row
-            val clear = frame.centerY - frame.height / 2 >= row.y + row.height ||
-                frame.centerY + frame.height / 2 <= row.y ||
-                frame.centerX - frame.width / 2 >= row.x + row.width ||
-                frame.centerX + frame.width / 2 <= row.x
-            assertTrue("Popup covers the measured $side row: $state", clear)
-            if (side == MangaActionSide.Above) {
-                assertTrue(frame.centerY - frame.height / 2 >= placement.bubble.y + placement.bubble.height)
-            }
-            if (side == MangaActionSide.Right) {
-                assertTrue(frame.centerX + frame.width / 2 <= placement.bubble.x)
-            }
-        }
+        val selection = checkNotNull(ReaderSelectionBridgePayload.fromJson(state.getString("selection")))
+        assertEquals(state.getDouble("textTop") * 1.8, selection.rect.y, 0.05)
+        assertEquals(state.getDouble("textBottom") * 1.8, selection.rect.y + selection.rect.height, 0.05)
+        assertEquals(state.getDouble("textLeft") * 1.8, selection.rect.x, 0.05)
+        assertEquals(state.getDouble("textRight") * 1.8, selection.rect.x + selection.rect.width, 0.05)
     }
 
     private class SelectionRecorder {
@@ -118,7 +94,6 @@ class MangaActionPlacementInstrumentedTest {
         viewportHeight: Int = 935,
         hostScale: Double = 1.0,
         exerciseSelection: Boolean = false,
-        verifyViewportChange: Boolean = false,
     ): JSONObject {
         val html = MangaPageHtml.build(
             page = MokuroPage(0, "test.png", 706, 935, listOf(
@@ -172,6 +147,7 @@ class MangaActionPlacementInstrumentedTest {
                       var row = actions.getBoundingClientRect();
                       var range = document.createRange(); range.selectNodeContents(box.querySelector('p'));
                       var text = range.getBoundingClientRect(); var border = box.getBoundingClientRect();
+                      var bubble = window.hoshiOcrBoxExtent(box);
                       window.dispatchEvent(new Event('resize'));
                       var afterPage = document.querySelector('.page').getBoundingClientRect();
                       var button = box.querySelector('button');
@@ -190,6 +166,7 @@ class MangaActionPlacementInstrumentedTest {
                         }));
                       }
                       return JSON.stringify({
+                        textTop: bubble.y, textLeft: bubble.x,
                         textBottom: Math.max(text.bottom, border.bottom), textRight: Math.max(text.right, border.right),
                         boxBottom: border.bottom, actionTop: row.top, actionBottom: row.bottom,
                         actionLeft: row.left, actionRight: row.right,
@@ -204,9 +181,45 @@ class MangaActionPlacementInstrumentedTest {
                 """.trimIndent()) { result = it; evaluated.countDown() }
             }
             assertTrue(evaluated.await(15, TimeUnit.SECONDS))
-            if (verifyViewportChange) {
+            if (exerciseSelection) {
+                val state = JSONObject(JSONTokener(result!!).nextValue() as String)
+                val original = popupTestRect(
+                    state.getDouble("actionLeft") * hostScale, state.getDouble("actionTop") * hostScale,
+                    state.getDouble("actionRight") * hostScale, state.getDouble("actionBottom") * hostScale,
+                )
+                val anchor = checkNotNull(ReaderSelectionBridgePayload.fromJson(checkNotNull(recorder.latest.get()))).rect
+                val card = LookupPopupLayout(
+                    selectionRect = anchor,
+                    screenWidth = state.getDouble("viewportWidth") * hostScale,
+                    screenHeight = state.getDouble("viewportHeight") * hostScale,
+                    maxWidth = 320.0, maxHeight = 300.0, isVertical = false,
+                ).calculate()
+                assertEquals(300.0, card.height, 0.05)
+                val lookup = ReaderSelectionRect(
+                    card.centerX - card.width / 2, card.centerY - card.height / 2,
+                    card.width, card.height,
+                )
+                assertTrue(lookup.y + lookup.height <= anchor.y)
+                assertTrue("The normal dictionary card must cover the original action row", lookup.overlaps(original))
+                val (relocated, taps) = checkRelocatedActions(scenario, webView, lookup.jsLiteral())
+                assertTrue(!relocated.overlaps(lookup))
+                assertTrue(!relocated.overlaps(anchor))
+                assertEquals("__ai__", taps.getString("translate"))
+                assertEquals("__copied__", taps.getString("copy"))
+                val nextCard = ReaderSelectionRect(relocated.x - 4, relocated.y - 4, relocated.width + 8, relocated.height + 8)
+                val withNested = checkRelocatedActions(scenario, webView, lookup.jsLiteral() + "," + nextCard.jsLiteral()).first
+                assertTrue(!withNested.overlaps(lookup))
+                assertTrue(!withNested.overlaps(nextCard))
+                assertTrue(!withNested.overlaps(anchor))
+                val anchorAfterMoving = checkNotNull(ReaderSelectionBridgePayload.fromJson(checkNotNull(recorder.latest.get()))).rect
+                assertEquals(anchor, anchorAfterMoving)
+                val restored = checkRelocatedActions(scenario, webView, "").first
+                assertEquals(original.x, restored.x, 0.05)
+                assertEquals(original.y, restored.y, 0.05)
+                assertEquals("Moving the row must keep the native lookup open", 1L, dismissed.count)
+                checkRelocatedActions(scenario, webView, lookup.jsLiteral())
                 scenario.onActivity { webView.evaluateJavascript("window.hoshiManga.setHostScale(${hostScale * 1.2})", null) }
-                assertTrue("Moving the toolbar must dismiss the stale native popup", dismissed.await(5, TimeUnit.SECONDS))
+                assertTrue("Moving the painted bubble must dismiss a stale native popup", dismissed.await(5, TimeUnit.SECONDS))
             }
             scenario.onActivity { webView.destroy() }
         }
@@ -214,4 +227,49 @@ class MangaActionPlacementInstrumentedTest {
             if (exerciseSelection) put("selection", checkNotNull(recorder.latest.get()))
         }
     }
+
+    private fun checkRelocatedActions(
+        scenario: ActivityScenario<ComponentActivity>,
+        webView: WebView,
+        bounds: String,
+    ): Pair<ReaderSelectionRect, JSONObject> {
+        val finished = CountDownLatch(1)
+        var result: String? = null
+        scenario.onActivity {
+            webView.evaluateJavascript("""
+                (function() {
+                  var manga = window.hoshiManga;
+                  var box = document.querySelector('.ocr-box');
+                  manga.setLookupPopupBounds([$bounds]);
+                  manga.updateActionPlacement(box);
+                  function tap(selector) {
+                    var r = box.querySelector(selector).getBoundingClientRect();
+                    return manga.handleTap(r.left + r.width / 2, r.top + r.height / 2, 16);
+                  }
+                  window.HoshiTextSelection.postMessage(JSON.stringify({
+                    text:'いつも', sentence:'いつものやつを！？', rect:{x:0,y:0,width:1,height:1}
+                  }));
+                  return JSON.stringify({
+                    row: manga.hostRectFromViewportRect(box.querySelector('.ocr-actions').getBoundingClientRect()),
+                    translate: tap('.ocr-ai-btn'), copy: tap('.ocr-copy-btn')
+                  });
+                })();
+            """.trimIndent()) { result = it; finished.countDown() }
+        }
+        assertTrue(finished.await(10, TimeUnit.SECONDS))
+        val state = JSONObject(JSONTokener(checkNotNull(result)).nextValue() as String)
+        val row = state.getJSONObject("row")
+        return ReaderSelectionRect(row.getDouble("x"), row.getDouble("y"), row.getDouble("width"), row.getDouble("height")) to state
+    }
+
+    private fun popupTestRect(left: Double, top: Double, right: Double, bottom: Double) =
+        ReaderSelectionRect(left, top, right - left, bottom - top)
+
+    private fun ReaderSelectionRect.jsLiteral(): String =
+        JSONObject().put("x", x).put("y", y).put("width", width).put("height", height).toString()
+
+    private fun ReaderSelectionRect.overlaps(other: ReaderSelectionRect): Boolean =
+        x < other.x + other.width && x + width > other.x &&
+            y < other.y + other.height && y + height > other.y
+
 }
