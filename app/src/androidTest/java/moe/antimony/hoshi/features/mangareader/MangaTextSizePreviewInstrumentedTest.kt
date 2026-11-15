@@ -107,12 +107,16 @@ class MangaTextSizePreviewInstrumentedTest {
         waitForPreview()
         compose.onNodeWithText(label(R.string.manga_preview_cancel)).performClick()
         compose.runOnIdle { assertEquals(original, settings) }
+        val reader = compose.runOnIdle { requireNotNull(findWebView(compose.activity.window.decorView)) }
+        val beforeExternalChange = script(reader, "window.hoshiMangaLoadSequence")
         openPreview()
         val synced = original.copy(mangaSmallTextAmount = 30)
         compose.runOnIdle { settings = synced }
         compose.onNodeWithTag("manga-preview-apply").performClick()
         compose.runOnIdle { assertEquals(synced, settings) }
-        val reader = compose.runOnIdle { requireNotNull(findWebView(compose.activity.window.decorView)) }
+        // Applying the externally changed setting starts a same-page reload. Zoom only
+        // after the replacement is visible, as a reader would.
+        waitForNewPage(reader, beforeExternalChange)
         val before = script(reader, "window.hoshiMangaLoadSequence")
         compose.runOnIdle {
             reader.zoomBy(2f)
@@ -120,6 +124,7 @@ class MangaTextSizePreviewInstrumentedTest {
         }
         val zoomed = compose.runOnIdle { reader.captureMangaPreviewViewport() }
         assertTrue(zoomed.scrollX > 0 && zoomed.scrollY > 0)
+        compose.runOnIdle { assertEquals(zoomed, reader.mangaViewportForReload()) }
         openPreview()
         waitForPreview()
         if (Build.VERSION.SDK_INT >= 29) {
@@ -127,18 +132,16 @@ class MangaTextSizePreviewInstrumentedTest {
                 WindowInspector.getGlobalWindowViews().mapNotNull(::findWebView).first { it !== reader }
             }
             assertViewport(zoomed, preview)
+            val beforeDraft = script(preview, "window.hoshiMangaLoadSequence")
             compose.onNodeWithText(label(R.string.manga_small_text_strong)).performScrollTo().performClick()
-            waitForPreview()
+            waitForNewPage(preview, beforeDraft)
             assertViewport(zoomed, preview)
         } else {
             compose.onNodeWithText(label(R.string.manga_small_text_strong)).performScrollTo().performClick()
         }
         compose.onNodeWithTag("manga-preview-apply").performClick()
         compose.runOnIdle { assertEquals(original.copy(mangaEnlargeSmallText = true, mangaSmallTextAmount = 75, mangaSmallTextThreshold = 40), settings) }
-        compose.waitUntil(10_000) {
-            script(reader, "window.hoshiMangaLoadSequence").let { it != "null" && it != before } &&
-                compose.runOnIdle { reader.mangaViewportForReload() == reader.captureMangaPreviewViewport() }
-        }
+        waitForNewPage(reader, before)
         assertViewport(zoomed, reader)
     }
 
@@ -161,6 +164,13 @@ class MangaTextSizePreviewInstrumentedTest {
         assertEquals(expected.scale, actual.scale, 0.01f)
         assertEquals(expected.scrollX.toDouble(), actual.scrollX.toDouble(), 1.0)
         assertEquals(expected.scrollY.toDouble(), actual.scrollY.toDouble(), 1.0)
+    }
+
+    private fun waitForNewPage(webView: WebView, previousSequence: String) {
+        compose.waitUntil(10_000) {
+            val sequence = script(webView, "window.hoshiMangaLoadSequence")
+            sequence != "null" && sequence != previousSequence && compose.runOnIdle { webView.isMangaPageReady() }
+        }
     }
 
     private fun waitForPreview() {

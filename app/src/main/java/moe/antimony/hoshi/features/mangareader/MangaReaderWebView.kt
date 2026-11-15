@@ -175,6 +175,7 @@ internal fun MangaReaderWebView(
             // Tear the WebView down when the reader leaves composition: it holds a
             // JavaScript interface and, via the Activity context, can otherwise leak
             // until GC. destroy() also stops any in-flight load.
+            webView.tag = null
             webView.destroy()
         },
         update = { webView ->
@@ -297,9 +298,12 @@ private fun WebView.rawMangaScale(): Float = scale
 
 internal data class MangaPreviewViewport(val scale: Float, val scrollX: Int, val scrollY: Int)
 
+internal fun WebView.isMangaPageReady(): Boolean =
+    this is MangaWebView && readyLoad != null && readyLoad == tag
+
 internal fun WebView.mangaViewportForReload(): MangaPreviewViewport? {
     val manga = this as? MangaWebView ?: return null
-    return if (manga.readyLoad != null && manga.readyLoad == tag) captureMangaPreviewViewport() else manga.pendingViewport
+    return if (isMangaPageReady()) captureMangaPreviewViewport() else manga.pendingViewport
 }
 
 internal fun WebView.captureMangaPreviewViewport() = MangaPreviewViewport(rawMangaScale(), scrollX, scrollY)
@@ -409,25 +413,35 @@ private class MangaWebViewClient(
         view.evaluateJavascript("window.hoshiMangaLoadSequence") { identity ->
             if (identity != token.sequence.toString() || view.tag != token || manga.finalizingLoad == token) return@evaluateJavascript
             manga.finalizingLoad = token
-            view.zoomBy(0.1f)
-            view.scrollTo(0, 0)
-            manga.pendingViewport?.let { view.restoreMangaPreviewViewport(it) }
-            view.syncMangaHostScale()
-            val fit = if (token.preview) "window.hoshiManga && window.hoshiManga.revealPreview()" else "0"
-            view.evaluateJavascript(fit) fitResult@{
-                if (view.tag != token) return@fitResult
-                view.postVisualStateCallback(nextMangaPageReadyRequestId(), object : WebView.VisualStateCallback() {
-                    override fun onComplete(requestId: Long) {
-                        if (view.tag != token) return
-                        manga.readyLoad = token
-                        onPageReady(token.pageIndex)
-                        imageLoader?.prepareAdjacentImages(token.pageIndex) { script ->
-                            view.post {
-                                if (view.tag == token && view.isAttachedToWindow) view.evaluateJavascript(script, null)
-                            }
-                        }
+            val viewport = manga.pendingViewport
+            if (viewport == null) {
+                manga.zoomBy(0.1f)
+                manga.scrollTo(0, 0)
+                finishPage(manga, token)
+            } else {
+                // Chromium can apply the document's initial scale after onPageFinished.
+                // Restore once that frame has arrived so it cannot overwrite the saved zoom.
+                manga.afterVisualState(token) {
+                    manga.restoreMangaPreviewViewport(viewport)
+                    finishPage(manga, token)
+                }
+            }
+        }
+    }
+
+    private fun finishPage(view: MangaWebView, token: MangaPageLoadToken) {
+        view.syncMangaHostScale()
+        val fit = if (token.preview) "window.hoshiManga && window.hoshiManga.revealPreview()" else "0"
+        view.evaluateJavascript(fit) {
+            if (view.tag != token) return@evaluateJavascript
+            view.afterVisualState(token) {
+                view.readyLoad = token
+                onPageReady(token.pageIndex)
+                imageLoader?.prepareAdjacentImages(token.pageIndex) { script ->
+                    view.post {
+                        if (view.tag == token && view.isAttachedToWindow) view.evaluateJavascript(script, null)
                     }
-                })
+                }
             }
         }
     }
@@ -438,6 +452,7 @@ private class MangaWebViewClient(
     }
 
     override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
+        view.tag = null
         view.destroy()
         return true
     }
@@ -451,4 +466,12 @@ private var mangaPageReadyRequestId = 0L
 private fun nextMangaPageReadyRequestId(): Long {
     mangaPageReadyRequestId += 1L
     return mangaPageReadyRequestId
+}
+
+private fun MangaWebView.afterVisualState(token: MangaPageLoadToken, action: () -> Unit) {
+    postVisualStateCallback(nextMangaPageReadyRequestId(), object : WebView.VisualStateCallback() {
+        override fun onComplete(requestId: Long) {
+            if (tag == token) action()
+        }
+    })
 }

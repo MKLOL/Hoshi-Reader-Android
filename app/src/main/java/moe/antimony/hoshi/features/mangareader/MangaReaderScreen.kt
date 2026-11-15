@@ -9,6 +9,8 @@ import android.graphics.Canvas
 import android.graphics.Rect
 import android.util.Base64
 import android.view.KeyEvent
+import android.view.ViewTreeObserver
+import android.view.Window
 import android.webkit.WebView
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.Animatable
@@ -90,6 +92,7 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import androidx.core.graphics.createBitmap
+import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -149,7 +152,6 @@ import moe.antimony.hoshi.features.reader.ReaderSelectionCommand
 import moe.antimony.hoshi.features.reader.ReaderSelectionData
 import moe.antimony.hoshi.features.reader.ReaderSettings
 import moe.antimony.hoshi.features.reader.findHoshiActivity
-import moe.antimony.hoshi.features.reader.readerShouldUseImmersiveSystemBars
 import moe.antimony.hoshi.features.reader.readerHardwareKeyActionForKeyEvent
 import moe.antimony.hoshi.features.reader.ReaderHardwareKeyAction
 import moe.antimony.hoshi.features.reader.usesDarkInterface
@@ -1940,39 +1942,56 @@ internal fun cropWebViewBitmapPng(bitmap: Bitmap, rect: MangaScreenshotCropRect)
  * a moment later when the bars finished hiding — two full page loads for one open.
  */
 @Composable
-internal fun MangaReaderSystemBarsEffect(overrideWindow: android.view.Window? = null) {
-    val context = LocalContext.current
-    val view = LocalView.current
-    val lifecycle = view.findViewTreeLifecycleOwner()?.lifecycle
-    DisposableEffect(context, view, lifecycle, overrideWindow) {
-        val activity = context.findHoshiActivity()
-        val window = overrideWindow ?: activity?.window
-        val controller = window?.let { currentWindow ->
-            WindowCompat.getInsetsController(currentWindow, view)
+internal fun MangaReaderSystemBarsEffect(overrideWindow: Window? = null) {
+    val window = overrideWindow ?: LocalContext.current.findHoshiActivity()?.window ?: return
+    val lifecycle = LocalView.current.findViewTreeLifecycleOwner()?.lifecycle
+    DisposableEffect(window, lifecycle) {
+        val decor = window.decorView
+        val controller = WindowCompat.getInsetsController(window, decor)
+        val previousSystemBarsBehavior = controller.systemBarsBehavior
+        val bars = WindowInsetsCompat.Type.systemBars()
+        fun hideReaderBars() {
+            controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            controller.hide(bars)
         }
-        val previousSystemBarsBehavior = controller?.systemBarsBehavior
-        fun applyReaderSystemBars() {
-            if (readerShouldUseImmersiveSystemBars(focusMode = false, immersiveReaderContent = true)) {
-                controller?.systemBarsBehavior =
-                    WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-                controller?.hide(WindowInsetsCompat.Type.systemBars())
-            } else {
-                controller?.show(WindowInsetsCompat.Type.systemBars())
+        hideReaderBars()
+
+        // Activity resume, window focus and insets control are separate events. A dialog or
+        // a window transition can hand control back after the route's first hide request.
+        // Reassert on that handoff, after other handlers for the same frame have run.
+        val hideAfterHandoff = Runnable {
+            if (decor.hasWindowFocus()) {
+                val insets = ViewCompat.getRootWindowInsets(decor)
+                if (insets == null || insets.isVisible(WindowInsetsCompat.Type.statusBars()) ||
+                    insets.isVisible(WindowInsetsCompat.Type.navigationBars())
+                ) {
+                    hideReaderBars()
+                }
             }
         }
-        applyReaderSystemBars()
+        fun scheduleHide() {
+            decor.removeCallbacks(hideAfterHandoff)
+            decor.postOnAnimation(hideAfterHandoff)
+        }
+        val focusListener = ViewTreeObserver.OnWindowFocusChangeListener { focused ->
+            if (focused) scheduleHide() else decor.removeCallbacks(hideAfterHandoff)
+        }
+        val insetsListener = WindowInsetsControllerCompat.OnControllableInsetsChangedListener { _, types ->
+            if (types and bars != 0) scheduleHide()
+        }
+        decor.viewTreeObserver.addOnWindowFocusChangeListener(focusListener)
+        controller.addOnControllableInsetsChangedListener(insetsListener)
         val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME) {
-                applyReaderSystemBars()
-            }
+            if (event == Lifecycle.Event.ON_RESUME) scheduleHide()
         }
         lifecycle?.addObserver(observer)
         onDispose {
             lifecycle?.removeObserver(observer)
-            if (previousSystemBarsBehavior != null) {
-                controller?.systemBarsBehavior = previousSystemBarsBehavior
-            }
-            controller?.show(WindowInsetsCompat.Type.systemBars())
+            decor.viewTreeObserver.removeOnWindowFocusChangeListener(focusListener)
+            controller.removeOnControllableInsetsChangedListener(insetsListener)
+            decor.removeCallbacks(hideAfterHandoff)
+            controller.systemBarsBehavior = previousSystemBarsBehavior
+            controller.show(bars)
         }
     }
 }

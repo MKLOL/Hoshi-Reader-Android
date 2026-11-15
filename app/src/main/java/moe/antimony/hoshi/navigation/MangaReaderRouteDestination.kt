@@ -68,8 +68,7 @@ internal fun MangaReaderRouteDestination(
     val loader = remember(appContainer) {
         MangaReaderLoader(appContainer.bookRepository, appContainer.mokuroParser)
     }
-    // Hide the system bars for the whole route, loading spinner included, so the window insets
-    // have settled by the time the page WebView composes and the first page loads only once.
+    // Request immersive mode during loading so the first page can use the full viewport.
     MangaReaderSystemBarsEffect()
     // Remote bookmark updates are watched for the whole route, not just once the page is ready:
     // refreshBeforeOpen() only waits a bounded time for the network, so a remote bookmark can
