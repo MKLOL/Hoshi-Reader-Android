@@ -7,6 +7,8 @@ Semantic Versioning.
 
 ## [Unreleased]
 
+## [v1.1.4] - 2026-11-16
+
 ### Fixed
 - Manga fits the full window from the first page. The reader restores fullscreen after a late system-bar update without resizing or reloading the page.
 
