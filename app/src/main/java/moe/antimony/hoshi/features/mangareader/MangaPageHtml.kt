@@ -140,8 +140,8 @@ internal object MangaPageHtml {
               // being read), not just the tapped character. The shared selection script
               // reports the tapped character's tiny rect; here HoshiTextSelection.postMessage
               // is wrapped so the containing .ocr-box's PAINTED extent is substituted before
-              // the payload reaches the bridge, and LookupPopupLayout then positions the
-              // popup above or below the entire bubble.
+              // the payload reaches the bridge. The tapped glyph gives the card a closer
+              // anchor when the bubble spans most of the viewport.
               //
               // The extent is taken from a Range over the box contents, NOT
               // box.getBoundingClientRect(): the OCR box has a FIXED height (needed for
@@ -200,8 +200,17 @@ internal object MangaPageHtml {
                         var manga = window.hoshiManga;
                         var extent = window.hoshiOcrBoxExtent(box);
                         var data = JSON.parse(json);
+                        if (manga) {
+                          data.mangaPopupOnLeft = manga.dictionaryOnLeft(extent);
+                          if (data.rect) data.mangaLookupGlyphRect = manga.hostRectFromViewportRect(data.rect);
+                        }
                         data.rect = manga ? manga.hostRectFromViewportRect(extent) : extent;
-                        if (manga) manga.lookupAnchor = { box: box, rect: data.rect };
+                        if (manga) {
+                          var text = box.querySelector('p');
+                          manga.lookupAnchor = {
+                            box: box, rect: data.rect, scrollLeft: text.scrollLeft, scrollTop: text.scrollTop
+                          };
+                        }
                         json = JSON.stringify(data);
                       }
                     } catch (e) {}
@@ -422,6 +431,7 @@ internal object MangaPageHtml {
           bottom: 100%;
           right: 0;
           margin-bottom: 3px;
+          transform-origin: top left;
           writing-mode: horizontal-tb;
           text-orientation: mixed;
           flex-direction: row-reverse;
@@ -434,16 +444,6 @@ internal object MangaPageHtml {
         .text-size-preview .ocr-actions {
           visibility: hidden;
           pointer-events: none;
-        }
-        /* When a revealed bubble sits high enough that the action row would be clipped past
-           the top of the viewport (and so be unreachable), the tap handler adds
-           `.actions-below`, which drops the row just *below* the bubble's bottom-right corner
-           instead of floating it above the top-right. See `updateActionPlacement`. */
-        .ocr-box.actions-below .ocr-actions {
-          top: 100%;
-          bottom: auto;
-          margin-top: 3px;
-          margin-bottom: 0;
         }
         .ocr-action-btn {
           zoom: ${largeScreenUiScale(viewportCssWidth.toDouble(), viewportCssHeight.toDouble())};
@@ -624,11 +624,6 @@ internal object MangaPageHtml {
           window.hoshiManga = {
             hostScaleValue: 1,
             lookupAnchor: null,
-            lookupPopupBounds: [],
-            setLookupPopupBounds: function(bounds) {
-              this.lookupPopupBounds = bounds;
-              refreshActions();
-            },
             // When true, the first tap on a bubble both reveals and looks up immediately.
             // Default false preserves the two-tap-to-lookup model.
             singleTapLookupValue: false,
@@ -877,16 +872,19 @@ internal object MangaPageHtml {
               }
               return window.hoshiSelection.selectText(x, y, maxLength);
             },
-            // Anchor to rendered text as well as the OCR rectangle. In particular, trailing
-            // vertical glyphs can extend below that rectangle. Exclude the actions from the
-            // Range so repeated placement cannot feed the previous button position back in.
+            dictionaryOnLeft: function(bubble) {
+              var viewport = window.visualViewport;
+              var center = viewport ? viewport.offsetLeft + viewport.width / 2 : window.innerWidth / 2;
+              return bubble.x + bubble.width / 2 >= center;
+            },
+            // Reserve opposite sides when the bubble is revealed. A lookup never changes
+            // the action row. If the edge is tight, tuck the row above or below that edge.
             updateActionPlacement: function(box) {
               if (!box || !box.classList.contains('revealed')) return;
               var actions = box.querySelector('.ocr-actions');
               var text = box.querySelector('p');
               if (!actions || !text) return;
               actions.style.transform = '';
-              box.classList.remove('actions-below');
               var bubble = window.hoshiOcrBoxExtent(box);
               var top = bubble.y, bottom = bubble.y + bubble.height;
               var left = bubble.x, right = bubble.x + bubble.width;
@@ -897,66 +895,20 @@ internal object MangaPageHtml {
               var viewLeft = vv ? vv.offsetLeft : 0;
               var viewBottom = viewTop + (vv ? vv.height : window.innerHeight);
               var viewRight = viewLeft + (vv ? vv.width : window.innerWidth);
-              var targetX = Math.max(viewLeft, Math.min(row.left, viewRight - row.width));
-              var targetY = Math.min(row.top, top - row.height - margin);
-              if (targetY < viewTop) {
-                targetY = bottom + margin;
-                box.classList.add('actions-below');
-                row = actions.getBoundingClientRect();
-                if (targetY + row.height > viewBottom) {
-                  // A tall/pinch-zoomed bubble may leave room only beside its text.
-                  if (right + margin + row.width <= viewRight) {
-                    targetX = right + margin;
-                    targetY = Math.max(viewTop, Math.min(top, viewBottom - row.height));
-                  } else if (left - margin - row.width >= viewLeft) {
-                    targetX = left - margin - row.width;
-                    targetY = Math.max(viewTop, Math.min(top, viewBottom - row.height));
-                  }
-                }
+              // Keep the whole row on its side at pinch zoom.
+              var scale = Math.min(1, (viewRight - viewLeft) / (2 * row.width), (viewBottom - viewTop) / row.height);
+              var width = row.width * scale, height = row.height * scale;
+              var onRight = this.dictionaryOnLeft(bubble);
+              var targetX = onRight ? right + margin : left - margin - width;
+              var targetY = top;
+              if (targetX < viewLeft || targetX + width > viewRight) {
+                var above = top - height - margin;
+                targetY = above >= viewTop ? above : bottom + margin;
               }
-              if (this.lookupPopupBounds.length) {
-                var scale = this.hostScale();
-                var cards = this.lookupPopupBounds.map(function(rect) {
-                  return {
-                    left: viewLeft + rect.x / scale, top: viewTop + rect.y / scale,
-                    right: viewLeft + (rect.x + rect.width) / scale,
-                    bottom: viewTop + (rect.y + rect.height) / scale
-                  };
-                });
-                var width = row.width, height = row.height;
-                function overlaps(x, y, rect) {
-                  return x < rect.right + margin && x + width > rect.left - margin &&
-                    y < rect.bottom + margin && y + height > rect.top - margin;
-                }
-                if (cards.some(function(card) { return overlaps(targetX, targetY, card); })) {
-                  var obstacles = cards.concat({left: left, top: top, right: right, bottom: bottom});
-                  // Try the nearest placement that fits the entire row. Edges of the
-                  // cards and the painted bubble also allow sliding along either axis.
-                  var maxX = viewRight - width, maxY = viewBottom - height;
-                  var xs = [targetX, viewLeft, maxX];
-                  var ys = [targetY, viewTop, maxY];
-                  obstacles.forEach(function(rect) {
-                    xs.push(rect.left - margin - width, rect.right + margin);
-                    ys.push(rect.top - margin - height, rect.bottom + margin);
-                  });
-                  var best = Infinity;
-                  var preferredX = targetX, preferredY = targetY;
-                  xs.forEach(function(x) {
-                    if (x < viewLeft || x > maxX) return;
-                    ys.forEach(function(y) {
-                      if (y < viewTop || y > maxY || obstacles.some(function(rect) { return overlaps(x, y, rect); })) return;
-                      var distance = Math.hypot(x - preferredX, y - preferredY);
-                      if (distance < best) {
-                        best = distance;
-                        targetX = x;
-                        targetY = y;
-                      }
-                    });
-                  });
-                }
-              }
+              targetX = Math.max(viewLeft, Math.min(targetX, viewRight - width));
+              targetY = Math.max(viewTop, Math.min(targetY, viewBottom - height));
               actions.style.transform = 'translate(' + (targetX - row.left) + 'px,' +
-                (targetY - row.top) + 'px)';
+                (targetY - row.top) + 'px) scale(' + scale + ')';
             },
             // The configured image-space size is authoritative. Mis-tagged horizontal
             // bubbles can benefit from reflow, but geometry must never add another boost.
@@ -1124,11 +1076,11 @@ internal object MangaPageHtml {
               var anchor = manga.lookupAnchor;
               if (anchor && window.hoshiSelection && window.hoshiSelection.selection) {
                 var current = manga.hostRectFromViewportRect(window.hoshiOcrBoxExtent(anchor.box));
-                // A viewport change can invalidate the dictionary's anchor. Moving the
-                // action buttons around a dictionary card leaves the anchor in place.
+                var text = anchor.box.querySelector('p');
+                // Panning or scrolling the selected text invalidates its native anchor.
                 var moved = ['x', 'y', 'width', 'height'].some(function(key) {
                   return Math.abs(current[key] - anchor.rect[key]) > 0.5;
-                });
+                }) || text.scrollLeft !== anchor.scrollLeft || text.scrollTop !== anchor.scrollTop;
                 if (moved) {
                   manga.lookupAnchor = null;
                   window.hoshiSelection.clearSelection();

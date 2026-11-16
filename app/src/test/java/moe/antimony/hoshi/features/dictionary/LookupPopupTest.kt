@@ -82,6 +82,55 @@ class LookupPopupTest {
         assertEquals(259.0, result.centerY, 0.0)
     }
 
+    @Test
+    fun mangaLayoutUsesItsAssignedSideWithinScreenInsets() {
+        val layout = LookupPopupLayout(
+            selectionRect = ReaderSelectionRect(x = 100.0, y = 718.0, width = 82.0, height = 70.0),
+            screenWidth = 412.0,
+            screenHeight = 800.0,
+            maxWidth = 320.0,
+            maxHeight = 250.0,
+            isVertical = false,
+            topInset = 20.0,
+            bottomInset = 24.0,
+            mangaPopupOnLeft = false,
+        )
+
+        val card = layout.calculate()
+
+        assertEquals(220.0, card.width, 0.0)
+        assertEquals(250.0, card.height, 0.0)
+        assertEquals(186.0, card.centerX - card.width / 2, 0.0)
+        assertEquals(770.0, card.centerY + card.height / 2, 0.0)
+    }
+
+    @Test
+    fun wideMangaBubbleKeepsTheAssignedSideAndRespectsFullWidthMode() {
+        val layout = LookupPopupLayout(
+            selectionRect = ReaderSelectionRect(x = 115.0, y = 500.0, width = 180.0, height = 110.0),
+            screenWidth = 412.0,
+            screenHeight = 800.0,
+            maxWidth = 320.0,
+            maxHeight = 250.0,
+            isVertical = false,
+            mangaPopupOnLeft = true,
+            mangaLookupGlyphRect = ReaderSelectionRect(x = 272.0, y = 524.0, width = 20.0, height = 20.0),
+        )
+
+        val beside = layout.calculate()
+        assertEquals(196.0, beside.width, 0.0)
+        assertEquals(250.0, beside.height, 0.0)
+        assertEquals(202.0, beside.centerX + beside.width / 2, 0.0)
+        assertEquals(524.0, beside.centerY - beside.height / 2, 0.0)
+
+        val fullWidth = layout.copy(
+            selectionRect = layout.selectionRect.copy(x = 180.0),
+            isFullWidth = true,
+        ).calculate()
+        assertEquals(400.0, fullWidth.width, 0.0)
+        assertEquals(794.0, fullWidth.centerY + fullWidth.height / 2, 0.0)
+    }
+
     // Real Yotsuba bubble, measured on-device via tools/manga_debug.py:
     // mokuro's OCR box has a FIXED height and getBoundingClientRect() reports
     // bottom≈641, but the revealed OCR text overflows (overflow:visible) so the

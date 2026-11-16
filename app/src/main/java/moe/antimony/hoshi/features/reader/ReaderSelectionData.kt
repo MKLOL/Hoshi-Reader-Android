@@ -6,6 +6,8 @@ data class ReaderSelectionData(
     val rect: ReaderSelectionRect,
     val normalizedOffset: Int?,
     val sentenceOffset: Int? = null,
+    val mangaPopupOnLeft: Boolean? = null,
+    val mangaLookupGlyphRect: ReaderSelectionRect? = null,
 )
 
 data class ReaderSelectionRect(

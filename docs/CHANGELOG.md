@@ -10,6 +10,7 @@ Semantic Versioning.
 ### Fixed
 - Manga returns to full screen when the reader window regains focus or Android hands it control of the system bars. The page and controls recover without reopening the book.
 - Manga keeps its zoom and pan when the current page reloads after a viewport or text size change.
+- Manga dictionary cards open beside speech bubbles. Translate and Copy stay on the opposite side when a lookup opens.
 
 ## [v1.1.2] - 2026-11-14
 

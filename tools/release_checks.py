@@ -76,6 +76,8 @@ ANDROID_CLASSES = tuple(PREFIX + name for name in (
     "features.mangareader.MangaBubbleScrollGestureInstrumentedTest",
     "features.mangareader.MangaActionPlacementInstrumentedTest",
     "features.mangareader.MangaReaderFullscreenInstrumentedTest",
+    "features.mangareader.MangaTextSizePreviewInstrumentedTest",
+    "features.mangareader.MangaPageZoomInstrumentedTest",
     "features.dictionary.AdaptiveLookupPopupInstrumentedTest",
 ))
 

@@ -20,6 +20,8 @@ data class LookupPopupLayout(
     val topInset: Double = 0.0,
     val bottomInset: Double = 0.0,
     val uiScale: Double = 1.0,
+    val mangaPopupOnLeft: Boolean? = null,
+    val mangaLookupGlyphRect: ReaderSelectionRect? = null,
 ) {
     fun calculate(): LookupPopupFrame {
         val boundedWidth = minOf(maxWidth * uiScale, (screenWidth - screenBorderPadding * 2).coerceAtLeast(1.0))
@@ -31,6 +33,7 @@ data class LookupPopupLayout(
                 uiScale = 1.0,
             ).calculate()
         }
+        if (mangaPopupOnLeft != null && !isFullWidth) return mangaSideFrame(mangaPopupOnLeft)
         val width = width()
         val height = height()
         return LookupPopupFrame(
@@ -40,6 +43,35 @@ data class LookupPopupLayout(
             centerY = centerY(height),
         )
     }
+
+    private fun mangaSideFrame(onLeft: Boolean): LookupPopupFrame {
+        val glyph = mangaLookupGlyphRect ?: selectionRect
+        val minWidth = minOf(maxWidth, minPopupWidth)
+        val bubbleEdge = if (onLeft) selectionRect.x else selectionRect.x + selectionRect.width
+        val middle = screenWidth / 2
+        // With a wide bubble, use the tapped glyph without taking over the action's half.
+        val edge = if (sideSpace(bubbleEdge, onLeft) >= minWidth) bubbleEdge else if (onLeft) {
+            minOf(glyph.x, middle)
+        } else {
+            maxOf(glyph.x + glyph.width, middle)
+        }
+        val width = popupSize(sideSpace(edge, onLeft), maxWidth, minOf(minWidth, middle - screenBorderPadding))
+            .coerceAtLeast(1.0)
+        val x = if (onLeft) {
+            edge - popupPadding - width / 2
+        } else {
+            edge + popupPadding + width / 2
+        }
+        return LookupPopupFrame(
+            width = width,
+            height = maxHeight,
+            centerX = clampLikeIos(x, width / 2 + screenBorderPadding, screenWidth - width / 2 - screenBorderPadding),
+            centerY = clampToViewportY(glyph.y + maxHeight / 2, maxHeight),
+        )
+    }
+
+    private fun sideSpace(edge: Double, onLeft: Boolean): Double =
+        (if (onLeft) edge else screenWidth - edge) - popupPadding - screenBorderPadding
 
     private fun width(): Double {
         if (isFullWidth) return screenWidth - screenBorderPadding * 2
@@ -85,24 +117,22 @@ data class LookupPopupLayout(
             return clampLikeIos(anchor, height / 2 + topInset + screenBorderPadding, anchor)
         }
         if (isVertical) {
-            val raw = selectionRect.y + height / 2
-            return clampLikeIos(
-                raw,
-                height / 2 + screenBorderPadding + topInset,
-                screenHeight - bottomInset - height / 2 - screenBorderPadding,
-            )
+            return clampToViewportY(selectionRect.y + height / 2, height)
         }
         val raw = if (showBelow()) {
             selectionRect.y + selectionRect.height + popupPadding + height / 2
         } else {
             selectionRect.y - popupPadding - height / 2
         }
-        return clampLikeIos(
-            raw,
+        return clampToViewportY(raw, height)
+    }
+
+    private fun clampToViewportY(center: Double, height: Double): Double =
+        clampLikeIos(
+            center,
             height / 2 + topInset + screenBorderPadding,
             screenHeight - bottomInset - height / 2 - screenBorderPadding,
         )
-    }
 
     private fun spaceLeft(): Double = selectionRect.x - popupPadding
     private fun spaceRight(): Double = screenWidth - selectionRect.x - selectionRect.width - popupPadding

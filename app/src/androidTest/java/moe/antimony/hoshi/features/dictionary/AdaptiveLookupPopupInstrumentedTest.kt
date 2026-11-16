@@ -63,12 +63,19 @@ class AdaptiveLookupPopupInstrumentedTest {
             frequencies = emptyArray(), pitches = emptyArray(),
         ), 0)
         val root = LookupPopupItem(id = "root", state = LookupPopupState(
-            selection = ReaderSelectionData("本", "本を読む", ReaderSelectionRect(100.0, 200.0, 30.0, 30.0), null),
+            selection = ReaderSelectionData(
+                "本", "本を読む", ReaderSelectionRect(552.0, 520.0, 80.0, 46.0), null,
+                mangaPopupOnLeft = true,
+                mangaLookupGlyphRect = ReaderSelectionRect(572.0, 540.0, 18.0, 18.0),
+            ),
             results = listOf(result),
             isVertical = false,
         ))
         val child = root.copy(id = "child", state = root.state.copy(
-            selection = root.state.selection.copy(rect = ReaderSelectionRect(160.0, 450.0, 30.0, 30.0)),
+            selection = ReaderSelectionData(
+                "本", "book", ReaderSelectionRect(260.0, 560.0, 30.0, 30.0), null,
+                mangaPopupOnLeft = true,
+            ),
         ))
         var popups by mutableStateOf(listOf(root))
         val reported = AtomicReference<List<ReaderSelectionRect>>(emptyList())
@@ -90,9 +97,13 @@ class AdaptiveLookupPopupInstrumentedTest {
         val rootBounds = reported.get().single()
         assertEquals(320.0, rootBounds.width, 1.0)
         assertEquals(250.0, rootBounds.height, 1.0)
+        assertEquals(root.state.selection.rect.x - 4.0, rootBounds.x + rootBounds.width, 1.0)
+        assertEquals(540.0, rootBounds.y, 1.0)
         compose.runOnIdle { popups = listOf(root, child) }
         compose.waitUntil(15_000) { reported.get().size == 2 }
         assertEquals(rootBounds, reported.get().first())
+        val childBounds = reported.get().last()
+        assertEquals(child.state.selection.rect.x - 4.0, childBounds.x + childBounds.width, 1.0)
         compose.runOnIdle { popups = listOf(root) }
         compose.waitUntil(15_000) { reported.get() == listOf(rootBounds) }
         compose.runOnIdle { popups = emptyList() }

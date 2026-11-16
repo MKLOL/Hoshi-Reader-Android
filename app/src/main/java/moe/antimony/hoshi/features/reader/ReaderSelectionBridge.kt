@@ -34,6 +34,8 @@ internal object ReaderSelectionBridgePayload {
             rect = payload.rect.toSelectionRect(),
             normalizedOffset = payload.normalizedOffset,
             sentenceOffset = payload.sentenceOffset,
+            mangaPopupOnLeft = payload.mangaPopupOnLeft,
+            mangaLookupGlyphRect = payload.mangaLookupGlyphRect?.toSelectionRect(),
         )
     }
 
@@ -63,6 +65,8 @@ internal object ReaderSelectionBridgePayload {
         val rect: Rect,
         val normalizedOffset: Int? = null,
         val sentenceOffset: Int? = null,
+        val mangaPopupOnLeft: Boolean? = null,
+        val mangaLookupGlyphRect: Rect? = null,
     )
 
     @Serializable

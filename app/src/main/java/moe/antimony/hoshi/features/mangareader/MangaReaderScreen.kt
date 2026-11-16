@@ -1149,12 +1149,12 @@ internal fun MangaReaderScreen(
                 popups = lookupPopups,
                 onPopupsChange = { lookupPopups = it },
                 lookupChildPopup = { selection ->
-                    lookupPopupFor(selection).also { lookup ->
+                    val side = lookupPopups.firstOrNull()?.state?.selection?.mangaPopupOnLeft
+                    lookupPopupFor(selection.copy(mangaPopupOnLeft = side)).also { lookup ->
                         usageSession?.logLookup(selection, lookup?.first, UsageLookupSource.Popup, page = pageIndex + 1)
                     }
                 },
-                onPopupBoundsChanged = { bounds -> webView?.setMangaLookupPopupBounds(bounds) },
-                // Let the WebView distinguish a relocated action from empty artwork.
+                // Let the WebView handle stylus taps on the manga's action buttons.
                 dismissOnOutsideStylusTouch = false,
                 onRootPopupDismissed = {
                     // Clear the in-page selection highlight, then return false so the stack view
