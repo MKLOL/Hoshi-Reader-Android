@@ -28,6 +28,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.graphics.Insets
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -79,6 +80,7 @@ internal fun LookupPopupAndroidStack(
     rootHighlightEInkStyle: PopupSelectionEInkStyle = PopupSelectionEInkStyle.Underline,
     onPopupBoundsChanged: (List<ReaderSelectionRect>) -> Unit = {},
     dismissOnOutsideStylusTouch: Boolean = true,
+    viewportInsets: Insets = Insets.NONE,
 ) {
     val context = LocalContext.current
     val appContainer = LocalHoshiAppContainer.current
@@ -105,6 +107,7 @@ internal fun LookupPopupAndroidStack(
         factory = { controller.view },
         onRelease = { controller.release() },
         update = {
+            controller.view.viewportInsets = viewportInsets
             controller.update(
                 popups = popups,
                 rootHighlightRects = rootHighlightRects,
@@ -308,6 +311,7 @@ private data class OverlayUpdate(
 )
 
 private class LookupPopupOverlayLayout(context: Context) : FrameLayout(context) {
+    var viewportInsets = Insets.NONE
     var onOverlaySizeChanged: () -> Unit = {}
     var onOutsideStylusTouch: () -> Unit = {}
     var onPopupBoundsChanged: (List<ReaderSelectionRect>) -> Unit = {}
@@ -532,7 +536,11 @@ private class LookupPopupHostView(
             webView.evaluateJavascript("window.hoshiSelection.clearSelection()", null)
         }
 
-        val frame = state.popupFrame(overlayView?.width ?: 0, overlayView?.height ?: 0)
+        val frame = state.popupFrame(
+            overlayView?.width ?: 0,
+            overlayView?.height ?: 0,
+            (overlayView as? LookupPopupOverlayLayout)?.viewportInsets ?: Insets.NONE,
+        )
         currentFrame = frame
         syncSelectionOffset(frame, state, popup.sasayakiCue)
         callbacks.callbacks = callbacksFor(
@@ -865,26 +873,28 @@ private class LookupPopupHostView(
         }
     }
 
-    private fun LookupPopupState.popupFrame(parentWidthPx: Int, parentHeightPx: Int): PopupFrameDp {
-        val screenWidthDp = (parentWidthPx.takeIf { it > 0 } ?: width.dpToPx()) / density
+    private fun LookupPopupState.popupFrame(parentWidthPx: Int, parentHeightPx: Int, viewportInsets: Insets): PopupFrameDp {
+        val leftInset = viewportInsets.left / density.toDouble()
+        val rightInset = viewportInsets.right / density.toDouble()
+        val screenWidthDp = (parentWidthPx.takeIf { it > 0 } ?: width.dpToPx()) / density.toDouble()
         val screenHeightDp = (parentHeightPx.takeIf { it > 0 } ?: height.dpToPx()) / density
         val style = cardStyle.resolveDictionary(readability, width, height, popupScale)
         val frame = LookupPopupLayout(
-            selectionRect = selection.rect,
-            screenWidth = screenWidthDp.toDouble(),
+            selectionRect = selection.rect.copy(x = selection.rect.x - leftInset),
+            screenWidth = (screenWidthDp - leftInset - rightInset).coerceAtLeast(1.0),
             screenHeight = screenHeightDp.toDouble(),
             maxWidth = style.width,
             maxHeight = style.height,
             uiScale = uiScale,
             isVertical = isVertical,
             isFullWidth = isFullWidth,
-            topInset = topInset,
-            bottomInset = bottomInset,
+            topInset = maxOf(topInset, viewportInsets.top / density.toDouble()),
+            bottomInset = maxOf(bottomInset, viewportInsets.bottom / density.toDouble()),
             mangaPopupOnLeft = selection.mangaPopupOnLeft,
-            mangaLookupGlyphRect = selection.mangaLookupGlyphRect,
+            mangaLookupGlyphRect = selection.mangaLookupGlyphRect?.let { it.copy(x = it.x - leftInset) },
         ).calculate()
         return PopupFrameDp(
-            leftDp = frame.centerX - frame.width / 2,
+            leftDp = frame.centerX - frame.width / 2 + leftInset,
             topDp = frame.centerY - frame.height / 2,
             widthDp = frame.width,
             heightDp = frame.height,

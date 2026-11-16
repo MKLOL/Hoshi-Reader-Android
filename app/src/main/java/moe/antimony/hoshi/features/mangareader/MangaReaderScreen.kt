@@ -20,16 +20,21 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.areNavigationBarsVisible
+import androidx.compose.foundation.layout.areStatusBarsVisible
+import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.systemBars
+import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -71,6 +76,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
@@ -80,6 +86,8 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
@@ -92,6 +100,7 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import androidx.core.graphics.createBitmap
+import androidx.core.graphics.Insets
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -1008,7 +1017,15 @@ internal fun MangaReaderScreen(
         }
     }
 
-    BoxWithConstraints(
+    val chromeInsets = WindowInsets.systemBars.union(WindowInsets.displayCutout)
+    val density = LocalDensity.current
+    val layoutDirection = LocalLayoutDirection.current
+    val controlInsets = Insets.of(
+        chromeInsets.getLeft(density, layoutDirection), chromeInsets.getTop(density),
+        chromeInsets.getRight(density, layoutDirection), chromeInsets.getBottom(density),
+    )
+
+    Box(
         modifier = modifier
             .fillMaxSize()
             .background(backgroundColor),
@@ -1017,21 +1034,14 @@ internal fun MangaReaderScreen(
             pageTransition == null &&
             animatingTransition == null
 
-        BoxWithConstraints(
-            modifier = Modifier
-                .fillMaxSize()
-                .windowInsetsPadding(WindowInsets.systemBars),
-        ) {
+        BoxWithConstraints(Modifier.fillMaxSize()) {
             val activeTransition = pageTransition
             val animating = animatingTransition
             val containerWidthPx = constraints.maxWidth
             // The WebView's viewport size in CSS pixels — Dp values are 1:1 with CSS px for a
             // WebView at default scale. Passed into the page so `.frame` is sized from a
             // known-good size instead of a possibly-stale `window.innerWidth` during a
-            // page-turn reload. If a device keeps a top system bar visible, systemBars
-            // reduces this viewport so the page artwork is contained below that bar instead
-            // of being clipped behind it; when immersive mode succeeds these insets are
-            // empty and manga uses the full screen.
+            // page-turn reload. System bars overlay the artwork without changing its fit.
             val viewportCssWidth = maxWidth.value.roundToInt()
             val viewportCssHeight = maxHeight.value.roundToInt()
             val renderConfig = remember(
@@ -1111,6 +1121,7 @@ internal fun MangaReaderScreen(
                     lookupSelectionRequest += 1
                     lookupPopups = emptyList()
                 },
+                actionInsets = controlInsets,
                 modifier = Modifier
                     .fillMaxSize()
                     .then(Modifier.testTag("manga-reader-surface"))
@@ -1156,6 +1167,7 @@ internal fun MangaReaderScreen(
                 },
                 // Let the WebView handle stylus taps on the manga's action buttons.
                 dismissOnOutsideStylusTouch = false,
+                viewportInsets = controlInsets,
                 onRootPopupDismissed = {
                     // Clear the in-page selection highlight, then return false so the stack view
                     // still removes the dismissed popup from the list (the manga reader has no
@@ -1169,12 +1181,14 @@ internal fun MangaReaderScreen(
 
         AdaptiveUi {
             if (!screenshotCropMode) {
+                val topInsets = chromeInsets.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal)
+                val bottomInsets = chromeInsets.only(WindowInsetsSides.Bottom + WindowInsetsSides.Horizontal)
                 MangaReaderCloseButton(
                     darkInterface = readerSettings.usesDarkInterface(systemDark),
                     onClose = onClose,
                     modifier = Modifier
                         .align(Alignment.TopStart)
-                        .statusBarsPadding()
+                        .windowInsetsPadding(topInsets)
                         .padding(start = 4.dp, top = 4.dp)
                         .zIndex(1f),
                 )
@@ -1192,7 +1206,7 @@ internal fun MangaReaderScreen(
                 Row(
                     modifier = Modifier
                         .align(Alignment.TopEnd)
-                        .statusBarsPadding()
+                        .windowInsetsPadding(topInsets)
                         .padding(end = 4.dp, top = 4.dp)
                         .zIndex(1f),
                     horizontalArrangement = Arrangement.spacedBy(4.dp),
@@ -1241,7 +1255,7 @@ internal fun MangaReaderScreen(
                     onClick = { navigate(ReaderNavigationDirection.Forward) },
                     modifier = Modifier
                         .align(Alignment.BottomStart)
-                        .navigationBarsPadding()
+                        .windowInsetsPadding(bottomInsets)
                         .padding(start = 8.dp, bottom = 4.dp)
                         .zIndex(1f),
                 )
@@ -1251,7 +1265,7 @@ internal fun MangaReaderScreen(
                     darkInterface = readerSettings.usesDarkInterface(systemDark),
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
-                        .navigationBarsPadding()
+                        .windowInsetsPadding(bottomInsets)
                         .padding(bottom = 22.dp)
                         .zIndex(1f),
                 )
@@ -1263,7 +1277,7 @@ internal fun MangaReaderScreen(
                     onClick = { navigate(ReaderNavigationDirection.Backward) },
                     modifier = Modifier
                         .align(Alignment.BottomEnd)
-                        .navigationBarsPadding()
+                        .windowInsetsPadding(bottomInsets)
                         .padding(end = 8.dp, bottom = 4.dp)
                         .zIndex(1f),
                 )
@@ -1274,7 +1288,6 @@ internal fun MangaReaderScreen(
             BoxWithConstraints(
                 modifier = Modifier
                     .fillMaxSize()
-                    .windowInsetsPadding(WindowInsets.systemBars)
                     .zIndex(2f),
             ) {
                 val screenshotContainerWidthPx =
@@ -1937,14 +1950,15 @@ internal fun cropWebViewBitmapPng(bitmap: Bitmap, rect: MangaScreenshotCropRect)
 /**
  * Puts the window into the manga reader's immersive system-bars mode for as long as the caller
  * is composed, restoring the previous behaviour on dispose. [MangaReaderRouteDestination]
- * composes it for the whole route, loading spinner included: hiding the bars only once the page
- * composed made the WebView lay out against the inset-padded viewport first and reload the page
- * a moment later when the bars finished hiding — two full page loads for one open.
+ * composes it for the whole route, loading spinner included.
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 internal fun MangaReaderSystemBarsEffect(overrideWindow: Window? = null) {
     val window = overrideWindow ?: LocalContext.current.findHoshiActivity()?.window ?: return
     val lifecycle = LocalView.current.findViewTreeLifecycleOwner()?.lifecycle
+    val scope = rememberCoroutineScope()
+    val visibility = rememberUpdatedState(WindowInsets.areStatusBarsVisible to WindowInsets.areNavigationBarsVisible)
     DisposableEffect(window, lifecycle) {
         val decor = window.decorView
         val controller = WindowCompat.getInsetsController(window, decor)
@@ -1985,7 +1999,15 @@ internal fun MangaReaderSystemBarsEffect(overrideWindow: Window? = null) {
             if (event == Lifecycle.Event.ON_RESUME) scheduleHide()
         }
         lifecycle?.addObserver(observer)
+        // A delayed visibility update can arrive after the window already has focus and
+        // insets control. Transient swipe bars overlay the reader without changing these insets.
+        val visibilityObserver = scope.launch {
+            snapshotFlow { visibility.value }.collect { (statusVisible, navigationVisible) ->
+                if (statusVisible || navigationVisible) scheduleHide()
+            }
+        }
         onDispose {
+            visibilityObserver.cancel()
             lifecycle?.removeObserver(observer)
             decor.viewTreeObserver.removeOnWindowFocusChangeListener(focusListener)
             controller.removeOnControllableInsetsChangedListener(insetsListener)

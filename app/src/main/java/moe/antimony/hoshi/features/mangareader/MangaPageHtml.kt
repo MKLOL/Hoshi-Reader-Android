@@ -623,13 +623,15 @@ internal object MangaPageHtml {
         (function() {
           window.hoshiManga = {
             hostScaleValue: 1,
+            actionInsets: [0, 0, 0, 0],
             lookupAnchor: null,
             // When true, the first tap on a bubble both reveals and looks up immediately.
             // Default false preserves the two-tap-to-lookup model.
             singleTapLookupValue: false,
-            setHostScale: function(scale) {
+            setHostScale: function(scale, insets) {
               if (typeof scale === 'number' && isFinite(scale) && scale > 0) {
                 this.hostScaleValue = scale;
+                if (insets) this.actionInsets = insets;
                 refreshActions();
               }
             },
@@ -895,6 +897,11 @@ internal object MangaPageHtml {
               var viewLeft = vv ? vv.offsetLeft : 0;
               var viewBottom = viewTop + (vv ? vv.height : window.innerHeight);
               var viewRight = viewLeft + (vv ? vv.width : window.innerWidth);
+              var hostScale = this.hostScale();
+              viewLeft += this.actionInsets[0] / hostScale;
+              viewTop += this.actionInsets[1] / hostScale;
+              viewRight -= this.actionInsets[2] / hostScale;
+              viewBottom -= this.actionInsets[3] / hostScale;
               // Keep the whole row on its side at pinch zoom.
               var scale = Math.min(1, (viewRight - viewLeft) / (2 * row.width), (viewBottom - viewTop) / row.height);
               var width = row.width * scale, height = row.height * scale;

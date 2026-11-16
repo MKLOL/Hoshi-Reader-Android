@@ -13,6 +13,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.core.graphics.Insets
 import de.manhhao.hoshi.GlossaryEntry
 import de.manhhao.hoshi.LookupResult
 import de.manhhao.hoshi.TermResult
@@ -78,6 +79,7 @@ class AdaptiveLookupPopupInstrumentedTest {
             ),
         ))
         var popups by mutableStateOf(listOf(root))
+        var viewportInsets by mutableStateOf(Insets.NONE)
         val reported = AtomicReference<List<ReaderSelectionRect>>(emptyList())
         val app = HoshiAppContainer(compose.activity)
         compose.setContent {
@@ -89,6 +91,7 @@ class AdaptiveLookupPopupInstrumentedTest {
                         lookupChildPopup = { null },
                         modifier = Modifier.requiredSize(706.dp, 935.dp),
                         onPopupBoundsChanged = reported::set,
+                        viewportInsets = viewportInsets,
                     )
                 }
             }
@@ -104,6 +107,16 @@ class AdaptiveLookupPopupInstrumentedTest {
         assertEquals(rootBounds, reported.get().first())
         val childBounds = reported.get().last()
         assertEquals(child.state.selection.rect.x - 4.0, childBounds.x + childBounds.width, 1.0)
+        compose.runOnIdle {
+            val density = compose.activity.resources.displayMetrics.density
+            viewportInsets = Insets.of((36 * density).toInt(), (570 * density).toInt(), 0, 0)
+        }
+        compose.waitUntil(15_000) {
+            reported.get().let { cards -> cards.size == 2 && cards.all { it.x >= 41.0 && it.y >= 575.0 } }
+        }
+        val insetRoot = reported.get().first()
+        assertEquals(rootBounds.x + rootBounds.width, insetRoot.x + insetRoot.width, 1.0)
+        compose.runOnIdle { viewportInsets = Insets.NONE }
         compose.runOnIdle { popups = listOf(root) }
         compose.waitUntil(15_000) { reported.get() == listOf(rootBounds) }
         compose.runOnIdle { popups = emptyList() }

@@ -19,6 +19,7 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.graphics.Insets
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import moe.antimony.hoshi.features.reader.ReaderNavigationDirection
@@ -77,6 +78,7 @@ internal fun MangaReaderWebView(
     onBubbleCopied: (String) -> Unit = {},
     initialViewport: MangaPreviewViewport? = null,
     onPageLoadStarted: () -> Unit = {},
+    actionInsets: Insets = Insets.NONE,
 ) {
     val currentOnNavigate = rememberUpdatedState(onNavigate)
     val currentOnTextSelected = rememberUpdatedState(onTextSelected)
@@ -176,6 +178,10 @@ internal fun MangaReaderWebView(
             webView.destroy()
         },
         update = { webView ->
+            if (webView.actionInsets != actionInsets) {
+                webView.actionInsets = actionInsets
+                webView.syncMangaHostScale()
+            }
             // The WebViewClient and touch listener are attached once in factory(); both
             // read rememberUpdatedState values, so they stay current without being
             // re-allocated on every recomposition. update() only swaps the page content.
@@ -208,6 +214,7 @@ private class MangaWebView(context: Context) : WebView(context) {
     var readyLoad: MangaPageLoadToken? = null
     var finalizingLoad: MangaPageLoadToken? = null
     var pendingViewport: MangaPreviewViewport? = null
+    var actionInsets: Insets = Insets.NONE
 
     fun mangaZoomScale(): Float {
         // The fitted document uses initial/minimum-scale=1. Never adopt a restored zoom as
@@ -337,8 +344,11 @@ private fun WebView.syncMangaHostScale() {
     val scale = mangaZoomScale()
         .takeIf { it.isFinite() && it > 0f }
         ?: 1f
+    val insets = (this as? MangaWebView)?.actionInsets ?: Insets.NONE
+    val density = resources.displayMetrics.density
     evaluateJavascript(
-        "window.hoshiManga && window.hoshiManga.setHostScale($scale)",
+        "window.hoshiManga && window.hoshiManga.setHostScale($scale, " +
+            "[${insets.left / density}, ${insets.top / density}, ${insets.right / density}, ${insets.bottom / density}])",
         null,
     )
 }

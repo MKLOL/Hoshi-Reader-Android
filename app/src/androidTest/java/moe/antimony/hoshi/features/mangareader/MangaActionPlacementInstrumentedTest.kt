@@ -38,6 +38,20 @@ class MangaActionPlacementInstrumentedTest {
         }
     }
 
+    @Test fun controlsClearHostInsetsWithoutResizingTheMangaPage() {
+        val state = measure(
+            paired = true,
+            setup = "box.style.cssText = 'left:110px;top:2px;width:150px;height:30px;font-size:18px';",
+            hostScale = 2.0,
+            hostInsets = listOf(200, 160, 0, 0),
+        )
+        assertEquals("action left edge clears the host inset at 2×", 100.0, state.getDouble("actionLeft"), 0.05)
+        assertEquals("action top edge clears the host inset at 2×", 80.0, state.getDouble("actionTop"), 0.05)
+        assertTrue("the action row must clear painted text", state.getDouble("actionTop") >= state.getDouble("textBottom") + 2.9)
+        assertEquals(0.0, state.getDouble("pageResize"), 0.01)
+        assertEquals(0.0, state.getDouble("artworkResize"), 0.01)
+    }
+
     @Test fun tabletButtonsScaleWithoutChangingTextClearanceOrDrifting() {
         val state = measure(false, """
             box.style.cssText = 'left:2px;top:0px;width:150px;height:6px;font-size:24px';
@@ -115,9 +129,11 @@ class MangaActionPlacementInstrumentedTest {
         viewportWidth: Int = 706,
         viewportHeight: Int = 935,
         hostScale: Double = 1.0,
+        hostInsets: List<Int>? = null,
         vertical: Boolean = false,
         checkLookupActions: Boolean = false,
     ): JSONObject {
+        val hostScaleArgs = if (hostInsets == null) "$hostScale" else "$hostScale, $hostInsets"
         val html = MangaPageHtml.build(
             page = MokuroPage(0, "test.png", 706, 935, listOf(
                 MokuroTextBox(100, 100, 200, 200, 24, vertical, listOf("いつものやつを！？")),
@@ -158,12 +174,13 @@ class MangaActionPlacementInstrumentedTest {
             scenario.onActivity {
                 webView.evaluateJavascript("""
                     (function() {
-                      window.hoshiManga.setHostScale($hostScale);
                       var box = document.querySelector('.ocr-box');
                       box.classList.add('revealed');
                       $setup
                       var actions = box.querySelector('.ocr-actions');
                       var page = document.querySelector('.page').getBoundingClientRect();
+                      var artwork = document.querySelector('.frame').getBoundingClientRect();
+                      window.hoshiManga.setHostScale($hostScaleArgs);
                       window.hoshiManga.updateActionPlacement(box);
                       var first = actions.getBoundingClientRect();
                       for (var i = 0; i < 5; i++) window.hoshiManga.updateActionPlacement(box);
@@ -173,6 +190,7 @@ class MangaActionPlacementInstrumentedTest {
                       var bubble = window.hoshiOcrBoxExtent(box);
                       window.dispatchEvent(new Event('resize'));
                       var afterPage = document.querySelector('.page').getBoundingClientRect();
+                      var afterArtwork = document.querySelector('.frame').getBoundingClientRect();
                       var button = box.querySelector('button');
                       var actualButton = button.getBoundingClientRect();
                       var wasSolo = actions.classList.contains('solo');
@@ -207,7 +225,8 @@ class MangaActionPlacementInstrumentedTest {
                         areaRatio: (actualButton.width * actualButton.height) / (pairedButton.width * pairedButton.height),
                         viewportWidth: window.visualViewport.width, viewportHeight: window.visualViewport.height,
                         drift: Math.abs(first.top-row.top) + Math.abs(first.left-row.left),
-                        pageResize: Math.abs(page.width-afterPage.width)+Math.abs(page.height-afterPage.height)
+                        pageResize: Math.abs(page.width-afterPage.width)+Math.abs(page.height-afterPage.height),
+                        artworkResize: Math.abs(artwork.width-afterArtwork.width)+Math.abs(artwork.height-afterArtwork.height)
                       });
                     })();
                 """.trimIndent()) { result = it; evaluated.countDown() }

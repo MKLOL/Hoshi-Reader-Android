@@ -196,7 +196,6 @@ class MangaPageHtmlTest {
         // Android WebView may not report visualViewport.scale reliably, so native WebView
         // scale is pushed into the page and rects subtract the visual viewport pan offset
         // before converting back into host coordinates for Compose popup placement.
-        assertTrue(html.contains("setHostScale: function(scale)"))
         assertTrue(html.contains("hostRectFromViewportRect"))
         assertTrue(html.contains("offsetLeft"))
         assertTrue(html.contains("offsetTop"))

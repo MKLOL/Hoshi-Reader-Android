@@ -132,7 +132,7 @@ private fun MangaTextSizePreview(source: MangaTextPreviewSource, initial: Reader
     val save: () -> Unit = { if (draft == baseline) onClose() else onApply(draft) }
     CompositionLocalProvider(LocalContentColor provides Color.White) {
         BoxWithConstraints(Modifier.fillMaxSize().background(Color(background)).testTag("manga-page-text-preview")) {
-            BoxWithConstraints(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.systemBars)) {
+            BoxWithConstraints(Modifier.fillMaxSize()) {
                 val config = MangaPageRenderConfig(backgroundCssColor = backgroundCss, scanNonJapaneseText = false,
                     eInkMode = initial.eInkMode, viewportCssWidth = maxWidth.value.roundToInt(), viewportCssHeight = maxHeight.value.roundToInt(),
                     useNotoSansJpFont = initial.mangaUseNotoSansJp, showCopyButton = initial.mangaShowCopyButton,
