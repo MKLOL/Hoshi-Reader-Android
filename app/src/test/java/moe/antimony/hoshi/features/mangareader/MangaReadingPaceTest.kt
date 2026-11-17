@@ -32,7 +32,6 @@ class MangaReadingPaceTest {
         val statistics = day(samples = mapOf(30 to 1, 40 to 1, 50 to 1, 3600 to 1))
 
         assertEquals(45.0, statistics.medianMangaPageSeconds()!!, 0.0)
-        assertEquals(450.0, mangaSecondsRemaining(10, statistics.medianMangaPageSeconds())!!, 0.0)
     }
 
     @Test
@@ -61,11 +60,8 @@ class MangaReadingPaceTest {
     }
 
     @Test
-    fun remainingTimeStaysUnknownUntilThereIsACompletedPage() {
+    fun noMedianExistsWithoutPageDurationSamples() {
         assertNull(day().medianMangaPageSeconds())
-        assertNull(mangaSecondsRemaining(10, medianPageSeconds = null))
-        assertEquals(0.0, mangaSecondsRemaining(0, medianPageSeconds = null)!!, 0.0)
-        assertEquals(0.0, mangaSecondsRemaining(-1, medianPageSeconds = 30.0)!!, 0.0)
     }
 
     @Test

@@ -1,6 +1,8 @@
 package moe.antimony.hoshi.features.mangareader
 
+import moe.antimony.hoshi.epub.ReadingStatistics
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Test
 
 class MangaStatisticsSheetTest {
@@ -43,11 +45,28 @@ class MangaStatisticsSheetTest {
     }
 
     @Test
-    fun remainingTimeUsesMedianPageDurationAndDistinguishesUnknownFromFinished() {
-        assertEquals(1800.0, mangaSecondsRemaining(remainingPages = 10, medianPageSeconds = 180.0)!!, 0.0)
-        assertEquals(null, mangaSecondsRemaining(remainingPages = 10, medianPageSeconds = null))
-        assertEquals(null, mangaSecondsRemaining(remainingPages = 10, medianPageSeconds = 0.0))
-        assertEquals(0.0, mangaSecondsRemaining(remainingPages = -1, medianPageSeconds = null)!!, 0.0)
+    fun remainingTimeUsesAllRecordedBookTimeAndPagesEvenWithFastTurnSamples() {
+        val totals = ReadingStatistics(
+            title = "Volume",
+            dateKey = "2026-11-16",
+            charactersRead = 150,
+            readingTime = 6164.0,
+            mangaPageSeconds = mapOf(15 to 40, 16 to 40),
+        )
+        val remainingPages = mangaRemainingPages(pageIndex = 129, pageCount = 233)
+        assertEquals(103, remainingPages)
+        assertEquals(87.60545, 3600 / totals.mangaAveragePageSeconds()!!, 0.001)
+        assertEquals(4232.61333, mangaSecondsRemaining(remainingPages, totals)!!, 0.001)
+        assertEquals(4232.61333, mangaSecondsRemaining(remainingPages, totals.copy(mangaPageSeconds = emptyMap()))!!, 0.001)
+    }
+
+    @Test
+    fun remainingTimeDistinguishesMissingRecordedPaceFromFinished() {
+        val empty = ReadingStatistics(title = "Volume", dateKey = "2026-11-16")
+        assertNull(mangaSecondsRemaining(10, empty.copy(readingTime = 120.0)))
+        assertNull(mangaSecondsRemaining(10, empty.copy(charactersRead = 1)))
+        assertNull(mangaSecondsRemaining(10, empty.copy(charactersRead = 1, readingTime = Double.NaN)))
+        assertEquals(0.0, mangaSecondsRemaining(0, empty)!!, 0.0)
     }
 
     @Test

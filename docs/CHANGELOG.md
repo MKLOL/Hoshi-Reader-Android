@@ -7,6 +7,9 @@ Semantic Versioning.
 
 ## [Unreleased]
 
+### Fixed
+- Manga estimates time to finish from the book's recorded reading time and pages read. The All Time section shows the same average pace used for the estimate.
+
 ## [v1.1.4] - 2026-11-16
 
 ### Fixed

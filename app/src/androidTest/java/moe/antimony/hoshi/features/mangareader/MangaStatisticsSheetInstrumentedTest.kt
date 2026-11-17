@@ -46,15 +46,15 @@ class MangaStatisticsSheetInstrumentedTest {
                         allTime = ReadingStatistics(
                             title = "Volume",
                             dateKey = "2026-05-19",
-                            charactersRead = 31,
-                            readingTime = 6200.0,
-                            lastReadingSpeed = 18,
-                            mangaPageSeconds = mapOf(200 to 3, 3600 to 1),
+                            charactersRead = 150,
+                            readingTime = 6164.0,
+                            lastReadingSpeed = 87,
+                            mangaPageSeconds = mapOf(15 to 40, 16 to 40),
                         ),
                     ),
                     textState = MangaTextReadState(sessionCharacters = 321, todayCharacters = 654, allTimeCharacters = 987),
-                    pageIndex = 2,
-                    pageCount = 12,
+                    pageIndex = 129,
+                    pageCount = 233,
                     onToggleTracking = { toggleClicks += 1 },
                     onDismiss = {},
                 )
@@ -62,12 +62,12 @@ class MangaStatisticsSheetInstrumentedTest {
         }
 
         composeRule.onNodeWithText("Manga Statistics").assertIsDisplayed()
-        composeRule.onNodeWithText("Page 3 of 12").assertIsDisplayed()
+        composeRule.onNodeWithText("Page 130 of 233").assertIsDisplayed()
         composeRule.onAllNodesWithText("Pages Read")[0].assertIsDisplayed()
         composeRule.onNodeWithText("All Time").assertIsDisplayed()
-        composeRule.onNodeWithText("Median Pace").assertIsDisplayed()
-        composeRule.onNodeWithText("18.0 pages / h").assertIsDisplayed()
-        composeRule.onNodeWithText(formatDurationSeconds(1800.0)).assertIsDisplayed()
+        composeRule.onAllNodesWithText("Average Pace")[0].assertIsDisplayed()
+        composeRule.onNodeWithText("87.6 pages / h").assertIsDisplayed()
+        composeRule.onNodeWithText(formatDurationSeconds(4232.61333)).assertIsDisplayed()
         composeRule.onAllNodesWithText("Characters Read")[0].assertIsDisplayed()
         composeRule.onNodeWithText("987").assertIsDisplayed()
         composeRule.onNodeWithContentDescription("Start statistics").performClick()

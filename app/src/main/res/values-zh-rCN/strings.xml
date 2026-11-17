@@ -731,7 +731,6 @@
     <string name="manga_statistics_time_to_finish">读完还需</string>
     <string name="manga_statistics_pages_read">已读页数</string>
     <string name="manga_statistics_pace">平均速度</string>
-    <string name="manga_statistics_median_pace">中位速度</string>
     <string name="manga_statistics_pace_format">%1$s 页/小时</string>
     <string name="manga_statistics_pace_pending">阅读一页后估算</string>
     <string name="manga_statistics_reading_time">阅读时间</string>
