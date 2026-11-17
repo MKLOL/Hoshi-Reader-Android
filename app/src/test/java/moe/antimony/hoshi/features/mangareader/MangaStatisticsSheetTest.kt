@@ -45,7 +45,7 @@ class MangaStatisticsSheetTest {
     }
 
     @Test
-    fun remainingTimeUsesAllRecordedBookTimeAndPagesEvenWithFastTurnSamples() {
+    fun incompleteSamplesUseTheBooksRecordedTimeAndPages() {
         val totals = ReadingStatistics(
             title = "Volume",
             dateKey = "2026-11-16",
@@ -55,18 +55,37 @@ class MangaStatisticsSheetTest {
         )
         val remainingPages = mangaRemainingPages(pageIndex = 129, pageCount = 233)
         assertEquals(103, remainingPages)
-        assertEquals(87.60545, 3600 / totals.mangaAveragePageSeconds()!!, 0.001)
-        assertEquals(4232.61333, mangaSecondsRemaining(remainingPages, totals)!!, 0.001)
-        assertEquals(4232.61333, mangaSecondsRemaining(remainingPages, totals.copy(mangaPageSeconds = emptyMap()))!!, 0.001)
+        for (samples in listOf(totals.mangaPageSeconds, emptyMap(), mapOf(15 to 75, 16 to 75))) {
+            val pace = totals.copy(mangaPageSeconds = samples).mangaEstimatedPageSeconds()!!
+            assertEquals(87.60545, 3600 / pace, 0.001)
+            assertEquals(4232.61333, mangaSecondsRemaining(remainingPages, pace)!!, 0.001)
+        }
+    }
+
+    @Test
+    fun trimsTwoPagesFromEachEndEvenWhenTheBoundaryFallsInsideABucket() {
+        val totals = ReadingStatistics(
+            title = "Volume",
+            dateKey = "2026-11-17",
+            charactersRead = 20,
+            readingTime = 1691.0,
+            mangaPageSeconds = mapOf(1000 to 1, 40 to 14, 1 to 1, 10 to 3, 100 to 1),
+        )
+        val pace = totals.mangaEstimatedPageSeconds()!!
+        assertEquals(36.25, pace, 0.0)
+        assertEquals(362.5, mangaSecondsRemaining(10, pace)!!, 0.0)
+        // These samples cover the time but represent fewer than 90% of the pages.
+        assertEquals(67.64, totals.copy(charactersRead = 25).mangaEstimatedPageSeconds()!!, 0.001)
+        assertEquals(169.1, totals.copy(charactersRead = 10).mangaEstimatedPageSeconds()!!, 0.001)
     }
 
     @Test
     fun remainingTimeDistinguishesMissingRecordedPaceFromFinished() {
         val empty = ReadingStatistics(title = "Volume", dateKey = "2026-11-16")
-        assertNull(mangaSecondsRemaining(10, empty.copy(readingTime = 120.0)))
-        assertNull(mangaSecondsRemaining(10, empty.copy(charactersRead = 1)))
-        assertNull(mangaSecondsRemaining(10, empty.copy(charactersRead = 1, readingTime = Double.NaN)))
-        assertEquals(0.0, mangaSecondsRemaining(0, empty)!!, 0.0)
+        assertNull(mangaSecondsRemaining(10, empty.copy(readingTime = 120.0).mangaEstimatedPageSeconds()))
+        assertNull(mangaSecondsRemaining(10, empty.copy(charactersRead = 1).mangaEstimatedPageSeconds()))
+        assertNull(mangaSecondsRemaining(10, empty.copy(charactersRead = 1, readingTime = Double.NaN).mangaEstimatedPageSeconds()))
+        assertEquals(0.0, mangaSecondsRemaining(0, empty.mangaEstimatedPageSeconds())!!, 0.0)
     }
 
     @Test

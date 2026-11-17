@@ -34,6 +34,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import moe.antimony.hoshi.R
 import moe.antimony.hoshi.epub.ReadingStatistics
+import moe.antimony.hoshi.epub.trimmedMangaPageSeconds
 import moe.antimony.hoshi.features.reader.ReaderBottomPanel
 import moe.antimony.hoshi.features.reader.ReaderStatisticsState
 import moe.antimony.hoshi.features.reader.formatDurationSeconds
@@ -80,13 +81,16 @@ internal fun MangaStatisticsSheet(
             } else {
                 item {
                     val remainingPages = mangaRemainingPages(pageIndex, pageCount)
-                    val secondsRemaining = mangaSecondsRemaining(remainingPages, state.allTime)
+                    val estimatedPageSeconds = state.allTime.mangaEstimatedPageSeconds()
+                    val secondsRemaining = mangaSecondsRemaining(remainingPages, estimatedPageSeconds)
                     MangaStatisticsSection(
                         title = stringResource(R.string.reader_statistics_all_time),
                         icon = Icons.Rounded.QueryStats,
                         statistic = state.allTime,
                         charactersRead = textState?.allTimeCharacters,
                         accentColor = MaterialTheme.colorScheme.primary,
+                        paceLabel = stringResource(R.string.manga_statistics_estimated_pace),
+                        pageSeconds = estimatedPageSeconds,
                         extraRows = listOf(
                             stringResource(R.string.manga_statistics_pages_remaining) to
                                 remainingPages.toString(),
@@ -207,6 +211,8 @@ private fun MangaStatisticsSection(
     statistic: ReadingStatistics,
     accentColor: Color,
     charactersRead: Int? = null,
+    paceLabel: String = stringResource(R.string.manga_statistics_pace),
+    pageSeconds: Double? = statistic.mangaAveragePageSeconds(),
     extraRows: List<Pair<String, String>> = emptyList(),
 ) {
     val metrics = readerSheetDensityMetrics()
@@ -249,8 +255,8 @@ private fun MangaStatisticsSection(
             }
             MangaStatisticsDivider()
             MangaStatisticRow(
-                stringResource(R.string.manga_statistics_pace),
-                statistic.mangaAveragePageSeconds()?.let { secondsPerPage ->
+                paceLabel,
+                pageSeconds?.let { secondsPerPage ->
                     stringResource(
                         R.string.manga_statistics_pace_format,
                         String.format(Locale.getDefault(), "%.1f", 3600.0 / secondsPerPage),
@@ -320,9 +326,12 @@ internal fun ReadingStatistics.mangaAveragePageSeconds(): Double? {
     return (readingTime / charactersRead).takeIf { it > 0.0 && (3600.0 / it).isFinite() }
 }
 
-internal fun mangaSecondsRemaining(remainingPages: Int, statistics: ReadingStatistics): Double? {
+internal fun ReadingStatistics.mangaEstimatedPageSeconds(): Double? =
+    trimmedMangaPageSeconds() ?: mangaAveragePageSeconds()
+
+internal fun mangaSecondsRemaining(remainingPages: Int, estimatedPageSeconds: Double?): Double? {
     if (remainingPages <= 0) return 0.0
-    return statistics.mangaAveragePageSeconds()?.times(remainingPages)?.takeIf { it.isFinite() }
+    return estimatedPageSeconds?.times(remainingPages)?.takeIf { it.isFinite() && it > 0.0 }
 }
 
 internal fun mangaPageProgress(pageIndex: Int, pageCount: Int): Float {

@@ -30,3 +30,31 @@ fun ReadingStatistics.medianMangaPageSeconds(): Double? {
     }
     return null
 }
+
+/** Drop the fastest and slowest tenth of the timed pages when they cover the book's reading. */
+internal fun ReadingStatistics.trimmedMangaPageSeconds(): Double? {
+    val samples = mangaPageSeconds.filter { (seconds, count) -> seconds > 0 && count > 0 }
+    val timedPages = samples.values.sumOf { it.toLong() }
+    val loggedPages = charactersRead.toLong()
+    if (timedPages < 10 || timedPages > loggedPages || timedPages < loggedPages - loggedPages / 10) return null
+
+    // Older rows and unfinished/revisited pages can have active time without timed turns.
+    // The upper bound allows duration rounding and rejects inconsistent or duplicate samples.
+    val timedSeconds = samples.entries.sumOf { (seconds, count) -> seconds.toDouble() * count }
+    if (!readingTime.isFinite() || readingTime <= 0 || timedSeconds / readingTime !in 0.9..1.1) {
+        return null
+    }
+
+    val trim = timedPages / 10
+    val end = timedPages - trim
+    var seen = 0L
+    var keptSeconds = 0.0
+    for ((seconds, count) in samples.toSortedMap()) {
+        val next = seen + count
+        val kept = (minOf(next, end) - maxOf(seen, trim)).coerceAtLeast(0)
+        keptSeconds += seconds.toDouble() * kept
+        if (next >= end) break
+        seen = next
+    }
+    return keptSeconds / (timedPages - 2 * trim)
+}

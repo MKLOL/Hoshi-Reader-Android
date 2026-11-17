@@ -65,7 +65,7 @@ class MangaStatisticsSheetInstrumentedTest {
         composeRule.onNodeWithText("Page 130 of 233").assertIsDisplayed()
         composeRule.onAllNodesWithText("Pages Read")[0].assertIsDisplayed()
         composeRule.onNodeWithText("All Time").assertIsDisplayed()
-        composeRule.onAllNodesWithText("Average Pace")[0].assertIsDisplayed()
+        composeRule.onNodeWithText("Estimated Pace").assertIsDisplayed()
         composeRule.onNodeWithText("87.6 pages / h").assertIsDisplayed()
         composeRule.onNodeWithText(formatDurationSeconds(4232.61333)).assertIsDisplayed()
         composeRule.onAllNodesWithText("Characters Read")[0].assertIsDisplayed()
