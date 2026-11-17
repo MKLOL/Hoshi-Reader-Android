@@ -7,6 +7,8 @@ Semantic Versioning.
 
 ## [Unreleased]
 
+## [v1.1.5] - 2026-11-17
+
 ### Fixed
 - Manga estimates time to finish using the average after removing the fastest and slowest tenth of timed page turns. When the timed history is incomplete, it uses the book's recorded time and pages. The All Time section shows the pace used for the estimate.
 
